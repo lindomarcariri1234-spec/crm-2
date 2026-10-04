@@ -43,6 +43,7 @@ const {
   mockDbInsertValues,
   mockLogInfo,
   mockLogError,
+  mockRunWhatsAppMediaRetentionCleanup,
 } = vi.hoisted(() => {
   const mockListFiles = vi.fn();
   const mockDeleteFiles = vi.fn();
@@ -65,6 +66,7 @@ const {
 
   const mockLogInfo = vi.fn();
   const mockLogError = vi.fn();
+  const mockRunWhatsAppMediaRetentionCleanup = vi.fn();
 
   return {
     mockListFiles, mockDeleteFiles, mockCollectReferenced,
@@ -72,6 +74,7 @@ const {
     mockDbUpdate, mockDbUpdateSet, mockDbUpdateSetWhere,
     mockDbInsert, mockDbInsertValues,
     mockLogInfo, mockLogError,
+    mockRunWhatsAppMediaRetentionCleanup,
   };
 });
 
@@ -83,6 +86,10 @@ vi.mock("../lib/uploadthing.js", () => ({
 
 vi.mock("../lib/collectReferencedUploadThingKeys.js", () => ({
   collectReferencedUploadThingKeys: mockCollectReferenced,
+}));
+
+vi.mock("../lib/whatsapp-media-retention.js", () => ({
+  runWhatsAppInboundMediaRetentionCleanup: mockRunWhatsAppMediaRetentionCleanup,
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -181,6 +188,7 @@ beforeEach(() => {
   mockDbInsertValues.mockReset();
   mockLogInfo.mockReset();
   mockLogError.mockReset();
+  mockRunWhatsAppMediaRetentionCleanup.mockReset();
 
   // Re-wire the db chain after reset
   mockDbSelect.mockReturnValue({ from: mockDbSelectFrom });
@@ -195,11 +203,65 @@ beforeEach(() => {
   mockDeleteFiles.mockResolvedValue({ deletedCount: 0 });
   mockDbUpdateSetWhere.mockResolvedValue([]);
   mockDbInsertValues.mockResolvedValue([]);
+  mockRunWhatsAppMediaRetentionCleanup.mockResolvedValue({ expiredMessages: 0, errors: 0 });
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
+  it("expires WhatsApp media before scanning database references", async () => {
+    mockStagingEmpty();
+    mockListFiles.mockResolvedValueOnce(buildPage([]));
+
+    await runUploadThingOrphanCleanup();
+
+    expect(mockRunWhatsAppMediaRetentionCleanup).toHaveBeenCalledOnce();
+    expect(mockRunWhatsAppMediaRetentionCleanup.mock.invocationCallOrder[0])
+      .toBeLessThan(mockCollectReferenced.mock.invocationCallOrder[0]!);
+  });
+
+  it("includes a failed WhatsApp retention pass in the cleanup outcome", async () => {
+    mockRunWhatsAppMediaRetentionCleanup.mockResolvedValueOnce({
+      expiredMessages: 6,
+      errors: 1,
+    });
+    mockStagingEmpty();
+    mockListFiles.mockResolvedValueOnce(buildPage([]));
+
+    const result = await runUploadThingOrphanCleanup();
+
+    expect(result.retention).toEqual({ expiredMessages: 6, errors: 1 });
+    expect(result.errors).toBe(0);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        retention: { expiredMessages: 6, errors: 1 },
+      }),
+      expect.stringContaining("WhatsApp retention cleanup errors"),
+    );
+  });
+
+  it("records rejected retention cleanup and continues the scan without logging exception content", async () => {
+    const privateErrorMessage = "private attachment details";
+    mockRunWhatsAppMediaRetentionCleanup.mockRejectedValueOnce(
+      new Error(privateErrorMessage),
+    );
+    mockStagingEmpty();
+    mockListFiles.mockResolvedValueOnce(buildPage([]));
+
+    const result = await runUploadThingOrphanCleanup();
+
+    expect(result.retention).toEqual({ expiredMessages: 0, errors: 1 });
+    expect(mockCollectReferenced).toHaveBeenCalledOnce();
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        retention: { expiredMessages: 0, errors: 1 },
+      }),
+      expect.stringContaining("retention cleanup rejected"),
+    );
+    expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(
+      privateErrorMessage,
+    );
+  });
 
   describe("Run N (first discovery — no prior staging)", () => {
     it("stages a newly discovered orphan and does NOT delete it", async () => {
@@ -422,7 +484,13 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
 
       const result = await runUploadThingOrphanCleanup();
 
-      expect(result).toEqual({ scanned: 0, newlyStaged: 0, deleted: 0, errors: 0 });
+      expect(result).toEqual({
+        scanned: 0,
+        newlyStaged: 0,
+        deleted: 0,
+        errors: 0,
+        retention: { expiredMessages: 0, errors: 0 },
+      });
       expect(mockDeleteFiles).not.toHaveBeenCalled();
     });
 

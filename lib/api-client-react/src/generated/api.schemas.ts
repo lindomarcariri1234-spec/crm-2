@@ -2672,6 +2672,10 @@ export interface Message {
   outboundMessageId?: string | null;
 }
 
+export interface MessageClientStatus {
+  valid: boolean;
+}
+
 export type SendMessageBodyChannel =
   (typeof SendMessageBodyChannel)[keyof typeof SendMessageBodyChannel];
 
@@ -4347,6 +4351,12 @@ export interface ChatbotMessage {
   content: string;
   /** @nullable */
   mediaUrl?: string | null;
+  /** @nullable */
+  mediaMimeType?: string | null;
+  /** @nullable */
+  mediaFileName?: string | null;
+  /** @nullable */
+  mediaExpiredAt?: string | null;
   isBot: boolean;
   sentAt: string;
 }

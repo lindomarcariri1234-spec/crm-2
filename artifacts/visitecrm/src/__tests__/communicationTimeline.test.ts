@@ -55,6 +55,30 @@ const chatbotMessages: AiConversationMessage[] = [
 ];
 
 describe("communication timeline", () => {
+  it("preserves expired WhatsApp media state on the client timeline entry", () => {
+    const mediaMessage: AiConversationMessage = {
+      ...chatbotMessages[0]!,
+      mediaUrl: null,
+      mediaMimeType: "audio/ogg",
+      mediaFileName: "voice.ogg",
+      mediaExpiredAt: "2026-10-01T10:00:00.000Z",
+    };
+    const timeline = buildClientTimeline({
+      clientId: "client-1",
+      messages: [],
+      outboundMessages: [],
+      chatbotConversations: [conversation],
+      chatbotMessages: [mediaMessage],
+    });
+
+    expect(timeline[0]).toMatchObject({
+      mediaUrl: null,
+      mediaMimeType: "audio/ogg",
+      mediaFileName: "voice.ogg",
+      mediaExpiredAt: "2026-10-01T10:00:00.000Z",
+    });
+  });
+
   it("merges inbound, automated, human, and outbound-ledger messages chronologically", () => {
     const timeline = buildClientTimeline({
       clientId: "client-1",

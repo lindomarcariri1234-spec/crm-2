@@ -6,13 +6,21 @@ import {
   db,
   tenantIntegrationsTable,
 } from "@workspace/db";
-import { and, desc, eq, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { decryptOrPassthrough } from "../lib/crypto";
 import { getAIClientForTenant, sanitizeProviderError } from "../lib/ai-client";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
+import { deleteOrphanedFile } from "../lib/uploadthing";
 import { dispatchOutboundMessage, updateOutboundDeliveryFromWebhook } from "./outbound-delivery";
 import { recomputeClientClassification, recordClientClassificationEvent } from "./client-classification.js";
+import {
+  extractEvolutionInboundMedia,
+  storeEvolutionInboundMedia,
+  unwrapEvolutionMessage,
+  type EvolutionInboundMedia,
+  type StoredEvolutionMedia,
+} from "./whatsapp-media.js";
 
 function normalizeInboundWhatsAppPhone(raw: string): string | null {
   const phonePart = raw.trim().split("@")[0]?.split(":")[0] ?? "";
@@ -44,6 +52,7 @@ interface EvolutionInbound {
   messageId: string | null;
   phone: string | null;
   content: string | null;
+  media: EvolutionInboundMedia | null;
   fromMe: boolean;
 }
 
@@ -53,12 +62,7 @@ function safeEqual(a: string, b: string): boolean {
   return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-/**
- * Evolution emits slightly different envelopes between versions. We accept the
- * text-only variants that are safe to automate and ignore media, groups and
- * outgoing messages. Unsupported input remains visible to an agent through the
- * provider, but never becomes an AI prompt.
- */
+/** Evolution emits slightly different envelopes between versions. */
 export function parseEvolutionInbound(instanceName: string, payload: unknown): EvolutionInbound {
   const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
   const data = root["data"] && typeof root["data"] === "object"
@@ -70,27 +74,42 @@ export function parseEvolutionInbound(instanceName: string, payload: unknown): E
   const message = data["message"] && typeof data["message"] === "object"
     ? data["message"] as Record<string, unknown>
     : {};
-  const extended = message["extendedTextMessage"] && typeof message["extendedTextMessage"] === "object"
-    ? message["extendedTextMessage"] as Record<string, unknown>
-    : {};
   const rawJid = typeof key["remoteJid"] === "string"
     ? key["remoteJid"]
     : typeof data["remoteJid"] === "string"
       ? data["remoteJid"]
       : typeof data["sender"] === "string" ? data["sender"] : "";
   const rawPhone = rawJid.split("@")[0] ?? "";
-  const content = typeof message["conversation"] === "string"
-    ? message["conversation"]
+  const messageId = typeof key["id"] === "string"
+    ? key["id"]
+    : typeof data["id"] === "string" ? data["id"] : null;
+  const unwrappedMessage = unwrapEvolutionMessage(message);
+  const extended = unwrappedMessage["extendedTextMessage"] && typeof unwrappedMessage["extendedTextMessage"] === "object"
+    ? unwrappedMessage["extendedTextMessage"] as Record<string, unknown>
+    : {};
+  const media = extractEvolutionInboundMedia({
+    message,
+    messageId,
+    remoteJid: rawJid,
+  });
+  const textContent = typeof unwrappedMessage["conversation"] === "string"
+    ? unwrappedMessage["conversation"]
     : typeof extended["text"] === "string"
       ? extended["text"]
-      : typeof data["text"] === "string" ? data["text"] : null;
+      : typeof data["text"] === "string" ? data["text"] : media?.caption ?? null;
+  const mediaLabel = media?.kind === "audio"
+    ? "Áudio recebido"
+    : media?.kind === "image"
+      ? "Imagem recebida"
+      : media?.kind === "video"
+        ? "Vídeo recebido"
+        : media ? "Anexo recebido" : null;
   return {
     instanceName,
-    messageId: typeof key["id"] === "string"
-      ? key["id"]
-      : typeof data["id"] === "string" ? data["id"] : null,
+    messageId,
     phone: normalizeInboundWhatsAppPhone(rawPhone),
-    content: content?.trim().slice(0, 4_000) || null,
+    content: textContent?.trim().slice(0, 4_000) || mediaLabel,
+    media,
     fromMe: key["fromMe"] === true || data["fromMe"] === true || rawJid.endsWith("@g.us"),
   };
 }
@@ -213,7 +232,6 @@ export async function processEvolutionDeliveryStatus(opts: {
 export async function deliverAttendanceReply(opts: {
   tenantId: string;
   messageId: string;
-  phone: string;
 }): Promise<boolean> {
   const claimed = await db
     .update(chatbotMessagesTable)
@@ -247,6 +265,36 @@ export async function deliverAttendanceReply(opts: {
     return message?.deliveryStatus === "sent";
   }
   try {
+    const [conversation] = await db.select({
+      sessionId: chatbotConversationsTable.sessionId,
+      status: chatbotConversationsTable.status,
+      clientId: chatbotConversationsTable.clientId,
+      clientWhatsappOptIn: clientsTable.whatsappOptIn,
+    }).from(chatbotConversationsTable)
+      .leftJoin(clientsTable, and(
+        eq(clientsTable.id, chatbotConversationsTable.clientId),
+        eq(clientsTable.tenantId, chatbotConversationsTable.tenantId),
+      ))
+      .where(and(
+        eq(chatbotConversationsTable.id, claimed[0].conversationId),
+        eq(chatbotConversationsTable.tenantId, opts.tenantId),
+      ))
+      .limit(1);
+    const optOut = conversation?.status === "opted_out"
+      || Boolean(conversation?.clientId && conversation.clientWhatsappOptIn !== true);
+    if (!conversation?.sessionId || optOut) {
+      await db.update(chatbotMessagesTable)
+        .set({
+          deliveryStatus: "cancelled",
+          deliveryUpdatedAt: new Date(),
+          lastDeliveryError: optOut ? "contact_opted_out" : "conversation_unavailable",
+        })
+        .where(and(
+          eq(chatbotMessagesTable.id, opts.messageId),
+          eq(chatbotMessagesTable.tenantId, opts.tenantId),
+        ));
+      return false;
+    }
     // The attendance service only persists/queues the reply. Provider calls
     // belong to the outbound-delivery worker, so a webhook replay cannot
     // accidentally send outside the durable ledger.
@@ -254,7 +302,7 @@ export async function deliverAttendanceReply(opts: {
       tenantId: opts.tenantId,
       eventType: "whatsapp_attendance_reply",
       idempotencyKey: `whatsapp-attendance:${opts.tenantId}:${claimed[0].conversationId}:${claimed[0].id}`,
-      recipient: { type: "direct", whatsapp: opts.phone },
+      recipient: { type: "direct", whatsapp: conversation.sessionId },
       whatsapp: { text: claimed[0].content },
       origin: "whatsapp-attendance",
       originChannel: "whatsapp",
@@ -303,9 +351,18 @@ export async function retryPendingAttendanceReplies(): Promise<void> {
       tenantId: chatbotMessagesTable.tenantId,
       phone: chatbotConversationsTable.sessionId,
       conversationStatus: chatbotConversationsTable.status,
+      clientId: chatbotConversationsTable.clientId,
+      clientWhatsappOptIn: clientsTable.whatsappOptIn,
     })
     .from(chatbotMessagesTable)
-    .innerJoin(chatbotConversationsTable, eq(chatbotMessagesTable.conversationId, chatbotConversationsTable.id))
+    .innerJoin(chatbotConversationsTable, and(
+      eq(chatbotMessagesTable.conversationId, chatbotConversationsTable.id),
+      eq(chatbotMessagesTable.tenantId, chatbotConversationsTable.tenantId),
+    ))
+    .leftJoin(clientsTable, and(
+      eq(clientsTable.id, chatbotConversationsTable.clientId),
+      eq(clientsTable.tenantId, chatbotConversationsTable.tenantId),
+    ))
     .where(or(
       eq(chatbotMessagesTable.deliveryStatus, "pending"),
       and(
@@ -318,23 +375,32 @@ export async function retryPendingAttendanceReplies(): Promise<void> {
 
   for (let index = 0; index < rows.length; index += 5) {
     await Promise.all(rows.slice(index, index + 5).map(async (row) => {
-      if (!row.phone || row.conversationStatus === "opted_out") {
+      const clientOptedOut = Boolean(row.clientId && row.clientWhatsappOptIn !== true);
+      if (!row.phone || row.conversationStatus === "opted_out" || clientOptedOut) {
         await db.update(chatbotMessagesTable)
           .set({
             deliveryStatus: "cancelled",
             deliveryUpdatedAt: new Date(),
-            lastDeliveryError: "contact_opted_out",
+            lastDeliveryError: row.conversationStatus === "opted_out" || clientOptedOut
+              ? "contact_opted_out"
+              : "conversation_unavailable",
           })
           .where(and(
             eq(chatbotMessagesTable.id, row.messageId),
             eq(chatbotMessagesTable.tenantId, row.tenantId),
+            or(
+              eq(chatbotMessagesTable.deliveryStatus, "pending"),
+              and(
+                eq(chatbotMessagesTable.deliveryStatus, "processing"),
+                lt(chatbotMessagesTable.deliveryUpdatedAt, staleBefore),
+              ),
+            ),
           ));
         return;
       }
       await deliverAttendanceReply({
         tenantId: row.tenantId,
         messageId: row.messageId,
-        phone: row.phone,
       });
     }));
   }
@@ -346,13 +412,15 @@ export async function processEvolutionInbound(opts: {
   payload: unknown;
 }): Promise<WhatsAppInboundOutcome> {
   const inbound = parseEvolutionInbound(opts.instanceName, opts.payload);
-  if (inbound.fromMe || !inbound.phone || !inbound.content) return "ignored";
+  if (inbound.fromMe || !inbound.phone || (!inbound.content && !inbound.media)) return "ignored";
+  const inboundContent = inbound.content ?? "";
+  const optOutRequested = isOptOut(inboundContent);
 
   const integration = await resolveIntegration(inbound.instanceName, opts.apiKey);
   if (!integration) return "unauthorized";
   const tenantId = integration.tenantId;
 
-  const { client, conversation, inserted } = await db.transaction(async (tx) => {
+  const transactionResult = await db.transaction(async (tx) => {
     await tx.execute(sql`
       SELECT pg_advisory_xact_lock(
         hashtextextended(${`client-whatsapp:${tenantId}:${inbound.phone}`}, 0)
@@ -483,6 +551,23 @@ export async function processEvolutionInbound(opts: {
       }, tx);
     }
 
+    const optedOut = optOutRequested
+      || client?.whatsappOptIn === false
+      || conversation.status === "opted_out";
+    if (optOutRequested && client) {
+      await tx.update(clientsTable)
+        .set({ whatsappOptIn: false })
+        .where(and(eq(clientsTable.id, client.id), eq(clientsTable.tenantId, tenantId)));
+    }
+    if (optedOut) {
+      await tx.update(chatbotConversationsTable)
+        .set({ status: "opted_out", endedAt: new Date() })
+        .where(and(
+          eq(chatbotConversationsTable.id, conversation.id),
+          eq(chatbotConversationsTable.tenantId, tenantId),
+        ));
+    }
+
     const [inserted] = await tx.insert(chatbotMessagesTable)
       .values({
         id: generateId(),
@@ -490,11 +575,30 @@ export async function processEvolutionInbound(opts: {
         conversationId: conversation.id,
         sourceMessageId: inbound.messageId,
         role: "user",
-        content: inbound.content!,
+        content: inbound.content ?? "Mídia recebida",
+        mediaUrl: null,
+        mediaMimeType: optedOut ? null : inbound.media?.mimeType ?? null,
+        mediaFileName: optedOut ? null : inbound.media?.fileName ?? null,
         isBot: false,
       })
       .onConflictDoNothing()
       .returning({ id: chatbotMessagesTable.id });
+
+    let existingMediaMessage: { id: string; mediaUrl: string | null } | undefined;
+    if (!inserted && inbound.messageId && inbound.media && !optedOut) {
+      const [existing] = await tx.select({
+        id: chatbotMessagesTable.id,
+        mediaUrl: chatbotMessagesTable.mediaUrl,
+      })
+        .from(chatbotMessagesTable)
+        .where(and(
+          eq(chatbotMessagesTable.tenantId, tenantId),
+          eq(chatbotMessagesTable.conversationId, conversation.id),
+          eq(chatbotMessagesTable.sourceMessageId, inbound.messageId),
+        ))
+        .limit(1);
+      existingMediaMessage = existing;
+    }
 
     if (identityMatchStatus === "auto_created") {
       await recordClientClassificationEvent({
@@ -525,10 +629,80 @@ export async function processEvolutionInbound(opts: {
         reason: "Mensagem recebida pelo WhatsApp.",
       }, tx);
     }
-    return { client, conversation, inserted };
+    const mediaMessageId = inserted?.id ?? existingMediaMessage?.id ?? null;
+    return {
+      conversation,
+      inserted,
+      optedOut,
+      mediaMessageId,
+      shouldStoreMedia: Boolean(
+        inbound.media
+        && !optedOut
+        && mediaMessageId
+        && !existingMediaMessage?.mediaUrl,
+      ),
+    };
   });
+  const { conversation, inserted, optedOut, mediaMessageId, shouldStoreMedia } = transactionResult;
+  if (optedOut) return "opted_out";
+
+  if (inbound.media && mediaMessageId && shouldStoreMedia) {
+    const config = (integration.config ?? {}) as Record<string, unknown>;
+    let apiKey: string | null = null;
+    try {
+      const secrets = JSON.parse(decryptOrPassthrough(integration.secretsEncrypted) ?? "{}") as Record<string, unknown>;
+      apiKey = typeof secrets["apiKey"] === "string" ? secrets["apiKey"].trim() : null;
+    } catch {
+      // resolveIntegration already verified this credential; don't expose it.
+    }
+    const baseUrl = typeof config["baseUrl"] === "string" ? config["baseUrl"].trim() : "";
+    const instanceName = typeof config["instanceName"] === "string" ? config["instanceName"].trim() : "";
+    const result = baseUrl && instanceName && apiKey
+      ? await storeEvolutionInboundMedia({ baseUrl, instanceName, apiKey, media: inbound.media })
+      : { ok: false as const, reason: "request_failed" as const };
+    if (result.ok) {
+      const uploadedMedia: StoredEvolutionMedia = result.media;
+      try {
+        const [attached] = await db.update(chatbotMessagesTable)
+          .set({
+            mediaUrl: uploadedMedia.mediaUrl,
+            mediaMimeType: uploadedMedia.mimeType,
+            mediaFileName: uploadedMedia.fileName,
+          })
+          .where(and(
+            eq(chatbotMessagesTable.id, mediaMessageId),
+            eq(chatbotMessagesTable.tenantId, tenantId),
+            isNull(chatbotMessagesTable.mediaUrl),
+          ))
+          .returning({ id: chatbotMessagesTable.id });
+        if (!attached) {
+          await deleteOrphanedFile(
+            uploadedMedia.mediaUrl,
+            null,
+            logger,
+            tenantId,
+            { checkSameTenantReferences: true },
+          );
+        }
+      } catch (err) {
+        await deleteOrphanedFile(
+          uploadedMedia.mediaUrl,
+          null,
+          logger,
+          tenantId,
+          { checkSameTenantReferences: true },
+        );
+        throw err;
+      }
+    } else {
+      logger.warn(
+        { tenantId, reason: result.reason },
+        "[whatsapp-attendance] inbound media could not be stored",
+      );
+    }
+  }
   const outboundKey = inbound.messageId ? `outbound:${inbound.messageId}` : null;
-  if (inbound.messageId && !inserted && outboundKey) {
+  if (inbound.messageId && !inserted && outboundKey && !inbound.media) {
     const [existingReply] = await db.select({ id: chatbotMessagesTable.id })
       .from(chatbotMessagesTable)
       .where(and(
@@ -537,32 +711,18 @@ export async function processEvolutionInbound(opts: {
       ))
       .limit(1);
     if (existingReply) {
-      return (await deliverAttendanceReply({ tenantId, messageId: existingReply.id, phone: inbound.phone }))
+      return (await deliverAttendanceReply({ tenantId, messageId: existingReply.id }))
         ? "answered"
         : "ai_unavailable";
     }
   }
 
-  if (isOptOut(inbound.content)) {
-    if (client) {
-      await db.update(clientsTable)
-        .set({ whatsappOptIn: false })
-        .where(and(eq(clientsTable.id, client.id), eq(clientsTable.tenantId, tenantId)));
-    }
-    await db.update(chatbotConversationsTable)
-      .set({ status: "opted_out", endedAt: new Date() })
-      .where(eq(chatbotConversationsTable.id, conversation.id));
-    return "opted_out";
-  }
-
   if (
-    client?.whatsappOptIn === false
-    || conversation.status === "opted_out"
+    inbound.media
+    || conversation.assignedUserId
+    || conversation.status === "human_handoff"
+    || mustHandoff(inboundContent)
   ) {
-    return "opted_out";
-  }
-
-  if (conversation.assignedUserId || conversation.status === "human_handoff" || mustHandoff(inbound.content)) {
     await db.update(chatbotConversationsTable)
       .set({ status: "human_handoff" })
       .where(eq(chatbotConversationsTable.id, conversation.id));
@@ -632,7 +792,6 @@ export async function processEvolutionInbound(opts: {
   const delivered = await deliverAttendanceReply({
     tenantId,
     messageId: existingResponse.id,
-    phone: inbound.phone,
   });
   if (!delivered) {
     logger.warn({ tenantId }, "[whatsapp-attendance] Response queued for retry after delivery failure");

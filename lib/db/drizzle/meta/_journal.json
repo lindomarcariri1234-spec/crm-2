@@ -722,6 +722,20 @@
       "when": 1809960003000,
       "tag": "0103_link_operational_cost_payables",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1809960004000,
+      "tag": "0104_whatsapp_inbound_media",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1809960005000,
+      "tag": "0105_whatsapp_media_retention",
+      "breakpoints": true
     }
   ]
 }

@@ -18,6 +18,7 @@ import {
   useReconcileOutboundDelivery,
   useRetryOutboundDelivery,
   useRetryUnknownOutboundDelivery,
+  useGetMessageClientStatus,
   useGetMe,
 } from "@workspace/api-client-react";
 import { useListClients } from "@workspace/api-client-react";
@@ -90,6 +91,7 @@ import {
 } from "@/lib/communicationTimeline";
 import {
   ConversationsTab,
+  type ClientLinkStatus,
   type AiConversation,
   type AiMessage,
 } from "./communication/CommunicationInboxTabs";
@@ -230,6 +232,7 @@ export default function Communication() {
   const [associatingAiConversationId, setAssociatingAiConversationId] = useState<string | null>(null);
   const aiReplyKey = useRef<string | null>(null);
   const aiConversationRequestId = useRef(0);
+  const aiInboxRequestId = useRef(0);
 
   const [resendingId, setResendingId] = useState<string | null>(null);
   const [historyChannel, setHistoryChannel] = useState<"all" | "email" | "whatsapp">("all");
@@ -312,32 +315,42 @@ export default function Communication() {
     return () => window.clearTimeout(timeout);
   }, [clientSearch]);
 
-  const fetchAiInbox = useCallback(async () => {
-    setLoadingAiInbox(true);
-    setAiInboxError(null);
+  const fetchAiInbox = useCallback(async (silent = false) => {
+    const requestId = ++aiInboxRequestId.current;
+    if (!silent) {
+      setLoadingAiInbox(true);
+      setAiInboxError(null);
+    }
     try {
       const res = await fetch(`${BASE}/api/chatbot-conversations`, { credentials: "include" });
       if (!res.ok) throw new Error("failed");
-      setAiConversations(await res.json());
+      const conversations = await res.json();
+      if (requestId !== aiInboxRequestId.current) return;
+      setAiConversations(conversations);
+      setAiInboxError(null);
     } catch {
-      setAiInboxError("Não foi possível carregar as conversas recebidas pelo WhatsApp.");
-      toast({ title: "Não foi possível carregar o atendimento por IA.", variant: "destructive" });
+      if (!silent && requestId === aiInboxRequestId.current) {
+        setAiInboxError("Não foi possível carregar as conversas recebidas pelo WhatsApp.");
+        toast({ title: "Não foi possível carregar o atendimento por IA.", variant: "destructive" });
+      }
     } finally {
-      setLoadingAiInbox(false);
+      if (requestId === aiInboxRequestId.current) setLoadingAiInbox(false);
     }
   }, [toast]);
 
-  const selectAiConversation = useCallback(async (id: string) => {
+  const selectAiConversation = useCallback(async (id: string, silent = false) => {
     const requestId = ++aiConversationRequestId.current;
-    setSelectedAiConversationId(id);
-    setAiMessages([]);
+    if (!silent) {
+      setSelectedAiConversationId(id);
+      setAiMessages([]);
+    }
     try {
       const res = await fetch(`${BASE}/api/chatbot-conversations/${id}/messages`, { credentials: "include" });
       if (!res.ok) throw new Error("failed");
       const messages = await res.json() as AiMessage[];
       if (requestId === aiConversationRequestId.current) setAiMessages(messages);
     } catch {
-      if (requestId === aiConversationRequestId.current) {
+      if (!silent && requestId === aiConversationRequestId.current) {
         toast({ title: "Não foi possível carregar o histórico.", variant: "destructive" });
       }
     }
@@ -348,8 +361,26 @@ export default function Communication() {
   }, []);
 
   useEffect(() => {
-    if (tab === "ai-inbox" || tab === "conversations") fetchAiInbox();
+    if (tab !== "ai-inbox" && tab !== "conversations") return;
+    void fetchAiInbox();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void fetchAiInbox(true);
+    }, 15_000);
+    return () => {
+      window.clearInterval(interval);
+      aiInboxRequestId.current += 1;
+    };
   }, [tab, fetchAiInbox]);
+
+  useEffect(() => {
+    if (tab !== "ai-inbox" || !selectedAiConversationId) return;
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void selectAiConversation(selectedAiConversationId, true);
+      }
+    }, 15_000);
+    return () => window.clearInterval(interval);
+  }, [tab, selectedAiConversationId, selectAiConversation]);
 
   useEffect(() => {
     const linkedConversations = aiConversations.filter((conversation) =>
@@ -457,6 +488,19 @@ export default function Communication() {
         enabled: tab === "messages" || tab === "conversations",
       },
     });
+  const {
+    data: selectedConversationClientStatus,
+    isLoading: loadingSelectedConversationClientStatus,
+    isFetching: fetchingSelectedConversationClientStatus,
+    isError: selectedConversationClientStatusError,
+    refetch: refetchSelectedConversationClientStatus,
+  } = useGetMessageClientStatus(selectedConversationClientId ?? "", {
+    query: {
+      enabled: tab === "conversations" && Boolean(selectedConversationClientId),
+      retry: false,
+      staleTime: 0,
+    },
+  });
   const { data: templates, isLoading: loadingTemplates, isError: templatesError, error: templatesQueryError, refetch: refetchTemplates } =
     useListMessageTemplates({
       query: { queryKey: templatesQueryKey, enabled: tab === "templates" || isSendOpen },
@@ -464,7 +508,7 @@ export default function Communication() {
   const { data: clients } = useListClients(clientsParams, {
     query: {
       queryKey: getListClientsQueryKey(clientsParams),
-      enabled: tab === "email-logs",
+      enabled: tab === "email-logs" || tab === "ai-inbox",
     },
   });
   const { data: messageClients } = useListClients({
@@ -879,9 +923,37 @@ export default function Communication() {
     [aiConversations, selectedConversationClientId],
   );
 
+  const selectedClientLinkStatus: ClientLinkStatus = !selectedConversationClientId
+    ? "valid"
+    : fetchingSelectedConversationClientStatus || loadingSelectedConversationClientStatus
+      ? "checking"
+      : selectedConversationClientStatusError
+        ? "unavailable"
+        : selectedConversationClientStatus?.valid === true
+          ? "valid"
+          : selectedConversationClientStatus?.valid === false
+            ? "missing"
+            : "checking";
+
+  const openSelectedConversationForReassociation = () => {
+    if (!selectedWhatsAppConversation) return;
+    setTab("ai-inbox");
+    void selectAiConversation(selectedWhatsAppConversation.id);
+  };
+
   const handleSendInbox = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selectedConversationClientId || !inboxMessage.trim()) return;
+    if (selectedClientLinkStatus !== "valid") {
+      toast({
+        title: "Envio bloqueado",
+        description: selectedClientLinkStatus === "missing"
+          ? "Associe este histórico a um cliente válido antes de enviar."
+          : "Aguarde a confirmação do vínculo do cliente antes de enviar.",
+        variant: "destructive",
+      });
+      return;
+    }
     if (inboxChannel === "whatsapp" && selectedWhatsAppConversation?.status === "opted_out") {
       toast({
         title: "WhatsApp indisponível para esta conversa",
@@ -1351,6 +1423,9 @@ export default function Communication() {
             loadingConversationAiMessages={loadingConversationAiMessages}
             conversationAiError={conversationAiError}
             selectedWhatsAppConversation={selectedWhatsAppConversation}
+            selectedClientLinkStatus={selectedClientLinkStatus}
+            onRetryClientLinkCheck={() => refetchSelectedConversationClientStatus()}
+            onReassociateConversation={openSelectedConversationForReassociation}
             inboxChannel={inboxChannel}
             setInboxChannel={setInboxChannel}
             inboxMessage={inboxMessage}

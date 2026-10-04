@@ -105,6 +105,22 @@ router.get("/messages", async (req, res, next: NextFunction): Promise<void> => {
   }
 });
 
+router.get("/messages/client-status/:clientId", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const [client] = await db.select({ id: clientsTable.id }).from(clientsTable)
+      .where(and(
+        eq(clientsTable.id, req.params.clientId),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .limit(1);
+    res.json({ valid: Boolean(client) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);

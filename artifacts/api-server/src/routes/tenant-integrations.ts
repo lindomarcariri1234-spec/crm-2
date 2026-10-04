@@ -51,6 +51,96 @@ function sanitizeExternalError(err: unknown): string {
   return "Falha ao conectar ao serviço externo.";
 }
 
+function resolvePublicWebhookBaseUrl(): string | null {
+  const firstReplitDomain = (process.env["REPLIT_DOMAINS"] ?? "")
+    .split(",")
+    .map((domain) => domain.trim())
+    .find(Boolean);
+  const candidates = [
+    process.env["API_BASE_URL"],
+    ...(process.env["NODE_ENV"] === "development" ? [process.env["REPLIT_DEV_DOMAIN"]] : []),
+    firstReplitDomain,
+    process.env["FRONTEND_URL"],
+    ...(process.env["NODE_ENV"] !== "development" ? [process.env["REPLIT_DEV_DOMAIN"]] : []),
+  ];
+
+  for (const rawCandidate of candidates) {
+    const candidate = rawCandidate?.trim();
+    if (!candidate) continue;
+    try {
+      const normalized = /^[a-z][a-z\d+.-]*:\/\//i.test(candidate)
+        ? candidate
+        : `https://${candidate}`;
+      const url = new URL(normalized);
+      if (
+        url.protocol !== "https:"
+        || !url.hostname
+        || url.username
+        || url.password
+        || url.search
+        || url.hash
+        || url.hostname === "localhost"
+        || url.hostname.endsWith(".localhost")
+      ) {
+        continue;
+      }
+      const basePath = url.pathname.replace(/\/+$/, "").replace(/\/api$/i, "");
+      return `${url.origin}${basePath}`;
+    } catch {
+      // Try the next trusted environment-provided public origin.
+    }
+  }
+  return null;
+}
+
+async function configureEvolutionInboundWebhook(
+  config: Record<string, string>,
+  apiKey: string,
+): Promise<{ ok: boolean; message: string }> {
+  const instanceName = config["instanceName"]?.trim();
+  const baseUrl = config["baseUrl"]?.trim();
+  const publicBaseUrl = resolvePublicWebhookBaseUrl();
+  if (!instanceName || !baseUrl || !publicBaseUrl) {
+    return {
+      ok: false,
+      message: "Não foi possível determinar a URL pública para receber mensagens. Configure API_BASE_URL ou FRONTEND_URL.",
+    };
+  }
+
+  const callbackUrl = `${publicBaseUrl}/api/webhooks/whatsapp/evolution/${encodeURIComponent(instanceName)}`;
+  const endpoint = `${baseUrl.replace(/\/+$/, "")}/webhook/set/${encodeURIComponent(instanceName)}`;
+  try {
+    const result = await ssrfSafeFetchBounded(endpoint, {
+      method: "POST",
+      headers: {
+        apikey: apiKey,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        webhook: {
+          enabled: true,
+          url: callbackUrl,
+          webhookByEvents: false,
+          webhookBase64: false,
+          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE"],
+          headers: { apikey: apiKey },
+        },
+      }),
+      timeoutMs: 12000,
+      maxBytes: 16 * 1024,
+    });
+    if (!result.ok) {
+      return {
+        ok: false,
+        message: `A Evolution recusou a configuração do webhook de recebimento (HTTP ${result.status}).`,
+      };
+    }
+    return { ok: true, message: "Webhook de recebimento do WhatsApp configurado." };
+  } catch (err) {
+    return { ok: false, message: sanitizeExternalError(err) };
+  }
+}
+
 // ─── Audit log ────────────────────────────────────────────────────────────────
 
 async function writeLog(
@@ -621,6 +711,8 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       `Configuração salva (${entry.label}, ativo: ${enabled ? "sim" : "não"}${secretsChanged ? ", credenciais atualizadas" : ""}).`,
     );
 
+    let webhookSetup: { ok: boolean; message: string } | undefined;
+
     // Auto-verify the saved config so the persisted status always reflects the
     // stored credentials. Never auto-test disabled integrations (stale status).
     if (enabled && (newSecretsEncrypted || secretFields.length === 0)) {
@@ -650,6 +742,22 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
             );
           await writeLog(me, type, "test", "error", `Falha ao verificar após salvar: ${testResult.message}`);
         }
+
+        if (type === "whatsapp_evolution") {
+          webhookSetup = testResult.ok
+            ? await configureEvolutionInboundWebhook(resolvedConfig, secrets["apiKey"] ?? "")
+            : {
+                ok: false,
+                message: "O webhook de recebimento não foi configurado porque o teste da conexão Evolution falhou.",
+              };
+          await writeLog(
+            me,
+            type,
+            "webhook_setup",
+            webhookSetup.ok ? "info" : "warn",
+            webhookSetup.message,
+          );
+        }
       } catch (testErr) {
         const msg = sanitizeExternalError(testErr);
         await db
@@ -662,10 +770,23 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
             ),
           );
         await writeLog(me, type, "test", "error", `Falha ao verificar após salvar: ${msg}`);
+        if (type === "whatsapp_evolution") {
+          webhookSetup = {
+            ok: false,
+            message: "O webhook de recebimento não foi configurado porque o teste da conexão Evolution falhou.",
+          };
+          await writeLog(me, type, "webhook_setup", "warn", webhookSetup.message);
+        }
       }
+    } else if (enabled && type === "whatsapp_evolution") {
+      webhookSetup = {
+        ok: false,
+        message: "O webhook de recebimento não foi configurado porque as credenciais não puderam ser verificadas.",
+      };
+      await writeLog(me, type, "webhook_setup", "warn", webhookSetup.message);
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, ...(webhookSetup ? { webhook: webhookSetup } : {}) });
   } catch (err) {
     next(err);
   }

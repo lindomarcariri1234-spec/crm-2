@@ -6362,6 +6362,17 @@ export const SendMessageResponse = zod.object({
 });
 
 /**
+ * @summary Check whether a client belongs to the current tenant for messaging
+ */
+export const GetMessageClientStatusParams = zod.object({
+  clientId: zod.coerce.string(),
+});
+
+export const GetMessageClientStatusResponse = zod.object({
+  valid: zod.boolean(),
+});
+
+/**
  * @summary List persistent multichannel outbound messages
  */
 export const listOutboundMessagesQueryLimitDefault = 100;
@@ -9695,6 +9706,9 @@ export const ListChatbotMessagesResponseItem = zod.object({
   role: zod.string(),
   content: zod.string(),
   mediaUrl: zod.string().nullish(),
+  mediaMimeType: zod.string().nullish(),
+  mediaFileName: zod.string().nullish(),
+  mediaExpiredAt: zod.coerce.date().nullish(),
   isBot: zod.boolean(),
   sentAt: zod.string(),
 });
@@ -9720,6 +9734,9 @@ export const CreateChatbotMessageResponse = zod.object({
   role: zod.string(),
   content: zod.string(),
   mediaUrl: zod.string().nullish(),
+  mediaMimeType: zod.string().nullish(),
+  mediaFileName: zod.string().nullish(),
+  mediaExpiredAt: zod.coerce.date().nullish(),
   isBot: zod.boolean(),
   sentAt: zod.string(),
 });

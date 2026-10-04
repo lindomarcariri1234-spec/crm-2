@@ -240,6 +240,22 @@ function asNonAdmin() {
   });
 }
 
+function setWebhookTestEnvironment(frontendUrl: string) {
+  const keys = ["API_BASE_URL", "REPLIT_DOMAINS", "FRONTEND_URL", "REPLIT_DEV_DOMAIN"] as const;
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  process.env["API_BASE_URL"] = "";
+  process.env["REPLIT_DOMAINS"] = "";
+  process.env["FRONTEND_URL"] = frontendUrl;
+  process.env["REPLIT_DEV_DOMAIN"] = "";
+  return () => {
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+}
+
 // ---------------------------------------------------------------------------
 // beforeEach: reset mocks and rebuild all DB call chains
 // ---------------------------------------------------------------------------
@@ -565,6 +581,90 @@ describe("PUT /api/integrations/:type — save configuration", () => {
       (c: unknown[]) => (c[0] as Record<string, unknown>).status === "connected",
     );
     expect(statusUpdate).toBeDefined();
+  });
+
+  it("configures authenticated Evolution receive events when the integration is saved", async () => {
+    const restoreEnv = setWebhookTestEnvironment("https://app.example.com/api");
+    try {
+      asAdmin();
+      mockLimit.mockResolvedValueOnce([]);
+      mockSsrfFetch
+        .mockResolvedValueOnce({ ok: true, status: 200 })
+        .mockResolvedValueOnce({ ok: true, status: 201 });
+
+      const res = await request(buildApp())
+        .put("/api/integrations/whatsapp_evolution")
+        .send({
+          enabled: true,
+          config: { baseUrl: "https://evo.example.com", instanceName: "my-instance" },
+          secrets: { apiKey: WA_SECRETS.apiKey },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.webhook).toEqual({
+        ok: true,
+        message: "Webhook de recebimento do WhatsApp configurado.",
+      });
+      expect(mockSsrfFetch).toHaveBeenCalledTimes(2);
+      const [url, options] = mockSsrfFetch.mock.calls[1] as [
+        string,
+        { method: string; headers: Record<string, string>; body: string },
+      ];
+      expect(url).toBe("https://evo.example.com/webhook/set/my-instance");
+      expect(options.method).toBe("POST");
+      expect(options.headers.apikey).toBe(WA_SECRETS.apiKey);
+      const body = JSON.parse(options.body) as {
+        webhook: {
+          enabled: boolean;
+          url: string;
+          webhookByEvents: boolean;
+          webhookBase64: boolean;
+          events: string[];
+          headers: Record<string, string>;
+        };
+      };
+      expect(body.webhook).toEqual({
+        enabled: true,
+        url: "https://app.example.com/api/webhooks/whatsapp/evolution/my-instance",
+        webhookByEvents: false,
+        webhookBase64: false,
+        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE"],
+        headers: { apikey: WA_SECRETS.apiKey },
+      });
+      expect(res.text).not.toContain(WA_SECRETS.apiKey);
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  it("keeps the Evolution integration connected if webhook setup is rejected", async () => {
+    const restoreEnv = setWebhookTestEnvironment("https://app.example.com");
+    try {
+      asAdmin();
+      mockLimit.mockResolvedValueOnce([]);
+      mockSsrfFetch
+        .mockResolvedValueOnce({ ok: true, status: 200 })
+        .mockResolvedValueOnce({ ok: false, status: 401 });
+
+      const res = await request(buildApp())
+        .put("/api/integrations/whatsapp_evolution")
+        .send({
+          enabled: true,
+          config: { baseUrl: "https://evo.example.com", instanceName: "my-instance" },
+          secrets: { apiKey: WA_SECRETS.apiKey },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.webhook.ok).toBe(false);
+      expect(res.body.webhook.message).toContain("HTTP 401");
+      expect(mockUpdateSet.mock.calls.some(
+        (call: unknown[]) => (call[0] as Record<string, unknown>).status === "connected",
+      )).toBe(true);
+    } finally {
+      restoreEnv();
+    }
   });
 
   it("auto-tests after save and persists status=error when testConnection fails", async () => {

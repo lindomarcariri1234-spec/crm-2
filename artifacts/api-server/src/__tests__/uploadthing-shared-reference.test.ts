@@ -34,6 +34,7 @@ describe("deleteOrphanedFile shared-reference protection", () => {
 
     expect(mockDbExecute).toHaveBeenCalledOnce();
     expect(JSON.stringify(mockDbExecute.mock.calls[0]?.[0])).toContain("trip_media");
+    expect(JSON.stringify(mockDbExecute.mock.calls[0]?.[0])).toContain("chatbot_messages");
     expect(deleteFiles).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       { fileKey: "shared-file-key", callerTenantId: TENANT_ID },
