@@ -258,6 +258,7 @@ describe("enqueueOrSend", () => {
       eventType: "trip_whatsapp_broadcast",
       idempotencyKey: "trip:trip-1:broadcast:request-1:5511999990001",
       whatsappOnly: true,
+      inlineOnQueueFailure: true,
     })).resolves.toEqual({
       mode: "direct",
       success: true,
@@ -270,6 +271,7 @@ describe("enqueueOrSend", () => {
       idempotencyKey: "trip:trip-1:broadcast:request-1:5511999990001",
       whatsapp: { text: "Aviso de embarque" },
     });
+    expect(mockDispatchOutboundMessage.mock.calls[0][1]).toEqual({ inlineOnQueueFailure: true });
   });
 
   it("does not count email delivery as a successful WhatsApp when WhatsApp is opted out", async () => {

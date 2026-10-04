@@ -30,6 +30,7 @@ interface WhatsAppDispatchOptions {
   emailSubject?: string;
   whatsappOnly?: boolean;
   recipientClientId?: string;
+  inlineOnQueueFailure?: boolean;
 }
 
 /** Public wrapper for enqueueing a single WhatsApp job (e.g. from a bulk broadcast route). */
@@ -94,7 +95,7 @@ export async function enqueueOrSend(
   // opt-outs and owns queue/retry behavior. Email is included for legacy
   // multichannel callers unless a WhatsApp-only caller explicitly omits it.
   // Keep an optional key for callers with a durable business event.
-  const result = await dispatchOutboundMessage({
+  const dispatchInput: Parameters<typeof dispatchOutboundMessage>[0] = {
     tenantId,
     eventType: opts?.eventType ?? "whatsapp_message",
     idempotencyKey: opts?.idempotencyKey ?? `whatsapp:${tenantId}:${generateMessageId()}`,
@@ -110,7 +111,10 @@ export async function enqueueOrSend(
     whatsapp: { text: message },
     origin: "legacy_whatsapp",
     originChannel: "whatsapp",
-  });
+  };
+  const result = opts?.inlineOnQueueFailure
+    ? await dispatchOutboundMessage(dispatchInput, { inlineOnQueueFailure: true })
+    : await dispatchOutboundMessage(dispatchInput);
 
   const whatsappDelivery = result.deliveries.find((delivery) => delivery.channel === "whatsapp");
   let status: WhatsAppDispatchResult["status"];

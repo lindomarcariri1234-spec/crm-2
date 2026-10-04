@@ -3467,6 +3467,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
           ),
           whatsappOnly: true,
           recipientClientId: recipient.recipientClientId,
+          inlineOnQueueFailure: true,
         });
         switch (dispatch.status) {
           case "queued":
