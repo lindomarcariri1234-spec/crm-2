@@ -1,4 +1,5 @@
-import { pgTable, text, timestamp, boolean, integer, json, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, text, timestamp, boolean, integer, json, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -36,10 +37,16 @@ export const chatbotMessagesTable = pgTable(
     role: text("role").notNull().default("user"),
     content: text("content").notNull(),
     mediaUrl: text("media_url"),
+    mediaMimeType: text("media_mime_type"),
+    mediaFileName: text("media_file_name"),
+    mediaExpiredAt: timestamp("media_expired_at", { withTimezone: true }),
     isBot: boolean("is_bot").notNull().default(false),
     sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    index("chatbot_messages_media_retention_idx")
+      .on(table.sentAt)
+      .where(sql`${table.mediaUrl} IS NOT NULL AND ${table.mediaExpiredAt} IS NULL`),
     uniqueIndex("chatbot_messages_tenant_source_message_unique")
       .on(table.tenantId, table.sourceMessageId),
   ],

@@ -111,6 +111,9 @@ async function isFileKeyStillReferenced(
         WHERE (file_key = ${key} OR url LIKE ${like})
           ${tenantFilter}
       UNION ALL
+      SELECT 1 FROM chatbot_messages
+        WHERE media_url LIKE ${like} ${tenantFilter}
+      UNION ALL
       SELECT 1 FROM store_products sp
         JOIN stores s ON s.id = sp.store_id
         WHERE (sp.thumbnail LIKE ${like}

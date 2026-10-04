@@ -32,6 +32,16 @@ import { recomputeClientClassification } from "../services/client-classification
 
 const router = Router();
 
+function evolutionWebhookApiKey(req: Request): string | undefined {
+  const headerKey = req.header("apikey") ?? req.header("x-api-key");
+  if (headerKey) return headerKey;
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? req.body as Record<string, unknown>
+    : null;
+  const payloadKey = body?.["apikey"] ?? body?.["apiKey"];
+  return typeof payloadKey === "string" ? payloadKey : undefined;
+}
+
 const RESEND_BOUNCE_TYPES = new Map<string, "permanent" | "temporary">([
   ["permanent", "permanent"],
   ["temporary", "temporary"],
@@ -54,7 +64,7 @@ router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next:
   try {
     const statusOutcome = await processEvolutionDeliveryStatus({
       instanceName: req.params["instanceName"] ?? "",
-      apiKey: req.header("apikey") ?? req.header("x-api-key") ?? undefined,
+      apiKey: evolutionWebhookApiKey(req),
       payload: req.body,
     });
     if (statusOutcome !== "not_status") {
@@ -68,7 +78,7 @@ router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next:
 
     const outcome = await processEvolutionInbound({
       instanceName: req.params["instanceName"] ?? "",
-      apiKey: req.header("apikey") ?? req.header("x-api-key") ?? undefined,
+      apiKey: evolutionWebhookApiKey(req),
       payload: req.body,
     });
     if (outcome === "unauthorized") {

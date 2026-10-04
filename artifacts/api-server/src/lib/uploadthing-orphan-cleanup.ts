@@ -44,6 +44,10 @@ import { collectReferencedUploadThingKeys } from "./collectReferencedUploadThing
 import { generateId } from "./id";
 import { logger } from "./logger";
 import { safeErrorLogFields } from "./safe-error-log";
+import {
+  runWhatsAppInboundMediaRetentionCleanup,
+  type WhatsAppMediaRetentionResult,
+} from "./whatsapp-media-retention";
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -70,6 +74,8 @@ export type UploadThingOrphanCleanupResult = {
   deleted: number;
   /** Number of deletion failures (file still exists in UploadThing). */
   errors: number;
+  /** Aggregate result of the inbound WhatsApp media retention pass. */
+  retention: WhatsAppMediaRetentionResult;
 };
 
 // ── Staging helpers ───────────────────────────────────────────────────────────
@@ -127,9 +133,21 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     newlyStaged: 0,
     deleted: 0,
     errors: 0,
+    retention: { expiredMessages: 0, errors: 0 },
   };
 
+  let retentionCleanupRejected = false;
+
   try {
+    // Expire old inbound media references before collecting keys, so files
+    // released by the 90-day policy are staged by this same cleanup run.
+    try {
+      result.retention = await runWhatsAppInboundMediaRetentionCleanup();
+    } catch {
+      result.retention = { expiredMessages: 0, errors: 1 };
+      retentionCleanupRejected = true;
+    }
+
     const now = Date.now();
 
     // ── Step 1: Collect DB-referenced keys and list all UT files ─────────────
@@ -273,10 +291,24 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     );
   }
 
-  logger.info(
-    { scanned: result.scanned, newlyStaged: result.newlyStaged, deleted: result.deleted, errors: result.errors },
-    "[uploadthing-orphan] Run complete",
-  );
+  const completionSummary = {
+    scanned: result.scanned,
+    newlyStaged: result.newlyStaged,
+    deleted: result.deleted,
+    errors: result.errors,
+    retention: result.retention,
+  };
+
+  if (result.retention.errors > 0) {
+    logger.error(
+      completionSummary,
+      retentionCleanupRejected
+        ? "[uploadthing-orphan] Run completed after WhatsApp retention cleanup rejected"
+        : "[uploadthing-orphan] Run completed with WhatsApp retention cleanup errors",
+    );
+  } else {
+    logger.info(completionSummary, "[uploadthing-orphan] Run complete");
+  }
 
   return result;
 }

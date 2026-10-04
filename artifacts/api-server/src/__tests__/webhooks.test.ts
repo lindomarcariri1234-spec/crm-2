@@ -3,8 +3,14 @@ import express from "express";
 import crypto from "node:crypto";
 import request from "supertest";
 
-const { mockUpdateOutboundDeliveryFromWebhook } = vi.hoisted(() => ({
+const {
+  mockUpdateOutboundDeliveryFromWebhook,
+  mockProcessEvolutionInbound,
+  mockProcessEvolutionDeliveryStatus,
+} = vi.hoisted(() => ({
   mockUpdateOutboundDeliveryFromWebhook: vi.fn(),
+  mockProcessEvolutionInbound: vi.fn(),
+  mockProcessEvolutionDeliveryStatus: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -56,8 +62,8 @@ vi.mock("../lib/reservation-payments.js", () => ({
   paymentExistsForGatewayTx: vi.fn(),
 }));
 vi.mock("../services/whatsapp-attendance.js", () => ({
-  processEvolutionInbound: vi.fn(),
-  processEvolutionDeliveryStatus: vi.fn(),
+  processEvolutionInbound: mockProcessEvolutionInbound,
+  processEvolutionDeliveryStatus: mockProcessEvolutionDeliveryStatus,
 }));
 vi.mock("../services/pipeline-automation.js", () => ({
   moveDealToStage: vi.fn(),
@@ -357,5 +363,33 @@ describe("Resend webhook route", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ received: true, outcome: "ignored" });
     expect(mockUpdateOutboundDeliveryFromWebhook).not.toHaveBeenCalled();
+  });
+});
+
+describe("Evolution WhatsApp webhook route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("accepts the API key Evolution includes in the webhook body when no auth header is set", async () => {
+    mockProcessEvolutionDeliveryStatus.mockResolvedValue("not_status");
+    mockProcessEvolutionInbound.mockResolvedValue("ignored");
+    const payload = {
+      apikey: "evolution-api-key",
+      event: "messages.upsert",
+      data: {},
+    };
+
+    const response = await request(buildApp())
+      .post("/api/webhooks/whatsapp/evolution/agency-instance")
+      .send(payload);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ received: true, outcome: "ignored" });
+    expect(mockProcessEvolutionInbound).toHaveBeenCalledWith({
+      instanceName: "agency-instance",
+      apiKey: "evolution-api-key",
+      payload,
+    });
   });
 });

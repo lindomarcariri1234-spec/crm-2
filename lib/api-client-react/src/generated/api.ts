@@ -175,6 +175,7 @@ import type {
   MarkBirthdayConverted200,
   MarkBirthdayConvertedBody,
   Message,
+  MessageClientStatus,
   MessageTemplate,
   MetricPoint,
   MoveDealBody,
@@ -16695,6 +16696,179 @@ export const useSendMessage = <TError = ErrorType<unknown>, TContext = unknown>(
 > => {
   return useMutation(getSendMessageMutationOptions(options), queryClient);
 };
+
+export const getGetMessageClientStatusUrl = (clientId: string) => {
+  return `/api/messages/client-status/${clientId}`;
+};
+
+/**
+ * @summary Check whether a client belongs to the current tenant for messaging
+ */
+export const getMessageClientStatus = async (
+  clientId: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<MessageClientStatus> => {
+  return customFetch<MessageClientStatus>(
+    getGetMessageClientStatusUrl(clientId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMessageClientStatusQueryKey = (clientId: string) => {
+  return [`/api/messages/client-status/${clientId}`] as const;
+};
+
+export const getGetMessageClientStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMessageClientStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  clientId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageClientStatus>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetMessageClientStatusQueryKey(clientId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMessageClientStatus>>
+  > = ({ signal }) =>
+    getMessageClientStatus(clientId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: clientId !== null && clientId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMessageClientStatus>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetMessageClientStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMessageClientStatus>>
+>;
+export type GetMessageClientStatusQueryError = ErrorType<unknown>;
+
+export function useGetMessageClientStatus<
+  TData = Awaited<ReturnType<typeof getMessageClientStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  clientId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageClientStatus>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMessageClientStatus>>,
+          TError,
+          Awaited<ReturnType<typeof getMessageClientStatus>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMessageClientStatus<
+  TData = Awaited<ReturnType<typeof getMessageClientStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  clientId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageClientStatus>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMessageClientStatus>>,
+          TError,
+          Awaited<ReturnType<typeof getMessageClientStatus>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMessageClientStatus<
+  TData = Awaited<ReturnType<typeof getMessageClientStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  clientId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageClientStatus>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Check whether a client belongs to the current tenant for messaging
+ */
+
+export function useGetMessageClientStatus<
+  TData = Awaited<ReturnType<typeof getMessageClientStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  clientId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageClientStatus>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetMessageClientStatusQueryOptions(clientId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export const getListOutboundMessagesUrl = (
   params?: ListOutboundMessagesParams,

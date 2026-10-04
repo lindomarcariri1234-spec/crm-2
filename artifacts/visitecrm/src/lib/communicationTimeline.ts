@@ -23,6 +23,9 @@ export interface AiConversationMessage {
   sentAt: string;
   deliveryStatus?: string | null;
   mediaUrl?: string | null;
+  mediaMimeType?: string | null;
+  mediaFileName?: string | null;
+  mediaExpiredAt?: string | null;
 }
 
 interface SentMessage {
@@ -66,6 +69,9 @@ export interface CommunicationTimelineEntry {
   status: string | null;
   source: "message" | "outbound" | "chatbot";
   mediaUrl?: string | null;
+  mediaMimeType?: string | null;
+  mediaFileName?: string | null;
+  mediaExpiredAt?: string | null;
 }
 
 export interface ClientConversationSummary {
@@ -165,6 +171,9 @@ function chatbotEntry(
     status: isInbound ? "received" : message.deliveryStatus ?? null,
     source: "chatbot",
     mediaUrl: message.mediaUrl ?? null,
+    mediaMimeType: message.mediaMimeType ?? null,
+    mediaFileName: message.mediaFileName ?? null,
+    mediaExpiredAt: message.mediaExpiredAt ?? null,
   };
 }
 

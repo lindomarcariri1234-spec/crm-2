@@ -33,7 +33,18 @@ vi.mock("@workspace/db", () => ({
     update: mockDbUpdate,
   },
   auditLogsTable: {},
-  clientsTable: {},
+  clientsTable: {
+    id: "clients.id",
+    tenantId: "clients.tenant_id",
+    whatsappOptIn: "clients.whatsapp_opt_in",
+  },
+  chatbotConversationsTable: {
+    id: "chatbot_conversations.id",
+    tenantId: "chatbot_conversations.tenant_id",
+    status: "chatbot_conversations.status",
+    clientId: "chatbot_conversations.client_id",
+    sessionId: "chatbot_conversations.session_id",
+  },
   tenantsTable: {},
   usersTable: {},
   emailLogsTable: {
@@ -62,6 +73,11 @@ vi.mock("@workspace/db", () => ({
   outboundMessagesTable: {
     id: "outbound_messages.id",
     tenantId: "outbound_messages.tenant_id",
+    origin: "outbound_messages.origin",
+    recipientType: "outbound_messages.recipient_type",
+    recipientId: "outbound_messages.recipient_id",
+    emailAddress: "outbound_messages.email_address",
+    metadata: "outbound_messages.metadata",
     createdAt: "outbound_messages.created_at",
   },
 }));
@@ -478,7 +494,13 @@ describe("legacy email history synchronization", () => {
       .mockReturnValueOnce(makeUpdateQuery([]))
       .mockReturnValueOnce(makeUpdateQuery())
       .mockReturnValueOnce(makeUpdateQuery());
-    mockDbSelect.mockReturnValue(makeSelectQuery([{ status: "unknown" }]));
+    mockDbSelect.mockReturnValue(makeSelectQuery([{
+      status: "unknown",
+      origin: "system",
+      recipientType: "direct",
+      recipientId: null,
+      metadata: null,
+    }]));
     mockSendReminderHtmlEmail.mockResolvedValue({
       success: false,
       error: "provider timeout",
@@ -535,6 +557,123 @@ describe("legacy email history synchronization", () => {
     await expect(retryOutboundDelivery("tenant-a", "delivery-1"))
       .rejects.toThrow("delivery_not_retryable");
     expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledOnce();
+  });
+
+  it("skips a queued WhatsApp message when the client revokes consent before the provider call", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+    });
+    const skipped = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "skipped",
+      skippedReason: "whatsapp_opted_out",
+      lastError: "whatsapp_opted_out",
+    });
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([delivery]))
+      .mockReturnValueOnce(makeUpdateQuery([skipped]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([{
+        origin: "campaign",
+        recipientType: "client",
+        recipientId: "client-1",
+        emailAddress: null,
+        metadata: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{ whatsappOptIn: false }]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "skipped" }]));
+
+    await expect(processOutboundDelivery("delivery-1", "tenant-a")).resolves.toBe(false);
+
+    expect(mockSendTenantWhatsAppMessage).not.toHaveBeenCalled();
+    expect(mockUpdateSets).toContainEqual(expect.objectContaining({
+      status: "skipped",
+      skippedReason: "whatsapp_opted_out",
+      lastError: "whatsapp_opted_out",
+    }));
+  });
+
+  it("skips an attendance reply already queued when its conversation becomes opted out", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+    });
+    const skipped = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "skipped",
+      skippedReason: "whatsapp_opted_out",
+      lastError: "whatsapp_opted_out",
+    });
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([delivery]))
+      .mockReturnValueOnce(makeUpdateQuery([skipped]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([{
+        origin: "whatsapp-attendance",
+        recipientType: "direct",
+        recipientId: null,
+        emailAddress: null,
+        metadata: { conversationId: "conversation-1" },
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        status: "opted_out",
+        clientId: null,
+        sessionId: "+5511999990001",
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "skipped" }]));
+
+    await expect(processOutboundDelivery("delivery-1", "tenant-a")).resolves.toBe(false);
+
+    expect(mockSendTenantWhatsAppMessage).not.toHaveBeenCalled();
+    expect(mockUpdateSets).toContainEqual(expect.objectContaining({
+      status: "skipped",
+      skippedReason: "whatsapp_opted_out",
+      lastError: "whatsapp_opted_out",
+    }));
+  });
+
+  it("rechecks consent for queued direct messages linked to a client by email", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+    });
+    const skipped = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "skipped",
+      skippedReason: "whatsapp_opted_out",
+      lastError: "whatsapp_opted_out",
+    });
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([delivery]))
+      .mockReturnValueOnce(makeUpdateQuery([skipped]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([{
+        origin: "system",
+        recipientType: "direct",
+        recipientId: null,
+        emailAddress: "client@example.com",
+        metadata: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{ whatsappOptIn: false }]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "skipped" }]));
+
+    await expect(processOutboundDelivery("delivery-1", "tenant-a")).resolves.toBe(false);
+
+    expect(mockSendTenantWhatsAppMessage).not.toHaveBeenCalled();
+    expect(mockUpdateSets).toContainEqual(expect.objectContaining({
+      status: "skipped",
+      skippedReason: "whatsapp_opted_out",
+    }));
   });
 
   it.each([

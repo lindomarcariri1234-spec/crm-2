@@ -2835,6 +2835,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/Message"
 
+  /messages/client-status/{clientId}:
+    get:
+      operationId: getMessageClientStatus
+      tags: [messages]
+      summary: Check whether a client belongs to the current tenant for messaging
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Client link status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageClientStatus"
+
   /outbound-messages:
     get:
       operationId: listOutboundMessages
@@ -9499,6 +9518,13 @@ components:
           type: ["string", "null"]
       required: [id, channel, content, status, sentAt]
 
+    MessageClientStatus:
+      type: object
+      properties:
+        valid:
+          type: boolean
+      required: [valid]
+
     SendMessageBody:
       type: object
       properties:
@@ -11769,6 +11795,13 @@ components:
           type: string
         mediaUrl:
           type: ["string", "null"]
+        mediaMimeType:
+          type: ["string", "null"]
+        mediaFileName:
+          type: ["string", "null"]
+        mediaExpiredAt:
+          type: ["string", "null"]
+          format: date-time
         isBot:
           type: boolean
         sentAt:

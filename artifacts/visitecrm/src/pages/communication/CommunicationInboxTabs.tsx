@@ -37,7 +37,12 @@ export interface AiMessage {
   sentAt: string;
   deliveryStatus?: string | null;
   mediaUrl?: string | null;
+  mediaMimeType?: string | null;
+  mediaFileName?: string | null;
+  mediaExpiredAt?: string | null;
 }
+
+export type ClientLinkStatus = "checking" | "valid" | "missing" | "unavailable";
 
 const CHANNELS = [
   { value: "whatsapp", label: "WhatsApp" },
@@ -81,6 +86,101 @@ function timelineStatusLabel(status: string | null): string | null {
   return statusLabels[status] ?? outboundDeliveryStatusLabels[status] ?? status;
 }
 
+const INLINE_AUDIO_TYPES = new Set([
+  "audio/aac",
+  "audio/amr",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/opus",
+  "audio/wav",
+  "audio/webm",
+  "audio/x-wav",
+]);
+const INLINE_IMAGE_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+const INLINE_VIDEO_TYPES = new Set(["video/3gpp", "video/mp4", "video/webm"]);
+
+export function MessageMediaAttachment({
+  url,
+  mimeType,
+  fileName,
+  expiredAt,
+}: {
+  url: string | null | undefined;
+  mimeType: string | null | undefined;
+  fileName: string | null | undefined;
+  expiredAt: string | null | undefined;
+}) {
+  if (expiredAt) {
+    return (
+      <span className="mt-1 block text-xs opacity-80" role="status">
+        Anexo expirado após 90 dias
+      </span>
+    );
+  }
+
+  if (!url) {
+    return (
+      <span className="mt-1 block text-xs opacity-80">
+        {mimeType ? "Anexo indisponível" : "Mídia anexada"}
+      </span>
+    );
+  }
+
+  const normalizedMimeType = mimeType?.toLowerCase() ?? "";
+  if (INLINE_AUDIO_TYPES.has(normalizedMimeType)) {
+    return (
+      <audio
+        className="mt-2 block w-full max-w-full"
+        controls
+        preload="none"
+        src={url}
+        aria-label={fileName || "Áudio recebido"}
+      />
+    );
+  }
+  if (INLINE_IMAGE_TYPES.has(normalizedMimeType)) {
+    return (
+      <a href={url} target="_blank" rel="noreferrer" className="mt-2 block">
+        <img
+          src={url}
+          alt={fileName || "Imagem recebida"}
+          loading="lazy"
+          className="max-h-64 max-w-full rounded-md object-contain"
+        />
+      </a>
+    );
+  }
+  if (INLINE_VIDEO_TYPES.has(normalizedMimeType)) {
+    return (
+      <video
+        className="mt-2 block max-h-64 max-w-full rounded-md"
+        controls
+        preload="metadata"
+        src={url}
+        aria-label={fileName || "Vídeo recebido"}
+      />
+    );
+  }
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      download={fileName || undefined}
+      className="mt-1 block text-xs underline underline-offset-2"
+    >
+      {fileName || "Baixar anexo"}
+    </a>
+  );
+}
+
 interface ConversationsTabProps {
   channelColors: Record<string, string>;
   channelLabels: Record<string, string>;
@@ -102,6 +202,9 @@ interface ConversationsTabProps {
   loadingConversationAiMessages: boolean;
   conversationAiError: string | null;
   selectedWhatsAppConversation: AiConversation | null;
+  selectedClientLinkStatus: ClientLinkStatus;
+  onRetryClientLinkCheck: () => unknown;
+  onReassociateConversation: () => void;
   inboxChannel: "email" | "whatsapp";
   setInboxChannel: (channel: "email" | "whatsapp") => void;
   inboxMessage: string;
@@ -131,6 +234,9 @@ export function ConversationsTab({
   loadingConversationAiMessages,
   conversationAiError,
   selectedWhatsAppConversation,
+  selectedClientLinkStatus,
+  onRetryClientLinkCheck,
+  onReassociateConversation,
   inboxChannel,
   setInboxChannel,
   inboxMessage,
@@ -234,8 +340,13 @@ export function ConversationsTab({
                             : "bg-muted rounded-tl-sm"
                         }`}>
                           {message.content || (message.mediaUrl ? "Mídia recebida" : "Mensagem sem texto")}
-                          {message.mediaUrl && (
-                            <span className="mt-1 block text-xs opacity-80">Mídia anexada</span>
+                          {(message.mediaUrl || message.mediaMimeType || message.mediaExpiredAt) && (
+                            <MessageMediaAttachment
+                              url={message.mediaUrl}
+                              mimeType={message.mediaMimeType}
+                              fileName={message.mediaFileName}
+                              expiredAt={message.mediaExpiredAt}
+                            />
                           )}
                         </div>
                         <div className={`flex items-center gap-1.5 mt-0.5 ${message.direction === "outbound" ? "justify-end" : ""}`}>
@@ -262,6 +373,60 @@ export function ConversationsTab({
                   ))}
                 </div>
                 <div className="p-3 border-t">
+                  {selectedClientLinkStatus === "checking" && (
+                    <p className="mb-2 text-xs text-muted-foreground" role="status">
+                      Verificando o vínculo do cliente antes de liberar o envio…
+                    </p>
+                  )}
+                  {selectedClientLinkStatus === "missing" && (
+                    <div
+                      className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm"
+                      data-testid="client-link-missing-warning"
+                      role="alert"
+                    >
+                      <p>Este histórico não está vinculado a um cliente válido desta agência. O envio está bloqueado.</p>
+                      {selectedWhatsAppConversation ? (
+                        <>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Reassocie o atendimento a um cadastro existente na aba Atendimento IA e depois selecione o cliente atualizado.
+                          </p>
+                          <Button
+                            className="mt-2"
+                            data-testid="button-reassociate-client-conversation"
+                            onClick={onReassociateConversation}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                          >
+                            Abrir atendimento para reassociar
+                          </Button>
+                        </>
+                      ) : (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Selecione um cliente válido ou peça à equipe para corrigir o vínculo deste histórico.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {selectedClientLinkStatus === "unavailable" && (
+                    <div
+                      className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm"
+                      data-testid="client-link-check-unavailable"
+                      role="alert"
+                    >
+                      <p>Não foi possível confirmar o cadastro agora. O envio ficará bloqueado até a verificação.</p>
+                      <Button
+                        className="mt-2"
+                        data-testid="button-retry-client-link-check"
+                        onClick={() => { void onRetryClientLinkCheck(); }}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        Verificar novamente
+                      </Button>
+                    </div>
+                  )}
                   {selectedWhatsAppConversation?.status === "opted_out" && inboxChannel === "whatsapp" && (
                     <p className="mb-2 text-xs text-destructive" role="alert">
                       Este contato pediu para não receber mensagens pelo WhatsApp. Selecione outro canal se houver autorização.
@@ -278,6 +443,7 @@ export function ConversationsTab({
                       aria-label="Nova mensagem para o cliente"
                       value={inboxMessage}
                       onChange={(event) => setInboxMessage(event.target.value)}
+                      disabled={selectedClientLinkStatus !== "valid"}
                     />
                     <Button
                       data-testid="button-send-conversation-message"
@@ -287,6 +453,7 @@ export function ConversationsTab({
                       disabled={
                         sendingMessage ||
                         !inboxMessage.trim() ||
+                        selectedClientLinkStatus !== "valid" ||
                         (selectedWhatsAppConversation?.status === "opted_out" && inboxChannel === "whatsapp")
                       }
                     >
@@ -392,7 +559,15 @@ export function AiInboxTab({
                   {selectedMessages.map((message) => (
                     <div key={message.id} className={`flex ${message.role === "user" ? "justify-start" : "justify-end"}`}>
                       <div className={`max-w-xs rounded-lg px-3 py-2 text-sm ${message.role === "user" ? "bg-muted" : message.isBot ? "bg-primary/10 text-foreground" : "bg-primary text-primary-foreground"}`}>
-                        <p>{message.content}</p>
+                        <p>{message.content || (message.mediaUrl ? "Mídia recebida" : "Mensagem sem texto")}</p>
+                        {(message.mediaUrl || message.mediaMimeType || message.mediaExpiredAt) && (
+                          <MessageMediaAttachment
+                            url={message.mediaUrl}
+                            mimeType={message.mediaMimeType}
+                            fileName={message.mediaFileName}
+                            expiredAt={message.mediaExpiredAt}
+                          />
+                        )}
                         <p className="mt-1 text-[10px] opacity-70">
                           {message.isBot ? "IA" : message.role === "user" ? "Cliente" : "Equipe"} · {new Date(message.sentAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
                         </p>

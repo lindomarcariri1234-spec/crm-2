@@ -268,6 +268,7 @@ export * from "./loyaltyTransaction";
 export * from "./markBirthdayConverted200";
 export * from "./markBirthdayConvertedBody";
 export * from "./message";
+export * from "./messageClientStatus";
 export * from "./messageMetadata";
 export * from "./messageTemplate";
 export * from "./metricPoint";

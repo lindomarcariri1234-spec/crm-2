@@ -35,6 +35,7 @@ export default defineConfig({
       "src/__tests__/accommodation-capacity.integration.test.ts",
       "src/__tests__/trips-filter.integration.test.ts",
       "src/__tests__/dashboard-summary.integration.test.ts",
+      "src/__tests__/whatsapp-media-retention.integration.test.ts",
     ],
   },
 });

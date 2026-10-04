@@ -9,8 +9,12 @@ import { ADMIN_ROLES } from '../lib/tenant';
 import { deliverAttendanceReply } from "../services/whatsapp-attendance";
 import { recomputeClientClassification, recordClientClassificationEvent } from "../services/client-classification.js";
 import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
+import { extractVerifiedUploadThingKey, utapi } from "../lib/uploadthing";
+import { logger } from "../lib/logger";
+import { getWhatsAppInboundMediaExpirationAt } from "../lib/whatsapp-media-retention";
 
 const router = Router();
+const DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 const CreateConversationBody = z.object({
   clientId: z.string().optional(),
@@ -143,7 +147,40 @@ router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFun
         eq(chatbotMessagesTable.tenantId, me.tenantId),
       ))
       .orderBy(chatbotMessagesTable.sentAt);
-    res.json(messages);
+    const now = Date.now();
+    const visibleMessages = await Promise.all(messages.map(async (message) => {
+      const isInboundWhatsAppMedia =
+        conv.channel === "whatsapp" &&
+        message.role === "user" &&
+        Boolean(message.mediaUrl);
+      let expiresIn = DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS;
+      if (isInboundWhatsAppMedia) {
+        const mediaExpiresAt = getWhatsAppInboundMediaExpirationAt(message.sentAt);
+        const secondsUntilExpiry = Math.floor((mediaExpiresAt.getTime() - now) / 1000);
+        if (message.mediaExpiredAt || secondsUntilExpiry <= 0) {
+          return {
+            ...message,
+            mediaUrl: null,
+            mediaExpiredAt: message.mediaExpiredAt ?? mediaExpiresAt,
+          };
+        }
+        expiresIn = Math.min(DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS, secondsUntilExpiry);
+      }
+
+      const fileKey = message.mediaUrl ? extractVerifiedUploadThingKey(message.mediaUrl) : null;
+      if (!fileKey) return message;
+      try {
+        const signed = await utapi.generateSignedURL(fileKey, { expiresIn });
+        return { ...message, mediaUrl: signed.ufsUrl };
+      } catch {
+        logger.warn(
+          { tenantId: me.tenantId, messageId: message.id },
+          "[chatbot] could not create temporary media URL",
+        );
+        return { ...message, mediaUrl: null };
+      }
+    }));
+    res.json(visibleMessages);
   } catch (err) {
     next(err);
   }
@@ -295,7 +332,18 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
     if (!me) return;
     const parsed = ReplyConversationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
-    const [conversation] = await db.select().from(chatbotConversationsTable)
+    const [conversation] = await db.select({
+      id: chatbotConversationsTable.id,
+      tenantId: chatbotConversationsTable.tenantId,
+      clientId: chatbotConversationsTable.clientId,
+      sessionId: chatbotConversationsTable.sessionId,
+      status: chatbotConversationsTable.status,
+      clientWhatsappOptIn: clientsTable.whatsappOptIn,
+    }).from(chatbotConversationsTable)
+      .leftJoin(clientsTable, and(
+        eq(clientsTable.id, chatbotConversationsTable.clientId),
+        eq(clientsTable.tenantId, chatbotConversationsTable.tenantId),
+      ))
       .where(and(
         eq(chatbotConversationsTable.id, req.params.id),
         eq(chatbotConversationsTable.tenantId, me.tenantId),
@@ -304,6 +352,10 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
       .limit(1);
     if (!conversation?.sessionId || conversation.status === "opted_out") {
       next(new NotFoundError("WhatsApp conversation not available for delivery", "NOT_FOUND"));
+      return;
+    }
+    if (conversation.clientId && conversation.clientWhatsappOptIn !== true) {
+      next(new ForbiddenError("O cliente não autorizou mensagens por WhatsApp.", "WHATSAPP_OPTED_OUT"));
       return;
     }
     const sourceMessageId = `staff:${parsed.data.idempotencyKey}`;
@@ -328,7 +380,6 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
     if (!existing || !await deliverAttendanceReply({
       tenantId: me.tenantId,
       messageId: existing.id,
-      phone: conversation.sessionId,
     })) {
       next(new ValidationError("Não foi possível enviar a mensagem pelo WhatsApp.", "WHATSAPP_DELIVERY_FAILED"));
       return;

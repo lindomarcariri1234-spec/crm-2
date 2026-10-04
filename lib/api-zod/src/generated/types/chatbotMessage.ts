@@ -14,6 +14,12 @@ export interface ChatbotMessage {
   content: string;
   /** @nullable */
   mediaUrl?: string | null;
+  /** @nullable */
+  mediaMimeType?: string | null;
+  /** @nullable */
+  mediaFileName?: string | null;
+  /** @nullable */
+  mediaExpiredAt?: Date | null;
   isBot: boolean;
   sentAt: string;
 }

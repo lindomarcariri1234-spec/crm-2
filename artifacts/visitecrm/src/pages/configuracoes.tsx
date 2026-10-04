@@ -1292,7 +1292,20 @@ function IntegrationCard({ type }: { type: string }) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Erro ao salvar");
       }
-      toast({ title: "Integração salva com sucesso" });
+      const result = await res.json().catch(() => ({})) as {
+        webhook?: { ok?: boolean; message?: string };
+      };
+      if (type === "whatsapp_evolution" && enabled && result.webhook) {
+        toast({
+          title: result.webhook.ok
+            ? "Integração salva e recebimento configurado"
+            : "Integração salva, mas o recebimento está pendente",
+          description: result.webhook.message,
+          ...(!result.webhook.ok ? { variant: "destructive" as const } : {}),
+        });
+      } else {
+        toast({ title: "Integração salva com sucesso" });
+      }
       setFormSecrets({});
       setDirty(false);
       await loadConfig();
