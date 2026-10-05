@@ -125,10 +125,66 @@ function ConversationInteractionHarness() {
   );
 }
 
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (!setter) throw new Error("HTMLInputElement.value setter is unavailable");
+  setter.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 afterEach(async () => {
   await cleanupRoots();
 });
 
+describe("conversation list search interactions", () => {
+  it("finds clients by name and preserves the selected conversation when search is cleared", async () => {
+    const { container } = await renderComponent(createElement(ConversationInteractionHarness));
+    const searchInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="input-client-conversation-search"]',
+    );
+    expect(searchInput).not.toBeNull();
+
+    await flushAct(() => setInputValue(searchInput!, "bruna"));
+
+    expect(container.querySelector('[data-testid="button-conversation-client-a"]')).toBeNull();
+    const brunaButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-conversation-client-b"]',
+    );
+    expect(brunaButton).not.toBeNull();
+
+    await flushAct(() => brunaButton!.click());
+    expect(brunaButton!.getAttribute("aria-pressed")).toBe("true");
+
+    await flushAct(() => setInputValue(searchInput!, ""));
+
+    expect(container.querySelector('[data-testid="button-conversation-client-a"]')).not.toBeNull();
+    const restoredBrunaButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-conversation-client-b"]',
+    );
+    expect(restoredBrunaButton?.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      container.querySelector('[data-testid="client-conversation-timeline"]')?.textContent,
+    ).toContain(secondMessage.content);
+  });
+
+  it("finds a conversation by the text of its latest message", async () => {
+    const { container } = await renderComponent(createElement(ConversationInteractionHarness));
+    const searchInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="input-client-conversation-search"]',
+    );
+    expect(searchInput).not.toBeNull();
+
+    await flushAct(() =>
+      setInputValue(searchInput!, "mensagem recente da bruna"),
+    );
+
+    expect(container.querySelector('[data-testid="button-conversation-client-a"]')).toBeNull();
+    expect(
+      container.querySelector('[data-testid="button-conversation-client-b"]'),
+    ).not.toBeNull();
+  });
+});
 
 describe("conversation timeline interactions", () => {
   it("opens a newly selected conversation at its latest message after history was read", async () => {
