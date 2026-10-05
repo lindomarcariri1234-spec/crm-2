@@ -1,6 +1,6 @@
 ---
 name: Redis pub/sub recovery for ticket SSE
-description: How open ticket inboxes recover after a Redis subscriber misses pub/sub messages.
+description: Recovery and safe ticket payload projection for Redis and local SSE delivery.
 ---
 
 When the shared Redis subscriber reconnects, browser SSE connections may still be open and Redis Pub/Sub does not replay missed messages. Wait for the channel subscriptions to be acknowledged, then send a tenant-scoped refresh hint to local ticket streams. The hint contains no ticket data; each tenant's client refetches only its own list, selected messages/events, and queues.
@@ -19,8 +19,8 @@ With real ioredis, rapid stop/restart cycles can leave multiple explicit subscri
 
 **How to apply:** In recovery tests, track and gate acknowledgements by generation, then assert that stale acknowledgements emit nothing and all current-generation completions produce only one refresh.
 
-For Redis-originated ticket updates, validate the required fields and project the payload onto the explicit SSE contract (`eventId`, `type`, `ticketId`) before delivery. Strip unknown fields rather than rejecting an otherwise valid ticket or queue event.
+For ticket SSE delivery, project payloads onto the explicit public contract fields (`eventId`, `type`, `ticketId`) on both Redis-subscriber and local-fallback paths. Strip unknown fields rather than rejecting otherwise valid ticket or queue events.
 
-**Why:** A broker payload may contain private or internal data beyond the public event contract; projecting known fields prevents accidental exposure without blocking valid updates.
+**Why:** Broker payloads and runtime caller objects may contain private or internal data beyond the public event contract; projecting known fields prevents accidental exposure without blocking valid updates.
 
-**How to apply:** When adding a ticket SSE field, update the public type and Redis-to-SSE projection together. Never forward a parsed Redis payload object verbatim.
+**How to apply:** When adding a ticket SSE field, update the public type and shared projection together. Never forward parsed Redis payloads or caller-supplied update objects verbatim; test both Redis fan-out and fallback paths.

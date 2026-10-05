@@ -43,13 +43,57 @@ vi.mock("../lib/logger.js", () => ({
   },
 }));
 
-import { closeSeatUpdateSubscriber, initSeatUpdateSubscriber } from "../lib/realtime.js";
+import {
+  broadcastSupportTicketUpdate,
+  closeSeatUpdateSubscriber,
+  initSeatUpdateSubscriber,
+} from "../lib/realtime.js";
 import {
   addSupportTicketClient,
   removeSupportTicketClient,
 } from "../lib/support-ticket-sse.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe("ticket SSE local fallback", () => {
+  afterEach(async () => {
+    await closeSeatUpdateSubscriber();
+    mockGetRedisConnection.mockReset();
+  });
+
+  it("sends only the public ticket fields in the local SSE frame", async () => {
+    const tenantId = "tenant-local-fallback";
+    const write = vi.fn();
+    const response = { write } as unknown as Response;
+    mockGetRedisConnection.mockReturnValue(null);
+    addSupportTicketClient(tenantId, response);
+
+    try {
+      const updateWithSensitiveExtra = {
+        type: "ticket" as const,
+        ticketId: "ticket-local-fallback",
+        customerEmail: "must-not-be-forwarded@example.test",
+      };
+      await broadcastSupportTicketUpdate(tenantId, updateWithSensitiveExtra);
+
+      expect(write).toHaveBeenCalledOnce();
+      const frame = write.mock.calls[0][0] as string;
+      const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
+      if (!dataLine) throw new Error("Expected a ticket SSE data frame");
+      const payload = JSON.parse(dataLine.slice("data:".length).trim()) as Record<string, unknown>;
+
+      expect(payload).toMatchObject({
+        eventId: expect.any(String),
+        type: "ticket",
+        ticketId: "ticket-local-fallback",
+      });
+      expect(Object.keys(payload).sort()).toEqual(["eventId", "ticketId", "type"]);
+      expect(payload).not.toHaveProperty("customerEmail");
+    } finally {
+      removeSupportTicketClient(tenantId, response);
+    }
+  });
+});
 
 async function waitUntil(
   predicate: () => boolean,

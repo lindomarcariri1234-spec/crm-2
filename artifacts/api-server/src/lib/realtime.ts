@@ -16,6 +16,16 @@ import { generateId } from "./id";
 const SEAT_UPDATE_CHANNEL = "seat-updates";
 const SUPPORT_TICKET_UPDATE_CHANNEL = "support-ticket-updates";
 
+function toPublicSupportTicketPayload(
+  payload: SupportTicketUpdatePayload,
+): SupportTicketUpdatePayload {
+  return {
+    eventId: payload.eventId,
+    type: payload.type,
+    ticketId: payload.type === "ticket" ? payload.ticketId : null,
+  };
+}
+
 let _subscriber: Redis | null = null;
 let _cancelRecoveryRetry: (() => void) | null = null;
 
@@ -201,12 +211,7 @@ export function initSeatUpdateSubscriber(): void {
           return;
         }
         // Redis payloads can carry fields outside the public SSE contract; never relay them.
-        const safePayload: SupportTicketUpdatePayload = {
-          eventId: payload.eventId,
-          type: payload.type,
-          ticketId: payload.type === "ticket" ? payload.ticketId : null,
-        };
-        emitSupportTicketUpdate(envelope.tenantId, safePayload);
+        emitSupportTicketUpdate(envelope.tenantId, toPublicSupportTicketPayload(payload));
       } catch (err) {
         logger.warn({ err }, "[support-ticket-sse] Ignoring malformed Redis update");
       }
@@ -243,7 +248,7 @@ export async function broadcastSupportTicketUpdate(
     }
   }
 
-  emitSupportTicketUpdate(tenantId, payload);
+  emitSupportTicketUpdate(tenantId, toPublicSupportTicketPayload(payload));
 }
 
 /**

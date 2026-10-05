@@ -481,17 +481,51 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     expect(mockEmitSupportTicketUpdate).toHaveBeenCalledWith("tenant-startup", startupTicketPayload);
   });
 
-  it("falls back to a local tenant-scoped ticket event when Redis is unavailable", async () => {
+  it("strips unexpected fields and keeps ticket and queue events working when Redis is unavailable", async () => {
+    const fakeSubscriber = makeFakeSubscriber();
+    const fakeConnForInit = {
+      status: "ready",
+      publish: vi.fn(),
+      duplicate: vi.fn().mockReturnValue(fakeSubscriber),
+    };
+    const failingPublisher = {
+      status: "ready",
+      publish: vi.fn().mockRejectedValue(new Error("simulated Redis publish failure")),
+    };
+    mockGetRedisConnection
+      .mockReturnValueOnce(fakeConnForInit)
+      .mockReturnValueOnce(null)
+      .mockReturnValue(failingPublisher);
+    initSeatUpdateSubscriber();
+
+    const updateWithSensitiveExtra = {
+      type: "ticket" as const,
+      ticketId: "ticket-fallback",
+      customerEmail: "must-not-be-forwarded@example.test",
+    };
+    await broadcastSupportTicketUpdate("tenant-fallback", updateWithSensitiveExtra);
     await broadcastSupportTicketUpdate("tenant-fallback", {
       type: "queues",
       ticketId: null,
     });
 
-    expect(mockEmitSupportTicketUpdate).toHaveBeenCalledOnce();
-    expect(mockEmitSupportTicketUpdate).toHaveBeenCalledWith("tenant-fallback", {
+    expect(mockGetRedisConnection).toHaveBeenCalledTimes(3);
+    expect(fakeConnForInit.publish).not.toHaveBeenCalled();
+    expect(failingPublisher.publish).toHaveBeenCalledOnce();
+    expect(failingPublisher.publish.mock.calls[0][0]).toBe("support-ticket-updates");
+    expect(mockEmitSupportTicketUpdate).toHaveBeenCalledTimes(2);
+    expect(mockEmitSupportTicketUpdate).toHaveBeenNthCalledWith(1, "tenant-fallback", {
+      eventId: expect.any(String),
+      type: "ticket",
+      ticketId: "ticket-fallback",
+    });
+    expect(mockEmitSupportTicketUpdate).toHaveBeenNthCalledWith(2, "tenant-fallback", {
       eventId: expect.any(String),
       type: "queues",
       ticketId: null,
     });
+    const emittedPayload = mockEmitSupportTicketUpdate.mock.calls[0][1];
+    expect(Object.keys(emittedPayload).sort()).toEqual(["eventId", "ticketId", "type"]);
+    expect(emittedPayload).not.toHaveProperty("customerEmail");
   });
 });
