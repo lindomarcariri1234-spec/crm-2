@@ -160,7 +160,7 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
     mockEmitSeatUpdate.mockClear();
   });
 
-  it("keeps an open inbox current through two Redis restarts and refreshes only after acknowledgements", async () => {
+  it("keeps an open inbox current when Redis drops again before its recovery acknowledgement completes", async () => {
     const port = await reservePort();
     const dataDirectory = await mkdtemp(join(tmpdir(), "visitecrm-ticket-redis-"));
     const redisUrl = `redis://127.0.0.1:${port}`;
@@ -173,7 +173,13 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
     const streamAbort = new AbortController();
     let currentRecoveryAcknowledged = false;
     let reconnectCount = 0;
-    const subscriptionAcks: Array<{ acknowledged: boolean }> = [];
+    let holdRecoverySubscribeCompletions = false;
+    const subscriptionAcks: Array<{
+      generation: number;
+      acknowledged: boolean;
+      completed: boolean;
+      release?: () => void;
+    }> = [];
     const refreshes: Array<{ payload: RefreshEnvelope; acknowledgedAtDelivery: boolean }> = [];
     let ticketRevision = "initial";
     let inboxRevision: string | null = null;
@@ -197,11 +203,21 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
             configurable: true,
             writable: true,
             value: (channel: string, ...channels: string[]) => {
-              const acknowledgement = { acknowledged: false };
+              const acknowledgement: (typeof subscriptionAcks)[number] = {
+                generation: reconnectCount,
+                acknowledged: false,
+                completed: false,
+              };
               subscriptionAcks.push(acknowledgement);
-              return rawSubscribe(channel, ...channels).then((result) => {
+              return rawSubscribe(channel, ...channels).then(async (result) => {
                 acknowledgement.acknowledged = true;
-                currentRecoveryAcknowledged = true;
+                if (holdRecoverySubscribeCompletions) {
+                  await new Promise<void>((resolve) => {
+                    acknowledgement.release = resolve;
+                  });
+                }
+                acknowledgement.completed = true;
+                currentRecoveryAcknowledged = acknowledgement.generation === reconnectCount;
                 return result;
               });
             },
@@ -214,7 +230,10 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         },
       });
       initSeatUpdateSubscriber();
-      await waitUntil(() => subscriptionAcks[0]?.acknowledged === true, "the initial Redis subscribe acknowledgement");
+      await waitUntil(
+        () => subscriptionAcks[0]?.acknowledged === true && subscriptionAcks[0]?.completed === true,
+        "the initial Redis subscribe acknowledgement",
+      );
       expect(subscriptionAcks).toHaveLength(1);
 
       httpServer = createHttpServer((request, response) => {
@@ -318,6 +337,10 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
           "the recovery subscribe acknowledgement",
         );
         await waitUntil(
+          () => recoveryAcknowledgement.completed,
+          "the recovery subscribe acknowledgement to complete",
+        );
+        await waitUntil(
           () => refreshes.length === refreshCount + 1 && inboxRevision === revision,
           "the connected inbox to re-fetch the latest ticket data",
         );
@@ -334,10 +357,153 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         expect(refreshes).toHaveLength(refreshCount + 1);
       };
 
-      await recoverOnce("after-first-interruption", 0);
-      await recoverOnce("after-second-interruption", 1);
+      const recoverAcrossPendingAcknowledgement = async (
+        staleRevision: string,
+        latestRevision: string,
+        refreshCount: number,
+      ) => {
+        ticketRevision = staleRevision;
+        const staleAckIndex = subscriptionAcks.length;
+        const firstReconnectCount = reconnectCount;
+        holdRecoverySubscribeCompletions = true;
 
-      expect(inboxRevision).toBe("after-second-interruption");
+        await stopRedis(redisProcess);
+        redisProcess = undefined;
+        await waitUntil(
+          () => reconnectCount > firstReconnectCount,
+          "ioredis to report the interruption before the delayed acknowledgement",
+        );
+        await sleep(75);
+        expect(refreshes).toHaveLength(refreshCount);
+        expect(streamClosed).toBe(false);
+
+        redisProcess = await startDisposableRedis(port, dataDirectory);
+        await waitUntil(() => publisher?.status === "ready", "the Redis publisher to reconnect");
+        await waitUntil(() => subscriber?.status === "ready", "the subscriber to recover");
+        await waitUntil(
+          () => subscriptionAcks.slice(staleAckIndex).some((ack) => (
+            ack.acknowledged && ack.release !== undefined
+          )),
+          "the first recovery subscribe command",
+        );
+        const staleAcknowledgement = subscriptionAcks
+          .slice(staleAckIndex)
+          .find((ack) => ack.acknowledged && ack.release !== undefined);
+        if (!staleAcknowledgement) {
+          throw new Error("Expected a real Redis recovery acknowledgement to be held");
+        }
+        await waitUntil(
+          () => staleAcknowledgement.release !== undefined,
+          "the recovery acknowledgement to remain pending at the application boundary",
+        );
+        expect(staleAcknowledgement.completed).toBe(false);
+        expect(refreshes).toHaveLength(refreshCount);
+
+        // Redis drops again after its real ACK arrives but before realtime.ts
+        // observes the pending subscribe promise as complete.
+        ticketRevision = latestRevision;
+        const secondReconnectCount = reconnectCount;
+        await stopRedis(redisProcess);
+        redisProcess = undefined;
+        await waitUntil(
+          () => reconnectCount > secondReconnectCount,
+          "ioredis to report a second interruption while acknowledgement is pending",
+        );
+        await sleep(75);
+        expect(refreshes).toHaveLength(refreshCount);
+        expect(streamClosed).toBe(false);
+
+        redisProcess = await startDisposableRedis(port, dataDirectory);
+        await waitUntil(() => publisher?.status === "ready", "the Redis publisher to reconnect after the second interruption");
+        await waitUntil(() => subscriber?.status === "ready", "the subscriber to recover after the second interruption");
+        await sleep(100);
+        const latestGeneration = reconnectCount;
+        expect(staleAcknowledgement.completed).toBe(false);
+        expect(refreshes).toHaveLength(refreshCount);
+        expect(streamClosed).toBe(false);
+
+        let staleAcknowledgements = subscriptionAcks.filter((ack) => (
+          ack.generation < latestGeneration && ack.acknowledged && ack.release !== undefined
+        ));
+        let staleReleaseCount = 0;
+        while (staleAcknowledgements.length > 0) {
+          if (++staleReleaseCount > 20) {
+            throw new Error("Too many stale Redis acknowledgements while recovering");
+          }
+          const acknowledgement = staleAcknowledgements[0];
+          const releaseStaleAcknowledgement = acknowledgement.release;
+          if (!releaseStaleAcknowledgement) {
+            throw new Error("Expected the stale Redis acknowledgement to be held");
+          }
+          acknowledgement.release = undefined;
+          releaseStaleAcknowledgement();
+          await waitUntil(
+            () => acknowledgement.completed,
+            "a stale acknowledgement completion to be observed",
+          );
+          await sleep(20);
+          staleAcknowledgements = subscriptionAcks.filter((ack) => (
+            ack.generation < latestGeneration && ack.acknowledged && ack.release !== undefined
+          ));
+        }
+
+        await waitUntil(
+          () => subscriptionAcks.some((ack) => (
+            ack.acknowledged && ack.generation === latestGeneration && ack.release !== undefined
+          )),
+          "a new subscribe command for the latest recovery generation",
+        );
+        const latestAcknowledgements = subscriptionAcks.filter((ack) => (
+          ack.acknowledged && ack.generation === latestGeneration && ack.release !== undefined
+        ));
+        const latestAcknowledgement = latestAcknowledgements[0];
+        if (!latestAcknowledgement) {
+          throw new Error("Expected an acknowledgement for the latest recovery generation");
+        }
+        expect(latestAcknowledgement.generation).toBeGreaterThan(staleAcknowledgement.generation);
+        expect(latestAcknowledgements.every((ack) => !ack.completed)).toBe(true);
+        expect(refreshes).toHaveLength(refreshCount);
+        expect(inboxRevision).not.toBe(latestRevision);
+        expect(streamClosed).toBe(false);
+
+        for (const acknowledgement of latestAcknowledgements) {
+          const release = acknowledgement.release;
+          if (!release) {
+            throw new Error("Expected the latest Redis acknowledgement to be held");
+          }
+          acknowledgement.release = undefined;
+          release();
+        }
+        await waitUntil(
+          () => latestAcknowledgements.every((ack) => ack.completed),
+          "the latest subscription acknowledgement to complete",
+        );
+        await waitUntil(
+          () => refreshes.length === refreshCount + 1 && inboxRevision === latestRevision,
+          "the inbox to refresh from the latest Redis recovery",
+        );
+
+        expect(refreshes[refreshCount]?.acknowledgedAtDelivery).toBe(true);
+        expect(refreshes[refreshCount]?.payload).toMatchObject({
+          type: "refresh",
+          ticketId: null,
+          eventId: expect.any(String),
+        });
+        expect(streamError).toBeUndefined();
+        expect(streamClosed).toBe(false);
+        await sleep(100);
+        expect(refreshes).toHaveLength(refreshCount + 1);
+        holdRecoverySubscribeCompletions = false;
+      };
+
+      await recoverOnce("after-first-interruption", 0);
+      await recoverAcrossPendingAcknowledgement(
+        "during-stale-recovery",
+        "after-final-recovery",
+        1,
+      );
+
+      expect(inboxRevision).toBe("after-final-recovery");
       expect(refreshes).toHaveLength(2);
       expect(refreshes.every((refresh) => refresh.acknowledgedAtDelivery)).toBe(true);
       expect(streamClosed).toBe(false);
@@ -347,6 +513,11 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       await streamTask;
       if (subscriber && subscriber.status !== "ready") subscriber.disconnect();
       await closeSeatUpdateSubscriber();
+      holdRecoverySubscribeCompletions = false;
+      for (const acknowledgement of subscriptionAcks) {
+        acknowledgement.release?.();
+        acknowledgement.release = undefined;
+      }
       if (publisher) {
         if (publisher.status === "ready") await publisher.quit().catch(() => {});
         else publisher.disconnect();

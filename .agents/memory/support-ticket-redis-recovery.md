@@ -12,3 +12,9 @@ Keep initial channel fan-out inactive until the first explicit subscription ackn
 **Why:** ioredis emits `ready` before its automatic resubscription is acknowledged, so `ready` alone is too early to tell connected clients to rehydrate. A second outage can make an in-flight acknowledgement stale, and either an initial or later rejected acknowledgement can otherwise leave recovery pending forever.
 
 **How to apply:** For similar SSE consumers, keep fan-out disabled until acknowledged, detect each subscriber reconnect, await an acknowledgement for the latest recovery generation, retry failed acknowledgements while ready, and emit a safe refresh/reconciliation signal instead of trying to replay ephemeral events.
+
+With real ioredis, rapid stop/restart cycles can leave multiple explicit subscribe acknowledgements in flight within the same recovery generation. Accept multiple attempts, but allow only the current generation to trigger one refresh.
+
+**Why:** A real-Redis test observed overlapping acknowledgements while reconnects were progressing; assuming one subscribe attempt made the race test miss a valid interleaving.
+
+**How to apply:** In recovery tests, track and gate acknowledgements by generation, then assert that stale acknowledgements emit nothing and all current-generation completions produce only one refresh.
