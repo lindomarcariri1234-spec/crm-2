@@ -9699,10 +9699,15 @@ export const ListChatbotMessagesParams = zod.object({
   id: zod.coerce.string(),
 });
 
+export const ListChatbotMessagesQueryParams = zod.object({
+  ticketId: zod.coerce.string().optional(),
+});
+
 export const ListChatbotMessagesResponseItem = zod.object({
   id: zod.string(),
   conversationId: zod.string(),
   tenantId: zod.string(),
+  ticketId: zod.string().nullable(),
   role: zod.string(),
   content: zod.string(),
   mediaUrl: zod.string().nullish(),
@@ -9731,6 +9736,7 @@ export const CreateChatbotMessageResponse = zod.object({
   id: zod.string(),
   conversationId: zod.string(),
   tenantId: zod.string(),
+  ticketId: zod.string().nullable(),
   role: zod.string(),
   content: zod.string(),
   mediaUrl: zod.string().nullish(),
@@ -9740,6 +9746,376 @@ export const CreateChatbotMessageResponse = zod.object({
   isBot: zod.boolean(),
   sentAt: zod.string(),
 });
+
+/**
+ * @summary List human-support tickets
+ */
+export const listSupportTicketsQueryLimitMax = 100;
+
+export const listSupportTicketsQueryOffsetMin = 0;
+
+export const ListSupportTicketsQueryParams = zod.object({
+  status: zod.enum(["all", "pending", "open", "resolved"]).optional(),
+  queueId: zod.coerce.string().optional(),
+  assignedUserId: zod.coerce.string().optional(),
+  search: zod.coerce.string().optional(),
+  limit: zod.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(listSupportTicketsQueryLimitMax)
+    .optional(),
+  offset: zod.coerce
+    .number()
+    .int()
+    .min(listSupportTicketsQueryOffsetMin)
+    .optional(),
+});
+
+export const ListSupportTicketsResponse = zod.object({
+  items: zod.array(
+    zod
+      .object({
+        id: zod.string(),
+        tenantId: zod.string(),
+        conversationId: zod.string(),
+        clientId: zod.string().nullable(),
+        queueId: zod.string().nullable(),
+        assignedUserId: zod.string().nullable(),
+        createdByUserId: zod.string().nullable(),
+        status: zod.enum(["pending", "open", "resolved"]),
+        priority: zod.enum(["low", "normal", "high", "urgent"]),
+        subject: zod.string().nullish(),
+        lastMessageAt: zod.coerce.date(),
+        firstResponseAt: zod.coerce.date().nullable(),
+        resolvedAt: zod.coerce.date().nullable(),
+        createdAt: zod.coerce.date(),
+        updatedAt: zod.coerce.date(),
+      })
+      .and(
+        zod.object({
+          clientName: zod.string().nullable(),
+          clientPhone: zod.string().nullable(),
+          channel: zod.string(),
+          queueName: zod.string().nullable(),
+          assignedUserName: zod.string().nullable(),
+          lastMessageContent: zod.string().nullable(),
+          messageCount: zod.number().int(),
+        }),
+      ),
+  ),
+  limit: zod.number().int(),
+  offset: zod.number().int(),
+});
+
+/**
+ * @summary Get a support ticket
+ */
+export const GetSupportTicketParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetSupportTicketResponse = zod
+  .object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    conversationId: zod.string(),
+    clientId: zod.string().nullable(),
+    queueId: zod.string().nullable(),
+    assignedUserId: zod.string().nullable(),
+    createdByUserId: zod.string().nullable(),
+    status: zod.enum(["pending", "open", "resolved"]),
+    priority: zod.enum(["low", "normal", "high", "urgent"]),
+    subject: zod.string().nullish(),
+    lastMessageAt: zod.coerce.date(),
+    firstResponseAt: zod.coerce.date().nullable(),
+    resolvedAt: zod.coerce.date().nullable(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  })
+  .and(
+    zod.object({
+      clientName: zod.string().nullable(),
+      clientPhone: zod.string().nullable(),
+      channel: zod.string(),
+      queueName: zod.string().nullable(),
+      assignedUserName: zod.string().nullable(),
+      lastMessageContent: zod.string().nullable(),
+      messageCount: zod.number().int(),
+    }),
+  );
+
+/**
+ * @summary List support ticket lifecycle events
+ */
+export const ListSupportTicketEventsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ListSupportTicketEventsResponseItem = zod.object({
+  id: zod.string(),
+  eventType: zod.string(),
+  details: zod.record(zod.string(), zod.unknown()),
+  createdAt: zod.coerce.date(),
+  actorUserId: zod.string().nullable(),
+  actorName: zod.string().nullable(),
+});
+export const ListSupportTicketEventsResponse = zod.array(
+  ListSupportTicketEventsResponseItem,
+);
+
+/**
+ * @summary Claim, assign, transfer, resolve, or reopen a support ticket
+ */
+export const ApplySupportTicketActionParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ApplySupportTicketActionBody = zod.object({
+  action: zod.enum([
+    "claim",
+    "assign",
+    "transfer",
+    "resolve",
+    "reopen",
+    "set_priority",
+  ]),
+  assignedUserId: zod.string().nullish(),
+  queueId: zod.string().nullish(),
+  priority: zod.enum(["low", "normal", "high", "urgent"]).optional(),
+});
+
+export const ApplySupportTicketActionResponse = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  conversationId: zod.string(),
+  clientId: zod.string().nullable(),
+  queueId: zod.string().nullable(),
+  assignedUserId: zod.string().nullable(),
+  createdByUserId: zod.string().nullable(),
+  status: zod.enum(["pending", "open", "resolved"]),
+  priority: zod.enum(["low", "normal", "high", "urgent"]),
+  subject: zod.string().nullish(),
+  lastMessageAt: zod.coerce.date(),
+  firstResponseAt: zod.coerce.date().nullable(),
+  resolvedAt: zod.coerce.date().nullable(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Send a human reply on WhatsApp
+ */
+export const ReplyToSupportTicketParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const replyToSupportTicketBodyContentMax = 4000;
+
+export const ReplyToSupportTicketBody = zod.object({
+  content: zod.string().min(1).max(replyToSupportTicketBodyContentMax),
+  idempotencyKey: zod.string().uuid(),
+});
+
+export const ReplyToSupportTicketResponse = zod.object({
+  message: zod.object({
+    id: zod.string(),
+    conversationId: zod.string(),
+    tenantId: zod.string(),
+    ticketId: zod.string().nullable(),
+    role: zod.string(),
+    content: zod.string(),
+    mediaUrl: zod.string().nullish(),
+    mediaMimeType: zod.string().nullish(),
+    mediaFileName: zod.string().nullish(),
+    mediaExpiredAt: zod.coerce.date().nullish(),
+    isBot: zod.boolean(),
+    sentAt: zod.string(),
+  }),
+  deliveryQueued: zod.boolean(),
+});
+
+/**
+ * @summary List ticket queues
+ */
+export const ListSupportQueuesResponseItem = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  name: zod.string(),
+  slug: zod.string(),
+  isDefault: zod.boolean(),
+  isActive: zod.boolean(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+export const ListSupportQueuesResponse = zod.array(
+  ListSupportQueuesResponseItem,
+);
+
+/**
+ * @summary Create a ticket queue
+ */
+export const createSupportQueueBodyNameMin = 2;
+export const createSupportQueueBodyNameMax = 80;
+
+export const CreateSupportQueueBody = zod.object({
+  name: zod
+    .string()
+    .min(createSupportQueueBodyNameMin)
+    .max(createSupportQueueBodyNameMax),
+});
+
+export const CreateSupportQueueResponse = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  name: zod.string(),
+  slug: zod.string(),
+  isDefault: zod.boolean(),
+  isActive: zod.boolean(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Rename, archive, or make a queue the default
+ */
+export const UpdateSupportQueueParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const updateSupportQueueBodyNameMin = 2;
+export const updateSupportQueueBodyNameMax = 80;
+
+export const UpdateSupportQueueBody = zod.object({
+  name: zod
+    .string()
+    .min(updateSupportQueueBodyNameMin)
+    .max(updateSupportQueueBodyNameMax)
+    .optional(),
+  isActive: zod.boolean().optional(),
+  isDefault: zod.boolean().optional(),
+});
+
+export const UpdateSupportQueueResponse = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  name: zod.string(),
+  slug: zod.string(),
+  isDefault: zod.boolean(),
+  isActive: zod.boolean(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary List ticket quick replies
+ */
+export const ListSupportQuickRepliesQueryParams = zod.object({
+  includeInactive: zod.coerce.boolean().optional(),
+});
+
+export const ListSupportQuickRepliesResponseItem = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  queueId: zod.string().nullable(),
+  title: zod.string(),
+  shortcut: zod.string(),
+  content: zod.string(),
+  isActive: zod.boolean(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+export const ListSupportQuickRepliesResponse = zod.array(
+  ListSupportQuickRepliesResponseItem,
+);
+
+/**
+ * @summary Create a ticket quick reply
+ */
+export const createSupportQuickReplyBodyTitleMin = 2;
+export const createSupportQuickReplyBodyTitleMax = 80;
+
+export const createSupportQuickReplyBodyShortcutMax = 32;
+
+export const createSupportQuickReplyBodyContentMax = 2000;
+
+export const CreateSupportQuickReplyBody = zod.object({
+  title: zod
+    .string()
+    .min(createSupportQuickReplyBodyTitleMin)
+    .max(createSupportQuickReplyBodyTitleMax),
+  shortcut: zod.string().min(1).max(createSupportQuickReplyBodyShortcutMax),
+  content: zod.string().min(1).max(createSupportQuickReplyBodyContentMax),
+  queueId: zod.string().nullish(),
+  isActive: zod.boolean().optional(),
+});
+
+export const CreateSupportQuickReplyResponse = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  queueId: zod.string().nullable(),
+  title: zod.string(),
+  shortcut: zod.string(),
+  content: zod.string(),
+  isActive: zod.boolean(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Update a ticket quick reply
+ */
+export const UpdateSupportQuickReplyParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const updateSupportQuickReplyBodyTitleMin = 2;
+export const updateSupportQuickReplyBodyTitleMax = 80;
+
+export const updateSupportQuickReplyBodyShortcutMax = 32;
+
+export const updateSupportQuickReplyBodyContentMax = 2000;
+
+export const UpdateSupportQuickReplyBody = zod.object({
+  title: zod
+    .string()
+    .min(updateSupportQuickReplyBodyTitleMin)
+    .max(updateSupportQuickReplyBodyTitleMax)
+    .optional(),
+  shortcut: zod
+    .string()
+    .min(1)
+    .max(updateSupportQuickReplyBodyShortcutMax)
+    .optional(),
+  content: zod
+    .string()
+    .min(1)
+    .max(updateSupportQuickReplyBodyContentMax)
+    .optional(),
+  queueId: zod.string().nullish(),
+  isActive: zod.boolean().optional(),
+});
+
+export const UpdateSupportQuickReplyResponse = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  queueId: zod.string().nullable(),
+  title: zod.string(),
+  shortcut: zod.string(),
+  content: zod.string(),
+  isActive: zod.boolean(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Archive a ticket quick reply
+ */
+export const DeleteSupportQuickReplyParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteSupportQuickReplyResponse = zod.void();
 
 /**
  * @summary List product categories

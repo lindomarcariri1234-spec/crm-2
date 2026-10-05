@@ -10,6 +10,8 @@ export interface ChatbotMessage {
   id: string;
   conversationId: string;
   tenantId: string;
+  /** @nullable */
+  ticketId: string | null;
   role: string;
   content: string;
   /** @nullable */

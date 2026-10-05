@@ -1,6 +1,13 @@
 import { Router, type NextFunction } from "express";
-import { db, chatbotConversationsTable, chatbotMessagesTable, clientsTable } from "@workspace/db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import {
+  db,
+  chatbotConversationsTable,
+  chatbotMessagesTable,
+  clientsTable,
+  usersTable,
+  supportTicketsTable,
+} from "@workspace/db";
+import { eq, and, desc, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
@@ -12,6 +19,7 @@ import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
 import { extractVerifiedUploadThingKey, utapi } from "../lib/uploadthing";
 import { logger } from "../lib/logger";
 import { getWhatsAppInboundMediaExpirationAt } from "../lib/whatsapp-media-retention";
+import { ensureSupportTicketForConversation, recordSupportTicketEvent } from "../services/support-ticketing.js";
 
 const router = Router();
 const DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
@@ -141,10 +149,34 @@ router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFun
     const [conv] = await db.select().from(chatbotConversationsTable)
       .where(and(eq(chatbotConversationsTable.id, req.params.id), eq(chatbotConversationsTable.tenantId, me.tenantId))).limit(1);
     if (!conv) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+    const ticketId = req.query["ticketId"];
+    let ticketMessageFilter = undefined;
+    if (ticketId !== undefined) {
+      if (typeof ticketId !== "string" || ticketId.length === 0) {
+        next(new ValidationError("ticketId inválido.", "VALIDATION_ERROR"));
+        return;
+      }
+      const [ticket] = await db.select({
+        id: supportTicketsTable.id,
+        createdAt: supportTicketsTable.createdAt,
+      }).from(supportTicketsTable)
+        .where(and(
+          eq(supportTicketsTable.id, ticketId),
+          eq(supportTicketsTable.conversationId, conv.id),
+          eq(supportTicketsTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      if (!ticket) { next(new NotFoundError("Ticket não encontrado.", "NOT_FOUND")); return; }
+      ticketMessageFilter = or(
+        eq(chatbotMessagesTable.ticketId, ticket.id),
+        and(isNull(chatbotMessagesTable.ticketId), lte(chatbotMessagesTable.sentAt, ticket.createdAt)),
+      );
+    }
     const messages = await db.select().from(chatbotMessagesTable)
       .where(and(
         eq(chatbotMessagesTable.conversationId, req.params.id),
         eq(chatbotMessagesTable.tenantId, me.tenantId),
+        ...(ticketMessageFilter ? [ticketMessageFilter] : []),
       ))
       .orderBy(chatbotMessagesTable.sentAt);
     const now = Date.now();
@@ -248,6 +280,16 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
           .limit(1);
         if (!target) return { error: "client" as const };
       }
+      if (parsed.data.assignedUserId) {
+        const [targetUser] = await tx.select({ id: usersTable.id }).from(usersTable)
+          .where(and(
+            eq(usersTable.id, parsed.data.assignedUserId),
+            eq(usersTable.tenantId, me.tenantId),
+            eq(usersTable.isActive, true),
+          ))
+          .limit(1);
+        if (!targetUser) return { error: "user" as const };
+      }
 
       const updates: Partial<typeof chatbotConversationsTable.$inferInsert> = {};
       if (parsed.data.status !== undefined) updates.status = parsed.data.status;
@@ -308,13 +350,74 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
         }
       }
 
+      const shouldCreateTicket = current.channel === "whatsapp" && (
+        parsed.data.status === "human_handoff"
+        || Boolean(parsed.data.assignedUserId)
+      );
+      if (shouldCreateTicket) {
+        const ticket = await ensureSupportTicketForConversation(tx, {
+          tenantId: me.tenantId,
+          conversationId: current.id,
+          actorUserId: me.id,
+        });
+        if (ticket && parsed.data.assignedUserId !== undefined) {
+          const assignedUserId = parsed.data.assignedUserId || null;
+          if (ticket.assignedUserId !== assignedUserId) {
+            await tx.update(supportTicketsTable)
+              .set({
+                assignedUserId,
+                status: assignedUserId ? "open" : "pending",
+                updatedAt: new Date(),
+              })
+              .where(and(
+                eq(supportTicketsTable.id, ticket.id),
+                eq(supportTicketsTable.tenantId, me.tenantId),
+              ));
+            await recordSupportTicketEvent(tx, {
+              tenantId: me.tenantId,
+              ticketId: ticket.id,
+              actorUserId: me.id,
+              eventType: assignedUserId ? "ticket_assigned" : "ticket_unassigned",
+              details: { userId: assignedUserId },
+            });
+          }
+        }
+      } else if (current.channel === "whatsapp" && parsed.data.assignedUserId === "") {
+        const [activeTicket] = await tx.select().from(supportTicketsTable)
+          .where(and(
+            eq(supportTicketsTable.tenantId, me.tenantId),
+            eq(supportTicketsTable.conversationId, current.id),
+            sql`${supportTicketsTable.status} <> 'resolved'`,
+          ))
+          .for("update")
+          .limit(1);
+        if (activeTicket?.assignedUserId) {
+          await tx.update(supportTicketsTable)
+            .set({ assignedUserId: null, status: "pending", updatedAt: new Date() })
+            .where(and(
+              eq(supportTicketsTable.id, activeTicket.id),
+              eq(supportTicketsTable.tenantId, me.tenantId),
+            ));
+          await recordSupportTicketEvent(tx, {
+            tenantId: me.tenantId,
+            ticketId: activeTicket.id,
+            actorUserId: me.id,
+            eventType: "ticket_unassigned",
+            details: {},
+          });
+        }
+      }
+
       const [updated] = await tx.select().from(chatbotConversationsTable)
         .where(and(eq(chatbotConversationsTable.id, current.id), eq(chatbotConversationsTable.tenantId, me.tenantId)))
         .limit(1);
       return { conversation: updated };
     });
     if ("error" in result) {
-      next(new NotFoundError(result.error === "client" ? "Client not found" : "Not found", "NOT_FOUND"));
+      next(new NotFoundError(
+        result.error === "client" ? "Client not found" : result.error === "user" ? "Team member not found or inactive" : "Not found",
+        result.error === "user" ? "USER_NOT_FOUND" : "NOT_FOUND",
+      ));
       return;
     }
     if (!result.conversation) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }

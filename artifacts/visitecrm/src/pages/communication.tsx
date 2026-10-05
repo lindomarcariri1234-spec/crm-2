@@ -66,6 +66,7 @@ import {
   Mail,
   AlertTriangle,
   Download,
+  TicketCheck,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -108,6 +109,7 @@ import {
 } from "./communication/CommunicationHistoryTab";
 import { useConversationAiMessages } from "./communication/useConversationAiMessages";
 import { submitInboxMessage } from "./communication/submitInboxMessage";
+import SupportTicketsTab from "./communication/SupportTicketsTab";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const OUTBOUND_HISTORY_PAGE_SIZE = 50;
@@ -1344,6 +1346,9 @@ export default function Communication() {
           <TabsTrigger value="ai-inbox" className="flex items-center gap-1">
             <MessageSquare className="w-3.5 h-3.5" /> Atendimento IA
           </TabsTrigger>
+          <TabsTrigger value="support-tickets" className="flex items-center gap-1">
+            <TicketCheck className="w-3.5 h-3.5" /> Tickets
+          </TabsTrigger>
           <TabsTrigger value="messages">Mensagens Enviadas</TabsTrigger>
           <TabsTrigger value="templates">Templates</TabsTrigger>
           <TabsTrigger value="email-logs" className="flex items-center gap-1">
@@ -1503,6 +1508,10 @@ export default function Communication() {
               </div>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="support-tickets" className="mt-4">
+          <SupportTicketsTab />
         </TabsContent>
 
         <TabsContent value="messages" className="mt-4">

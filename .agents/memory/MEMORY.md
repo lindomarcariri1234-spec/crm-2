@@ -59,6 +59,7 @@
 - [Marketplace capacity lifecycle](marketplace-capacity-lifecycle.md) — dated partner capacity is claimed atomically after payment, never at anonymous checkout
 - [Distribution operation finalization](distribution-operation-finalization.md) — capacity, booking ledger and terminal operation status must commit together; replays repair any ledger gap
 - [WhatsApp attendance delivery](whatsapp-attendance-delivery.md) — persist and conditionally claim replies before provider calls; recovery must honor opt-out.
+- [WhatsApp support ticketing scope](whatsapp-support-ticketing-scope.md) — human handoffs only; no historical backfill, multi-number support, or full realtime unless scope expands.
 - [Expo build port isolation](expo-build-port-isolation.md) — mobile static builds must use a configurable Metro port when the component sandbox also occupies 8081.
 - [Resend production verification](resend-production-verification.md) — the connected production credential may be send-only; verify the exact sender domain externally before testing delivery.
 - [GitHub Actions IPv4-mapped loopback](github-actions-ipv4-mapped-loopback.md) — GitHub runners may expose localhost as ::ffff:127.0.0.1; queue/audit payloads should use the canonical client-IP helper.

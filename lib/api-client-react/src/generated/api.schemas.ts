@@ -4347,6 +4347,8 @@ export interface ChatbotMessage {
   id: string;
   conversationId: string;
   tenantId: string;
+  /** @nullable */
+  ticketId: string | null;
   role: string;
   content: string;
   /** @nullable */
@@ -4359,6 +4361,213 @@ export interface ChatbotMessage {
   mediaExpiredAt?: string | null;
   isBot: boolean;
   sentAt: string;
+}
+
+export interface SupportQueue {
+  id: string;
+  tenantId: string;
+  name: string;
+  slug: string;
+  isDefault: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SupportTicketStatus =
+  (typeof SupportTicketStatus)[keyof typeof SupportTicketStatus];
+
+export const SupportTicketStatus = {
+  pending: "pending",
+  open: "open",
+  resolved: "resolved",
+} as const;
+
+export type SupportTicketPriority =
+  (typeof SupportTicketPriority)[keyof typeof SupportTicketPriority];
+
+export const SupportTicketPriority = {
+  low: "low",
+  normal: "normal",
+  high: "high",
+  urgent: "urgent",
+} as const;
+
+export interface SupportTicket {
+  id: string;
+  tenantId: string;
+  conversationId: string;
+  /** @nullable */
+  clientId: string | null;
+  /** @nullable */
+  queueId: string | null;
+  /** @nullable */
+  assignedUserId: string | null;
+  /** @nullable */
+  createdByUserId: string | null;
+  status: SupportTicketStatus;
+  priority: SupportTicketPriority;
+  /** @nullable */
+  subject?: string | null;
+  lastMessageAt: string;
+  /** @nullable */
+  firstResponseAt: string | null;
+  /** @nullable */
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SupportTicketListItem = SupportTicket & {
+  /** @nullable */
+  clientName: string | null;
+  /** @nullable */
+  clientPhone: string | null;
+  channel: string;
+  /** @nullable */
+  queueName: string | null;
+  /** @nullable */
+  assignedUserName: string | null;
+  /** @nullable */
+  lastMessageContent: string | null;
+  messageCount: number;
+};
+
+export interface SupportTicketListResponse {
+  items: SupportTicketListItem[];
+  limit: number;
+  offset: number;
+}
+
+export type SupportTicketEventDetails = { [key: string]: unknown };
+
+export interface SupportTicketEvent {
+  id: string;
+  eventType: string;
+  details: SupportTicketEventDetails;
+  createdAt: string;
+  /** @nullable */
+  actorUserId: string | null;
+  /** @nullable */
+  actorName: string | null;
+}
+
+export type SupportTicketActionBodyAction =
+  (typeof SupportTicketActionBodyAction)[keyof typeof SupportTicketActionBodyAction];
+
+export const SupportTicketActionBodyAction = {
+  claim: "claim",
+  assign: "assign",
+  transfer: "transfer",
+  resolve: "resolve",
+  reopen: "reopen",
+  set_priority: "set_priority",
+} as const;
+
+export type SupportTicketActionBodyPriority =
+  (typeof SupportTicketActionBodyPriority)[keyof typeof SupportTicketActionBodyPriority];
+
+export const SupportTicketActionBodyPriority = {
+  low: "low",
+  normal: "normal",
+  high: "high",
+  urgent: "urgent",
+} as const;
+
+export interface SupportTicketActionBody {
+  action: SupportTicketActionBodyAction;
+  /** @nullable */
+  assignedUserId?: string | null;
+  /** @nullable */
+  queueId?: string | null;
+  priority?: SupportTicketActionBodyPriority;
+}
+
+export interface SupportTicketReplyBody {
+  /**
+   * @minLength 1
+   * @maxLength 4000
+   */
+  content: string;
+  idempotencyKey: string;
+}
+
+export interface SupportTicketReplyResponse {
+  message: ChatbotMessage;
+  deliveryQueued: boolean;
+}
+
+export interface CreateSupportQueueBody {
+  /**
+   * @minLength 2
+   * @maxLength 80
+   */
+  name: string;
+}
+
+export interface UpdateSupportQueueBody {
+  /**
+   * @minLength 2
+   * @maxLength 80
+   */
+  name?: string;
+  isActive?: boolean;
+  isDefault?: boolean;
+}
+
+export interface SupportQuickReply {
+  id: string;
+  tenantId: string;
+  /** @nullable */
+  queueId: string | null;
+  title: string;
+  shortcut: string;
+  content: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSupportQuickReplyBody {
+  /**
+   * @minLength 2
+   * @maxLength 80
+   */
+  title: string;
+  /**
+   * @minLength 1
+   * @maxLength 32
+   */
+  shortcut: string;
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  content: string;
+  /** @nullable */
+  queueId?: string | null;
+  isActive?: boolean;
+}
+
+export interface UpdateSupportQuickReplyBody {
+  /**
+   * @minLength 2
+   * @maxLength 80
+   */
+  title?: string;
+  /**
+   * @minLength 1
+   * @maxLength 32
+   */
+  shortcut?: string;
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  content?: string;
+  /** @nullable */
+  queueId?: string | null;
+  isActive?: boolean;
 }
 
 export type CreateChatbotMessageBodyRole =
@@ -6163,6 +6372,40 @@ export type MarkBirthdayConvertedBody = {
 
 export type MarkBirthdayConverted200 = {
   success: boolean;
+};
+
+export type ListChatbotMessagesParams = {
+  ticketId?: string;
+};
+
+export type ListSupportTicketsParams = {
+  status?: ListSupportTicketsStatus;
+  queueId?: string;
+  assignedUserId?: string;
+  search?: string;
+  /**
+   * @minimum 1
+   * @maximum 100
+   */
+  limit?: number;
+  /**
+   * @minimum 0
+   */
+  offset?: number;
+};
+
+export type ListSupportTicketsStatus =
+  (typeof ListSupportTicketsStatus)[keyof typeof ListSupportTicketsStatus];
+
+export const ListSupportTicketsStatus = {
+  all: "all",
+  pending: "pending",
+  open: "open",
+  resolved: "resolved",
+} as const;
+
+export type ListSupportQuickRepliesParams = {
+  includeInactive?: boolean;
 };
 
 export type ListAuditLogsParams = {

@@ -6,8 +6,18 @@ import {
   isSameLogicalAgency,
   normalizeBackupPayload,
 } from "./backup-contract.js";
+import { NOT_RESTORED_SECTIONS } from "./backup-import.js";
 
 describe("backup contract", () => {
+  it("reports support ticket data as not restored", () => {
+    expect(NOT_RESTORED_SECTIONS).toEqual(expect.arrayContaining([
+      "comunicacao.supportQueues",
+      "comunicacao.supportTickets",
+      "comunicacao.supportTicketEvents",
+      "comunicacao.supportQuickReplies",
+    ]));
+  });
+
   it("keeps the canonical envelope unchanged", () => {
     const backup = {
       format: BACKUP_FORMAT,
@@ -41,6 +51,17 @@ describe("backup contract", () => {
     expect((data.reservas as { passengers: unknown[] }).passengers).toEqual([
       { id: "passenger-1", reservationId: "reservation-1" },
     ]);
+    expect((data.comunicacao as {
+      supportQueues: unknown[];
+      supportTickets: unknown[];
+      supportTicketEvents: unknown[];
+      supportQuickReplies: unknown[];
+    })).toMatchObject({
+      supportQueues: [],
+      supportTickets: [],
+      supportTicketEvents: [],
+      supportQuickReplies: [],
+    });
   });
 
   it("rejects unknown and incompatible versions separately", () => {

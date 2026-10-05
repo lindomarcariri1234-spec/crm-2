@@ -21,6 +21,7 @@ import {
   type EvolutionInboundMedia,
   type StoredEvolutionMedia,
 } from "./whatsapp-media.js";
+import { ensureSupportTicketForConversation } from "./support-ticketing.js";
 
 function normalizeInboundWhatsAppPhone(raw: string): string | null {
   const phonePart = raw.trim().split("@")[0]?.split(":")[0] ?? "";
@@ -584,6 +585,24 @@ export async function processEvolutionInbound(opts: {
       .onConflictDoNothing()
       .returning({ id: chatbotMessagesTable.id });
 
+    if (
+      inserted
+      && !optedOut
+      && (
+        inbound.media
+        || conversation.assignedUserId
+        || conversation.status === "human_handoff"
+        || mustHandoff(inboundContent)
+      )
+    ) {
+      await ensureSupportTicketForConversation(tx, {
+        tenantId,
+        conversationId: conversation.id,
+        inboundMessageId: inserted.id,
+        subject: inboundContent || "Mídia recebida",
+      });
+    }
+
     let existingMediaMessage: { id: string; mediaUrl: string | null } | undefined;
     if (!inserted && inbound.messageId && inbound.media && !optedOut) {
       const [existing] = await tx.select({
@@ -765,6 +784,14 @@ export async function processEvolutionInbound(opts: {
     await db.update(chatbotConversationsTable)
       .set({ status: "human_handoff" })
       .where(eq(chatbotConversationsTable.id, conversation.id));
+    await db.transaction(async (tx) => {
+      await ensureSupportTicketForConversation(tx, {
+        tenantId,
+        conversationId: conversation.id,
+        inboundMessageId: inserted?.id,
+        subject: inboundContent,
+      });
+    });
     return "ai_unavailable";
   }
 

@@ -39,7 +39,8 @@ const { rowsByTable, rejectedTable, mockRequireAuth, mockLogError, tables, makeC
     "loyaltyTransactionsTable", "clubConfigTable", "clubBenefitsTable", "campaignsTable",
     "campaignSendsTable", "npsResponsesTable", "clientNpsResponsesTable", "productsTable",
     "ordersTable", "orderItemsTable", "messagesTable", "messageTemplatesTable",
-    "chatbotConversationsTable", "chatbotMessagesTable", "birthdayMessagesTable",
+    "chatbotConversationsTable", "chatbotMessagesTable", "supportQueuesTable",
+    "supportTicketsTable", "supportTicketEventsTable", "supportQuickRepliesTable", "birthdayMessagesTable",
     "emailLogsTable", "whatsappNotificationOutboxTable", "outboundMessagesTable",
     "outboundDeliveriesTable", "outboundDeliveryAttemptsTable", "tripMediaTable", "tripImportBatchesTable",
     "clientAchievementsTable", "clientDreamDestinationsTable", "clientFavoritesTable",
@@ -424,6 +425,22 @@ function seedFullTenantFixture() {
     { id: "cmsg-a1", tenantId: TENANT_A },
     { id: "cmsg-b1", tenantId: TENANT_B },
   ]);
+  rowsByTable.set(tables.supportQueuesTable, [
+    { id: "support-queue-a1", tenantId: TENANT_A },
+    { id: "support-queue-b1", tenantId: TENANT_B },
+  ]);
+  rowsByTable.set(tables.supportTicketsTable, [
+    { id: "support-ticket-a1", tenantId: TENANT_A },
+    { id: "support-ticket-b1", tenantId: TENANT_B },
+  ]);
+  rowsByTable.set(tables.supportTicketEventsTable, [
+    { id: "support-event-a1", tenantId: TENANT_A },
+    { id: "support-event-b1", tenantId: TENANT_B },
+  ]);
+  rowsByTable.set(tables.supportQuickRepliesTable, [
+    { id: "support-reply-a1", tenantId: TENANT_A },
+    { id: "support-reply-b1", tenantId: TENANT_B },
+  ]);
   rowsByTable.set(tables.birthdayMessagesTable, [
     { id: "bday-a1", tenantId: TENANT_A },
     { id: "bday-b1", tenantId: TENANT_B },
@@ -661,6 +678,18 @@ describe("GET /api/backup/export", () => {
       (data.marketing as { campaigns: unknown[]; catalogoPontos: { products: unknown[]; orders: unknown[] } }).catalogoPontos.products,
     ).toHaveLength(1);
     expect((data.comunicacao as { messages: unknown[]; chatbotMessages: unknown[]; emailLogs: unknown[]; whatsappOutbox: unknown[] }).chatbotMessages).toHaveLength(1);
+    expect((data.comunicacao as { supportQueues: unknown[] }).supportQueues).toEqual([
+      { id: "support-queue-a1", tenantId: TENANT_A },
+    ]);
+    expect((data.comunicacao as { supportTickets: unknown[] }).supportTickets).toEqual([
+      { id: "support-ticket-a1", tenantId: TENANT_A },
+    ]);
+    expect((data.comunicacao as { supportTicketEvents: unknown[] }).supportTicketEvents).toEqual([
+      { id: "support-event-a1", tenantId: TENANT_A },
+    ]);
+    expect((data.comunicacao as { supportQuickReplies: unknown[] }).supportQuickReplies).toEqual([
+      { id: "support-reply-a1", tenantId: TENANT_A },
+    ]);
     expect((data.comunicacao as { emailLogs: unknown[] }).emailLogs).toHaveLength(1);
     expect((data.comunicacao as { whatsappOutbox: unknown[] }).whatsappOutbox).toHaveLength(1);
     expect((data.comunicacao as { outboundMessages: unknown[] }).outboundMessages).toEqual([]);

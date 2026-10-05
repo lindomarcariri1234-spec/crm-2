@@ -736,6 +736,13 @@
       "when": 1809960005000,
       "tag": "0105_whatsapp_media_retention",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1809960006000,
+      "tag": "0106_whatsapp_support_tickets",
+      "breakpoints": true
     }
   ]
 }

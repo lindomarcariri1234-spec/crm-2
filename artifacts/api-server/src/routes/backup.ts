@@ -72,6 +72,10 @@ import {
   messageTemplatesTable,
   chatbotConversationsTable,
   chatbotMessagesTable,
+  supportQueuesTable,
+  supportTicketsTable,
+  supportTicketEventsTable,
+  supportQuickRepliesTable,
   birthdayMessagesTable,
   emailLogsTable,
   whatsappNotificationOutboxTable,
@@ -430,7 +434,8 @@ async function writeSmallTable(
  * registries (incl. vehicle seat layouts), calendar, documents, sales
  * goals, commissions, pipeline/deals, loyalty, club benefits, marketing
  * (campaigns/points catalog/NPS), communication history (messages,
- * templates, chatbot, birthday messages, email/WhatsApp logs), third-party
+ * templates, chatbot, human-support tickets and their lifecycle events,
+ * birthday messages, email/WhatsApp logs), third-party
  * integration configuration (non-secret fields only) and logs, AI
  * insights/alerts history, marketplace partners and distribution ledger,
  * and the audit trail plus aggregate integrity-reconciliation history. Restricted to agency admins of their own tenant —
@@ -911,7 +916,7 @@ router.get("/backup/export", async (req: Request, res: Response, next: NextFunct
     await writer.endObject();
     await writer.endObject();
 
-    // Comunicação: mensagens, templates, chatbot e mensagens de aniversário.
+    // Comunicação: mensagens, templates, chatbot, tickets humanos e mensagens de aniversário.
     await writer.key("comunicacao");
     await writer.beginObject();
     await streamDirectTable(writer, "messages", messagesTable as unknown as AnyTable, eq(messagesTable.tenantId, tenantId), counts);
@@ -934,6 +939,34 @@ router.get("/backup/export", async (req: Request, res: Response, next: NextFunct
       "chatbotMessages",
       chatbotMessagesTable as unknown as AnyTable,
       eq(chatbotMessagesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "supportQueues",
+      supportQueuesTable as unknown as AnyTable,
+      eq(supportQueuesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "supportTickets",
+      supportTicketsTable as unknown as AnyTable,
+      eq(supportTicketsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "supportTicketEvents",
+      supportTicketEventsTable as unknown as AnyTable,
+      eq(supportTicketEventsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "supportQuickReplies",
+      supportQuickRepliesTable as unknown as AnyTable,
+      eq(supportQuickRepliesTable.tenantId, tenantId),
       counts,
     );
     await streamDirectTable(

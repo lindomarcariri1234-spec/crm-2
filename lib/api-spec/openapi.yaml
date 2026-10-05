@@ -5301,6 +5301,11 @@ paths:
           required: true
           schema:
             type: string
+        - in: query
+          name: ticketId
+          required: false
+          schema:
+            type: string
       responses:
         "200":
           description: List of messages
@@ -5329,6 +5334,276 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ChatbotMessage"
+
+  /support/tickets:
+    get:
+      operationId: listSupportTickets
+      summary: List human-support tickets
+      tags: [SupportTickets]
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [all, pending, open, resolved]
+        - in: query
+          name: queueId
+          schema:
+            type: string
+        - in: query
+          name: assignedUserId
+          schema:
+            type: string
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Tenant-scoped ticket page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportTicketListResponse"
+
+  /support/tickets/{id}:
+    get:
+      operationId: getSupportTicket
+      summary: Get a support ticket
+      tags: [SupportTickets]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ticket details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportTicketListItem"
+
+  /support/tickets/{id}/events:
+    get:
+      operationId: listSupportTicketEvents
+      summary: List support ticket lifecycle events
+      tags: [SupportTickets]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ticket events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SupportTicketEvent"
+
+  /support/tickets/{id}/actions:
+    post:
+      operationId: applySupportTicketAction
+      summary: Claim, assign, transfer, resolve, or reopen a support ticket
+      tags: [SupportTickets]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupportTicketActionBody"
+      responses:
+        "200":
+          description: Updated support ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportTicket"
+
+  /support/tickets/{id}/reply:
+    post:
+      operationId: replyToSupportTicket
+      summary: Send a human reply on WhatsApp
+      tags: [SupportTickets]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupportTicketReplyBody"
+      responses:
+        "201":
+          description: Message delivered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportTicketReplyResponse"
+        "202":
+          description: Message persisted and queued for retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportTicketReplyResponse"
+
+  /support/queues:
+    get:
+      operationId: listSupportQueues
+      summary: List ticket queues
+      tags: [SupportTickets]
+      responses:
+        "200":
+          description: Tenant queues
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SupportQueue"
+    post:
+      operationId: createSupportQueue
+      summary: Create a ticket queue
+      tags: [SupportTickets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSupportQueueBody"
+      responses:
+        "201":
+          description: Created queue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportQueue"
+
+  /support/queues/{id}:
+    patch:
+      operationId: updateSupportQueue
+      summary: Rename, archive, or make a queue the default
+      tags: [SupportTickets]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSupportQueueBody"
+      responses:
+        "200":
+          description: Updated queue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportQueue"
+
+  /support/quick-replies:
+    get:
+      operationId: listSupportQuickReplies
+      summary: List ticket quick replies
+      tags: [SupportTickets]
+      parameters:
+        - in: query
+          name: includeInactive
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Tenant quick replies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SupportQuickReply"
+    post:
+      operationId: createSupportQuickReply
+      summary: Create a ticket quick reply
+      tags: [SupportTickets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSupportQuickReplyBody"
+      responses:
+        "201":
+          description: Created quick reply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportQuickReply"
+
+  /support/quick-replies/{id}:
+    patch:
+      operationId: updateSupportQuickReply
+      summary: Update a ticket quick reply
+      tags: [SupportTickets]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSupportQuickReplyBody"
+      responses:
+        "200":
+          description: Updated quick reply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportQuickReply"
+    delete:
+      operationId: deleteSupportQuickReply
+      summary: Archive a ticket quick reply
+      tags: [SupportTickets]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Archived
 
   # ─── CATALOG ────────────────────────────────────────────────────
   /product-categories:
@@ -11789,6 +12064,8 @@ components:
           type: string
         tenantId:
           type: string
+        ticketId:
+          type: [string, "null"]
         role:
           type: string
         content:
@@ -11806,7 +12083,170 @@ components:
           type: boolean
         sentAt:
           type: string
-      required: [id, conversationId, tenantId, role, content, isBot, sentAt]
+      required: [id, conversationId, tenantId, ticketId, role, content, isBot, sentAt]
+
+    # ─── WHATSAPP SUPPORT TICKETS ────────────────────────────────────
+    SupportQueue:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        isDefault: { type: boolean }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, tenantId, name, slug, isDefault, isActive, createdAt, updatedAt]
+
+    SupportTicket:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        conversationId: { type: string }
+        clientId: { type: [string, "null"] }
+        queueId: { type: [string, "null"] }
+        assignedUserId: { type: [string, "null"] }
+        createdByUserId: { type: [string, "null"] }
+        status: { type: string, enum: [pending, open, resolved] }
+        priority: { type: string, enum: [low, normal, high, urgent] }
+        subject: { type: [string, "null"] }
+        lastMessageAt: { type: string, format: date-time }
+        firstResponseAt: { type: [string, "null"], format: date-time }
+        resolvedAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required:
+        - id
+        - tenantId
+        - conversationId
+        - clientId
+        - queueId
+        - assignedUserId
+        - createdByUserId
+        - status
+        - priority
+        - lastMessageAt
+        - firstResponseAt
+        - resolvedAt
+        - createdAt
+        - updatedAt
+
+    SupportTicketListItem:
+      allOf:
+        - $ref: "#/components/schemas/SupportTicket"
+        - type: object
+          properties:
+            clientName: { type: [string, "null"] }
+            clientPhone: { type: [string, "null"] }
+            channel: { type: string }
+            queueName: { type: [string, "null"] }
+            assignedUserName: { type: [string, "null"] }
+            lastMessageContent: { type: [string, "null"] }
+            messageCount: { type: integer }
+          required:
+            - clientName
+            - clientPhone
+            - channel
+            - queueName
+            - assignedUserName
+            - lastMessageContent
+            - messageCount
+
+    SupportTicketListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SupportTicketListItem"
+        limit: { type: integer }
+        offset: { type: integer }
+      required: [items, limit, offset]
+
+    SupportTicketEvent:
+      type: object
+      properties:
+        id: { type: string }
+        eventType: { type: string }
+        details:
+          type: object
+          additionalProperties: true
+        createdAt: { type: string, format: date-time }
+        actorUserId: { type: [string, "null"] }
+        actorName: { type: [string, "null"] }
+      required: [id, eventType, details, createdAt, actorUserId, actorName]
+
+    SupportTicketActionBody:
+      type: object
+      properties:
+        action: { type: string, enum: [claim, assign, transfer, resolve, reopen, set_priority] }
+        assignedUserId: { type: [string, "null"] }
+        queueId: { type: [string, "null"] }
+        priority: { type: string, enum: [low, normal, high, urgent] }
+      required: [action]
+
+    SupportTicketReplyBody:
+      type: object
+      properties:
+        content: { type: string, minLength: 1, maxLength: 4000 }
+        idempotencyKey: { type: string, format: uuid }
+      required: [content, idempotencyKey]
+
+    SupportTicketReplyResponse:
+      type: object
+      properties:
+        message:
+          $ref: "#/components/schemas/ChatbotMessage"
+        deliveryQueued: { type: boolean }
+      required: [message, deliveryQueued]
+
+    CreateSupportQueueBody:
+      type: object
+      properties:
+        name: { type: string, minLength: 2, maxLength: 80 }
+      required: [name]
+
+    UpdateSupportQueueBody:
+      type: object
+      properties:
+        name: { type: string, minLength: 2, maxLength: 80 }
+        isActive: { type: boolean }
+        isDefault: { type: boolean }
+
+    SupportQuickReply:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        queueId: { type: [string, "null"] }
+        title: { type: string }
+        shortcut: { type: string }
+        content: { type: string }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, tenantId, queueId, title, shortcut, content, isActive, createdAt, updatedAt]
+
+    CreateSupportQuickReplyBody:
+      type: object
+      properties:
+        title: { type: string, minLength: 2, maxLength: 80 }
+        shortcut: { type: string, minLength: 1, maxLength: 32 }
+        content: { type: string, minLength: 1, maxLength: 2000 }
+        queueId: { type: [string, "null"] }
+        isActive: { type: boolean }
+      required: [title, shortcut, content]
+
+    UpdateSupportQuickReplyBody:
+      type: object
+      properties:
+        title: { type: string, minLength: 2, maxLength: 80 }
+        shortcut: { type: string, minLength: 1, maxLength: 32 }
+        content: { type: string, minLength: 1, maxLength: 2000 }
+        queueId: { type: [string, "null"] }
+        isActive: { type: boolean }
 
     CreateChatbotMessageBody:
       type: object
