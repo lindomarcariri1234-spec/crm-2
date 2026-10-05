@@ -201,6 +201,7 @@ interface ConversationsTabProps {
   conversationMessages: CommunicationTimelineEntry[];
   selectedClientName: string | undefined;
   loadingConversationAiMessages: boolean;
+  retryingConversationId?: string | null;
   conversationAiError: string | null;
   failedConversationLabels?: FailedConversationLabel[];
   onOpenFailedConversation: (conversationId: string) => void;
@@ -236,6 +237,7 @@ export function ConversationsTab({
   conversationMessages,
   selectedClientName,
   loadingConversationAiMessages,
+  retryingConversationId = null,
   conversationAiError,
   failedConversationLabels = [],
   onOpenFailedConversation,
@@ -408,32 +410,40 @@ export function ConversationsTab({
                               className="mt-1 list-inside list-disc space-y-0.5 text-muted-foreground"
                               data-testid="failed-conversation-history-labels"
                             >
-                              {failedConversationLabels.map(({ conversationId, label }, index) => (
-                                <li key={conversationId}>
-                                  <button
-                                    aria-label={`Abrir ${label} no Atendimento IA`}
-                                    className="rounded-sm text-left underline decoration-border underline-offset-2 transition-colors hover:text-foreground hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                    data-testid={`button-open-failed-whatsapp-session-${index}`}
-                                    onClick={() => onOpenFailedConversation(conversationId)}
-                                    type="button"
-                                  >
-                                    {label}
-                                  </button>
-                                  <Button
-                                    aria-label={`Tentar novamente ${label}`}
-                                    className="ml-2 h-6 px-2 text-xs"
-                                    data-testid={`button-retry-failed-whatsapp-session-${index}`}
-                                    disabled={loadingConversationAiMessages}
-                                    onClick={() => {
-                                      void onRetryConversationAiMessages(conversationId);
-                                    }}
-                                    size="sm"
-                                    variant="ghost"
-                                  >
-                                    Tentar novamente
-                                  </Button>
-                                </li>
-                              ))}
+                              {failedConversationLabels.map(({ conversationId, label }, index) => {
+                                const isRetrying = retryingConversationId === conversationId;
+                                return (
+                                  <li key={conversationId}>
+                                    <button
+                                      aria-label={`Abrir ${label} no Atendimento IA`}
+                                      className="rounded-sm text-left underline decoration-border underline-offset-2 transition-colors hover:text-foreground hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                      data-testid={`button-open-failed-whatsapp-session-${index}`}
+                                      onClick={() => onOpenFailedConversation(conversationId)}
+                                      type="button"
+                                    >
+                                      {label}
+                                    </button>
+                                    <Button
+                                      aria-label={
+                                        isRetrying
+                                          ? `Tentando novamente ${label}`
+                                          : `Tentar novamente ${label}`
+                                      }
+                                      aria-busy={isRetrying}
+                                      className="ml-2 h-6 px-2 text-xs"
+                                      data-testid={`button-retry-failed-whatsapp-session-${index}`}
+                                      disabled={loadingConversationAiMessages}
+                                      onClick={() => {
+                                        void onRetryConversationAiMessages(conversationId);
+                                      }}
+                                      size="sm"
+                                      variant="ghost"
+                                    >
+                                      {isRetrying ? "Tentando…" : "Tentar novamente"}
+                                    </Button>
+                                  </li>
+                                );
+                              })}
                             </ul>
                           </div>
                         )}

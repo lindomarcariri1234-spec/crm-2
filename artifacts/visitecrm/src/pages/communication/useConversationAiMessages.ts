@@ -20,6 +20,7 @@ interface UseConversationAiMessagesOptions {
 interface UseConversationAiMessagesResult {
   messages: AiConversationMessage[];
   loading: boolean;
+  retryingConversationId: string | null;
   error: string | null;
   failedConversationLabels: FailedConversationLabel[];
   updateConversationMessages: (
@@ -116,6 +117,7 @@ export function useConversationAiMessages({
 }: UseConversationAiMessagesOptions): UseConversationAiMessagesResult {
   const [messages, setMessages] = useState<AiConversationMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [retryingConversationId, setRetryingConversationId] = useState<string | null>(null);
   const [partialFailure, setPartialFailure] = useState<PartialConversationFailure | null>(null);
   const [refreshError, setRefreshError] = useState<ScopedRefreshError | null>(null);
   const partialFailureRef = useRef(partialFailure);
@@ -173,6 +175,7 @@ export function useConversationAiMessages({
     if (!enabled || !selectedClientId || conversationIds.length === 0) {
       setMessages([]);
       setLoading(false);
+      setRetryingConversationId(null);
       setPartialFailure(null);
       setRefreshError(null);
       return;
@@ -206,6 +209,7 @@ export function useConversationAiMessages({
       : failedConversationIdsToRetry.length > 0
         ? failedConversationIdsToRetry
         : conversationIds;
+    setRetryingConversationId(isTargetedRetry ? retryConversationId : null);
     const conversationIdSet = new Set(conversationIds);
     const requestedConversationIdSet = new Set(conversationIdsToLoad);
     const results = new Array<ConversationLoadResult>(conversationIdsToLoad.length);
@@ -272,7 +276,10 @@ export function useConversationAiMessages({
           : null);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setRetryingConversationId(null);
+        }
       });
 
     return () => {
@@ -291,6 +298,7 @@ export function useConversationAiMessages({
   return {
     messages,
     loading,
+    retryingConversationId,
     error,
     failedConversationLabels,
     updateConversationMessages,

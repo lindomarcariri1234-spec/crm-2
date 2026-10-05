@@ -118,6 +118,7 @@ function ConversationHistoryRetryHarness() {
         conversationAiError: history.error,
         failedConversationLabels: history.failedConversationLabels,
         loadingConversationAiMessages: history.loading,
+        retryingConversationId: history.retryingConversationId,
         onRetryConversationAiMessages: (conversationId) => {
           setRetryConversationId(conversationId ?? null);
           setRefreshToken((current) => current + 1);
@@ -255,6 +256,22 @@ describe("WhatsApp conversation history", () => {
       "conversation-failed-a",
       1,
     );
+    const retryAButtonWhilePending = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-failed-whatsapp-session-0"]',
+    );
+    const retryBButtonWhilePending = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-failed-whatsapp-session-1"]',
+    );
+    expect(retryAButtonWhilePending?.textContent).toBe("Tentando…");
+    expect(retryAButtonWhilePending?.getAttribute("aria-busy")).toBe("true");
+    expect(retryAButtonWhilePending?.getAttribute("aria-label"))
+      .toContain("Tentando novamente");
+    expect(retryBButtonWhilePending?.textContent).toBe("Tentar novamente");
+    expect(retryBButtonWhilePending?.getAttribute("aria-busy")).toBe("false");
+    expect(retryBButtonWhilePending?.disabled).toBe(true);
+    expect(container.querySelectorAll(
+      '[data-testid^="button-open-failed-whatsapp-session-"]',
+    )).toHaveLength(2);
 
     const callsFor = (conversationId: string) => fetchMock.mock.calls.filter(([input]) =>
       String(input).includes(`/chatbot-conversations/${conversationId}/messages`),
@@ -267,6 +284,11 @@ describe("WhatsApp conversation history", () => {
     await flushAct(async () => {
       await settleHttpFailure(retriedFailedRequestA);
     });
+    const retryAButtonAfterFailure = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-failed-whatsapp-session-0"]',
+    );
+    expect(retryAButtonAfterFailure?.textContent).toBe("Tentar novamente");
+    expect(retryAButtonAfterFailure?.getAttribute("aria-busy")).toBe("false");
     expect(history!.textContent).toContain(successfulMessage.content);
     expect(container.querySelectorAll(
       '[data-testid^="button-retry-failed-whatsapp-session-"]',

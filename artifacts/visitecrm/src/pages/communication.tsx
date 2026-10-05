@@ -229,6 +229,7 @@ export default function Communication() {
   const {
     messages: conversationAiMessages,
     loading: loadingConversationAiMessages,
+    retryingConversationId: retryingConversationAiId,
     error: conversationAiError,
     failedConversationLabels: conversationAiFailureLabels,
   } = useConversationAiMessages({
@@ -1382,6 +1383,7 @@ export default function Communication() {
             conversationMessages={conversationMessages}
             selectedClientName={conversations.find((item) => item.clientId === selectedConversationClientId)?.clientName}
             loadingConversationAiMessages={loadingConversationAiMessages}
+            retryingConversationId={retryingConversationAiId}
             conversationAiError={conversationAiError}
             failedConversationLabels={conversationAiFailureLabels}
             onOpenFailedConversation={openFailedWhatsAppConversation}
