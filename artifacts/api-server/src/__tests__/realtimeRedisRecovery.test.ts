@@ -613,4 +613,338 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       await rm(dataDirectory, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("fans ticket and queue events across isolated realtime instances after Redis recovery", async () => {
+    type SubscriptionTracker = {
+      id: string;
+      subscriber?: Redis;
+      reconnectCount: number;
+      currentRecoveryAcknowledged: boolean;
+      acknowledgements: Array<{
+        generation: number;
+        acknowledged: boolean;
+        completed: boolean;
+      }>;
+    };
+    type RealtimeInstance = {
+      id: string;
+      realtime: typeof import("../lib/realtime.js");
+      ticketSse: typeof import("../lib/support-ticket-sse.js");
+      tracker: SubscriptionTracker;
+    };
+    type TestStream = {
+      id: string;
+      path: string;
+      tenantId: string;
+      instance: RealtimeInstance;
+      refreshes: Array<{
+        payload: RefreshEnvelope;
+        acknowledgedAtDelivery: boolean;
+      }>;
+      updates: TicketUpdatePayload[];
+      abort: AbortController;
+      reader?: ReadableStreamDefaultReader<Uint8Array>;
+      task?: Promise<void>;
+      closed: boolean;
+      error?: unknown;
+    };
+
+    const port = await reservePort();
+    const dataDirectory = await mkdtemp(join(tmpdir(), "visitecrm-ticket-redis-instances-"));
+    const redisUrl = `redis://127.0.0.1:${port}`;
+    let redisProcess: ChildProcess | undefined;
+    let publisher: Redis | undefined;
+    let httpServer: ReturnType<typeof createHttpServer> | undefined;
+    const trackers: SubscriptionTracker[] = [
+      {
+        id: "instance-one",
+        reconnectCount: 0,
+        currentRecoveryAcknowledged: false,
+        acknowledgements: [],
+      },
+      {
+        id: "instance-two",
+        reconnectCount: 0,
+        currentRecoveryAcknowledged: false,
+        acknowledgements: [],
+      },
+    ];
+    const instances: RealtimeInstance[] = [];
+    const streams: TestStream[] = [];
+    let activeTracker: SubscriptionTracker | undefined;
+
+    try {
+      redisProcess = await startDisposableRedis(port, dataDirectory);
+      publisher = new Redis(redisUrl, {
+        connectTimeout: 1_000,
+        retryStrategy: (attempt) => Math.min(attempt * 50, 250),
+      });
+      publisher.on("error", () => {});
+      await waitUntil(() => publisher?.status === "ready", "the test publisher to connect");
+
+      mockGetRedisConnection.mockReturnValue({
+        duplicate: () => {
+          if (!activeTracker) {
+            throw new Error("Expected a tracker for each isolated Redis subscriber");
+          }
+          const tracker = activeTracker;
+          const subscriber = publisher!.duplicate();
+          tracker.subscriber = subscriber;
+          const rawSubscribe = subscriber.subscribe.bind(subscriber);
+          Object.defineProperty(subscriber, "subscribe", {
+            configurable: true,
+            writable: true,
+            value: (channel: string, ...channels: string[]) => {
+              const acknowledgement = {
+                generation: tracker.reconnectCount,
+                acknowledged: false,
+                completed: false,
+              };
+              tracker.acknowledgements.push(acknowledgement);
+              return rawSubscribe(channel, ...channels).then((result) => {
+                acknowledgement.acknowledged = true;
+                acknowledgement.completed = true;
+                tracker.currentRecoveryAcknowledged =
+                  acknowledgement.generation === tracker.reconnectCount;
+                return result;
+              });
+            },
+          });
+          subscriber.on("reconnecting", () => {
+            tracker.reconnectCount += 1;
+            tracker.currentRecoveryAcknowledged = false;
+          });
+          return subscriber;
+        },
+      });
+
+      const loadIsolatedInstance = async (
+        id: string,
+        tracker: SubscriptionTracker,
+      ): Promise<RealtimeInstance> => {
+        vi.resetModules();
+        const [realtime, ticketSse] = await Promise.all([
+          import("../lib/realtime.js"),
+          import("../lib/support-ticket-sse.js"),
+        ]);
+        return { id, realtime, ticketSse, tracker };
+      };
+      instances.push(await loadIsolatedInstance("instance-one", trackers[0]));
+      instances.push(await loadIsolatedInstance("instance-two", trackers[1]));
+
+      for (const instance of instances) {
+        activeTracker = instance.tracker;
+        instance.realtime.initSeatUpdateSubscriber();
+      }
+      activeTracker = undefined;
+      await waitUntil(
+        () => trackers.every((tracker) => (
+          tracker.subscriber?.status === "ready"
+          && tracker.acknowledgements.some((acknowledgement) => acknowledgement.completed)
+        )),
+        "both isolated realtime instances to acknowledge their initial subscriptions",
+      );
+
+      const matchingTenantId = "tenant-redis-target";
+      const otherTenantId = "tenant-redis-other";
+      for (const instance of instances) {
+        for (const [tenantId, tenantLabel] of [
+          [matchingTenantId, "matching"],
+          [otherTenantId, "other"],
+        ]) {
+          streams.push({
+            id: `${instance.id}-${tenantLabel}`,
+            path: `/${instance.id}/${tenantLabel}`,
+            tenantId,
+            instance,
+            refreshes: [],
+            updates: [],
+            abort: new AbortController(),
+            closed: false,
+          });
+        }
+      }
+      const streamByPath = new Map<string, TestStream>(
+        streams.map((stream) => [stream.path, stream] as const),
+      );
+      httpServer = createHttpServer((request, response) => {
+        const stream = streamByPath.get(request.url ?? "");
+        if (!stream) {
+          response.writeHead(404).end();
+          return;
+        }
+
+        response.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+        });
+        response.write(": stream-open\n\n");
+        stream.instance.ticketSse.addSupportTicketClient(
+          stream.tenantId,
+          response as unknown as Response,
+        );
+        response.once("close", () => {
+          stream.closed = true;
+          stream.instance.ticketSse.removeSupportTicketClient(
+            stream.tenantId,
+            response as unknown as Response,
+          );
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer!.once("error", reject);
+        httpServer!.listen(0, "127.0.0.1", resolve);
+      });
+      const httpAddress = httpServer.address() as AddressInfo;
+      const baseUrl = `http://127.0.0.1:${httpAddress.port}`;
+      const consumeStream = async (
+        stream: TestStream,
+        reader: ReadableStreamDefaultReader<Uint8Array>,
+      ) => {
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) return;
+          buffer += decoder.decode(value, { stream: true });
+          let separator = buffer.indexOf("\n\n");
+          while (separator >= 0) {
+            const frame = buffer.slice(0, separator).replaceAll("\r", "");
+            buffer = buffer.slice(separator + 2);
+            const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
+            if (dataLine) {
+              const payload = JSON.parse(dataLine.slice(5).trim()) as TicketStreamEnvelope;
+              if (payload.type === "refresh") {
+                stream.refreshes.push({
+                  payload,
+                  acknowledgedAtDelivery: stream.instance.tracker.currentRecoveryAcknowledged,
+                });
+              } else {
+                stream.updates.push(payload);
+              }
+            }
+            separator = buffer.indexOf("\n\n");
+          }
+        }
+      };
+
+      for (const stream of streams) {
+        const response = await fetch(`${baseUrl}${stream.path}`, {
+          signal: stream.abort.signal,
+        });
+        expect(response.status).toBe(200);
+        if (!response.body) throw new Error(`Expected an open SSE response for ${stream.id}`);
+        stream.reader = response.body.getReader();
+        stream.task = consumeStream(stream, stream.reader).catch((error: unknown) => {
+          if (!stream.abort.signal.aborted) stream.error = error;
+        });
+      }
+      await waitUntil(
+        () => streams.every((stream) => !stream.closed),
+        "the four tenant streams across both instances to stay open",
+      );
+      expect(streams.every((stream) => stream.refreshes.length === 0)).toBe(true);
+
+      const reconnectCountsBefore = trackers.map((tracker) => tracker.reconnectCount);
+      await stopRedis(redisProcess);
+      redisProcess = undefined;
+      await waitUntil(
+        () => trackers.every((tracker, index) => (
+          tracker.reconnectCount > reconnectCountsBefore[index]
+        )),
+        "both realtime subscribers to detect the Redis interruption",
+      );
+      await sleep(75);
+      expect(streams.every((stream) => !stream.closed)).toBe(true);
+      expect(streams.every((stream) => stream.refreshes.length === 0)).toBe(true);
+
+      redisProcess = await startDisposableRedis(port, dataDirectory);
+      await waitUntil(() => publisher?.status === "ready", "the Redis publisher to reconnect");
+      await waitUntil(
+        () => trackers.every((tracker) => tracker.subscriber?.status === "ready"),
+        "both real ioredis subscribers to reconnect",
+      );
+      await waitUntil(
+        () => trackers.every((tracker) => tracker.acknowledgements.some((acknowledgement) => (
+          acknowledgement.generation === tracker.reconnectCount
+          && acknowledgement.acknowledged
+          && acknowledgement.completed
+        ))),
+        "both instances to complete their latest channel subscription acknowledgements",
+      );
+      await waitUntil(
+        () => streams.every((stream) => stream.refreshes.length === 1),
+        "each local tenant stream to receive its recovery refresh",
+      );
+      for (const stream of streams) {
+        expect(stream.refreshes[0]?.payload).toMatchObject({
+          type: "refresh",
+          ticketId: null,
+          eventId: expect.any(String),
+        });
+        expect(stream.refreshes[0]?.acknowledgedAtDelivery).toBe(true);
+      }
+      await sleep(100);
+      expect(streams.every((stream) => stream.refreshes.length === 1)).toBe(true);
+
+      if (!publisher) throw new Error("Expected the real Redis publisher to remain connected");
+      const ticketEvent: TicketUpdatePayload = {
+        eventId: "ticket-event-after-multi-instance-recovery",
+        type: "ticket",
+        ticketId: "ticket-redis-multi-instance",
+      };
+      const queuesEvent: TicketUpdatePayload = {
+        eventId: "queues-event-after-multi-instance-recovery",
+        type: "queues",
+        ticketId: null,
+      };
+      expect(await publisher.publish("support-ticket-updates", JSON.stringify({
+        tenantId: matchingTenantId,
+        payload: ticketEvent,
+      }))).toBe(2);
+      expect(await publisher.publish("support-ticket-updates", JSON.stringify({
+        tenantId: matchingTenantId,
+        payload: queuesEvent,
+      }))).toBe(2);
+
+      const matchingStreams = streams.filter((stream) => stream.tenantId === matchingTenantId);
+      const otherTenantStreams = streams.filter((stream) => stream.tenantId === otherTenantId);
+      await waitUntil(
+        () => matchingStreams.every((stream) => stream.updates.length === 2),
+        "ticket and queue events to reach both matching tenant streams",
+      );
+      await sleep(100);
+      for (const stream of matchingStreams) {
+        expect(stream.updates).toEqual([ticketEvent, queuesEvent]);
+      }
+      for (const stream of otherTenantStreams) {
+        expect(stream.updates).toHaveLength(0);
+      }
+      expect(streams.every((stream) => stream.refreshes.length === 1)).toBe(true);
+      expect(streams.every((stream) => !stream.closed && stream.error === undefined)).toBe(true);
+      expect(trackers.every((tracker) => tracker.currentRecoveryAcknowledged)).toBe(true);
+    } finally {
+      for (const stream of streams) stream.abort.abort();
+      for (const stream of streams) {
+        await stream.reader?.cancel().catch(() => {});
+      }
+      await Promise.all(streams.map((stream) => stream.task));
+      for (const tracker of trackers) {
+        if (tracker.subscriber && tracker.subscriber.status !== "ready") {
+          tracker.subscriber.disconnect();
+        }
+      }
+      await Promise.all(
+        instances.map((instance) => instance.realtime.closeSeatUpdateSubscriber()),
+      );
+      if (publisher) {
+        if (publisher.status === "ready") await publisher.quit().catch(() => {});
+        else publisher.disconnect();
+      }
+      await stopRedis(redisProcess);
+      if (httpServer) await closeHttpServer(httpServer);
+      await rm(dataDirectory, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
