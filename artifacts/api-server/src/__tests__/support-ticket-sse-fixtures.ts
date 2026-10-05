@@ -1,3 +1,14 @@
+export const supportTicketSsePayloadsWithUnsafeEventIds = [
+  { eventId: "event-with-cr\rframe", type: "ticket", ticketId: "ticket-unsafe" },
+  { eventId: "event-with-lf\nframe", type: "ticket", ticketId: "ticket-unsafe" },
+  { eventId: "event-with-nul\u0000frame", type: "ticket", ticketId: "ticket-unsafe" },
+  { eventId: "event-with-control\u001fbyte", type: "ticket", ticketId: "ticket-unsafe" },
+  { eventId: "event-with-del\u007fbyte", type: "ticket", ticketId: "ticket-unsafe" },
+  { eventId: "event-with-c1\u0085byte", type: "ticket", ticketId: "ticket-unsafe" },
+  { eventId: "event-with-line-separator\u2028byte", type: "ticket", ticketId: "ticket-unsafe" },
+  { eventId: "event-with-paragraph-separator\u2029byte", type: "ticket", ticketId: "ticket-unsafe" },
+] as const;
+
 export const malformedSupportTicketSsePayloads: unknown[] = [
   null,
   [],
@@ -14,4 +25,5 @@ export const malformedSupportTicketSsePayloads: unknown[] = [
   { eventId: "queue-missing-null", type: "queues" },
   { eventId: "refresh-unexpected-id", type: "refresh", ticketId: "ticket-123" },
   { eventId: "unknown-type", type: "reservation", ticketId: null },
+  ...supportTicketSsePayloadsWithUnsafeEventIds,
 ];

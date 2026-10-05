@@ -17,6 +17,8 @@ type SupportTicketUpdateShape =
   | { type: "queues"; ticketId: null }
   | { type: "refresh"; ticketId: null };
 
+const SUPPORT_TICKET_EVENT_ID_CONTROL_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+
 export const SUPPORT_TICKET_STREAM_HEARTBEAT_MS = 30_000;
 
 export type SupportTicketStreamPrincipal = {
@@ -64,7 +66,12 @@ function parseSupportTicketUpdateShape(value: unknown): SupportTicketUpdateShape
 export function parseSupportTicketUpdatePayload(
   payload: unknown,
 ): SupportTicketUpdatePayload | null {
-  if (!isRecord(payload) || typeof payload.eventId !== "string" || !payload.eventId.trim()) {
+  if (
+    !isRecord(payload)
+    || typeof payload.eventId !== "string"
+    || !payload.eventId.trim()
+    || SUPPORT_TICKET_EVENT_ID_CONTROL_CHARACTERS.test(payload.eventId)
+  ) {
     return null;
   }
 

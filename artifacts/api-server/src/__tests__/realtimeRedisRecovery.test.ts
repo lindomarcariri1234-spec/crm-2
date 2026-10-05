@@ -8,10 +8,16 @@ import type { Response } from "express";
 import Redis from "ioredis";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetRedisConnection, mockEmitSeatRefresh, mockEmitSeatUpdate } = vi.hoisted(() => ({
+const {
+  mockGetRedisConnection,
+  mockEmitSeatRefresh,
+  mockEmitSeatUpdate,
+  mockLoggerWarn,
+} = vi.hoisted(() => ({
   mockGetRedisConnection: vi.fn(),
   mockEmitSeatRefresh: vi.fn(),
   mockEmitSeatUpdate: vi.fn(),
+  mockLoggerWarn: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -38,7 +44,7 @@ vi.mock("../lib/seat-sse.js", () => ({
 vi.mock("../lib/logger.js", () => ({
   logger: {
     info: vi.fn(),
-    warn: vi.fn(),
+    warn: mockLoggerWarn,
     error: vi.fn(),
   },
 }));
@@ -52,7 +58,10 @@ import {
   addSupportTicketClient,
   removeSupportTicketClient,
 } from "../lib/support-ticket-sse.js";
-import { malformedSupportTicketSsePayloads } from "./support-ticket-sse-fixtures.js";
+import {
+  malformedSupportTicketSsePayloads,
+  supportTicketSsePayloadsWithUnsafeEventIds,
+} from "./support-ticket-sse-fixtures.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -986,6 +995,15 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       expect(streams.every((stream) => stream.updates.length === 0)).toBe(true);
       expect(streams.every((stream) => stream.refreshes.length === 1)).toBe(true);
       expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
+
+      mockLoggerWarn.mockClear();
+      for (const payload of supportTicketSsePayloadsWithUnsafeEventIds) {
+        const message = JSON.stringify({ tenantId: matchingTenantId, payload });
+        expect(await publisher.publish("support-ticket-updates", message)).toBe(2);
+      }
+      await sleep(100);
+      expect(streams.every((stream) => stream.updates.length === 0)).toBe(true);
+      expect(mockLoggerWarn).not.toHaveBeenCalled();
 
       expect(await publisher.publish("seat-updates", JSON.stringify(seatEvent))).toBe(2);
       await waitUntil(

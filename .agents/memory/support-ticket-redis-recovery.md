@@ -19,11 +19,11 @@ With real ioredis, rapid stop/restart cycles can leave multiple explicit subscri
 
 **How to apply:** In recovery tests, track and gate acknowledgements by generation, then assert that stale acknowledgements emit nothing and all current-generation completions produce only one refresh.
 
-For ticket SSE delivery, use one runtime parser/projection across Redis publishing, Redis subscription, and direct SSE delivery. Project onto the explicit public contract fields (`eventId`, `type`, `ticketId`) and strip unknown fields rather than rejecting otherwise valid ticket or queue events.
+For ticket SSE delivery, keep runtime validation/projection aligned across Redis publishing, Redis subscription, and direct SSE delivery. Reject event IDs containing control, line-separator, or paragraph-separator characters before any `id:` line write or subscriber fan-out, while preserving all other valid ID bytes. Project onto the explicit public contract fields (`eventId`, `type`, `ticketId`) and strip unknown fields rather than rejecting otherwise valid ticket or queue events.
 
-**Why:** Broker payloads and runtime caller objects may contain private or internal data beyond the public event contract; projecting known fields prevents accidental exposure without blocking valid updates.
+**Why:** Carriage returns, line feeds, and other control characters can alter SSE framing when interpolated into the `id:` line. Broker payloads and runtime caller objects may also contain private or internal data beyond the public event contract.
 
-**How to apply:** When adding a ticket SSE variant or field, update the public type and shared runtime parser together and use that parser at every delivery boundary. Never forward parsed Redis payloads or caller-supplied update objects verbatim; test malformed inputs at both Redis and direct-emitter boundaries.
+**How to apply:** When adding a ticket SSE variant or field, update the public type and shared runtime validators together and use them at every delivery boundary. Never forward parsed Redis payloads or caller-supplied update objects verbatim; test valid frame bytes plus malformed inputs at both Redis and direct-emitter boundaries, and never log raw event IDs.
 
 Keep `SupportTicketUpdatePayload` as a discriminated union: ticket events require a nonblank ticket ID, while queue and recovery-refresh events require `ticketId: null`. The SSE emitter validates this shape at runtime too. Keep recovery `refresh` hints separate from broadcastable ticket and queue updates; recovery refreshes use their explicit local rehydration path after subscription acknowledgement.
 
