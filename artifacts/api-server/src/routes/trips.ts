@@ -2050,12 +2050,17 @@ router.get("/trips/:id/seats/stream", async (req, res, next: NextFunction): Prom
   if (!trip) { next(new NotFoundError("Trip not found", "NOT_FOUND")); return; }
 
   const tripId = trip.id;
+  try {
+    addSeatClient(tripId, res);
+  } catch {
+    next(new ValidationError("Identificador da viagem inválido", "VALIDATION_ERROR"));
+    return;
+  }
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
-  addSeatClient(tripId, res);
   const ping = setInterval(() => {
     try { res.write(": ping\n\n"); } catch { clearInterval(ping); }
   }, 30000);

@@ -378,7 +378,7 @@ describe("GET /trips/:id/seat-map — seatMap plan guard", () => {
       .mockResolvedValueOnce([{ id: TRIP_ID }]);
 
     mockAddSeatClient.mockImplementationOnce((_tripId: string, res: import("express").Response) => {
-      res.end();
+      queueMicrotask(() => res.end());
     });
 
     const res = await request(buildApp())

@@ -22,7 +22,13 @@ import {
   removeSeatClient,
   emitSeatUpdate,
   emitSeatRefresh,
+  isValidSeatTripId,
+  parseSeatUpdatePayload,
   seatStreamLimits,
+  SEAT_UPDATE_MAX_SEATS,
+  SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH,
+  SEAT_UPDATE_MAX_SEAT_STATUS_LENGTH,
+  SEAT_UPDATE_MAX_TRIP_ID_LENGTH,
   type SeatUpdatePayload,
 } from "../lib/seat-sse.js";
 
@@ -122,6 +128,68 @@ describe("emitSeatUpdate", () => {
     expect(() => emitSeatUpdate(samplePayload("trip-empty"))).not.toThrow();
   });
 
+  it("preserves the valid frame at every configured seat-update limit", () => {
+    const tripId = "t".repeat(SEAT_UPDATE_MAX_TRIP_ID_LENGTH);
+    const response = makeClient();
+    const payload = {
+      tripId,
+      seats: Array.from({ length: SEAT_UPDATE_MAX_SEATS }, (_, index) => ({
+        number: index === 0
+          ? "n".repeat(SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH)
+          : `seat-${index}`,
+        status: index === 0
+          ? "s".repeat(SEAT_UPDATE_MAX_SEAT_STATUS_LENGTH)
+          : "occupied",
+        internalMetadata: "must-not-be-forwarded",
+      })),
+      internalMetadata: "must-not-be-forwarded",
+    };
+    const expected = {
+      tripId,
+      seats: payload.seats.map(({ number, status }) => ({ number, status })),
+    };
+
+    expect(isValidSeatTripId(tripId)).toBe(true);
+    expect(parseSeatUpdatePayload(payload)).toEqual(expected);
+    expect(register(tripId, response)).toBe(response);
+
+    emitSeatUpdate(payload as unknown as SeatUpdatePayload);
+
+    expect(response.write).toHaveBeenCalledOnce();
+    expect(response.write).toHaveBeenCalledWith(`data: ${JSON.stringify(expected)}\n\n`);
+  });
+
+  it("rejects oversized trip IDs, seat lists, seat numbers, and statuses before fan-out", () => {
+    const response = register("trip-invalid-bounds", makeClient());
+    const invalidPayloads: unknown[] = [
+      { tripId: "t".repeat(SEAT_UPDATE_MAX_TRIP_ID_LENGTH + 1), seats: [] },
+      {
+        tripId: "trip-too-many-seats",
+        seats: Array.from({ length: SEAT_UPDATE_MAX_SEATS + 1 }, (_, index) => ({
+          number: `seat-${index}`,
+          status: "occupied",
+        })),
+      },
+      {
+        tripId: "trip-long-seat-number",
+        seats: [{ number: "n".repeat(SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH + 1), status: "free" }],
+      },
+      {
+        tripId: "trip-long-seat-status",
+        seats: [{ number: "1A", status: "s".repeat(SEAT_UPDATE_MAX_SEAT_STATUS_LENGTH + 1) }],
+      },
+    ];
+
+    for (const payload of invalidPayloads) {
+      expect(parseSeatUpdatePayload(payload)).toBeNull();
+      expect(() => emitSeatUpdate(payload as SeatUpdatePayload)).toThrow(
+        "Invalid seat update payload",
+      );
+    }
+
+    expect(response.write).not.toHaveBeenCalled();
+  });
+
   it("is a safe no-op after the last client for a tripId has been pruned", () => {
     const tripId = "trip-drains";
     const dead = register(
@@ -154,6 +222,15 @@ describe("tryAddSeatClient — connection caps", () => {
     if (ok) registered.push({ tripId, res: client });
     return { ok, res: client };
   }
+
+  it("does not register a trip ID beyond the seat-stream limit", () => {
+    const tripId = "t".repeat(SEAT_UPDATE_MAX_TRIP_ID_LENGTH + 1);
+    const response = makeClient();
+
+    expect(isValidSeatTripId(tripId)).toBe(false);
+    expect(tryAddSeatClient(tripId, response, null)).toBe(false);
+    expect(() => addSeatClient(tripId, response)).toThrow("Invalid trip ID for seat stream");
+  });
 
   it("accepts connections up to the per-IP cap, then rejects further ones from the same IP", () => {
     const ip = "203.0.113.10";

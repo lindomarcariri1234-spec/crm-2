@@ -19,6 +19,15 @@ const MAX_SEAT_STREAM_CONN_PER_TRIP =
     ? Number(process.env.MAX_SEAT_STREAM_CONN_PER_TRIP)
     : 200;
 
+// Trip IDs are generated as 16-character IDs; 128 chars also leaves room for
+// imported UUID-style IDs. Seat labels match the existing 80-character import
+// limit. 128 seats is well above a normal vehicle layout while bounding fan-out.
+export const SEAT_UPDATE_MAX_TRIP_ID_LENGTH = 128;
+export const SEAT_UPDATE_MAX_SEATS = 128;
+export const SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH = 80;
+export const SEAT_UPDATE_MAX_SEAT_STATUS_LENGTH = 32;
+export const SEAT_UPDATE_MAX_MESSAGE_BYTES = 128 * 1024;
+
 const ipConnections = new Map<string, number>();
 const responseIp = new WeakMap<Response, string>();
 
@@ -26,6 +35,12 @@ export const seatStreamLimits = {
   perIp: MAX_SEAT_STREAM_CONN_PER_IP,
   perTrip: MAX_SEAT_STREAM_CONN_PER_TRIP,
 };
+
+export function isValidSeatTripId(tripId: unknown): tripId is string {
+  return typeof tripId === "string"
+    && tripId.trim().length > 0
+    && tripId.length <= SEAT_UPDATE_MAX_TRIP_ID_LENGTH;
+}
 
 /**
  * Attempts to register an SSE client for a trip, enforcing per-IP and per-trip
@@ -38,6 +53,8 @@ export function tryAddSeatClient(
   res: Response,
   ip: string | null,
 ): boolean {
+  if (!isValidSeatTripId(tripId)) return false;
+
   const tripCount = clients.get(tripId)?.size ?? 0;
   if (tripCount >= MAX_SEAT_STREAM_CONN_PER_TRIP) return false;
 
@@ -57,6 +74,9 @@ export function tryAddSeatClient(
 }
 
 export function addSeatClient(tripId: string, res: Response): void {
+  if (!isValidSeatTripId(tripId)) {
+    throw new TypeError("Invalid trip ID for seat stream");
+  }
   if (!clients.has(tripId)) clients.set(tripId, new Set());
   clients.get(tripId)!.add(res);
 }
@@ -82,6 +102,47 @@ export interface SeatUpdatePayload {
   seats: Array<{ number: string; status: string }>;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Validate and project the public seat update shape so untrusted Redis extras
+ * cannot be copied into every connected SSE frame.
+ */
+export function parseSeatUpdatePayload(value: unknown): SeatUpdatePayload | null {
+  if (
+    !isRecord(value)
+    || !isValidSeatTripId(value.tripId)
+    || !Array.isArray(value.seats)
+    || value.seats.length > SEAT_UPDATE_MAX_SEATS
+  ) {
+    return null;
+  }
+
+  const seats: SeatUpdatePayload["seats"] = [];
+  for (const item of value.seats) {
+    if (
+      !isRecord(item)
+      || typeof item.number !== "string"
+      || item.number.length === 0
+      || item.number.length > SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH
+      || typeof item.status !== "string"
+      || item.status.length === 0
+      || item.status.length > SEAT_UPDATE_MAX_SEAT_STATUS_LENGTH
+    ) {
+      return null;
+    }
+    seats.push({ number: item.number, status: item.status });
+  }
+
+  const payload = { tripId: value.tripId, seats };
+  if (Buffer.byteLength(JSON.stringify(payload), "utf8") > SEAT_UPDATE_MAX_MESSAGE_BYTES) {
+    return null;
+  }
+  return payload;
+}
+
 interface SeatRefreshPayload {
   tripId: string;
   type: "refresh";
@@ -91,6 +152,7 @@ function emitSeatStreamPayload(
   tripId: string,
   payload: SeatUpdatePayload | SeatRefreshPayload,
 ): void {
+  if (!isValidSeatTripId(tripId) || payload.tripId !== tripId) return;
   const set = clients.get(tripId);
   if (!set || set.size === 0) return;
   const data = JSON.stringify(payload);
@@ -106,12 +168,17 @@ function emitSeatStreamPayload(
 }
 
 export function emitSeatUpdate(payload: SeatUpdatePayload): void {
-  emitSeatStreamPayload(payload.tripId, payload);
+  const validatedPayload = parseSeatUpdatePayload(payload);
+  if (!validatedPayload) {
+    throw new TypeError("Invalid seat update payload");
+  }
+  emitSeatStreamPayload(validatedPayload.tripId, validatedPayload);
 }
 
 /** Sends a trip-only recovery hint to every currently connected seat stream. */
 export function emitSeatRefresh(): void {
   for (const tripId of clients.keys()) {
+    if (!isValidSeatTripId(tripId)) continue;
     emitSeatStreamPayload(tripId, { type: "refresh", tripId });
   }
 }

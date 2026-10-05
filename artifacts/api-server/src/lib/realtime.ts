@@ -2,7 +2,15 @@ import type { Redis } from "ioredis";
 import { db } from "@workspace/db";
 import { reservationsTable, tripsTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
-import { emitSeatRefresh, emitSeatUpdate, type SeatUpdatePayload } from "./seat-sse";
+import {
+  emitSeatRefresh,
+  emitSeatUpdate,
+  isValidSeatTripId,
+  parseSeatUpdatePayload,
+  SEAT_UPDATE_MAX_MESSAGE_BYTES,
+  SEAT_UPDATE_MAX_SEATS,
+  SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH,
+} from "./seat-sse";
 import {
   emitSupportTicketRefresh,
   emitSupportTicketUpdate,
@@ -277,11 +285,20 @@ export function initSeatUpdateSubscriber(): void {
       return;
     }
     if (channel !== SEAT_UPDATE_CHANNEL) return;
+    if (Buffer.byteLength(message, "utf8") > SEAT_UPDATE_MAX_MESSAGE_BYTES) {
+      logger.warn("[seat-sse] Ignoring oversized seat-update message from Redis");
+      return;
+    }
+
     try {
-      const payload = JSON.parse(message) as SeatUpdatePayload;
+      const payload = parseSeatUpdatePayload(JSON.parse(message) as unknown);
+      if (!payload) {
+        logger.warn("[seat-sse] Ignoring invalid seat-update payload from Redis");
+        return;
+      }
       emitSeatUpdate(payload);
-    } catch (err) {
-      logger.warn({ err }, "[seat-sse] Ignoring malformed seat-update message from Redis");
+    } catch {
+      logger.warn("[seat-sse] Ignoring malformed seat-update message from Redis");
     }
   });
 }
@@ -345,6 +362,10 @@ export async function closeSeatUpdateSubscriber(): Promise<void> {
  * fails.
  */
 export async function broadcastSeatUpdate(tripId: string, tenantId: string): Promise<void> {
+  if (!isValidSeatTripId(tripId)) {
+    throw new TypeError("Invalid trip ID for seat update");
+  }
+
   const reservations = await db
     .select({ seats: reservationsTable.seats, status: reservationsTable.status })
     .from(reservationsTable)
@@ -355,10 +376,29 @@ export async function broadcastSeatUpdate(tripId: string, tenantId: string): Pro
         inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
       ),
     );
-  const occupiedMap: Record<string, string> = {};
+  const occupiedMap = Object.create(null) as Record<string, string>;
+  let occupiedSeatCount = 0;
+  const setOccupiedSeat = (seatNumber: unknown, status: string) => {
+    if (
+      typeof seatNumber !== "string"
+      || seatNumber.length === 0
+      || seatNumber.length > SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH
+    ) {
+      throw new TypeError("Invalid seat update payload");
+    }
+    if (!Object.prototype.hasOwnProperty.call(occupiedMap, seatNumber)) {
+      if (occupiedSeatCount >= SEAT_UPDATE_MAX_SEATS) {
+        throw new TypeError("Invalid seat update payload");
+      }
+      occupiedSeatCount += 1;
+    }
+    occupiedMap[seatNumber] = status;
+  };
+
   for (const r of reservations) {
     const s = r.status === RESERVATION_STATUS.CONFIRMED ? "confirmed" : "reserved";
-    for (const seat of r.seats) occupiedMap[seat] = s;
+    if (!Array.isArray(r.seats)) throw new TypeError("Invalid seat update payload");
+    for (const seat of r.seats) setOccupiedSeat(seat, s);
   }
 
   // Include free-passenger (gratuidade) seats so they appear occupied on the
@@ -372,13 +412,14 @@ export async function broadcastSeatUpdate(tripId: string, tenantId: string): Pro
     ? (trip.freePassengers as Array<{ seatNumber?: string | null }>)
     : [];
   for (const fp of freePassengers) {
-    if (fp.seatNumber) occupiedMap[fp.seatNumber] = "free";
+    if (fp.seatNumber) setOccupiedSeat(fp.seatNumber, "free");
   }
 
-  const payload: SeatUpdatePayload = {
+  const payload = parseSeatUpdatePayload({
     tripId,
     seats: Object.entries(occupiedMap).map(([number, status]) => ({ number, status })),
-  };
+  });
+  if (!payload) throw new TypeError("Invalid seat update payload");
 
   // When a subscriber is active and the connection is ready, publish to Redis
   // so ALL instances (including this one) emit via their subscriber callback.

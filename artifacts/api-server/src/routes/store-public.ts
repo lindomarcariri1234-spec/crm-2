@@ -28,7 +28,7 @@ import
 
 import 
 {
- tryAddSeatClient, removeSeatClient, emitSeatUpdate 
+ tryAddSeatClient, removeSeatClient, emitSeatUpdate
 }
  from "../lib/seat-sse"
 ;

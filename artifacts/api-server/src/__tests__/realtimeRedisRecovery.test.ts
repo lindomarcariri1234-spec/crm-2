@@ -36,10 +36,14 @@ vi.mock("../lib/redis.js", () => ({
   getRedisConnection: mockGetRedisConnection,
 }));
 
-vi.mock("../lib/seat-sse.js", () => ({
-  emitSeatRefresh: mockEmitSeatRefresh,
-  emitSeatUpdate: mockEmitSeatUpdate,
-}));
+vi.mock("../lib/seat-sse.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/seat-sse.js")>();
+  return {
+    ...actual,
+    emitSeatRefresh: mockEmitSeatRefresh,
+    emitSeatUpdate: mockEmitSeatUpdate,
+  };
+});
 
 vi.mock("../lib/logger.js", () => ({
   logger: {

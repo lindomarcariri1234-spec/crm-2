@@ -5,6 +5,7 @@ const {
   mockEmitSeatRefresh,
   mockEmitSupportTicketUpdate,
   mockEmitSupportTicketRefresh,
+  mockLoggerWarn,
   mockResWhere,
   mockTripLimit,
   mockSelect,
@@ -31,6 +32,7 @@ const {
     const mockEmitSeatRefresh = vi.fn();
     const mockEmitSupportTicketUpdate = vi.fn();
     const mockEmitSupportTicketRefresh = vi.fn();
+    const mockLoggerWarn = vi.fn();
 
     // Default: no Redis connection (null → fallback path)
     const mockGetRedisConnection = vi.fn().mockReturnValue(null);
@@ -40,6 +42,7 @@ const {
       mockEmitSeatRefresh,
       mockEmitSupportTicketUpdate,
       mockEmitSupportTicketRefresh,
+      mockLoggerWarn,
       mockResWhere,
       mockTripLimit,
       mockSelect,
@@ -59,9 +62,21 @@ vi.mock("drizzle-orm", () => ({
   inArray: vi.fn(),
 }));
 
-vi.mock("../lib/seat-sse.js", () => ({
-  emitSeatUpdate: mockEmitSeatUpdate,
-  emitSeatRefresh: mockEmitSeatRefresh,
+vi.mock("../lib/seat-sse.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/seat-sse.js")>();
+  return {
+    ...actual,
+    emitSeatUpdate: mockEmitSeatUpdate,
+    emitSeatRefresh: mockEmitSeatRefresh,
+  };
+});
+
+vi.mock("../lib/logger.js", () => ({
+  logger: {
+    info: vi.fn(),
+    warn: mockLoggerWarn,
+    error: vi.fn(),
+  },
 }));
 
 vi.mock("../lib/support-ticket-sse.js", async (importOriginal) => {
@@ -83,6 +98,13 @@ import {
   initSeatUpdateSubscriber,
   closeSeatUpdateSubscriber,
 } from "../lib/realtime.js";
+import {
+  SEAT_UPDATE_MAX_MESSAGE_BYTES,
+  SEAT_UPDATE_MAX_SEATS,
+  SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH,
+  SEAT_UPDATE_MAX_SEAT_STATUS_LENGTH,
+  SEAT_UPDATE_MAX_TRIP_ID_LENGTH,
+} from "../lib/seat-sse.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -213,6 +235,74 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     await closeSeatUpdateSubscriber();
   });
 
+  it("rejects over-limit trip IDs before querying or publishing", async () => {
+    const { fakePub } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+
+    await expect(
+      broadcastSeatUpdate("t".repeat(SEAT_UPDATE_MAX_TRIP_ID_LENGTH + 1), "tenant-1"),
+    ).rejects.toThrow("Invalid trip ID for seat update");
+
+    expect(mockSelect).not.toHaveBeenCalled();
+    expect(fakePub.publish).not.toHaveBeenCalled();
+    expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
+  });
+
+  it("publishes a bounded update at the maximum supported dimensions", async () => {
+    const { fakePub } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+    const seatNumbers = Array.from({ length: SEAT_UPDATE_MAX_SEATS }, (_, index) => (
+      index === 0
+        ? "n".repeat(SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH)
+        : `seat-${index}`
+    ));
+    mockResWhere.mockResolvedValue([{ seats: seatNumbers, status: "confirmed" }]);
+
+    await broadcastSeatUpdate("t".repeat(SEAT_UPDATE_MAX_TRIP_ID_LENGTH), "tenant-1");
+
+    expect(fakePub.publish).toHaveBeenCalledOnce();
+    const [channel, rawPayload] = fakePub.publish.mock.calls[0] as [string, string];
+    expect(channel).toBe("seat-updates");
+    expect(JSON.parse(rawPayload)).toEqual({
+      tripId: "t".repeat(SEAT_UPDATE_MAX_TRIP_ID_LENGTH),
+      seats: seatNumbers.map((number) => ({ number, status: "confirmed" })),
+    });
+  });
+
+  it("rejects oversized database-derived seat lists before Redis or local fan-out", async () => {
+    const { fakePub } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+    mockResWhere.mockResolvedValue([{
+      seats: Array.from({ length: SEAT_UPDATE_MAX_SEATS + 1 }, (_, index) => `seat-${index}`),
+      status: "confirmed",
+    }]);
+
+    await expect(broadcastSeatUpdate("trip-too-many-seats", "tenant-1"))
+      .rejects.toThrow("Invalid seat update payload");
+
+    expect(fakePub.publish).not.toHaveBeenCalled();
+    expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized seat labels before Redis or local fan-out", async () => {
+    const { fakePub } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+    mockResWhere.mockResolvedValue([{
+      seats: ["n".repeat(SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH + 1)],
+      status: "confirmed",
+    }]);
+
+    await expect(broadcastSeatUpdate("trip-long-seat", "tenant-1"))
+      .rejects.toThrow("Invalid seat update payload");
+
+    expect(fakePub.publish).not.toHaveBeenCalled();
+    expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
+  });
+
   it("publishes to Redis channel with correct payload when subscriber is active and connection is ready", async () => {
     const { fakePub } = makeFakePub();
     mockGetRedisConnection.mockReturnValue(fakePub);
@@ -300,6 +390,82 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
 
     expect(fakeConnForInit.publish).not.toHaveBeenCalled();
     expect(mockEmitSeatUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("validates seat Redis messages and never logs their contents", async () => {
+    const { fakePub, fakeSubscriber } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+    await vi.waitFor(() => expect(mockEmitSeatRefresh).toHaveBeenCalledOnce());
+
+    const oversizedMessages = [
+      JSON.stringify({
+        tripId: "t".repeat(SEAT_UPDATE_MAX_TRIP_ID_LENGTH + 1),
+        seats: [],
+        marker: "redis-sensitive-seat-update",
+      }),
+      JSON.stringify({
+        tripId: "trip-too-many-seats",
+        seats: Array.from({ length: SEAT_UPDATE_MAX_SEATS + 1 }, (_, index) => ({
+          number: `seat-${index}`,
+          status: "reserved",
+        })),
+        marker: "redis-sensitive-seat-update",
+      }),
+      JSON.stringify({
+        tripId: "trip-long-seat-number",
+        seats: [{ number: "n".repeat(SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH + 1), status: "reserved" }],
+        marker: "redis-sensitive-seat-update",
+      }),
+      JSON.stringify({
+        tripId: "trip-long-seat-status",
+        seats: [{ number: "1A", status: "s".repeat(SEAT_UPDATE_MAX_SEAT_STATUS_LENGTH + 1) }],
+        marker: "redis-sensitive-seat-update",
+      }),
+      JSON.stringify({
+        tripId: "trip-large-envelope",
+        seats: [],
+        marker: "x".repeat(SEAT_UPDATE_MAX_MESSAGE_BYTES + 1),
+      }),
+    ];
+    expect(oversizedMessages[oversizedMessages.length - 1]!.length)
+      .toBeGreaterThan(SEAT_UPDATE_MAX_MESSAGE_BYTES);
+    for (const message of oversizedMessages) {
+      fakeSubscriber.emitMessage("seat-updates", message);
+    }
+
+    expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
+    expect(mockLoggerWarn).toHaveBeenCalledTimes(oversizedMessages.length);
+    expect(JSON.stringify(mockLoggerWarn.mock.calls)).not.toContain("redis-sensitive-seat-update");
+  });
+
+  it("projects and delivers a maximum-size valid seat event received from Redis", async () => {
+    const { fakePub, fakeSubscriber } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+    await vi.waitFor(() => expect(mockEmitSeatRefresh).toHaveBeenCalledOnce());
+    const tripId = "t".repeat(SEAT_UPDATE_MAX_TRIP_ID_LENGTH);
+    const seats = Array.from({ length: SEAT_UPDATE_MAX_SEATS }, (_, index) => ({
+      number: index === 0
+        ? "n".repeat(SEAT_UPDATE_MAX_SEAT_NUMBER_LENGTH)
+        : `seat-${index}`,
+      status: index === 0
+        ? "s".repeat(SEAT_UPDATE_MAX_SEAT_STATUS_LENGTH)
+        : "reserved",
+      internalMetadata: "must-not-be-forwarded",
+    }));
+
+    fakeSubscriber.emitMessage("seat-updates", JSON.stringify({
+      tripId,
+      seats,
+      internalMetadata: "must-not-be-forwarded",
+    }));
+
+    expect(mockEmitSeatUpdate).toHaveBeenCalledOnce();
+    expect(mockEmitSeatUpdate).toHaveBeenCalledWith({
+      tripId,
+      seats: seats.map(({ number, status }) => ({ number, status })),
+    });
   });
 
   it("publishes tenant-scoped support-ticket refresh hints through Redis", async () => {
