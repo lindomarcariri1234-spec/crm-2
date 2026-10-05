@@ -750,6 +750,13 @@
       "when": 1809960007000,
       "tag": "0107_whatsapp_multi_number_routing",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1809960008000,
+      "tag": "0108_tenants_id_max_bytes",
+      "breakpoints": true
     }
   ]
 }

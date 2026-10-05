@@ -1,6 +1,9 @@
-import { pgTable, text, timestamp, boolean, json, integer } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, check, integer, json, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+
+export const TENANT_ID_MAX_BYTES = 64;
 
 export const tenantsTable = pgTable("tenants", {
   id: text("id").primaryKey(),
@@ -34,7 +37,12 @@ export const tenantsTable = pgTable("tenants", {
   maxTripsOverride: integer("max_trips_override"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
-});
+}, (table) => [
+  check(
+    "tenants_id_max_bytes_check",
+    sql`octet_length(${table.id}) <= ${sql.raw(String(TENANT_ID_MAX_BYTES))}`,
+  ),
+]);
 
 export const insertTenantSchema = createInsertSchema(tenantsTable).omit({ createdAt: true, updatedAt: true });
 export type InsertTenant = z.infer<typeof insertTenantSchema>;

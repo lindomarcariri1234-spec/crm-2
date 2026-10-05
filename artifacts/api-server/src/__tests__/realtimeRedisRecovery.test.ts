@@ -806,7 +806,7 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         "both isolated realtime instances to acknowledge their initial subscriptions",
       );
 
-      const matchingTenantId = "tenant-redis-target";
+      const matchingTenantId = "t".repeat(64);
       const otherTenantId = "tenant-redis-other";
       for (const instance of instances) {
         for (const [tenantId, tenantLabel] of [
@@ -995,8 +995,10 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       });
       expect(Buffer.byteLength(maxLengthTicketMessage, "utf8"))
         .toBeLessThanOrEqual(SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES);
+      expect(Buffer.byteLength(maxLengthTicketMessage, "utf8")).toBe(518);
       expect(Buffer.byteLength(maxLengthQueuesMessage, "utf8"))
         .toBeLessThanOrEqual(SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES);
+      expect(Buffer.byteLength(maxLengthQueuesMessage, "utf8")).toBe(328);
       const oversizedPayloadMarker = "oversized-private-ticket-envelope";
       const oversizedExtraMessage = JSON.stringify({
         tenantId: matchingTenantId,
@@ -1152,7 +1154,7 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
 
     const rejectionLogText = JSON.stringify(rejectionReports);
     for (const forbiddenValue of [
-      "tenant-redis-target",
+      "t".repeat(64),
       "tenant-redis-other",
       "ticket-redis-multi-instance",
       "ticket-unsafe",
