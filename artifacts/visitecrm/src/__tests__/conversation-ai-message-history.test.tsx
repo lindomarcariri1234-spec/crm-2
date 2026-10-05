@@ -1,6 +1,6 @@
-import { createElement, type ComponentProps } from "react";
+import { createElement, useState, type ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupRoots, flushAct, renderComponent, renderHook } from "./eventSourceHarness.js";
+import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js";
 import {
   ConversationsTab,
   type AiConversation,
@@ -94,6 +94,41 @@ function makeProps(overrides: Partial<ConversationsTabProps> = {}): Conversation
   };
 }
 
+function ConversationHistoryRetryHarness() {
+  const [refreshToken, setRefreshToken] = useState(0);
+  const history = useConversationAiMessages({
+    enabled: true,
+    selectedClientId: "client-1",
+    conversations: [
+      { id: "conversation-success", clientId: "client-1", channel: "whatsapp" },
+      { id: "conversation-failed-a", clientId: "client-1", channel: "whatsapp" },
+      { id: "conversation-failed-b", clientId: "client-1", channel: "whatsapp" },
+    ],
+    refreshToken,
+  });
+
+  return createElement(
+    "div",
+    null,
+    createElement(
+      ConversationsTab,
+      makeProps({
+        conversationAiError: history.error,
+        loadingConversationAiMessages: history.loading,
+        onRetryConversationAiMessages: () =>
+          setRefreshToken((current) => current + 1),
+      }),
+    ),
+    createElement(
+      "div",
+      { "data-testid": "loaded-conversation-history" },
+      history.messages.map((message) =>
+        createElement("p", { key: message.id, "data-message-id": message.id }, message.content),
+      ),
+    ),
+  );
+}
+
 interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -160,6 +195,13 @@ async function settleRequest(request: Deferred<Response>, messages: AiConversati
   await Promise.resolve();
 }
 
+async function settleHttpFailure(request: Deferred<Response>): Promise<void> {
+  request.resolve({ ok: false, json: async () => [] } as unknown as Response);
+  await request.promise;
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -170,57 +212,108 @@ afterEach(async () => {
 });
 
 describe("WhatsApp conversation history", () => {
-  it("keeps successful linked history, reports a partial failure, and clears it after retry", async () => {
-    const { requests } = installDeferredFetch();
-    let options = {
-      enabled: true,
-      selectedClientId: "client-a",
-      conversations: [
-        { id: "conversation-success", clientId: "client-a", channel: "whatsapp" },
-        { id: "conversation-failed", clientId: "client-a", channel: "whatsapp" },
-      ],
-      refreshToken: 0,
-    };
-    const hook = await renderHook(() => useConversationAiMessages(options));
+  it("retries only failed linked histories and preserves recovered messages without duplicates", async () => {
+    const { requests, fetchMock } = installDeferredFetch();
+    const { container } = await renderComponent(
+      createElement(ConversationHistoryRetryHarness),
+    );
+    const history = container.querySelector<HTMLElement>(
+      '[data-testid="loaded-conversation-history"]',
+    );
+    expect(history).not.toBeNull();
     const successRequest = getMessageRequest(requests, "conversation-success");
-    const failedRequest = getMessageRequest(requests, "conversation-failed");
+    const failedRequestA = getMessageRequest(requests, "conversation-failed-a");
+    const failedRequestB = getMessageRequest(requests, "conversation-failed-b");
     const successfulMessage = makeAiMessage("conversation-success", "Histórico disponível");
 
     await flushAct(async () => {
       successRequest.resolve(makeJsonResponse([successfulMessage]));
-      failedRequest.reject(new Error("Falha de rede"));
+      failedRequestA.reject(new Error("Falha de rede"));
+      failedRequestB.resolve({ ok: false, json: async () => [] } as unknown as Response);
       await Promise.all([
         successRequest.promise,
-        failedRequest.promise.catch(() => undefined),
+        failedRequestA.promise.catch(() => undefined),
+        failedRequestB.promise,
       ]);
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(hook.result.current.messages).toEqual([successfulMessage]);
-    expect(hook.result.current.error).toBe(
-      "Não foi possível carregar 1 de 2 conversas vinculadas. Os demais históricos continuam disponíveis.",
-    );
-    expect(hook.result.current.loading).toBe(false);
+    const initialPartialFailure =
+      "Não foi possível carregar 2 de 3 conversas vinculadas. Os demais históricos continuam disponíveis.";
+    expect(history!.textContent).toContain(successfulMessage.content);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(initialPartialFailure);
 
-    options = { ...options, refreshToken: 1 };
-    await hook.rerender();
-    const retriedSuccessRequest = getMessageRequest(requests, "conversation-success", 1);
-    const retriedFailedRequest = getMessageRequest(requests, "conversation-failed", 1);
-    const recoveredSuccess = makeAiMessage("conversation-success", "Histórico atualizado");
-    const recoveredFailure = makeAiMessage("conversation-failed", "Histórico recuperado");
+    const retryButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-conversation-ai-messages"]',
+    );
+    expect(retryButton).not.toBeNull();
+    await flushAct(() => retryButton!.click());
+    const retriedFailedRequestA = getMessageRequest(requests, "conversation-failed-a", 1);
+    const retriedFailedRequestB = getMessageRequest(requests, "conversation-failed-b", 1);
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    const callsFor = (conversationId: string) => fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes(`/chatbot-conversations/${conversationId}/messages`),
+    );
+    expect(callsFor("conversation-success")).toHaveLength(1);
+    expect(callsFor("conversation-failed-a")).toHaveLength(2);
+    expect(callsFor("conversation-failed-b")).toHaveLength(2);
+
+    const recoveredFailureA = makeAiMessage(
+      "conversation-failed-a",
+      "Histórico da primeira conversa recuperado",
+    );
+    expect(history!.textContent).toContain(successfulMessage.content);
 
     await flushAct(async () => {
       await Promise.all([
-        settleRequest(retriedSuccessRequest, [recoveredSuccess]),
-        settleRequest(retriedFailedRequest, [recoveredFailure]),
+        settleRequest(retriedFailedRequestA, [recoveredFailureA]),
+        settleHttpFailure(retriedFailedRequestB),
       ]);
     });
 
-    expect(hook.result.current.messages).toEqual([recoveredFailure, recoveredSuccess]);
-    expect(hook.result.current.error).toBeNull();
-    expect(hook.result.current.loading).toBe(false);
+    const remainingPartialFailure =
+      "Não foi possível carregar 1 de 3 conversas vinculadas. Os demais históricos continuam disponíveis.";
+    expect(history!.textContent).toContain(successfulMessage.content);
+    expect(history!.textContent).toContain(recoveredFailureA.content);
+    expect(history!.querySelectorAll("p")).toHaveLength(2);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(remainingPartialFailure);
+
+    const secondRetryButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-conversation-ai-messages"]',
+    );
+    expect(secondRetryButton).not.toBeNull();
+    await flushAct(() => secondRetryButton!.click());
+    const retriedRemainingFailure = getMessageRequest(requests, "conversation-failed-b", 2);
+
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(callsFor("conversation-success")).toHaveLength(1);
+    expect(callsFor("conversation-failed-a")).toHaveLength(2);
+    expect(callsFor("conversation-failed-b")).toHaveLength(3);
+    expect(history!.textContent).toContain(successfulMessage.content);
+    expect(history!.textContent).toContain(recoveredFailureA.content);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(remainingPartialFailure);
+
+    const recoveredFailureB = makeAiMessage(
+      "conversation-failed-b",
+      "Histórico da segunda conversa recuperado",
+    );
+    await flushAct(async () => {
+      await settleRequest(retriedRemainingFailure, [recoveredFailureB]);
+    });
+
+    const messageIds = Array.from(
+      history!.querySelectorAll<HTMLElement>("[data-message-id]"),
+      (message) => message.dataset.messageId,
+    );
+    expect(history!.textContent).toContain(successfulMessage.content);
+    expect(history!.textContent).toContain(recoveredFailureA.content);
+    expect(history!.textContent).toContain(recoveredFailureB.content);
+    expect(messageIds).toHaveLength(3);
+    expect(new Set(messageIds).size).toBe(3);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("shows available history and retries the history request without refreshing the inbox", async () => {

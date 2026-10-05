@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AiConversationMessage } from "@/lib/communicationTimeline";
 
 interface ConversationLink {
@@ -63,6 +63,12 @@ export function useConversationAiMessages({
   const [loading, setLoading] = useState(false);
   const [partialFailure, setPartialFailure] = useState<PartialConversationFailure | null>(null);
   const [refreshError, setRefreshError] = useState<ScopedRefreshError | null>(null);
+  const partialFailureRef = useRef(partialFailure);
+  const lastRefreshTokenRef = useRef(refreshToken);
+
+  useEffect(() => {
+    partialFailureRef.current = partialFailure;
+  }, [partialFailure]);
 
   const linkedConversationIds = conversations
     .filter((conversation) =>
@@ -103,6 +109,8 @@ export function useConversationAiMessages({
   }, [scopeKey]);
 
   useEffect(() => {
+    const isExplicitRefresh = refreshToken !== lastRefreshTokenRef.current;
+    lastRefreshTokenRef.current = refreshToken;
     const conversationIds = linkedConversationIds ? linkedConversationIds.split("|") : [];
     if (!enabled || !selectedClientId || conversationIds.length === 0) {
       setMessages([]);
@@ -115,8 +123,17 @@ export function useConversationAiMessages({
     let cancelled = false;
     setLoading(true);
     setRefreshError((current) => current?.scopeKey === scopeKey ? null : current);
+    // A retry token narrows the request to the current failures; a scope change reloads every link.
+    const failedConversationIdsToRetry = isExplicitRefresh
+      && partialFailureRef.current?.scopeKey === scopeKey
+      ? partialFailureRef.current.failedConversationIds
+      : [];
+    const conversationIdsToLoad = failedConversationIdsToRetry.length > 0
+      ? failedConversationIdsToRetry
+      : conversationIds;
     const conversationIdSet = new Set(conversationIds);
-    Promise.all(conversationIds.map(async (conversationId): Promise<ConversationLoadResult> => {
+    const requestedConversationIdSet = new Set(conversationIdsToLoad);
+    Promise.all(conversationIdsToLoad.map(async (conversationId): Promise<ConversationLoadResult> => {
       try {
         const response = await fetch(
           `${BASE}/api/chatbot-conversations/${encodeURIComponent(conversationId)}/messages`,
@@ -146,7 +163,10 @@ export function useConversationAiMessages({
         setMessages((current) => [
           ...current.filter((message) =>
             conversationIdSet.has(message.conversationId)
-            && failedConversationIds.includes(message.conversationId),
+            && (
+              !requestedConversationIdSet.has(message.conversationId)
+              || failedConversationIds.includes(message.conversationId)
+            ),
           ),
           ...successfulResults.flatMap((result) => result.messages),
         ]);
