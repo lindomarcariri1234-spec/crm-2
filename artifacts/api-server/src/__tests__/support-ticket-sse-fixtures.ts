@@ -1,0 +1,17 @@
+export const malformedSupportTicketSsePayloads: unknown[] = [
+  null,
+  [],
+  "not-an-object",
+  { type: "ticket", ticketId: "ticket-missing-event-id" },
+  { eventId: "", type: "ticket", ticketId: "ticket-empty-event-id" },
+  { eventId: "   ", type: "ticket", ticketId: "ticket-whitespace-event-id" },
+  { eventId: 42, type: "ticket", ticketId: "ticket-invalid-event-id" },
+  { eventId: "ticket-missing-id", type: "ticket" },
+  { eventId: "ticket-null-id", type: "ticket", ticketId: null },
+  { eventId: "ticket-empty-id", type: "ticket", ticketId: "" },
+  { eventId: "ticket-whitespace-id", type: "ticket", ticketId: "   " },
+  { eventId: "queue-unexpected-id", type: "queues", ticketId: "ticket-123" },
+  { eventId: "queue-missing-null", type: "queues" },
+  { eventId: "refresh-unexpected-id", type: "refresh", ticketId: "ticket-123" },
+  { eventId: "unknown-type", type: "reservation", ticketId: null },
+];

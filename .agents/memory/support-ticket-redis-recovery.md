@@ -19,11 +19,11 @@ With real ioredis, rapid stop/restart cycles can leave multiple explicit subscri
 
 **How to apply:** In recovery tests, track and gate acknowledgements by generation, then assert that stale acknowledgements emit nothing and all current-generation completions produce only one refresh.
 
-For ticket SSE delivery, project payloads onto the explicit public contract fields (`eventId`, `type`, `ticketId`) on both Redis-subscriber and local-fallback paths. Strip unknown fields rather than rejecting otherwise valid ticket or queue events.
+For ticket SSE delivery, use one runtime parser/projection across Redis publishing, Redis subscription, and direct SSE delivery. Project onto the explicit public contract fields (`eventId`, `type`, `ticketId`) and strip unknown fields rather than rejecting otherwise valid ticket or queue events.
 
 **Why:** Broker payloads and runtime caller objects may contain private or internal data beyond the public event contract; projecting known fields prevents accidental exposure without blocking valid updates.
 
-**How to apply:** When adding a ticket SSE field, update the public type and shared projection together. Never forward parsed Redis payloads or caller-supplied update objects verbatim; test both Redis fan-out and fallback paths.
+**How to apply:** When adding a ticket SSE variant or field, update the public type and shared runtime parser together and use that parser at every delivery boundary. Never forward parsed Redis payloads or caller-supplied update objects verbatim; test malformed inputs at both Redis and direct-emitter boundaries.
 
 Keep `SupportTicketUpdatePayload` as a discriminated union: ticket events require a nonblank ticket ID, while queue and recovery-refresh events require `ticketId: null`. The SSE emitter validates this shape at runtime too. Keep recovery `refresh` hints separate from broadcastable ticket and queue updates; recovery refreshes use their explicit local rehydration path after subscription acknowledgement.
 

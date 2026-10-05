@@ -64,10 +64,14 @@ vi.mock("../lib/seat-sse.js", () => ({
   emitSeatRefresh: mockEmitSeatRefresh,
 }));
 
-vi.mock("../lib/support-ticket-sse.js", () => ({
-  emitSupportTicketUpdate: mockEmitSupportTicketUpdate,
-  emitSupportTicketRefresh: mockEmitSupportTicketRefresh,
-}));
+vi.mock("../lib/support-ticket-sse.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/support-ticket-sse.js")>();
+  return {
+    ...actual,
+    emitSupportTicketUpdate: mockEmitSupportTicketUpdate,
+    emitSupportTicketRefresh: mockEmitSupportTicketRefresh,
+  };
+});
 
 vi.mock("../lib/redis.js", () => ({
   getRedisConnection: mockGetRedisConnection,
@@ -311,13 +315,15 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     expect(fakePub.publish).toHaveBeenCalledOnce();
     const [channel, rawPayload] = fakePub.publish.mock.calls[0] as [string, string];
     expect(channel).toBe("support-ticket-updates");
-    expect(JSON.parse(rawPayload)).toMatchObject({
+    const envelope = JSON.parse(rawPayload);
+    expect(envelope).toMatchObject({
       tenantId: "tenant-one",
       payload: {
         type: "ticket",
         ticketId: "ticket-123",
       },
     });
+    expect(Object.keys(envelope.payload).sort()).toEqual(["eventId", "ticketId", "type"]);
   });
 
   it("restricts ticket broadcasts to ticket and queue changes", () => {
@@ -336,6 +342,26 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     await expect(
       broadcastSupportTicketUpdate("tenant-one", refreshUpdate as never),
     ).rejects.toThrow("Only valid ticket and queue updates can be broadcast");
+    expect(fakePub.publish).not.toHaveBeenCalled();
+    expect(mockEmitSupportTicketUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed broadcasts before Redis or local delivery", async () => {
+    const { fakePub } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+
+    const invalidUpdates = [
+      { type: "ticket", ticketId: "" },
+      { type: "ticket", ticketId: "   " },
+      { type: "queues", ticketId: "ticket-123" },
+    ];
+    for (const update of invalidUpdates) {
+      await expect(
+        broadcastSupportTicketUpdate("tenant-one", update as never),
+      ).rejects.toThrow("Only valid ticket and queue updates can be broadcast");
+    }
+
     expect(fakePub.publish).not.toHaveBeenCalled();
     expect(mockEmitSupportTicketUpdate).not.toHaveBeenCalled();
   });

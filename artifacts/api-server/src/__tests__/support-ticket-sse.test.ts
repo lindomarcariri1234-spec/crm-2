@@ -4,9 +4,12 @@ import {
   addSupportTicketClient,
   emitSupportTicketRefresh,
   emitSupportTicketUpdate,
+  parseSupportTicketBroadcastUpdate,
+  parseSupportTicketUpdatePayload,
   removeSupportTicketClient,
   type SupportTicketUpdatePayload,
 } from "../lib/support-ticket-sse.js";
+import { malformedSupportTicketSsePayloads } from "./support-ticket-sse-fixtures.js";
 
 function mockResponse() {
   return { write: vi.fn() } as unknown as Response & { write: ReturnType<typeof vi.fn> };
@@ -78,17 +81,32 @@ describe("support ticket SSE tenant fan-out", () => {
     );
   });
 
-  it("does not write event payloads with mismatched types and ticket IDs", () => {
+  it("projects valid payloads onto the shared public contract", () => {
+    expect(parseSupportTicketUpdatePayload({
+      eventId: "event-public",
+      type: "ticket",
+      ticketId: "ticket-public",
+      customerEmail: "must-not-be-forwarded@example.test",
+    })).toEqual({
+      eventId: "event-public",
+      type: "ticket",
+      ticketId: "ticket-public",
+    });
+    expect(parseSupportTicketBroadcastUpdate({
+      type: "queues",
+      ticketId: null,
+      internalQueueMetadata: "must-not-be-forwarded",
+    })).toEqual({ type: "queues", ticketId: null });
+    expect(parseSupportTicketBroadcastUpdate({ type: "refresh", ticketId: null })).toBeNull();
+  });
+
+  it("rejects the same malformed payload shapes at parser and direct-emitter boundaries", () => {
     const response = mockResponse();
     clients.push({ tenantId: "tenant-invalid", response });
     addSupportTicketClient("tenant-invalid", response);
-    const invalidPayloads = [
-      { eventId: "bad-ticket", type: "ticket", ticketId: null },
-      { eventId: "bad-queue", type: "queues", ticketId: "ticket-one" },
-      { eventId: "bad-refresh", type: "refresh", ticketId: "ticket-one" },
-    ];
 
-    for (const payload of invalidPayloads) {
+    for (const payload of malformedSupportTicketSsePayloads) {
+      expect(parseSupportTicketUpdatePayload(payload)).toBeNull();
       expect(() =>
         emitSupportTicketUpdate(
           "tenant-invalid",
@@ -97,6 +115,23 @@ describe("support ticket SSE tenant fan-out", () => {
       ).toThrow("Invalid support-ticket SSE payload");
     }
     expect(response.write).not.toHaveBeenCalled();
+  });
+
+  it("strips unexpected fields before direct SSE delivery", () => {
+    const response = mockResponse();
+    clients.push({ tenantId: "tenant-public", response });
+    addSupportTicketClient("tenant-public", response);
+
+    emitSupportTicketUpdate("tenant-public", {
+      eventId: "event-public",
+      type: "ticket",
+      ticketId: "ticket-public",
+      customerEmail: "must-not-be-forwarded@example.test",
+    } as unknown as SupportTicketUpdatePayload);
+
+    expect(response.write).toHaveBeenCalledWith(
+      `id: event-public\ndata: {"eventId":"event-public","type":"ticket","ticketId":"ticket-public"}\n\n`,
+    );
   });
 
   it("refreshes each connected tenant's own inbox after Redis recovery", () => {

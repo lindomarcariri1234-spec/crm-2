@@ -6,8 +6,9 @@ import { emitSeatRefresh, emitSeatUpdate, type SeatUpdatePayload } from "./seat-
 import {
   emitSupportTicketRefresh,
   emitSupportTicketUpdate,
+  parseSupportTicketBroadcastUpdate,
+  parseSupportTicketUpdatePayload,
   type SupportTicketBroadcastUpdate,
-  type SupportTicketUpdatePayload,
 } from "./support-ticket-sse";
 import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES } from "@workspace/permissions";
 import { getRedisConnection } from "./redis";
@@ -16,32 +17,6 @@ import { generateId } from "./id";
 
 const SEAT_UPDATE_CHANNEL = "seat-updates";
 const SUPPORT_TICKET_UPDATE_CHANNEL = "support-ticket-updates";
-
-function toPublicSupportTicketPayload(
-  payload: SupportTicketUpdatePayload,
-): SupportTicketUpdatePayload {
-  switch (payload.type) {
-    case "ticket":
-      return { eventId: payload.eventId, type: "ticket", ticketId: payload.ticketId };
-    case "queues":
-      return { eventId: payload.eventId, type: "queues", ticketId: null };
-    case "refresh":
-      return { eventId: payload.eventId, type: "refresh", ticketId: null };
-    default: {
-      const exhaustiveCheck: never = payload;
-      return exhaustiveCheck;
-    }
-  }
-}
-
-function isSupportTicketBroadcastUpdate(update: unknown): update is SupportTicketBroadcastUpdate {
-  if (!update || typeof update !== "object") return false;
-  const payload = update as { type?: unknown; ticketId?: unknown };
-  if (payload.type === "ticket") {
-    return typeof payload.ticketId === "string" && payload.ticketId.trim().length > 0;
-  }
-  return payload.type === "queues" && payload.ticketId === null;
-}
 
 let _subscriber: Redis | null = null;
 let _cancelRecoveryRetry: (() => void) | null = null;
@@ -211,24 +186,12 @@ export function initSeatUpdateSubscriber(): void {
           tenantId?: unknown;
           payload?: unknown;
         };
-        const payload = envelope.payload as SupportTicketUpdatePayload | undefined;
-        if (
-          typeof envelope.tenantId !== "string"
-          || !envelope.tenantId.trim()
-          || !payload
-          || typeof payload.eventId !== "string"
-          || !payload.eventId.trim()
-          || (payload.type !== "ticket" && payload.type !== "queues")
-          || (
-            payload.type === "ticket"
-            && (typeof payload.ticketId !== "string" || !payload.ticketId.trim())
-          )
-          || (payload.type === "queues" && payload.ticketId !== null)
-        ) {
+        if (typeof envelope.tenantId !== "string" || !envelope.tenantId.trim()) {
           return;
         }
-        // Redis payloads can carry fields outside the public SSE contract; never relay them.
-        emitSupportTicketUpdate(envelope.tenantId, toPublicSupportTicketPayload(payload));
+        const payload = parseSupportTicketUpdatePayload(envelope.payload);
+        if (!payload || payload.type === "refresh") return;
+        emitSupportTicketUpdate(envelope.tenantId, payload);
       } catch (err) {
         logger.warn({ err }, "[support-ticket-sse] Ignoring malformed Redis update");
       }
@@ -248,14 +211,16 @@ export async function broadcastSupportTicketUpdate(
   tenantId: string,
   update: SupportTicketBroadcastUpdate,
 ): Promise<void> {
-  if (!isSupportTicketBroadcastUpdate(update)) {
+  const publicUpdate = parseSupportTicketBroadcastUpdate(update);
+  if (!publicUpdate) {
     throw new TypeError("Only valid ticket and queue updates can be broadcast");
   }
 
-  const payload: SupportTicketUpdatePayload = {
-    ...update,
+  const payload = parseSupportTicketUpdatePayload({
+    ...publicUpdate,
     eventId: generateId(),
-  };
+  });
+  if (!payload) throw new TypeError("Invalid support-ticket SSE payload");
 
   if (_subscriber !== null) {
     const pub = getRedisConnection();
@@ -269,7 +234,7 @@ export async function broadcastSupportTicketUpdate(
     }
   }
 
-  emitSupportTicketUpdate(tenantId, toPublicSupportTicketPayload(payload));
+  emitSupportTicketUpdate(tenantId, payload);
 }
 
 /**

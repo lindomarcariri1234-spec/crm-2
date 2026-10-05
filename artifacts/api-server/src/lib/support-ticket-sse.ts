@@ -11,20 +11,52 @@ export type SupportTicketBroadcastUpdate =
   | { type: "ticket"; ticketId: string }
   | { type: "queues"; ticketId: null };
 
-function isValidSupportTicketUpdatePayload(
-  payload: unknown,
-): payload is SupportTicketUpdatePayload {
-  if (!payload || typeof payload !== "object") return false;
-  const candidate = payload as { eventId?: unknown; type?: unknown; ticketId?: unknown };
-  if (typeof candidate.eventId !== "string" || !candidate.eventId.trim()) return false;
+type SupportTicketUpdateShape =
+  | { type: "ticket"; ticketId: string }
+  | { type: "queues"; ticketId: null }
+  | { type: "refresh"; ticketId: null };
 
-  if (candidate.type === "ticket") {
-    return typeof candidate.ticketId === "string" && candidate.ticketId.trim().length > 0;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseSupportTicketUpdateShape(value: unknown): SupportTicketUpdateShape | null {
+  if (!isRecord(value)) return null;
+
+  if (value.type === "ticket") {
+    return typeof value.ticketId === "string" && value.ticketId.trim()
+      ? { type: "ticket", ticketId: value.ticketId }
+      : null;
   }
-  return (
-    (candidate.type === "queues" || candidate.type === "refresh")
-    && candidate.ticketId === null
-  );
+
+  if ((value.type === "queues" || value.type === "refresh") && value.ticketId === null) {
+    return { type: value.type, ticketId: null };
+  }
+
+  return null;
+}
+
+/**
+ * Parse and project a public ticket SSE payload. Unknown fields are deliberately
+ * omitted so Redis messages and direct local emits share the same contract.
+ */
+export function parseSupportTicketUpdatePayload(
+  payload: unknown,
+): SupportTicketUpdatePayload | null {
+  if (!isRecord(payload) || typeof payload.eventId !== "string" || !payload.eventId.trim()) {
+    return null;
+  }
+
+  const shape = parseSupportTicketUpdateShape(payload);
+  return shape ? { eventId: payload.eventId, ...shape } : null;
+}
+
+/** Parse caller updates while keeping recovery-only refreshes off Redis. */
+export function parseSupportTicketBroadcastUpdate(
+  update: unknown,
+): SupportTicketBroadcastUpdate | null {
+  const shape = parseSupportTicketUpdateShape(update);
+  return shape && shape.type !== "refresh" ? shape : null;
 }
 
 export function addSupportTicketClient(tenantId: string, res: Response): void {
@@ -44,17 +76,18 @@ export function emitSupportTicketUpdate(
   tenantId: string,
   payload: SupportTicketUpdatePayload,
 ): void {
-  if (!isValidSupportTicketUpdatePayload(payload)) {
+  const publicPayload = parseSupportTicketUpdatePayload(payload);
+  if (!publicPayload) {
     throw new TypeError("Invalid support-ticket SSE payload");
   }
 
   const set = clients.get(tenantId);
   if (!set || set.size === 0) return;
-  const data = JSON.stringify(payload);
+  const data = JSON.stringify(publicPayload);
   const dead: Response[] = [];
   for (const res of set) {
     try {
-      res.write(`id: ${payload.eventId}\ndata: ${data}\n\n`);
+      res.write(`id: ${publicPayload.eventId}\ndata: ${data}\n\n`);
     } catch {
       dead.push(res);
     }

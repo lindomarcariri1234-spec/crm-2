@@ -52,6 +52,7 @@ import {
   addSupportTicketClient,
   removeSupportTicketClient,
 } from "../lib/support-ticket-sse.js";
+import { malformedSupportTicketSsePayloads } from "./support-ticket-sse-fixtures.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -968,37 +969,13 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         JSON.stringify({ tenantId: 42, payload: ticketEvent }),
         JSON.stringify({ tenantId: matchingTenantId }),
         JSON.stringify({ tenantId: matchingTenantId, payload: null }),
+        ...malformedSupportTicketSsePayloads.map((payload) =>
+          JSON.stringify({ tenantId: matchingTenantId, payload }),
+        ),
+        // Refresh is valid for local recovery but must never fan out through Redis.
         JSON.stringify({
           tenantId: matchingTenantId,
-          payload: { type: "ticket", ticketId: "ticket-without-event-id" },
-        }),
-        JSON.stringify({
-          tenantId: matchingTenantId,
-          payload: { eventId: "", type: "ticket", ticketId: "ticket-empty-event-id" },
-        }),
-        JSON.stringify({
-          tenantId: matchingTenantId,
-          payload: { eventId: "   ", type: "ticket", ticketId: "ticket-whitespace-event-id" },
-        }),
-        JSON.stringify({
-          tenantId: matchingTenantId,
-          payload: { eventId: "ticket-empty-id", type: "ticket", ticketId: "" },
-        }),
-        JSON.stringify({
-          tenantId: matchingTenantId,
-          payload: { eventId: "ticket-whitespace-id", type: "ticket", ticketId: "   " },
-        }),
-        JSON.stringify({
-          tenantId: matchingTenantId,
-          payload: { eventId: "ticket-invalid-type", type: "reservation", ticketId: null },
-        }),
-        JSON.stringify({
-          tenantId: matchingTenantId,
-          payload: { eventId: "ticket-missing-id", type: "ticket", ticketId: null },
-        }),
-        JSON.stringify({
-          tenantId: matchingTenantId,
-          payload: { eventId: "queues-unexpected-id", type: "queues", ticketId: "ticket-123" },
+          payload: { eventId: "redis-refresh-is-local-only", type: "refresh", ticketId: null },
         }),
       ];
       mockEmitSeatUpdate.mockClear();
