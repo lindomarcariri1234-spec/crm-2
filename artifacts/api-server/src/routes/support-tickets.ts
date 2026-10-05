@@ -1,4 +1,4 @@
-import { Router, type NextFunction } from "express";
+import { Router, type NextFunction, type Response } from "express";
 import {
   chatbotConversationsTable,
   chatbotMessagesTable,
@@ -19,6 +19,8 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from ".
 import { generateId } from "../lib/id.js";
 import { deliverAttendanceReply } from "../services/whatsapp-attendance.js";
 import { ensureSupportTicketForConversation, recordSupportTicketEvent } from "../services/support-ticketing.js";
+import { broadcastSupportTicketUpdate } from "../lib/realtime.js";
+import { addSupportTicketClient, removeSupportTicketClient } from "../lib/support-ticket-sse.js";
 
 const router = Router();
 
@@ -204,6 +206,34 @@ router.get("/support/tickets", async (req, res, next: NextFunction): Promise<voi
   }
 });
 
+router.get("/support/tickets/stream", async (req, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me || !requireStaff(me, next)) return;
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    addSupportTicketClient(me.tenantId, res);
+
+    const ping = setInterval(() => {
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        clearInterval(ping);
+      }
+    }, 30_000);
+    res.on("close", () => {
+      clearInterval(ping);
+      removeSupportTicketClient(me.tenantId, res);
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/support/tickets/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -358,7 +388,7 @@ router.post("/support/tickets/:id/actions", async (req, res, next: NextFunction)
         eventType = "ticket_transferred";
         details = { queueId, assignedUserId };
       } else if (action.action === "resolve") {
-        if (ticket.status === "resolved") return { ticket };
+        if (ticket.status === "resolved") return { ticket, changed: false };
         if (ticket.assignedUserId && ticket.assignedUserId !== me.id && !canManage(me.role)) {
           return { error: "assigned" as const };
         }
@@ -404,7 +434,7 @@ router.post("/support/tickets/:id/actions", async (req, res, next: NextFunction)
         eventType,
         details,
       });
-      return { ticket: updated };
+      return { ticket: updated, changed: true };
     });
 
     if ("error" in result) {
@@ -415,6 +445,9 @@ router.post("/support/tickets/:id/actions", async (req, res, next: NextFunction)
       else if (result.error === "not_resolved") next(new ConflictError("Só é possível reabrir um ticket resolvido.", "TICKET_NOT_RESOLVED"));
       else next(new ConflictError("Esta ação não está disponível para o ticket resolvido.", "TICKET_RESOLVED"));
       return;
+    }
+    if (result.changed) {
+      void broadcastSupportTicketUpdate(me.tenantId, { type: "ticket", ticketId: result.ticket.id });
     }
     res.json(result.ticket);
   } catch (err) {
@@ -538,7 +571,7 @@ router.post("/support/tickets/:id/reply", async (req, res, next: NextFunction): 
           details: { userId: me.id },
         });
       }
-      return { messageId: existing.id };
+      return { messageId: existing.id, ticketId: ticket.id, created: Boolean(created) };
     });
 
     if ("error" in result) {
@@ -553,6 +586,9 @@ router.post("/support/tickets/:id/reply", async (req, res, next: NextFunction): 
       return;
     }
 
+    if (result.created) {
+      void broadcastSupportTicketUpdate(me.tenantId, { type: "ticket", ticketId: result.ticketId });
+    }
     const delivered = await deliverAttendanceReply({
       tenantId: me.tenantId,
       messageId: result.messageId,
@@ -610,6 +646,7 @@ router.post("/support/queues", async (req, res, next: NextFunction): Promise<voi
       next(new ConflictError("Já existe uma fila com esse nome.", "QUEUE_ALREADY_EXISTS"));
       return;
     }
+    void broadcastSupportTicketUpdate(me.tenantId, { type: "queues", ticketId: null });
     res.status(201).json(queue);
   } catch (err) {
     next(err);
@@ -669,6 +706,7 @@ router.patch("/support/queues/:id", async (req, res, next: NextFunction): Promis
       else next(new ConflictError("Uma fila inativa não pode ser a fila padrão.", "INACTIVE_DEFAULT_QUEUE"));
       return;
     }
+    void broadcastSupportTicketUpdate(me.tenantId, { type: "queues", ticketId: null });
     res.json(result.queue);
   } catch (err) {
     next(err);

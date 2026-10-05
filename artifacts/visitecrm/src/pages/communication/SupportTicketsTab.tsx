@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   getGetMeQueryKey,
@@ -52,6 +52,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useSupportTicketStream } from "@/hooks/useSupportTicketStream";
 
 type TicketStatus = "all" | "pending" | "open" | "resolved";
 type AssignmentFilter = "all" | "mine" | "unassigned";
@@ -190,6 +191,8 @@ export default function SupportTicketsTab() {
   });
   const tickets = (ticketsQuery.data?.items ?? []) as SupportTicketListItem[];
   const selectedTicket = tickets.find((ticket) => ticket.id === selectedId) ?? null;
+  const selectedTicketId = selectedTicket?.id ?? null;
+  const selectedConversationId = selectedTicket?.conversationId ?? null;
   const messagesQuery = useListChatbotMessages(selectedTicket?.conversationId ?? "", { ticketId: selectedTicket?.id ?? "" }, {
     query: {
       enabled: Boolean(selectedTicket),
@@ -209,13 +212,34 @@ export default function SupportTicketsTab() {
   const quickReplies = ((quickRepliesQuery.data ?? []) as SupportQuickReply[]).filter((item) =>
     item.isActive && (!item.queueId || item.queueId === selectedTicket?.queueId));
 
-  const refreshTicketData = () => {
+  const refreshTicketData = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: getListSupportTicketsQueryKey() });
-    if (selectedTicket) {
-      void queryClient.invalidateQueries({ queryKey: getListChatbotMessagesQueryKey(selectedTicket.conversationId, { ticketId: selectedTicket.id }) });
-      void queryClient.invalidateQueries({ queryKey: getListSupportTicketEventsQueryKey(selectedTicket.id) });
+    if (selectedTicketId && selectedConversationId) {
+      void queryClient.invalidateQueries({ queryKey: getListChatbotMessagesQueryKey(selectedConversationId, { ticketId: selectedTicketId }) });
+      void queryClient.invalidateQueries({ queryKey: getListSupportTicketEventsQueryKey(selectedTicketId) });
     }
-  };
+  }, [queryClient, selectedConversationId, selectedTicketId]);
+  const refreshTicketFromStream = useCallback((ticketId: string) => {
+    void queryClient.invalidateQueries({ queryKey: getListSupportTicketsQueryKey() });
+    if (ticketId !== selectedTicketId || !selectedTicketId || !selectedConversationId) return;
+    void queryClient.invalidateQueries({ queryKey: getListChatbotMessagesQueryKey(selectedConversationId, { ticketId: selectedTicketId }) });
+    void queryClient.invalidateQueries({ queryKey: getListSupportTicketEventsQueryKey(selectedTicketId) });
+  }, [queryClient, selectedConversationId, selectedTicketId]);
+  const refreshQueuesFromStream = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: getListSupportTicketsQueryKey() });
+    void queryClient.invalidateQueries({ queryKey: getListSupportQueuesQueryKey() });
+  }, [queryClient]);
+  const refreshAfterStreamReconnect = useCallback(() => {
+    refreshTicketData();
+    void queryClient.invalidateQueries({ queryKey: getListSupportQueuesQueryKey() });
+  }, [queryClient, refreshTicketData]);
+  useSupportTicketStream({
+    tenantId: me?.tenantId,
+    enabled: Boolean(me?.tenantId),
+    onOpen: refreshAfterStreamReconnect,
+    onTicketUpdate: refreshTicketFromStream,
+    onQueuesUpdate: refreshQueuesFromStream,
+  });
   const refreshCatalog = () => {
     void queryClient.invalidateQueries({ queryKey: getListSupportQueuesQueryKey() });
     void queryClient.invalidateQueries({ queryKey: getListSupportQuickRepliesQueryKey() });

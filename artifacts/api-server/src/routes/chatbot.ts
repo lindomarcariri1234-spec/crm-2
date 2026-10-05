@@ -20,6 +20,7 @@ import { extractVerifiedUploadThingKey, utapi } from "../lib/uploadthing";
 import { logger } from "../lib/logger";
 import { getWhatsAppInboundMediaExpirationAt } from "../lib/whatsapp-media-retention";
 import { ensureSupportTicketForConversation, recordSupportTicketEvent } from "../services/support-ticketing.js";
+import { broadcastSupportTicketUpdate } from "../lib/realtime.js";
 
 const router = Router();
 const DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
@@ -354,12 +355,14 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
         parsed.data.status === "human_handoff"
         || Boolean(parsed.data.assignedUserId)
       );
+      let supportTicketId: string | null = null;
       if (shouldCreateTicket) {
         const ticket = await ensureSupportTicketForConversation(tx, {
           tenantId: me.tenantId,
           conversationId: current.id,
           actorUserId: me.id,
         });
+        supportTicketId = ticket?.id ?? null;
         if (ticket && parsed.data.assignedUserId !== undefined) {
           const assignedUserId = parsed.data.assignedUserId || null;
           if (ticket.assignedUserId !== assignedUserId) {
@@ -392,6 +395,7 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
           .for("update")
           .limit(1);
         if (activeTicket?.assignedUserId) {
+          supportTicketId = activeTicket.id;
           await tx.update(supportTicketsTable)
             .set({ assignedUserId: null, status: "pending", updatedAt: new Date() })
             .where(and(
@@ -411,7 +415,7 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
       const [updated] = await tx.select().from(chatbotConversationsTable)
         .where(and(eq(chatbotConversationsTable.id, current.id), eq(chatbotConversationsTable.tenantId, me.tenantId)))
         .limit(1);
-      return { conversation: updated };
+      return { conversation: updated, supportTicketId };
     });
     if ("error" in result) {
       next(new NotFoundError(
@@ -421,6 +425,12 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
       return;
     }
     if (!result.conversation) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+    if (result.supportTicketId) {
+      void broadcastSupportTicketUpdate(me.tenantId, {
+        type: "ticket",
+        ticketId: result.supportTicketId,
+      });
+    }
     res.json(result.conversation);
   } catch (err) {
     next(err);

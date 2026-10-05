@@ -3,21 +3,22 @@ import { db } from "@workspace/db";
 import { reservationsTable, tripsTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { emitSeatUpdate, type SeatUpdatePayload } from "./seat-sse";
+import { emitSupportTicketUpdate, type SupportTicketUpdatePayload } from "./support-ticket-sse";
 import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES } from "@workspace/permissions";
 import { getRedisConnection } from "./redis";
 import { logger } from "./logger";
+import { generateId } from "./id";
 
 const SEAT_UPDATE_CHANNEL = "seat-updates";
+const SUPPORT_TICKET_UPDATE_CHANNEL = "support-ticket-updates";
 
 let _subscriber: Redis | null = null;
 
 /**
- * Initialises a dedicated Redis subscriber connection for seat-map fan-out.
+ * Initialises a dedicated Redis subscriber connection for realtime fan-out.
  *
- * When called, every instance subscribes to the `seat-updates` Redis channel.
- * `broadcastSeatUpdate` then publishes the computed payload to that channel so
- * ALL instances—not just the one that handled the triggering HTTP request—emit
- * the update to their locally-connected SSE clients.
+ * Every instance subscribes to the seat and support-ticket channels. Publishers
+ * send events through Redis so all instances emit to their local SSE clients.
  *
  * Safe to call even when Redis is not configured: it logs and returns immediately.
  * Call once at server startup (after getRedisConnection has been initialised).
@@ -36,15 +37,41 @@ export function initSeatUpdateSubscriber(): void {
   });
 
   void _subscriber
-    .subscribe(SEAT_UPDATE_CHANNEL)
+    .subscribe(SEAT_UPDATE_CHANNEL, SUPPORT_TICKET_UPDATE_CHANNEL)
     .then(() => {
-      logger.info("[seat-sse] Subscribed to Redis seat-updates channel — multi-instance fan-out active");
+      logger.info("[realtime] Subscribed to Redis SSE channels — multi-instance fan-out active");
     })
     .catch((err: unknown) => {
-      logger.error({ err }, "[seat-sse] Failed to subscribe to seat-updates channel");
+      logger.error({ err }, "[realtime] Failed to subscribe to Redis SSE channels");
     });
 
-  _subscriber.on("message", (_channel: string, message: string) => {
+  _subscriber.on("message", (channel: string, message: string) => {
+    if (channel === SUPPORT_TICKET_UPDATE_CHANNEL) {
+      try {
+        const envelope = JSON.parse(message) as {
+          tenantId?: unknown;
+          payload?: unknown;
+        };
+        const payload = envelope.payload as SupportTicketUpdatePayload | undefined;
+        if (
+          typeof envelope.tenantId !== "string"
+          || !envelope.tenantId
+          || !payload
+          || typeof payload.eventId !== "string"
+          || !payload.eventId
+          || (payload.type !== "ticket" && payload.type !== "queues")
+          || (payload.type === "ticket" && typeof payload.ticketId !== "string")
+          || (payload.type === "queues" && payload.ticketId !== null)
+        ) {
+          return;
+        }
+        emitSupportTicketUpdate(envelope.tenantId, payload);
+      } catch (err) {
+        logger.warn({ err }, "[support-ticket-sse] Ignoring malformed Redis update");
+      }
+      return;
+    }
+    if (channel !== SEAT_UPDATE_CHANNEL) return;
     try {
       const payload = JSON.parse(message) as SeatUpdatePayload;
       emitSeatUpdate(payload);
@@ -52,6 +79,30 @@ export function initSeatUpdateSubscriber(): void {
       logger.warn({ err }, "[seat-sse] Ignoring malformed seat-update message from Redis");
     }
   });
+}
+
+export async function broadcastSupportTicketUpdate(
+  tenantId: string,
+  update: Omit<SupportTicketUpdatePayload, "eventId">,
+): Promise<void> {
+  const payload: SupportTicketUpdatePayload = {
+    ...update,
+    eventId: generateId(),
+  };
+
+  if (_subscriber !== null) {
+    const pub = getRedisConnection();
+    if (pub?.status === "ready") {
+      try {
+        await pub.publish(SUPPORT_TICKET_UPDATE_CHANNEL, JSON.stringify({ tenantId, payload }));
+        return;
+      } catch (err) {
+        logger.warn({ err, tenantId }, "[support-ticket-sse] Redis publish failed — falling back to local emit");
+      }
+    }
+  }
+
+  emitSupportTicketUpdate(tenantId, payload);
 }
 
 /**

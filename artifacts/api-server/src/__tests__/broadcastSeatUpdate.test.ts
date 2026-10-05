@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const { mockEmitSeatUpdate, mockResWhere, mockTripLimit, mockSelect, mockGetRedisConnection } =
+const {
+  mockEmitSeatUpdate,
+  mockEmitSupportTicketUpdate,
+  mockResWhere,
+  mockTripLimit,
+  mockSelect,
+  mockGetRedisConnection,
+} =
   vi.hoisted(() => {
     // Chain 1: reservations query — .select().from().where() → awaitable
     const mockResWhere = vi.fn().mockResolvedValue([]);
@@ -19,11 +26,19 @@ const { mockEmitSeatUpdate, mockResWhere, mockTripLimit, mockSelect, mockGetRedi
     });
 
     const mockEmitSeatUpdate = vi.fn();
+    const mockEmitSupportTicketUpdate = vi.fn();
 
     // Default: no Redis connection (null → fallback path)
     const mockGetRedisConnection = vi.fn().mockReturnValue(null);
 
-    return { mockEmitSeatUpdate, mockResWhere, mockTripLimit, mockSelect, mockGetRedisConnection };
+    return {
+      mockEmitSeatUpdate,
+      mockEmitSupportTicketUpdate,
+      mockResWhere,
+      mockTripLimit,
+      mockSelect,
+      mockGetRedisConnection,
+    };
   });
 
 vi.mock("@workspace/db", () => ({
@@ -42,11 +57,20 @@ vi.mock("../lib/seat-sse.js", () => ({
   emitSeatUpdate: mockEmitSeatUpdate,
 }));
 
+vi.mock("../lib/support-ticket-sse.js", () => ({
+  emitSupportTicketUpdate: mockEmitSupportTicketUpdate,
+}));
+
 vi.mock("../lib/redis.js", () => ({
   getRedisConnection: mockGetRedisConnection,
 }));
 
-import { broadcastSeatUpdate, initSeatUpdateSubscriber, closeSeatUpdateSubscriber } from "../lib/realtime.js";
+import {
+  broadcastSeatUpdate,
+  broadcastSupportTicketUpdate,
+  initSeatUpdateSubscriber,
+  closeSeatUpdateSubscriber,
+} from "../lib/realtime.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -138,10 +162,19 @@ describe("broadcastSeatUpdate — fallback (in-memory) path", () => {
 // Helper: build a fake subscriber (returned by conn.duplicate())
 // ---------------------------------------------------------------------------
 function makeFakeSubscriber() {
+  const listeners = new Map<string, (...args: unknown[]) => void>();
   const fake = {
-    on: vi.fn().mockReturnThis(),
+    on: vi.fn((event: string, listener: unknown) => {
+      if (typeof listener === "function") {
+        listeners.set(event, listener as (...args: unknown[]) => void);
+      }
+      return fake;
+    }),
     subscribe: vi.fn().mockResolvedValue(undefined),
     quit: vi.fn().mockResolvedValue(undefined),
+    emitMessage: (channel: string, message: string) => {
+      listeners.get("message")?.(channel, message);
+    },
   };
   return fake;
 }
@@ -252,5 +285,61 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
 
     expect(fakeConnForInit.publish).not.toHaveBeenCalled();
     expect(mockEmitSeatUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("publishes tenant-scoped support-ticket refresh hints through Redis", async () => {
+    const { fakePub } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+
+    await broadcastSupportTicketUpdate("tenant-one", {
+      type: "ticket",
+      ticketId: "ticket-123",
+    });
+
+    expect(fakePub.publish).toHaveBeenCalledOnce();
+    const [channel, rawPayload] = fakePub.publish.mock.calls[0] as [string, string];
+    expect(channel).toBe("support-ticket-updates");
+    expect(JSON.parse(rawPayload)).toMatchObject({
+      tenantId: "tenant-one",
+      payload: {
+        type: "ticket",
+        ticketId: "ticket-123",
+      },
+    });
+  });
+
+  it("fans a Redis ticket event out only through its tenant-keyed emitter", async () => {
+    const { fakePub, fakeSubscriber } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+    const payload = {
+      eventId: "update-123",
+      type: "ticket" as const,
+      ticketId: "ticket-123",
+    };
+
+    fakeSubscriber.emitMessage("support-ticket-updates", JSON.stringify({
+      tenantId: "tenant-one",
+      payload,
+    }));
+
+    expect(mockEmitSupportTicketUpdate).toHaveBeenCalledOnce();
+    expect(mockEmitSupportTicketUpdate).toHaveBeenCalledWith("tenant-one", payload);
+    expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a local tenant-scoped ticket event when Redis is unavailable", async () => {
+    await broadcastSupportTicketUpdate("tenant-fallback", {
+      type: "queues",
+      ticketId: null,
+    });
+
+    expect(mockEmitSupportTicketUpdate).toHaveBeenCalledOnce();
+    expect(mockEmitSupportTicketUpdate).toHaveBeenCalledWith("tenant-fallback", {
+      eventId: expect.any(String),
+      type: "queues",
+      ticketId: null,
+    });
   });
 });

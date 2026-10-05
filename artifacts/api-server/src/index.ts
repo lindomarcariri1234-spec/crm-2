@@ -282,6 +282,9 @@ void runApiStartup(process.env, {
     );
   },
 }).then((shouldStartBackgroundServices) => {
+  // SSE fan-out is needed by the request-serving process even when cron and
+  // queue workers are disabled (for example, in development).
+  initSeatUpdateSubscriber();
   if (!shouldStartBackgroundServices) return;
   // ── Background: cron + BullMQ workers (non-fatal if Redis is unavailable) ──
   void (async () => {
@@ -387,9 +390,6 @@ void runApiStartup(process.env, {
           await recoverOutboundDeliveries({ databaseFallback: true });
         },
       });
-
-      // ── Seat-map SSE pub/sub fan-out (non-fatal, no-op when Redis absent) ──
-      initSeatUpdateSubscriber();
 
       // ── Log Upstash daily usage on startup (non-fatal) ──
       fetchUpstashDailyStats()

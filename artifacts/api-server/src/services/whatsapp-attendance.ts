@@ -12,6 +12,7 @@ import { getAIClientForTenant, sanitizeProviderError } from "../lib/ai-client";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
 import { deleteOrphanedFile } from "../lib/uploadthing";
+import { broadcastSupportTicketUpdate } from "../lib/realtime";
 import { dispatchOutboundMessage, updateOutboundDeliveryFromWebhook } from "./outbound-delivery";
 import { recomputeClientClassification, recordClientClassificationEvent } from "./client-classification.js";
 import {
@@ -259,6 +260,7 @@ export async function deliverAttendanceReply(opts: {
     .returning({
       id: chatbotMessagesTable.id,
       conversationId: chatbotMessagesTable.conversationId,
+      ticketId: chatbotMessagesTable.ticketId,
       content: chatbotMessagesTable.content,
       deliveryAttempts: chatbotMessagesTable.deliveryAttempts,
     });
@@ -269,6 +271,12 @@ export async function deliverAttendanceReply(opts: {
       .limit(1);
     return message?.deliveryStatus === "sent";
   }
+  const notifyTicket = () => claimed[0]?.ticketId
+    ? broadcastSupportTicketUpdate(opts.tenantId, {
+        type: "ticket",
+        ticketId: claimed[0].ticketId,
+      })
+    : Promise.resolve();
   try {
     const [conversation] = await db.select({
       sessionId: chatbotConversationsTable.sessionId,
@@ -299,6 +307,7 @@ export async function deliverAttendanceReply(opts: {
           eq(chatbotMessagesTable.id, opts.messageId),
           eq(chatbotMessagesTable.tenantId, opts.tenantId),
         ));
+      await notifyTicket();
       return false;
     }
     // The attendance service only persists/queues the reply. Provider calls
@@ -333,6 +342,7 @@ export async function deliverAttendanceReply(opts: {
             },
       )
       .where(and(eq(chatbotMessagesTable.id, opts.messageId), eq(chatbotMessagesTable.tenantId, opts.tenantId)));
+    await notifyTicket();
     return delivered;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -343,6 +353,7 @@ export async function deliverAttendanceReply(opts: {
         lastDeliveryError: reason.slice(0, 240),
       })
       .where(and(eq(chatbotMessagesTable.id, opts.messageId), eq(chatbotMessagesTable.tenantId, opts.tenantId)));
+    await notifyTicket();
     return false;
   }
 }
@@ -600,6 +611,7 @@ export async function processEvolutionInbound(opts: {
       .onConflictDoNothing()
       .returning({ id: chatbotMessagesTable.id });
 
+    let supportTicketId: string | null = null;
     if (
       inserted
       && !optedOut
@@ -610,12 +622,13 @@ export async function processEvolutionInbound(opts: {
         || mustHandoff(inboundContent)
       )
     ) {
-      await ensureSupportTicketForConversation(tx, {
+      const ticket = await ensureSupportTicketForConversation(tx, {
         tenantId,
         conversationId: conversation.id,
         inboundMessageId: inserted.id,
         subject: inboundContent || "Mídia recebida",
       });
+      supportTicketId = ticket?.id ?? null;
     }
 
     let existingMediaMessage: { id: string; mediaUrl: string | null } | undefined;
@@ -669,6 +682,7 @@ export async function processEvolutionInbound(opts: {
       inserted,
       optedOut,
       mediaMessageId,
+      supportTicketId,
       shouldStoreMedia: Boolean(
         inbound.media
         && !optedOut
@@ -677,7 +691,10 @@ export async function processEvolutionInbound(opts: {
       ),
     };
   });
-  const { conversation, inserted, optedOut, mediaMessageId, shouldStoreMedia } = transactionResult;
+  const { conversation, inserted, optedOut, mediaMessageId, supportTicketId, shouldStoreMedia } = transactionResult;
+  if (inserted && supportTicketId) {
+    await broadcastSupportTicketUpdate(tenantId, { type: "ticket", ticketId: supportTicketId });
+  }
   if (optedOut) return "opted_out";
 
   if (inbound.media && mediaMessageId && shouldStoreMedia) {
@@ -709,6 +726,9 @@ export async function processEvolutionInbound(opts: {
             isNull(chatbotMessagesTable.mediaUrl),
           ))
           .returning({ id: chatbotMessagesTable.id });
+        if (attached && supportTicketId) {
+          await broadcastSupportTicketUpdate(tenantId, { type: "ticket", ticketId: supportTicketId });
+        }
         if (!attached) {
           await deleteOrphanedFile(
             uploadedMedia.mediaUrl,
@@ -805,14 +825,17 @@ export async function processEvolutionInbound(opts: {
         eq(chatbotConversationsTable.id, conversation.id),
         eq(chatbotConversationsTable.tenantId, tenantId),
       ));
-    await db.transaction(async (tx) => {
-      await ensureSupportTicketForConversation(tx, {
+    const ticket = await db.transaction(async (tx) => {
+      return ensureSupportTicketForConversation(tx, {
         tenantId,
         conversationId: conversation.id,
         inboundMessageId: inserted?.id,
         subject: inboundContent,
       });
     });
+    if (ticket) {
+      await broadcastSupportTicketUpdate(tenantId, { type: "ticket", ticketId: ticket.id });
+    }
     return "ai_unavailable";
   }
 
