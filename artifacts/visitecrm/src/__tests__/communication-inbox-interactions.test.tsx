@@ -283,12 +283,14 @@ function DelayedHistoryRefreshHarness() {
       clientId: "client-b",
       channel: "whatsapp",
       startedAt: "2026-10-02T12:00:00.000Z",
+      sessionId: "+5511999990001",
     },
     {
       id: "conversation-b-failed-2",
       clientId: "client-b",
       channel: "whatsapp",
-      startedAt: "2026-10-03T12:00:00.000Z",
+      startedAt: "2026-10-02T12:00:00.000Z",
+      sessionId: "+5511999990002",
     },
   ]);
   const { messages, loading, error, failedConversationLabels } = useConversationAiMessages({
@@ -588,18 +590,41 @@ describe("delayed conversation history refreshes", () => {
     expect(failedSessions).not.toBeNull();
     expect(failureWarning?.textContent).toContain("Sessões com histórico incompleto:");
     expect(failedSessions!.querySelectorAll("li")).toHaveLength(2);
-    expect(failedSessions!.textContent).toContain("Sessão iniciada em 02/10/2026, 09:00");
-    expect(failedSessions!.textContent).toContain("Sessão iniciada em 03/10/2026, 09:00");
+    const failedSessionLabels = Array.from(
+      failedSessions!.querySelectorAll("button"),
+      (button) => button.textContent,
+    );
+    expect(failedSessionLabels).toEqual([
+      "Sessão iniciada em 02/10/2026, 09:00 (sessão 1)",
+      "Sessão iniciada em 02/10/2026, 09:00 (sessão 2)",
+    ]);
+    expect(new Set(failedSessionLabels).size).toBe(2);
+    const failedSessionAriaLabels = Array.from(
+      failedSessions!.querySelectorAll("button"),
+      (button) => button.getAttribute("aria-label"),
+    );
+    expect(failedSessionAriaLabels).toEqual([
+      "Abrir Sessão iniciada em 02/10/2026, 09:00 (sessão 1) no Atendimento IA",
+      "Abrir Sessão iniciada em 02/10/2026, 09:00 (sessão 2) no Atendimento IA",
+    ]);
     expect(failedSessions!.textContent).not.toContain("conversation-b-failed");
+    expect(failedSessions!.textContent).not.toContain("+5511999990001");
+    expect(failedSessions!.textContent).not.toContain("+5511999990002");
     expect(failureWarning?.textContent).not.toContain("conversation-b-failed");
+    expect(failureWarning?.textContent).not.toContain("+5511999990001");
+    expect(failureWarning?.textContent).not.toContain("+5511999990002");
 
     const failedSessionLink = container.querySelector<HTMLButtonElement>(
       '[data-testid="button-open-failed-whatsapp-session-0"]',
     );
-    expect(failedSessionLink?.textContent).toBe("Sessão iniciada em 02/10/2026, 09:00");
-    expect(failedSessionLink?.getAttribute("aria-label")).not.toContain(
-      "conversation-b-failed-1",
-    );
+    expect(failedSessionLink?.textContent)
+      .toBe("Sessão iniciada em 02/10/2026, 09:00 (sessão 1)");
+    expect(failedSessionAriaLabels.join(" "))
+      .not.toContain("conversation-b-failed");
+    expect(failedSessionAriaLabels.join(" "))
+      .not.toContain("+5511999990001");
+    expect(failedSessionAriaLabels.join(" "))
+      .not.toContain("+5511999990002");
     await flushAct(() => failedSessionLink?.click());
     expect(container.querySelector('[data-testid="active-communication-tab"]')?.textContent)
       .toBe("ai-inbox");
@@ -621,7 +646,9 @@ describe("delayed conversation history refreshes", () => {
     expect(history!.textContent).toContain(currentBMessage.content);
     expect(history!.textContent).not.toContain("Atualização atrasada da Ana");
     expect(historyError!.textContent).toBe(clientBError);
-    expect(failedSessions!.textContent).toContain("Sessão iniciada em 02/10/2026, 09:00");
-    expect(failedSessions!.textContent).toContain("Sessão iniciada em 03/10/2026, 09:00");
+    expect(failedSessions!.textContent)
+      .toContain("Sessão iniciada em 02/10/2026, 09:00 (sessão 1)");
+    expect(failedSessions!.textContent)
+      .toContain("Sessão iniciada em 02/10/2026, 09:00 (sessão 2)");
   });
 });

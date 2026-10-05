@@ -69,6 +69,31 @@ function formatConversationStart(conversation: ConversationLink | undefined): st
   return "Sessão do WhatsApp sem data de início";
 }
 
+function formatFailedConversationLabels(
+  failedConversationIds: string[],
+  conversations: ConversationLink[],
+): FailedConversationLabel[] {
+  const entries = failedConversationIds.map((conversationId) => ({
+    conversationId,
+    label: formatConversationStart(
+      conversations.find((conversation) => conversation.id === conversationId),
+    ),
+  }));
+  const totals = new Map<string, number>();
+  for (const { label } of entries) {
+    totals.set(label, (totals.get(label) ?? 0) + 1);
+  }
+
+  const occurrences = new Map<string, number>();
+  return entries.map(({ conversationId, label }) => {
+    if ((totals.get(label) ?? 0) < 2) return { conversationId, label };
+
+    const occurrence = (occurrences.get(label) ?? 0) + 1;
+    occurrences.set(label, occurrence);
+    return { conversationId, label: `${label} (sessão ${occurrence})` };
+  });
+}
+
 function formatPartialFailure(failure: PartialConversationFailure): string {
   const failedCount = failure.failedConversationIds.length;
   if (failedCount === failure.totalConversationCount) {
@@ -106,10 +131,9 @@ export function useConversationAiMessages({
     .join("|");
   const scopeKey = JSON.stringify([selectedClientId, linkedConversationIds]);
   const currentPartialFailure = partialFailure?.scopeKey === scopeKey ? partialFailure : null;
-  const failedConversationLabels = currentPartialFailure?.failedConversationIds.map((failedId) => ({
-    conversationId: failedId,
-    label: formatConversationStart(conversations.find((conversation) => conversation.id === failedId)),
-  })) ?? [];
+  const failedConversationLabels = currentPartialFailure
+    ? formatFailedConversationLabels(currentPartialFailure.failedConversationIds, conversations)
+    : [];
   const currentRefreshError = refreshError?.scopeKey === scopeKey ? refreshError.message : null;
   const error = [
     currentPartialFailure ? formatPartialFailure(currentPartialFailure) : null,
