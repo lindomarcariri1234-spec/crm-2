@@ -42,3 +42,9 @@ For rejected support-ticket Redis messages, aggregate counts under a fixed set o
 **Why:** Invalid JSON and broker messages can contain customer or cross-tenant identifiers; per-message error logs could expose those values and flood logs during a bad producer rollout.
 
 **How to apply:** Keep reason keys bounded, use only fixed reason codes plus aggregate counts in reports, clear the reporting timer during flush/shutdown, and test that counts aggregate without sensitive values.
+
+The current app-generated and persisted support-ticket IDs are 16 characters; SSE event and ticket IDs accept up to 64 characters to leave 4× headroom while bounding fan-out size.
+
+**Why:** Ticket IDs are stored as unrestricted text, so the practical compatibility limit comes from generated and existing values rather than the database column type. The extra headroom preserves descriptive internal IDs without allowing a single ID to inflate every open SSE frame.
+
+**How to apply:** Keep length checks in the shared parser used by direct delivery and Redis publish/subscriber paths. Before changing the cap, audit current persisted ticket IDs and test both the exact limit and one character over it.

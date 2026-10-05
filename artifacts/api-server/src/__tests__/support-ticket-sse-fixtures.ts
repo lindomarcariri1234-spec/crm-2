@@ -25,5 +25,7 @@ export const malformedSupportTicketSsePayloads: unknown[] = [
   { eventId: "queue-missing-null", type: "queues" },
   { eventId: "refresh-unexpected-id", type: "refresh", ticketId: "ticket-123" },
   { eventId: "unknown-type", type: "reservation", ticketId: null },
+  { eventId: "e".repeat(65), type: "ticket", ticketId: "ticket-valid" },
+  { eventId: "event-valid", type: "ticket", ticketId: "t".repeat(65) },
   ...supportTicketSsePayloadsWithUnsafeEventIds,
 ];

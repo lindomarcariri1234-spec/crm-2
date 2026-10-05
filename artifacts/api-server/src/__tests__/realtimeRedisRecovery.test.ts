@@ -57,6 +57,8 @@ import {
 import {
   addSupportTicketClient,
   removeSupportTicketClient,
+  SUPPORT_TICKET_EVENT_ID_MAX_LENGTH,
+  SUPPORT_TICKET_ID_MAX_LENGTH,
 } from "../lib/support-ticket-sse.js";
 import {
   malformedSupportTicketSsePayloads,
@@ -958,6 +960,11 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         type: "ticket",
         ticketId: "ticket-redis-sensitive-extra",
       };
+      const maxLengthTicketEvent: TicketUpdatePayload = {
+        eventId: "e".repeat(SUPPORT_TICKET_EVENT_ID_MAX_LENGTH),
+        type: "ticket",
+        ticketId: "t".repeat(SUPPORT_TICKET_ID_MAX_LENGTH),
+      };
       const ticketEventWithSensitiveExtra = {
         ...sanitizedTicketEvent,
         customerEmail: "must-not-be-forwarded@example.test",
@@ -1026,16 +1033,25 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         tenantId: matchingTenantId,
         payload: queuesEventWithUnexpectedExtra,
       }))).toBe(2);
+      expect(await publisher.publish("support-ticket-updates", JSON.stringify({
+        tenantId: matchingTenantId,
+        payload: maxLengthTicketEvent,
+      }))).toBe(2);
 
       const matchingStreams = streams.filter((stream) => stream.tenantId === matchingTenantId);
       const otherTenantStreams = streams.filter((stream) => stream.tenantId === otherTenantId);
       await waitUntil(
-        () => matchingStreams.every((stream) => stream.updates.length === 3),
-        "sanitized ticket, ticket, and queue events to reach both matching tenant streams",
+        () => matchingStreams.every((stream) => stream.updates.length === 4),
+        "sanitized ticket, ticket, queue, and maximum-length events to reach both matching tenant streams",
       );
       await sleep(100);
       for (const stream of matchingStreams) {
-        expect(stream.updates).toEqual([sanitizedTicketEvent, ticketEvent, queuesEvent]);
+        expect(stream.updates).toEqual([
+          sanitizedTicketEvent,
+          ticketEvent,
+          queuesEvent,
+          maxLengthTicketEvent,
+        ]);
       }
       for (const stream of otherTenantStreams) {
         expect(stream.updates).toHaveLength(0);
@@ -1084,8 +1100,8 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
     expect(totalsByReason).toEqual({
       invalid_json: 2,
       invalid_envelope: 10,
-      invalid_event_id: 40,
-      invalid_payload_shape: 24,
+      invalid_event_id: 42,
+      invalid_payload_shape: 26,
       unsupported_refresh: 2,
     });
 

@@ -11,6 +11,8 @@ import {
   parseSupportTicketBroadcastUpdate,
   parseSupportTicketUpdatePayload,
   removeSupportTicketClient,
+  SUPPORT_TICKET_EVENT_ID_MAX_LENGTH,
+  SUPPORT_TICKET_ID_MAX_LENGTH,
   SUPPORT_TICKET_STREAM_HEARTBEAT_MS,
   type SupportTicketUpdatePayload,
 } from "../lib/support-ticket-sse.js";
@@ -133,6 +135,24 @@ describe("support ticket SSE tenant fan-out", () => {
       ).toThrow("Invalid support-ticket SSE payload");
     }
     expect(response.write).not.toHaveBeenCalled();
+  });
+
+  it("preserves valid SSE frames when event and ticket IDs are at their maximum lengths", () => {
+    const response = mockResponse();
+    clients.push({ tenantId: "tenant-max-ids", response });
+    addSupportTicketClient("tenant-max-ids", response);
+    const payload: SupportTicketUpdatePayload = {
+      eventId: "e".repeat(SUPPORT_TICKET_EVENT_ID_MAX_LENGTH),
+      type: "ticket",
+      ticketId: "t".repeat(SUPPORT_TICKET_ID_MAX_LENGTH),
+    };
+
+    emitSupportTicketUpdate("tenant-max-ids", payload);
+
+    expect(response.write).toHaveBeenCalledOnce();
+    expect(response.write).toHaveBeenCalledWith(
+      `id: ${payload.eventId}\ndata: ${JSON.stringify(payload)}\n\n`,
+    );
   });
 
   it("strips unexpected fields before direct SSE delivery", () => {

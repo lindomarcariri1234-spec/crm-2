@@ -354,6 +354,7 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     const invalidUpdates = [
       { type: "ticket", ticketId: "" },
       { type: "ticket", ticketId: "   " },
+      { type: "ticket", ticketId: "t".repeat(65) },
       { type: "queues", ticketId: "ticket-123" },
     ];
     for (const update of invalidUpdates) {

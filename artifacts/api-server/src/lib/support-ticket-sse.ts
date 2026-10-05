@@ -21,6 +21,11 @@ type SupportTicketUpdateShape =
   | { type: "queues"; ticketId: null }
   | { type: "refresh"; ticketId: null };
 
+// generateId() and current persisted ticket IDs are 16 characters. A 4×
+// allowance preserves descriptive/internal IDs while bounding SSE fan-out.
+export const SUPPORT_TICKET_EVENT_ID_MAX_LENGTH = 64;
+export const SUPPORT_TICKET_ID_MAX_LENGTH = 64;
+
 const SUPPORT_TICKET_EVENT_ID_CONTROL_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 
 export const SUPPORT_TICKET_STREAM_HEARTBEAT_MS = 30_000;
@@ -51,7 +56,9 @@ function parseSupportTicketUpdateShape(value: unknown): SupportTicketUpdateShape
   if (!isRecord(value)) return null;
 
   if (value.type === "ticket") {
-    return typeof value.ticketId === "string" && value.ticketId.trim()
+    return typeof value.ticketId === "string"
+      && value.ticketId.length <= SUPPORT_TICKET_ID_MAX_LENGTH
+      && value.ticketId.trim()
       ? { type: "ticket", ticketId: value.ticketId }
       : null;
   }
@@ -81,6 +88,7 @@ export function parseSupportTicketUpdatePayloadDetailed(
 
   if (
     typeof payload.eventId !== "string"
+    || payload.eventId.length > SUPPORT_TICKET_EVENT_ID_MAX_LENGTH
     || !payload.eventId.trim()
     || SUPPORT_TICKET_EVENT_ID_CONTROL_CHARACTERS.test(payload.eventId)
   ) {
