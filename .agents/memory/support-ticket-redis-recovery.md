@@ -18,3 +18,9 @@ With real ioredis, rapid stop/restart cycles can leave multiple explicit subscri
 **Why:** A real-Redis test observed overlapping acknowledgements while reconnects were progressing; assuming one subscribe attempt made the race test miss a valid interleaving.
 
 **How to apply:** In recovery tests, track and gate acknowledgements by generation, then assert that stale acknowledgements emit nothing and all current-generation completions produce only one refresh.
+
+For Redis-originated ticket updates, validate the required fields and project the payload onto the explicit SSE contract (`eventId`, `type`, `ticketId`) before delivery. Strip unknown fields rather than rejecting an otherwise valid ticket or queue event.
+
+**Why:** A broker payload may contain private or internal data beyond the public event contract; projecting known fields prevents accidental exposure without blocking valid updates.
+
+**How to apply:** When adding a ticket SSE field, update the public type and Redis-to-SSE projection together. Never forward a parsed Redis payload object verbatim.

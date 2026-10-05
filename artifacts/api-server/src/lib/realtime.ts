@@ -200,7 +200,13 @@ export function initSeatUpdateSubscriber(): void {
         ) {
           return;
         }
-        emitSupportTicketUpdate(envelope.tenantId, payload);
+        // Redis payloads can carry fields outside the public SSE contract; never relay them.
+        const safePayload: SupportTicketUpdatePayload = {
+          eventId: payload.eventId,
+          type: payload.type,
+          ticketId: payload.type === "ticket" ? payload.ticketId : null,
+        };
+        emitSupportTicketUpdate(envelope.tenantId, safePayload);
       } catch (err) {
         logger.warn({ err }, "[support-ticket-sse] Ignoring malformed Redis update");
       }

@@ -899,6 +899,19 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         type: "queues",
         ticketId: null,
       };
+      const sanitizedTicketEvent: TicketUpdatePayload = {
+        eventId: "ticket-event-extra-data-redacted",
+        type: "ticket",
+        ticketId: "ticket-redis-sensitive-extra",
+      };
+      const ticketEventWithSensitiveExtra = {
+        ...sanitizedTicketEvent,
+        customerEmail: "must-not-be-forwarded@example.test",
+      };
+      const queuesEventWithUnexpectedExtra = {
+        ...queuesEvent,
+        internalQueueMetadata: "must-not-be-forwarded",
+      };
       const seatEvent = {
         tripId: "trip-after-malformed-ticket-events",
         seats: [{ number: "A1", status: "reserved" }],
@@ -964,22 +977,26 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
 
       expect(await publisher.publish("support-ticket-updates", JSON.stringify({
         tenantId: matchingTenantId,
+        payload: ticketEventWithSensitiveExtra,
+      }))).toBe(2);
+      expect(await publisher.publish("support-ticket-updates", JSON.stringify({
+        tenantId: matchingTenantId,
         payload: ticketEvent,
       }))).toBe(2);
       expect(await publisher.publish("support-ticket-updates", JSON.stringify({
         tenantId: matchingTenantId,
-        payload: queuesEvent,
+        payload: queuesEventWithUnexpectedExtra,
       }))).toBe(2);
 
       const matchingStreams = streams.filter((stream) => stream.tenantId === matchingTenantId);
       const otherTenantStreams = streams.filter((stream) => stream.tenantId === otherTenantId);
       await waitUntil(
-        () => matchingStreams.every((stream) => stream.updates.length === 2),
-        "ticket and queue events to reach both matching tenant streams",
+        () => matchingStreams.every((stream) => stream.updates.length === 3),
+        "sanitized ticket, ticket, and queue events to reach both matching tenant streams",
       );
       await sleep(100);
       for (const stream of matchingStreams) {
-        expect(stream.updates).toEqual([ticketEvent, queuesEvent]);
+        expect(stream.updates).toEqual([sanitizedTicketEvent, ticketEvent, queuesEvent]);
       }
       for (const stream of otherTenantStreams) {
         expect(stream.updates).toHaveLength(0);
