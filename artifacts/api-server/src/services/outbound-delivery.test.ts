@@ -10,6 +10,7 @@ const {
   mockSendTenantWhatsAppMessage,
   mockReconcileTenantWhatsAppMessage,
   mockGetOutboundDeliveryQueue,
+  mockLoggerWarn,
   mockAnd,
   mockEq,
 } = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const {
   mockSendTenantWhatsAppMessage: vi.fn(),
   mockReconcileTenantWhatsAppMessage: vi.fn(),
   mockGetOutboundDeliveryQueue: vi.fn(() => null),
+  mockLoggerWarn: vi.fn(),
   mockAnd: vi.fn((...conditions: unknown[]) => ({ conditions })),
   mockEq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
 }));
@@ -112,7 +114,7 @@ vi.mock("../lib/id", () => ({
 }));
 
 vi.mock("../lib/logger", () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  logger: { info: vi.fn(), warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() },
 }));
 
 vi.mock("../lib/outbound-sse", () => ({
@@ -459,20 +461,26 @@ describe("legacy email history synchronization", () => {
   });
 
   it("does not re-send a delivery whose provider result became ambiguous after lease expiry", async () => {
-    mockDbUpdate
-      .mockReturnValueOnce(makeUpdateQuery([{
-        id: "delivery-1",
-        tenantId: "tenant-a",
-        outboundMessageId: "message-1",
-        attempts: 1,
-      }]))
-      .mockReturnValueOnce(makeUpdateQuery())
-      .mockReturnValueOnce(makeUpdateQuery());
+    const staleDelivery = {
+      id: "delivery-1",
+      tenantId: "tenant-a",
+      outboundMessageId: "message-1",
+      attempts: 1,
+    };
     mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([staleDelivery]))
       .mockReturnValueOnce(makeSelectQuery([{ status: "unknown" }]))
       .mockReturnValueOnce(makeSelectQuery([]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([staleDelivery]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
 
-    await expect(recoverOutboundDeliveries()).resolves.toEqual({ recovered: 1, enqueued: 0 });
+    await expect(recoverOutboundDeliveries()).resolves.toEqual({
+      recovered: 1,
+      enqueued: 0,
+      inlineAttempted: 0,
+    });
 
     expect(mockSendReminderHtmlEmail).not.toHaveBeenCalled();
     expect(mockUpdateSets[0]).toEqual(expect.objectContaining({
@@ -484,6 +492,128 @@ describe("legacy email history synchronization", () => {
       status: "unknown",
       error: "delivery_result_unknown",
     }));
+  });
+
+  it("recovers pending WhatsApp deliveries inline when Redis rejects queue writes at its daily limit", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      content: "private message body",
+    });
+    const processing = makeDelivery({ ...delivery, status: "processing", attempts: 2 });
+    const accepted = makeDelivery({
+      ...delivery,
+      status: "accepted",
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    });
+    const add = vi.fn().mockRejectedValue(new Error("max daily request limit"));
+    mockGetOutboundDeliveryQueue.mockReturnValueOnce({ add } as never);
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([]))
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        origin: "user",
+        recipientType: "client",
+        recipientId: "client-1",
+        emailAddress: null,
+        metadata: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        whatsappOptIn: true,
+        whatsapp: delivery.recipient,
+        phone: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([processing]))
+      .mockReturnValueOnce(makeUpdateQuery([accepted]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
+    mockDbInsert.mockReturnValue({ values: vi.fn().mockResolvedValue([]) });
+    mockSendTenantWhatsAppMessage.mockResolvedValue({
+      success: true,
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    });
+
+    await expect(recoverOutboundDeliveries()).resolves.toEqual({
+      recovered: 0,
+      enqueued: 0,
+      inlineAttempted: 1,
+    });
+
+    expect(add).toHaveBeenCalledOnce();
+    expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledOnce();
+    expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledWith(
+      "tenant-a",
+      delivery.recipient,
+      delivery.content,
+    );
+    expect(mockLoggerWarn.mock.calls).toContainEqual([
+      { tenantId: "tenant-a", deliveryId: "delivery-1" },
+      expect.stringContaining("Queue add failed"),
+    ]);
+    const serializedWarnings = JSON.stringify(mockLoggerWarn.mock.calls);
+    expect(serializedWarnings).not.toContain(delivery.recipient);
+    expect(serializedWarnings).not.toContain(delivery.content);
+  });
+
+  it("uses the database delivery claim when Redis scheduler leases are unavailable", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+    });
+    const processing = makeDelivery({ ...delivery, status: "processing", attempts: 2 });
+    const accepted = makeDelivery({
+      ...delivery,
+      status: "accepted",
+      provider: "evolution",
+      externalId: "evolution-message-2",
+    });
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([]))
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        origin: "user",
+        recipientType: "client",
+        recipientId: "client-1",
+        emailAddress: null,
+        metadata: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        whatsappOptIn: true,
+        whatsapp: delivery.recipient,
+        phone: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([processing]))
+      .mockReturnValueOnce(makeUpdateQuery([accepted]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
+    mockDbInsert.mockReturnValue({ values: vi.fn().mockResolvedValue([]) });
+    mockSendTenantWhatsAppMessage.mockResolvedValue({
+      success: true,
+      provider: "evolution",
+      externalId: "evolution-message-2",
+    });
+
+    await expect(recoverOutboundDeliveries({ databaseFallback: true })).resolves.toEqual({
+      recovered: 0,
+      enqueued: 0,
+      inlineAttempted: 1,
+    });
+
+    expect(mockGetOutboundDeliveryQueue).not.toHaveBeenCalled();
+    expect(mockDbUpdate).toHaveBeenCalled();
+    expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledOnce();
+    expect(mockAnd).toHaveBeenCalledWith(
+      { column: "outbound_deliveries.status", value: "pending" },
+      expect.anything(),
+      { column: "outbound_deliveries.channel", value: "whatsapp" },
+    );
   });
 
   it("keeps a late provider failure unknown instead of opening an automatic retry", async () => {
@@ -905,7 +1035,7 @@ describe("manual WhatsApp queue fallback", () => {
 
     await expect(enqueueOutboundDelivery("delivery-1", "tenant-a", {
       inlineOnQueueFailure: true,
-    })).resolves.toBeUndefined();
+    })).resolves.toBe("inline");
 
     expect(add).toHaveBeenCalledOnce();
     expect(mockUpdateSets[0]).toEqual(expect.objectContaining({ status: "processing" }));
@@ -934,10 +1064,62 @@ describe("manual WhatsApp queue fallback", () => {
 
     await expect(enqueueOutboundDelivery("delivery-1", "tenant-a", {
       inlineOnQueueFailure: true,
-    })).resolves.toBeUndefined();
+    })).resolves.toBe("inline");
 
     expect(mockDbUpdate).toHaveBeenCalledOnce();
     expect(mockSendTenantWhatsAppMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows only one of two concurrent database claims to send a WhatsApp delivery", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "processing",
+      attempts: 2,
+    });
+    const accepted = makeDelivery({
+      ...delivery,
+      status: "accepted",
+      provider: "evolution",
+      externalId: "evolution-message-concurrent",
+    });
+    let updateCall = 0;
+    mockDbUpdate.mockImplementation(() => {
+      updateCall++;
+      if (updateCall === 1) return makeUpdateQuery([delivery]);
+      if (updateCall === 2) return makeUpdateQuery([]);
+      if (updateCall === 3) return makeUpdateQuery([accepted]);
+      return makeUpdateQuery();
+    });
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([{
+        origin: "user",
+        recipientType: "client",
+        recipientId: "client-1",
+        emailAddress: null,
+        metadata: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        whatsappOptIn: true,
+        whatsapp: delivery.recipient,
+        phone: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockDbInsert.mockReturnValue({ values: vi.fn().mockResolvedValue([]) });
+    mockSendTenantWhatsAppMessage.mockResolvedValue({
+      success: true,
+      provider: "evolution",
+      externalId: "evolution-message-concurrent",
+    });
+
+    const results = await Promise.all([
+      processOutboundDelivery("delivery-1", "tenant-a"),
+      processOutboundDelivery("delivery-1", "tenant-a"),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(mockDbUpdate).toHaveBeenCalledTimes(5);
+    expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledOnce();
   });
 
   it("does not use inline fallback for deliveries without explicit opt-in", async () => {

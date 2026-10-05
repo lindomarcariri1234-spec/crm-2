@@ -81,4 +81,74 @@ describe("runScheduledJob", () => {
       process.env.NODE_ENV = previous;
     }
   });
+
+  it("runs the database-coordinated fallback when Redis rejects a lease at its daily limit", async () => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    const redis: SchedulerRedis = {
+      status: "ready",
+      set: vi.fn().mockRejectedValue(new Error("max daily request limit")),
+      eval: vi.fn(),
+    };
+    const task = vi.fn();
+    const databaseFallbackTask = vi.fn();
+
+    try {
+      await runScheduledJob("outbound-delivery-recovery", task, {
+        redis,
+        databaseFallbackTask,
+      });
+
+      expect(task).not.toHaveBeenCalled();
+      expect(databaseFallbackTask).toHaveBeenCalledOnce();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobName: "outbound-delivery-recovery",
+          mode: "database-claim-fallback",
+        }),
+        expect.stringContaining("database-coordinated fallback"),
+      );
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+  });
+
+  it("runs the opted-in database fallback when Redis is unavailable in production", async () => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    const task = vi.fn();
+    const databaseFallbackTask = vi.fn();
+
+    try {
+      await runScheduledJob("outbound-delivery-recovery", task, {
+        redis: null,
+        databaseFallbackTask,
+      });
+
+      expect(task).not.toHaveBeenCalled();
+      expect(databaseFallbackTask).toHaveBeenCalledOnce();
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+  });
+
+  it("does not run the database fallback when another replica owns the Redis lease", async () => {
+    const redis = new FakeRedis();
+    const lease = await RedisSchedulerLease.acquire(
+      redis,
+      "scheduler:lease:outbound-delivery-recovery",
+      60_000,
+    );
+    const task = vi.fn();
+    const databaseFallbackTask = vi.fn();
+
+    await runScheduledJob("outbound-delivery-recovery", task, {
+      redis,
+      databaseFallbackTask,
+    });
+
+    expect(task).not.toHaveBeenCalled();
+    expect(databaseFallbackTask).not.toHaveBeenCalled();
+    await lease?.release();
+  });
 });

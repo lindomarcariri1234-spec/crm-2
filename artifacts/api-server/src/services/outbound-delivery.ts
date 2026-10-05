@@ -55,6 +55,15 @@ export interface DispatchOutboundMessageOptions {
   inlineOnQueueFailure?: boolean;
 }
 
+export interface RecoverOutboundDeliveriesOptions {
+  /**
+   * Used only when the Redis scheduler lease cannot be acquired. Every replica
+   * may run this bounded sweep; processOutboundDelivery's tenant-scoped,
+   * conditional database claim is the cross-instance coordination gate.
+   */
+  databaseFallback?: boolean;
+}
+
 export interface OutboundMessageListOptions {
   status?: OutboundMessage["status"];
   channel?: OutboundDeliveryChannel;
@@ -100,6 +109,9 @@ export interface OutboundReconciliationResult {
 
 const MAX_ATTEMPTS = 3;
 const STALE_CLAIM_MS = 15 * 60 * 1000;
+const MAX_STALE_RECOVERY_BATCH = 100;
+const MAX_PENDING_RECOVERY_BATCH = 500;
+const MAX_DATABASE_FALLBACK_WHATSAPP_BATCH = 25;
 
 function clean(value: string | null | undefined): string | null {
   const result = value?.trim();
@@ -362,27 +374,35 @@ export async function dispatchOutboundMessage(
 export async function enqueueOutboundDelivery(
   deliveryId: string,
   tenantId: string,
-  options: { inlineOnQueueFailure?: boolean } = {},
-): Promise<void> {
+  options: {
+    inlineOnQueueFailure?: boolean;
+    allowInlineWhenQueueUnavailable?: boolean;
+    onQueueFailure?: () => void;
+  } = {},
+): Promise<"queued" | "inline" | "skipped"> {
   const [delivery] = await db.select({ id: outboundDeliveriesTable.id, status: outboundDeliveriesTable.status })
     .from(outboundDeliveriesTable)
     .where(and(eq(outboundDeliveriesTable.id, deliveryId), eq(outboundDeliveriesTable.tenantId, tenantId))).limit(1);
-  if (!delivery || delivery.status !== "pending") return;
+  if (!delivery || delivery.status !== "pending") return "skipped";
   const queue = getOutboundDeliveryQueue();
   if (queue) {
     try {
       await queue.add("outbound-delivery", { deliveryId, tenantId }, { jobId: `outbound-delivery:${tenantId}:${deliveryId}` });
+      return "queued";
     } catch (error) {
+      options.onQueueFailure?.();
       if (!options.inlineOnQueueFailure) throw error;
       logger.warn(
         { tenantId, deliveryId },
         "[outbound-delivery] Queue add failed; attempting inline processing through the database claim",
       );
       await processOutboundDelivery(deliveryId, tenantId);
+      return "inline";
     }
-    return;
   }
+  if (options.allowInlineWhenQueueUnavailable === false) return "skipped";
   await processOutboundDelivery(deliveryId, tenantId);
+  return "inline";
 }
 
 async function claimDelivery(deliveryId: string, tenantId: string) {
@@ -1170,41 +1190,148 @@ export async function retryUnknownOutboundDelivery(
   return { deliveryId: delivery.id, messageId: delivery.outboundMessageId, outcome: "queued" };
 }
 
-export async function recoverOutboundDeliveries(): Promise<{ recovered: number; enqueued: number }> {
+export async function recoverOutboundDeliveries(
+  options: RecoverOutboundDeliveriesOptions = {},
+): Promise<{ recovered: number; enqueued: number; inlineAttempted: number }> {
   const staleBefore = new Date(Date.now() - STALE_CLAIM_MS);
   const unknownAt = new Date();
   const unknownReason = "delivery_result_unknown";
-  const stale = await db.update(outboundDeliveriesTable).set({
-    status: "unknown", claimedAt: null, nextAttemptAt: unknownAt, lastError: unknownReason,
-  }).where(and(eq(outboundDeliveriesTable.status, "processing"), lte(outboundDeliveriesTable.claimedAt, staleBefore)))
-    .returning({
+  const staleCandidates = await db.select({
       id: outboundDeliveriesTable.id,
       tenantId: outboundDeliveriesTable.tenantId,
       outboundMessageId: outboundDeliveriesTable.outboundMessageId,
       attempts: outboundDeliveriesTable.attempts,
-    });
-  for (const delivery of stale) {
-    await db.update(outboundDeliveryAttemptsTable).set({
-      status: "unknown",
-      error: unknownReason,
-      completedAt: unknownAt,
-    }).where(and(
-      eq(outboundDeliveryAttemptsTable.tenantId, delivery.tenantId),
-      eq(outboundDeliveryAttemptsTable.deliveryId, delivery.id),
-      eq(outboundDeliveryAttemptsTable.attemptNumber, delivery.attempts),
-      or(
-        eq(outboundDeliveryAttemptsTable.status, "processing"),
-        eq(outboundDeliveryAttemptsTable.status, "unknown"),
-      ),
-    ));
-    await refreshMessageStatus(delivery.tenantId, delivery.outboundMessageId);
+    }).from(outboundDeliveriesTable)
+    .where(and(
+      eq(outboundDeliveriesTable.status, "processing"),
+      lte(outboundDeliveriesTable.claimedAt, staleBefore),
+    ))
+    .limit(MAX_STALE_RECOVERY_BATCH);
+  let recovered = 0;
+  for (const candidate of staleCandidates) {
+    try {
+      const [delivery] = await db.update(outboundDeliveriesTable).set({
+        status: "unknown", claimedAt: null, nextAttemptAt: unknownAt, lastError: unknownReason,
+      }).where(and(
+        eq(outboundDeliveriesTable.id, candidate.id),
+        eq(outboundDeliveriesTable.tenantId, candidate.tenantId),
+        eq(outboundDeliveriesTable.status, "processing"),
+        lte(outboundDeliveriesTable.claimedAt, staleBefore),
+      )).returning({
+        id: outboundDeliveriesTable.id,
+        tenantId: outboundDeliveriesTable.tenantId,
+        outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+        attempts: outboundDeliveriesTable.attempts,
+      });
+      if (!delivery) continue;
+      await db.update(outboundDeliveryAttemptsTable).set({
+        status: "unknown",
+        error: unknownReason,
+        completedAt: unknownAt,
+      }).where(and(
+        eq(outboundDeliveryAttemptsTable.tenantId, delivery.tenantId),
+        eq(outboundDeliveryAttemptsTable.deliveryId, delivery.id),
+        eq(outboundDeliveryAttemptsTable.attemptNumber, delivery.attempts),
+        or(
+          eq(outboundDeliveryAttemptsTable.status, "processing"),
+          eq(outboundDeliveryAttemptsTable.status, "unknown"),
+        ),
+      ));
+      await refreshMessageStatus(delivery.tenantId, delivery.outboundMessageId);
+      recovered++;
+    } catch (error) {
+      logger.warn({
+        tenantId: candidate.tenantId,
+        deliveryId: candidate.id,
+        errorName: error instanceof Error ? error.name : "unknown",
+      }, "[outbound-delivery] Stale-claim recovery failed; delivery remains tracked");
+    }
   }
   let enqueued = 0;
-  const pending = await db.select({ id: outboundDeliveriesTable.id, tenantId: outboundDeliveriesTable.tenantId })
-    .from(outboundDeliveriesTable).where(and(eq(outboundDeliveriesTable.status, "pending"), lte(outboundDeliveriesTable.nextAttemptAt, new Date()))).limit(500);
+  let inlineAttempted = 0;
+  let inlineWhatsAppCount = 0;
+  let queueUnavailable = false;
+  const pendingConditions = [
+    eq(outboundDeliveriesTable.status, "pending"),
+    lte(outboundDeliveriesTable.nextAttemptAt, new Date()),
+    ...(options.databaseFallback
+      ? [eq(outboundDeliveriesTable.channel, "whatsapp")]
+      : []),
+  ];
+  const pending = await db.select({
+    id: outboundDeliveriesTable.id,
+    tenantId: outboundDeliveriesTable.tenantId,
+    channel: outboundDeliveriesTable.channel,
+  })
+    .from(outboundDeliveriesTable)
+    .where(and(...pendingConditions))
+    .limit(options.databaseFallback
+      ? MAX_DATABASE_FALLBACK_WHATSAPP_BATCH
+      : MAX_PENDING_RECOVERY_BATCH);
   for (const delivery of pending) {
-    await enqueueOutboundDelivery(delivery.id, delivery.tenantId);
-    enqueued++;
+    if (options.databaseFallback) {
+      try {
+        await processOutboundDelivery(delivery.id, delivery.tenantId);
+        inlineAttempted++;
+      } catch (error) {
+        logger.warn({
+          tenantId: delivery.tenantId,
+          deliveryId: delivery.id,
+          errorName: error instanceof Error ? error.name : "unknown",
+        }, "[outbound-delivery] Database fallback attempt failed; delivery remains tracked");
+      }
+      continue;
+    }
+
+    if (queueUnavailable) {
+      if (delivery.channel !== "whatsapp" || inlineWhatsAppCount >= MAX_DATABASE_FALLBACK_WHATSAPP_BATCH) {
+        continue;
+      }
+      inlineWhatsAppCount++;
+      inlineAttempted++;
+      try {
+        await processOutboundDelivery(delivery.id, delivery.tenantId);
+      } catch (error) {
+        logger.warn({
+          tenantId: delivery.tenantId,
+          deliveryId: delivery.id,
+          errorName: error instanceof Error ? error.name : "unknown",
+        }, "[outbound-delivery] Inline recovery attempt failed; delivery remains tracked");
+      }
+      continue;
+    }
+
+    const canInlineWhatsApp =
+      delivery.channel === "whatsapp" &&
+      inlineWhatsAppCount < MAX_DATABASE_FALLBACK_WHATSAPP_BATCH;
+    let inlineBudgetReserved = false;
+    try {
+      const result = await enqueueOutboundDelivery(delivery.id, delivery.tenantId, {
+        inlineOnQueueFailure: canInlineWhatsApp,
+        allowInlineWhenQueueUnavailable:
+          delivery.channel === "whatsapp" ? canInlineWhatsApp : undefined,
+        onQueueFailure: () => {
+          queueUnavailable = true;
+          if (canInlineWhatsApp && !inlineBudgetReserved) {
+            inlineWhatsAppCount++;
+            inlineBudgetReserved = true;
+          }
+        },
+      });
+      if (result === "queued") enqueued++;
+      if (result === "inline") {
+        inlineAttempted++;
+        if (delivery.channel === "whatsapp" && !inlineBudgetReserved) {
+          inlineWhatsAppCount++;
+        }
+      }
+    } catch (error) {
+      logger.warn({
+        tenantId: delivery.tenantId,
+        deliveryId: delivery.id,
+        errorName: error instanceof Error ? error.name : "unknown",
+      }, "[outbound-delivery] Recovery dispatch failed; delivery remains tracked");
+    }
   }
-  return { recovered: stale.length, enqueued };
+  return { recovered, enqueued, inlineAttempted };
 }

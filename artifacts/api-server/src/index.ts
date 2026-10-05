@@ -371,10 +371,22 @@ void runApiStartup(process.env, {
       scheduleDistributedCron("whatsapp-outbox", "*/5 * * * *", async () => {
         await retryPendingReservationConfirmedWhatsApps();
       }, { timezone: "America/Sao_Paulo" });
-      void runScheduledJob("outbound-delivery-startup", async () => { await recoverOutboundDeliveries(); });
+      void runScheduledJob(
+        "outbound-delivery-startup",
+        async () => { await recoverOutboundDeliveries(); },
+        {
+          databaseFallbackTask: async () => {
+            await recoverOutboundDeliveries({ databaseFallback: true });
+          },
+        },
+      );
       scheduleDistributedCron("outbound-delivery-recovery", "*/5 * * * *", async () => {
         await recoverOutboundDeliveries();
-      }, { timezone: "America/Sao_Paulo" });
+      }, { timezone: "America/Sao_Paulo" }, {
+        databaseFallbackTask: async () => {
+          await recoverOutboundDeliveries({ databaseFallback: true });
+        },
+      });
 
       // ── Seat-map SSE pub/sub fan-out (non-fatal, no-op when Redis absent) ──
       initSeatUpdateSubscriber();

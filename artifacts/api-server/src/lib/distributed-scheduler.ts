@@ -30,6 +30,19 @@ export interface SchedulerLease {
   renew(): Promise<boolean>;
 }
 
+export type ScheduledTask = () => Promise<void> | void;
+
+export interface ScheduledJobDependencies {
+  redis?: SchedulerRedis | null;
+  allowDevelopmentFallback?: boolean;
+  /**
+   * A task-specific fallback for production Redis lease failures. The fallback
+   * must coordinate side effects through atomic database claims or equivalent
+   * idempotency so every replica may safely attempt it.
+   */
+  databaseFallbackTask?: ScheduledTask;
+}
+
 export class RedisSchedulerLease implements SchedulerLease {
   private released = false;
 
@@ -78,16 +91,36 @@ function isProduction(): boolean {
  */
 export async function runScheduledJob(
   jobName: string,
-  task: () => Promise<void> | void,
-  dependencies: { redis?: SchedulerRedis | null; allowDevelopmentFallback?: boolean } = {},
+  task: ScheduledTask,
+  dependencies: ScheduledJobDependencies = {},
 ): Promise<void> {
   const redis = dependencies.redis === undefined ? getRedisConnection() : dependencies.redis;
   const fallback = dependencies.allowDevelopmentFallback ?? !isProduction();
+  const runDatabaseFallback = async () => {
+    if (!dependencies.databaseFallbackTask) return;
+    logger.warn(
+      { jobName, mode: "database-claim-fallback" },
+      "[scheduler] Redis lease unavailable; running database-coordinated fallback",
+    );
+    try {
+      await dependencies.databaseFallbackTask();
+    } catch (error) {
+      logger.error(
+        {
+          jobName,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "[scheduler] Database-coordinated fallback failed",
+      );
+    }
+  };
 
   if (!redis || redis.status !== "ready") {
     if (fallback) {
       logger.warn({ jobName, mode: "single-instance-development" }, "[scheduler] Redis unavailable; running local fallback");
       await task();
+    } else if (dependencies.databaseFallbackTask) {
+      await runDatabaseFallback();
     } else {
       logger.error({ jobName, mode: "production" }, "[scheduler] Redis unavailable; scheduled execution skipped");
     }
@@ -99,8 +132,18 @@ export async function runScheduledJob(
   let lease: RedisSchedulerLease | null;
   try {
     lease = await RedisSchedulerLease.acquire(redis, key, ttlMs);
-  } catch (err) {
-    logger.error({ err, jobName }, "[scheduler] Lease acquisition failed; scheduled execution skipped");
+  } catch (error) {
+    if (dependencies.databaseFallbackTask) {
+      await runDatabaseFallback();
+    } else {
+      logger.error(
+        {
+          jobName,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "[scheduler] Lease acquisition failed; scheduled execution skipped",
+      );
+    }
     return;
   }
 
@@ -139,10 +182,11 @@ export async function runScheduledJob(
 export function scheduleDistributedCron(
   jobName: string,
   expression: string,
-  task: () => Promise<void> | void,
+  task: ScheduledTask,
   options: TaskOptions = {},
+  dependencies: Pick<ScheduledJobDependencies, "databaseFallbackTask"> = {},
 ) {
-  return cron.schedule(expression, () => runScheduledJob(jobName, task), {
+  return cron.schedule(expression, () => runScheduledJob(jobName, task, dependencies), {
     ...options,
     noOverlap: true,
   });
