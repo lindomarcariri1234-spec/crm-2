@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import { useLayoutEffect, useRef, type FormEvent } from "react";
 import { MessageSquare, Send } from "lucide-react";
 import type { AiConversationMessage } from "@/lib/communicationTimeline";
 import type { ClientConversationSummary, CommunicationTimelineEntry } from "@/lib/communicationTimeline";
@@ -246,6 +246,28 @@ export function ConversationsTab({
   handleSendInbox,
   sendingMessage,
 }: ConversationsTabProps) {
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const previousClientIdRef = useRef(selectedClientId);
+  const followLatestMessageRef = useRef(true);
+
+  useLayoutEffect(() => {
+    if (previousClientIdRef.current !== selectedClientId) {
+      previousClientIdRef.current = selectedClientId;
+      followLatestMessageRef.current = true;
+    }
+    const timeline = timelineRef.current;
+    if (timeline && followLatestMessageRef.current) {
+      timeline.scrollTop = timeline.scrollHeight;
+    }
+  }, [conversationMessages, selectedClientId]);
+
+  const handleTimelineScroll = () => {
+    const timeline = timelineRef.current;
+    if (!timeline) return;
+    followLatestMessageRef.current =
+      timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= 48;
+  };
+
   return (
     <>
       <p className="mb-3 text-xs text-muted-foreground">
@@ -318,7 +340,12 @@ export function ConversationsTab({
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                <div
+                  className="flex-1 overflow-y-auto p-3 space-y-2"
+                  data-testid="client-conversation-timeline"
+                  onScroll={handleTimelineScroll}
+                  ref={timelineRef}
+                >
                   {loadingConversationAiMessages && (
                     <p className="text-xs text-muted-foreground" role="status">Carregando mensagens recebidas…</p>
                   )}
