@@ -134,6 +134,11 @@ function SupportTicketRow({
               {statusCopy[ticket.status] ?? ticket.status}
             </span>
             <span className="rounded-full bg-[#f0eee8] px-2 py-0.5 text-[10px] text-[#706d63]">{ticket.queueName || "Sem fila"}</span>
+            {ticket.whatsappConnectionName ? (
+              <span className="rounded-full bg-[#e7f0ed] px-2 py-0.5 text-[10px] text-[#34665d]">
+                {ticket.whatsappConnectionName}
+              </span>
+            ) : null}
             {ticket.assignedUserName ? (
               <span className="flex items-center gap-1 text-[10px] text-[#79756b]">
                 <UserRound className="h-3 w-3" />{ticket.assignedUserName.split(" ")[0]}

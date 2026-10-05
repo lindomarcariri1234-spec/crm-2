@@ -91,9 +91,12 @@ export async function sendTenantWhatsAppMessage(
   tenantId: string,
   phone: string,
   message: string,
+  route: { integrationId?: string | null; requireEvolution?: boolean } = {},
 ): Promise<WhatsAppSendResult> {
-  // Look up tenant's Evolution API integration
-  const [integration] = await db
+  // Each ticket reply supplies the stored conversation connection. General
+  // messages use the tenant's explicit default; ambiguous connections never
+  // fall through to an unrelated sender.
+  const integrations = await db
     .select()
     .from(tenantIntegrationsTable)
     .where(
@@ -102,7 +105,18 @@ export async function sendTenantWhatsAppMessage(
         eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
       ),
     )
-    .limit(1);
+    .limit(100);
+  let integration = route.integrationId
+    ? integrations.find((row) => row.id === route.integrationId)
+    : integrations.find((row) => row.isDefault)
+      ?? (integrations.length === 1 ? integrations[0] : undefined);
+
+  if (!integration && route.requireEvolution) {
+    return { success: false, error: "whatsapp_connection_unavailable", provider: "evolution" };
+  }
+  if (integrations.length > 1 && !integration) {
+    return { success: false, error: "whatsapp_connection_ambiguous", provider: "evolution" };
+  }
 
   if (integration?.enabled && integration.status === "connected" && integration.secretsEncrypted) {
     try {
@@ -180,7 +194,14 @@ export async function sendTenantWhatsAppMessage(
         { phone, tenantId, providerError: safeErrorLogFields(err) },
         "[whatsapp] Evolution API configuration unavailable, falling back",
       );
+      if (route.requireEvolution) {
+        return { success: false, error: msg, provider: "evolution" };
+      }
     }
+  }
+
+  if (route.requireEvolution) {
+    return { success: false, error: "whatsapp_connection_unavailable", provider: "evolution" };
   }
 
   // Fall back to global Z-API credentials
@@ -220,6 +241,7 @@ export async function reconcileTenantWhatsAppMessage(
   provider: string,
   externalId: string,
   phone: string | null,
+  integrationId?: string,
 ): Promise<WhatsAppReconciliationResult> {
   const normalizedExternalId = externalId.trim();
   if (!normalizedExternalId) {
@@ -251,14 +273,13 @@ export async function reconcileTenantWhatsAppMessage(
     };
   }
 
-  const [integration] = await db
-    .select()
-    .from(tenantIntegrationsTable)
-    .where(and(
-      eq(tenantIntegrationsTable.tenantId, tenantId),
-      eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
-    ))
-    .limit(1);
+  const [integration] = await db.select().from(tenantIntegrationsTable).where(and(
+    eq(tenantIntegrationsTable.tenantId, tenantId),
+    eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+    ...(integrationId
+      ? [eq(tenantIntegrationsTable.id, integrationId)]
+      : [eq(tenantIntegrationsTable.isDefault, true)]),
+  )).limit(1);
 
   if (!integration?.enabled || integration.status !== "connected" || !integration.secretsEncrypted) {
     return {

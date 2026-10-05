@@ -46,6 +46,13 @@ vi.mock("@workspace/db", () => ({
     status: "chatbot_conversations.status",
     clientId: "chatbot_conversations.client_id",
     sessionId: "chatbot_conversations.session_id",
+    whatsappIntegrationId: "chatbot_conversations.whatsapp_integration_id",
+  },
+  tenantIntegrationsTable: {
+    id: "tenant_integrations.id",
+    tenantId: "tenant_integrations.tenant_id",
+    type: "tenant_integrations.type",
+    isDefault: "tenant_integrations.is_default",
   },
   tenantsTable: {},
   usersTable: {},
@@ -136,7 +143,8 @@ import {
 function makeSelectQuery(result: unknown[]) {
   const limit = vi.fn().mockResolvedValue(result);
   const where = vi.fn(() => Object.assign(Promise.resolve(result), { limit }));
-  const from = vi.fn(() => ({ where }));
+  const query = { where, leftJoin: vi.fn(() => query) };
+  const from = vi.fn(() => query);
   return { from };
 }
 
@@ -198,6 +206,8 @@ beforeEach(() => {
   mockUpdateSets.length = 0;
   mockAuditValues.mockResolvedValue([]);
   mockDbInsert.mockReturnValue({ values: mockAuditValues });
+  mockDbSelect.mockReturnValue(makeSelectQuery([]));
+  mockDbUpdate.mockReturnValue(makeUpdateQuery());
 });
 
 describe("multichannel rendering", () => {
@@ -550,6 +560,7 @@ describe("legacy email history synchronization", () => {
       "tenant-a",
       delivery.recipient,
       delivery.content,
+      { integrationId: undefined, requireEvolution: false },
     );
     expect(mockLoggerWarn.mock.calls).toContainEqual([
       { tenantId: "tenant-a", deliveryId: "delivery-1" },
@@ -1043,6 +1054,7 @@ describe("manual WhatsApp queue fallback", () => {
       "tenant-a",
       delivery.recipient,
       delivery.content,
+      { integrationId: undefined, requireEvolution: false },
     );
     expect(mockUpdateSets).toContainEqual(expect.objectContaining({
       status: "accepted",
@@ -1118,7 +1130,7 @@ describe("manual WhatsApp queue fallback", () => {
     ]);
 
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(mockDbUpdate).toHaveBeenCalledTimes(5);
+    expect(mockDbUpdate).toHaveBeenCalledTimes(4);
     expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledOnce();
   });
 

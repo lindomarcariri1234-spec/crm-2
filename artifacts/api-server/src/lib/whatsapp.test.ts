@@ -17,8 +17,10 @@ const {
 vi.mock("@workspace/db", () => ({
   db: { select: mockDbSelect },
   tenantIntegrationsTable: {
+    id: "tenant_integrations.id",
     tenantId: "tenant_integrations.tenant_id",
     type: "tenant_integrations.type",
+    isDefault: "tenant_integrations.is_default",
   },
 }));
 
@@ -49,6 +51,8 @@ function makeSelectQuery(rows: unknown[]) {
 }
 
 const evolutionIntegration = {
+  id: "integration-default",
+  isDefault: true,
   enabled: true,
   status: "connected",
   secretsEncrypted: "encrypted",
@@ -94,6 +98,69 @@ describe("WhatsApp transport contracts", () => {
         body: JSON.stringify({ number: "5511999990001", text: "Olá" }),
       }),
     );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("uses the selected connection for a support reply instead of the tenant default", async () => {
+    const defaultConnection = {
+      ...evolutionIntegration,
+      config: { ...evolutionIntegration.config, instanceName: "default-instance" },
+    };
+    const receivingConnection = {
+      ...evolutionIntegration,
+      id: "integration-received",
+      isDefault: false,
+      config: { ...evolutionIntegration.config, instanceName: "received-on-this-instance" },
+    };
+    mockDbSelect.mockReturnValue(makeSelectQuery([defaultConnection, receivingConnection]));
+    mockSafeFetch.mockResolvedValue({ ok: true, status: 201, text: "{}" });
+
+    await expect(sendTenantWhatsAppMessage(
+      "tenant-a",
+      "+5511999990001",
+      "Resposta",
+      { integrationId: "integration-received", requireEvolution: true },
+    )).resolves.toMatchObject({ success: true, provider: "evolution" });
+
+    expect(mockSafeFetch).toHaveBeenCalledWith(
+      "https://evolution.example.com/message/sendText/received-on-this-instance",
+      expect.any(Object),
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not substitute a different Evolution number when the saved connection is unavailable", async () => {
+    mockDbSelect.mockReturnValue(makeSelectQuery([evolutionIntegration]));
+
+    await expect(sendTenantWhatsAppMessage(
+      "tenant-a",
+      "+5511999990001",
+      "Resposta",
+      { integrationId: "revoked-connection", requireEvolution: true },
+    )).resolves.toEqual({
+      success: false,
+      error: "whatsapp_connection_unavailable",
+      provider: "evolution",
+    });
+
+    expect(mockSafeFetch).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not guess a sender when multiple connections have no default", async () => {
+    mockDbSelect.mockReturnValue(makeSelectQuery([
+      { ...evolutionIntegration, isDefault: false },
+      { ...evolutionIntegration, id: "integration-2", isDefault: false },
+    ]));
+
+    await expect(sendTenantWhatsAppMessage("tenant-a", "+5511999990001", "Olá"))
+      .resolves.toEqual({
+        success: false,
+        error: "whatsapp_connection_ambiguous",
+        provider: "evolution",
+      });
+
+    expect(mockSafeFetch).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

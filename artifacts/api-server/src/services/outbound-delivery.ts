@@ -10,6 +10,7 @@ import {
   outboundDeliveriesTable,
   outboundDeliveryAttemptsTable,
   outboundMessagesTable,
+  tenantIntegrationsTable,
   type OutboundDelivery,
   type OutboundDeliveryChannel,
   type OutboundBounceType,
@@ -419,7 +420,11 @@ async function claimDelivery(deliveryId: string, tenantId: string) {
   return delivery;
 }
 
-async function getWhatsAppBlockReason(tenantId: string, delivery: OutboundDelivery): Promise<string | null> {
+async function getWhatsAppBlockReason(
+  tenantId: string,
+  delivery: OutboundDelivery,
+): Promise<{ reason: string | null; integrationId?: string; requireEvolution: boolean }> {
+  const blocked = (reason: string) => ({ reason, requireEvolution: false });
   const [message] = await db.select({
     origin: outboundMessagesTable.origin,
     recipientType: outboundMessagesTable.recipientType,
@@ -432,10 +437,10 @@ async function getWhatsAppBlockReason(tenantId: string, delivery: OutboundDelive
       eq(outboundMessagesTable.tenantId, tenantId),
     ))
     .limit(1);
-  if (!message) return "outbound_message_unavailable";
+  if (!message) return blocked("outbound_message_unavailable");
 
   if (message.recipientType === "client") {
-    if (!message.recipientId) return "whatsapp_recipient_unavailable";
+    if (!message.recipientId) return blocked("whatsapp_recipient_unavailable");
     const [client] = await db.select({
       whatsappOptIn: clientsTable.whatsappOptIn,
       whatsapp: clientsTable.whatsapp,
@@ -447,12 +452,12 @@ async function getWhatsAppBlockReason(tenantId: string, delivery: OutboundDelive
         eq(clientsTable.tenantId, tenantId),
       ))
       .limit(1);
-    if (!client) return "whatsapp_recipient_unavailable";
-    if (client.whatsappOptIn === false) return "whatsapp_opted_out";
+    if (!client) return blocked("whatsapp_recipient_unavailable");
+    if (client.whatsappOptIn === false) return blocked("whatsapp_opted_out");
     const currentPhone = normalizeBrazilPhone(clean(client.whatsapp) ?? clean(client.phone) ?? "");
     const queuedPhone = normalizeBrazilPhone(delivery.recipient ?? "");
-    if (!currentPhone) return "whatsapp_recipient_unavailable";
-    if (!queuedPhone || currentPhone !== queuedPhone) return "whatsapp_recipient_changed";
+    if (!currentPhone) return blocked("whatsapp_recipient_unavailable");
+    if (!queuedPhone || currentPhone !== queuedPhone) return blocked("whatsapp_recipient_changed");
   }
 
   if (message.recipientType === "direct" && message.emailAddress) {
@@ -463,30 +468,31 @@ async function getWhatsAppBlockReason(tenantId: string, delivery: OutboundDelive
         sql`lower(${clientsTable.email}) = lower(${message.emailAddress})`,
       ))
       .limit(1);
-    if (client?.whatsappOptIn === false) return "whatsapp_opted_out";
+    if (client?.whatsappOptIn === false) return blocked("whatsapp_opted_out");
   }
 
   if (message.origin === "whatsapp-attendance") {
     const conversationId = typeof message.metadata?.conversationId === "string"
       ? message.metadata.conversationId
       : null;
-    if (!conversationId) return "whatsapp_conversation_unavailable";
+    if (!conversationId) return blocked("whatsapp_conversation_unavailable");
     const [conversation] = await db.select({
       status: chatbotConversationsTable.status,
       clientId: chatbotConversationsTable.clientId,
       sessionId: chatbotConversationsTable.sessionId,
+      whatsappIntegrationId: chatbotConversationsTable.whatsappIntegrationId,
     }).from(chatbotConversationsTable)
       .where(and(
         eq(chatbotConversationsTable.id, conversationId),
         eq(chatbotConversationsTable.tenantId, tenantId),
       ))
       .limit(1);
-    if (!conversation?.sessionId) return "whatsapp_conversation_unavailable";
-    if (conversation.status === "opted_out") return "whatsapp_opted_out";
+    if (!conversation?.sessionId) return blocked("whatsapp_conversation_unavailable");
+    if (conversation.status === "opted_out") return blocked("whatsapp_opted_out");
     const currentPhone = normalizeBrazilPhone(conversation.sessionId);
     const queuedPhone = normalizeBrazilPhone(delivery.recipient ?? "");
-    if (!currentPhone || !queuedPhone) return "whatsapp_conversation_unavailable";
-    if (currentPhone !== queuedPhone) return "whatsapp_recipient_changed";
+    if (!currentPhone || !queuedPhone) return blocked("whatsapp_conversation_unavailable");
+    if (currentPhone !== queuedPhone) return blocked("whatsapp_recipient_changed");
     if (conversation.clientId) {
       const [client] = await db.select({ whatsappOptIn: clientsTable.whatsappOptIn })
         .from(clientsTable)
@@ -495,12 +501,88 @@ async function getWhatsAppBlockReason(tenantId: string, delivery: OutboundDelive
           eq(clientsTable.tenantId, tenantId),
         ))
         .limit(1);
-      if (!client) return "whatsapp_recipient_unavailable";
-      if (client.whatsappOptIn === false) return "whatsapp_opted_out";
+      if (!client) return blocked("whatsapp_recipient_unavailable");
+      if (client.whatsappOptIn === false) return blocked("whatsapp_opted_out");
     }
+    let integrationId = conversation.whatsappIntegrationId ?? undefined;
+    if (!integrationId) {
+      // Pre-migration conversations belonged to the only permitted connection.
+      // Their original connection was retained as the tenant default by migration.
+      const [defaultIntegration] = await db.select({ id: tenantIntegrationsTable.id })
+        .from(tenantIntegrationsTable)
+        .where(and(
+          eq(tenantIntegrationsTable.tenantId, tenantId),
+          eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+          eq(tenantIntegrationsTable.isDefault, true),
+        ))
+        .limit(1);
+      integrationId = defaultIntegration?.id;
+    }
+    return { reason: null, integrationId, requireEvolution: true };
   }
 
-  return null;
+  const [defaultIntegration] = await db.select({ id: tenantIntegrationsTable.id })
+    .from(tenantIntegrationsTable)
+    .where(and(
+      eq(tenantIntegrationsTable.tenantId, tenantId),
+      eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+      eq(tenantIntegrationsTable.isDefault, true),
+    ))
+    .limit(1);
+  if (defaultIntegration) {
+    return { reason: null, integrationId: defaultIntegration.id, requireEvolution: false };
+  }
+  const availableIntegrations = await db.select({ id: tenantIntegrationsTable.id })
+    .from(tenantIntegrationsTable)
+    .where(and(
+      eq(tenantIntegrationsTable.tenantId, tenantId),
+      eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+    ))
+    .limit(2);
+  return {
+    reason: null,
+    integrationId: availableIntegrations.length === 1 ? availableIntegrations[0]?.id : undefined,
+    requireEvolution: false,
+  };
+}
+
+async function getWhatsAppIntegrationIdForMessage(
+  tenantId: string,
+  outboundMessageId: string,
+): Promise<string | undefined> {
+  const [message] = await db.select({
+    origin: outboundMessagesTable.origin,
+    metadata: outboundMessagesTable.metadata,
+  }).from(outboundMessagesTable).where(and(
+    eq(outboundMessagesTable.id, outboundMessageId),
+    eq(outboundMessagesTable.tenantId, tenantId),
+  )).limit(1);
+  const storedId = typeof message?.metadata?.whatsappIntegrationId === "string"
+    ? message.metadata.whatsappIntegrationId
+    : undefined;
+  if (storedId) return storedId;
+
+  const conversationId = message?.origin === "whatsapp-attendance"
+    && typeof message.metadata?.conversationId === "string"
+    ? message.metadata.conversationId
+    : null;
+  if (conversationId) {
+    const [conversation] = await db.select({
+      whatsappIntegrationId: chatbotConversationsTable.whatsappIntegrationId,
+    }).from(chatbotConversationsTable).where(and(
+      eq(chatbotConversationsTable.id, conversationId),
+      eq(chatbotConversationsTable.tenantId, tenantId),
+    )).limit(1);
+    if (conversation?.whatsappIntegrationId) return conversation.whatsappIntegrationId;
+  }
+
+  const [defaultIntegration] = await db.select({ id: tenantIntegrationsTable.id })
+    .from(tenantIntegrationsTable).where(and(
+      eq(tenantIntegrationsTable.tenantId, tenantId),
+      eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+      eq(tenantIntegrationsTable.isDefault, true),
+    )).limit(1);
+  return defaultIntegration?.id;
 }
 
 function isPermanentSkip(channel: OutboundDeliveryChannel, error: string) {
@@ -553,6 +635,7 @@ export type OutboundProviderDeliveryStatus = "accepted" | "failed";
 export interface OutboundDeliveryWebhookUpdate {
   tenantId: string;
   provider: string;
+  integrationId?: string;
   externalId: string;
   status: OutboundProviderDeliveryStatus;
   providerStatus?: string | null;
@@ -597,7 +680,7 @@ export async function updateOutboundDeliveryFromWebhook(
   const externalId = update.externalId.trim();
   if (!externalId) return { updated: false };
 
-  const [delivery] = await db
+  const selection = db
     .select({
       id: outboundDeliveriesTable.id,
       outboundMessageId: outboundDeliveriesTable.outboundMessageId,
@@ -608,10 +691,31 @@ export async function updateOutboundDeliveryFromWebhook(
       skippedReason: outboundDeliveriesTable.skippedReason,
     })
     .from(outboundDeliveriesTable)
-    .where(and(
+    .leftJoin(outboundMessagesTable, and(
+      eq(outboundMessagesTable.id, outboundDeliveriesTable.outboundMessageId),
+      eq(outboundMessagesTable.tenantId, update.tenantId),
+    ));
+  const connectionFilter = update.integrationId
+    ? sql`(
+        ${outboundMessagesTable.metadata}->>'whatsappIntegrationId' = ${update.integrationId}
+        OR (
+          ${outboundMessagesTable.metadata}->>'whatsappIntegrationId' IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM tenant_integrations legacy_connection
+            WHERE legacy_connection.id = ${update.integrationId}
+              AND legacy_connection.tenant_id = ${update.tenantId}
+              AND legacy_connection.type = 'whatsapp_evolution'
+              AND legacy_connection.is_default = true
+          )
+        )
+      )`
+    : undefined;
+  const [delivery] = await selection.where(and(
       eq(outboundDeliveriesTable.tenantId, update.tenantId),
       eq(outboundDeliveriesTable.externalId, externalId),
       eq(outboundDeliveriesTable.provider, update.provider),
+      ...(connectionFilter ? [connectionFilter] : []),
     ))
     .limit(1);
   if (!delivery) return { updated: false };
@@ -690,9 +794,10 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
   let error: string | null = null;
   let outcomeUnknown = false;
   try {
-    const whatsappBlockReason = delivery.channel === "whatsapp"
+    const whatsappRoute = delivery.channel === "whatsapp"
       ? await getWhatsAppBlockReason(tenantId, delivery)
       : null;
+    const whatsappBlockReason = whatsappRoute?.reason ?? null;
     if (whatsappBlockReason) {
       const [updated] = await db.update(outboundDeliveriesTable).set({
         status: "skipped",
@@ -736,7 +841,23 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
       provider = "resend";
       error = result.error ?? null;
     } else {
-      const result = await sendTenantWhatsAppMessage(tenantId, delivery.recipient, delivery.content);
+      if (whatsappRoute?.integrationId) {
+        await db.update(outboundMessagesTable).set({
+          metadata: sql`COALESCE(${outboundMessagesTable.metadata}, '{}'::jsonb) || jsonb_build_object('whatsappIntegrationId', ${whatsappRoute.integrationId})`,
+        }).where(and(
+          eq(outboundMessagesTable.id, delivery.outboundMessageId),
+          eq(outboundMessagesTable.tenantId, tenantId),
+        ));
+      }
+      const result = await sendTenantWhatsAppMessage(
+        tenantId,
+        delivery.recipient,
+        delivery.content,
+        {
+          integrationId: whatsappRoute?.integrationId,
+          requireEvolution: whatsappRoute?.requireEvolution,
+        },
+      );
       success = result.success;
       externalId = result.externalId ?? null;
       provider = result.provider ?? "whatsapp";
@@ -1046,8 +1167,17 @@ export async function reconcileOutboundDelivery(
   context: OutboundReconciliationContext,
 ): Promise<OutboundReconciliationResult> {
   const delivery = await getUnknownDeliveryForReconciliation(tenantId, deliveryId);
+  const integrationId = delivery.provider === "evolution"
+    ? await getWhatsAppIntegrationIdForMessage(tenantId, delivery.outboundMessageId)
+    : undefined;
   const result = delivery.provider && delivery.externalId
-    ? await reconcileTenantWhatsAppMessage(tenantId, delivery.provider, delivery.externalId, delivery.recipient)
+    ? await reconcileTenantWhatsAppMessage(
+      tenantId,
+      delivery.provider,
+      delivery.externalId,
+      delivery.recipient,
+      integrationId,
+    )
     : {
       outcome: "inconclusive" as const,
       provider: delivery.provider === "evolution" || delivery.provider === "z-api" ? delivery.provider : "whatsapp" as const,

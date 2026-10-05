@@ -12141,6 +12141,7 @@ components:
             clientName: { type: [string, "null"] }
             clientPhone: { type: [string, "null"] }
             channel: { type: string }
+            whatsappConnectionName: { type: [string, "null"] }
             queueName: { type: [string, "null"] }
             assignedUserName: { type: [string, "null"] }
             lastMessageContent: { type: [string, "null"] }
@@ -12149,6 +12150,7 @@ components:
             - clientName
             - clientPhone
             - channel
+            - whatsappConnectionName
             - queueName
             - assignedUserName
             - lastMessageContent

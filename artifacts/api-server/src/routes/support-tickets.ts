@@ -8,6 +8,7 @@ import {
   supportQuickRepliesTable,
   supportTicketEventsTable,
   supportTicketsTable,
+  tenantIntegrationsTable,
   usersTable,
 } from "@workspace/db";
 import { ALL_STAFF_ROLES, MANAGEMENT_ROLES } from "@workspace/permissions";
@@ -108,6 +109,7 @@ function ticketListQuery(tenantId: string) {
     clientName: clientsTable.name,
     clientPhone: sql<string | null>`COALESCE(${clientsTable.whatsapp}, ${clientsTable.phone})`,
     channel: chatbotConversationsTable.channel,
+    whatsappConnectionName: sql<string | null>`COALESCE(NULLIF(${tenantIntegrationsTable.name}, ''), ${tenantIntegrationsTable.config} ->> 'instanceName')`,
     queueId: supportTicketsTable.queueId,
     queueName: supportQueuesTable.name,
     assignedUserId: supportTicketsTable.assignedUserId,
@@ -145,6 +147,11 @@ function ticketListQuery(tenantId: string) {
     .leftJoin(chatbotConversationsTable, and(
       eq(chatbotConversationsTable.id, supportTicketsTable.conversationId),
       eq(chatbotConversationsTable.tenantId, tenantId),
+    ))
+    .leftJoin(tenantIntegrationsTable, and(
+      eq(tenantIntegrationsTable.id, supportTicketsTable.whatsappIntegrationId),
+      eq(tenantIntegrationsTable.tenantId, tenantId),
+      eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
     ))
     .leftJoin(clientsTable, and(
       eq(clientsTable.id, supportTicketsTable.clientId),
@@ -444,6 +451,7 @@ router.post("/support/tickets/:id/reply", async (req, res, next: NextFunction): 
         clientId: chatbotConversationsTable.clientId,
         sessionId: chatbotConversationsTable.sessionId,
         status: chatbotConversationsTable.status,
+        whatsappIntegrationId: chatbotConversationsTable.whatsappIntegrationId,
         clientWhatsappOptIn: clientsTable.whatsappOptIn,
       }).from(chatbotConversationsTable)
         .leftJoin(clientsTable, and(
@@ -458,6 +466,9 @@ router.post("/support/tickets/:id/reply", async (req, res, next: NextFunction): 
         .limit(1);
       if (!conversation?.sessionId || conversation.status === "opted_out") return { error: "unavailable" as const };
       if (conversation.clientId && conversation.clientWhatsappOptIn !== true) return { error: "opted_out" as const };
+      if (ticket.whatsappIntegrationId !== conversation.whatsappIntegrationId) {
+        return { error: "connection_mismatch" as const };
+      }
 
       const now = new Date();
       const sourceMessageId = `support-staff:${parsed.data.idempotencyKey}`;
@@ -536,6 +547,7 @@ router.post("/support/tickets/:id/reply", async (req, res, next: NextFunction): 
       else if (result.error === "assigned") next(new ConflictError("Este ticket está atribuído a outra pessoa.", "TICKET_ASSIGNED"));
       else if (result.error === "unavailable") next(new NotFoundError("Conversa de WhatsApp indisponível.", "NOT_FOUND"));
       else if (result.error === "opted_out") next(new ForbiddenError("O cliente não autorizou mensagens por WhatsApp.", "WHATSAPP_OPTED_OUT"));
+      else if (result.error === "connection_mismatch") next(new ConflictError("A conexão WhatsApp do ticket mudou. Atualize o ticket antes de responder.", "WHATSAPP_CONNECTION_MISMATCH"));
       else if (result.error === "idempotency_conflict") next(new ConflictError("A chave de envio já foi usada com outro conteúdo.", "IDEMPOTENCY_CONFLICT"));
       else next(new ConflictError("Não foi possível registrar a resposta.", "WHATSAPP_REPLY_FAILED"));
       return;

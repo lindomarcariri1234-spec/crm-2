@@ -32,6 +32,7 @@ const {
   mockUpdateWhere,
   mockInsert,
   mockInsertValues,
+  mockTransaction,
   mockAssertSafeUrl,
   mockSsrfFetch,
 } = vi.hoisted(() => {
@@ -40,6 +41,7 @@ const {
   const mockUpdate = vi.fn();
   const mockInsertValues = vi.fn();
   const mockInsert = vi.fn();
+  const mockTransaction = vi.fn();
   const mockLimit = vi.fn();
   const mockWhere = vi.fn();
   const mockFrom = vi.fn();
@@ -59,6 +61,7 @@ const {
     mockUpdateWhere,
     mockInsert,
     mockInsertValues,
+    mockTransaction,
     mockAssertSafeUrl,
     mockSsrfFetch,
   };
@@ -73,6 +76,7 @@ vi.mock("@workspace/db", () => ({
     select: mockSelect,
     update: mockUpdate,
     insert: mockInsert,
+    transaction: mockTransaction,
   },
   tenantIntegrationsTable: {},
   tenantIntegrationLogsTable: {},
@@ -82,6 +86,7 @@ vi.mock("drizzle-orm", () => ({
   eq: vi.fn(() => "eq"),
   and: vi.fn((...a: unknown[]) => a),
   desc: vi.fn(() => "desc"),
+  asc: vi.fn(() => "asc"),
 }));
 
 vi.mock("@clerk/express", () => ({
@@ -272,10 +277,13 @@ beforeEach(() => {
   // Rebuild insert chain
   mockInsertValues.mockResolvedValue([]);
   mockInsert.mockReturnValue({ values: mockInsertValues });
+  mockTransaction.mockImplementation(async (callback: (tx: unknown) => unknown) =>
+    await callback({ update: mockUpdate, insert: mockInsert }),
+  );
 
   // Rebuild select chain. mockWhere returns a thenable (awaitable directly) AND
   // exposes .limit() and .orderBy() for chained queries.
-  const mockOrderBy = vi.fn(() => ({ limit: mockLimit }));
+  const mockOrderBy = vi.fn(() => Object.assign(Promise.resolve([]), { limit: mockLimit, orderBy: mockOrderBy }));
   mockWhere.mockReturnValue(
     Object.assign(Promise.resolve([]), { limit: mockLimit, orderBy: mockOrderBy }),
   );

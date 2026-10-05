@@ -1,7 +1,9 @@
-import { pgTable, text, timestamp, boolean, jsonb, index, unique } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, text, timestamp, boolean, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 
-// Generic per-tenant integration configuration (one row per tenant + type).
+// Generic per-tenant integration configuration. Most types have one row per
+// tenant; Evolution WhatsApp may have multiple independent connections.
 // Used by the integrations that share the secure foundation introduced with the
 // AI integration: WhatsApp (Evolution API), Stripe (agency's own account) and
 // Google Analytics. Secret fields are stored encrypted at rest (enc:v1: prefix)
@@ -34,6 +36,11 @@ export const tenantIntegrationsTable = pgTable(
     // When false, the integration is configured but not active.
     enabled: boolean("enabled").notNull().default(false),
 
+    // Only used by WhatsApp Evolution to select the default sender for
+    // non-conversation-specific messages. Ticket replies use their stored
+    // conversation connection instead.
+    isDefault: boolean("is_default").notNull().default(false),
+
     // disconnected | connected | error — reflects the last Test Connection /
     // post-save verification result.
     status: text("status").notNull().default("disconnected"),
@@ -47,7 +54,15 @@ export const tenantIntegrationsTable = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    unique("tenant_integrations_tenant_type_uq").on(table.tenantId, table.type),
+    uniqueIndex("tenant_integrations_tenant_type_uq")
+      .on(table.tenantId, table.type)
+      .where(sql`${table.type} <> 'whatsapp_evolution'`),
+    uniqueIndex("tenant_integrations_whatsapp_default_uq")
+      .on(table.tenantId)
+      .where(sql`${table.type} = 'whatsapp_evolution' AND ${table.isDefault}`),
+    uniqueIndex("tenant_integrations_whatsapp_instance_uq")
+      .on(table.tenantId, sql`(${table.config} ->> 'instanceName')`)
+      .where(sql`${table.type} = 'whatsapp_evolution' AND ${table.config} ? 'instanceName'`),
   ],
 );
 

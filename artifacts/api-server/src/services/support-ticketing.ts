@@ -99,6 +99,7 @@ export async function ensureSupportTicketForConversation(
     clientId: chatbotConversationsTable.clientId,
     channel: chatbotConversationsTable.channel,
     status: chatbotConversationsTable.status,
+    whatsappIntegrationId: chatbotConversationsTable.whatsappIntegrationId,
     whatsappOptIn: clientsTable.whatsappOptIn,
   }).from(chatbotConversationsTable)
     .leftJoin(clientsTable, and(
@@ -151,6 +152,7 @@ export async function ensureSupportTicketForConversation(
     const [updated] = await executor.update(supportTicketsTable)
       .set({
         clientId: conversation.clientId,
+        whatsappIntegrationId: conversation.whatsappIntegrationId,
         lastMessageAt: occurredAt,
         subject: active.subject ?? subject,
         updatedAt: new Date(),
@@ -177,6 +179,7 @@ export async function ensureSupportTicketForConversation(
       const [reopened] = await executor.update(supportTicketsTable)
         .set({
           clientId: conversation.clientId,
+          whatsappIntegrationId: conversation.whatsappIntegrationId,
           status: "pending",
           assignedUserId: null,
           resolvedAt: null,
@@ -206,6 +209,7 @@ export async function ensureSupportTicketForConversation(
         tenantId: input.tenantId,
         conversationId: input.conversationId,
         clientId: conversation.clientId,
+        whatsappIntegrationId: conversation.whatsappIntegrationId,
         queueId: queue.id,
         createdByUserId: input.actorUserId ?? null,
         status: "pending",

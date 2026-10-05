@@ -22,6 +22,10 @@ export const chatbotConversationsTable = pgTable("chatbot_conversations", {
   tenantId: text("tenant_id").notNull(),
   clientId: text("client_id"),
   channel: text("channel").notNull().default("webchat"),
+  // Stable internal identity of the Evolution connection that received this
+  // conversation. Kept as a snapshot (without FK) so revoking a connection
+  // cannot silently route replies through a different number.
+  whatsappIntegrationId: text("whatsapp_integration_id"),
   status: text("status").notNull().default("open"),
   assignedUserId: text("assigned_user_id"),
   sessionId: text("session_id"),
@@ -29,7 +33,10 @@ export const chatbotConversationsTable = pgTable("chatbot_conversations", {
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp("ended_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  index("chatbot_conversations_tenant_whatsapp_connection_idx")
+    .on(table.tenantId, table.channel, table.whatsappIntegrationId, table.sessionId),
+]);
 
 export const insertChatbotConversationSchema = createInsertSchema(chatbotConversationsTable).omit({ createdAt: true, startedAt: true });
 export type InsertChatbotConversation = z.infer<typeof insertChatbotConversationSchema>;
@@ -67,6 +74,8 @@ export const supportTicketsTable = pgTable(
     tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
     conversationId: text("conversation_id").notNull()
       .references(() => chatbotConversationsTable.id, { onDelete: "cascade" }),
+    // Copied from the conversation for durable ticket-level routing/display.
+    whatsappIntegrationId: text("whatsapp_integration_id"),
     clientId: text("client_id").references(() => clientsTable.id, { onDelete: "set null" }),
     queueId: text("queue_id").references(() => supportQueuesTable.id, { onDelete: "set null" }),
     assignedUserId: text("assigned_user_id").references(() => usersTable.id, { onDelete: "set null" }),

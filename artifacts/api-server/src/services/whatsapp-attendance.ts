@@ -178,17 +178,20 @@ async function resolveIntegration(instanceName: string, apiKey: string | undefin
     .select()
     .from(tenantIntegrationsTable)
     .where(eq(tenantIntegrationsTable.type, "whatsapp_evolution"));
+  const matches = [];
   for (const integration of integrations) {
     const config = (integration.config ?? {}) as Record<string, string>;
     if (!integration.enabled || config.instanceName?.trim() !== instanceName || !integration.secretsEncrypted) continue;
     try {
       const secrets = JSON.parse(decryptOrPassthrough(integration.secretsEncrypted) ?? "{}") as Record<string, string>;
-      if (apiKey && secrets.apiKey && safeEqual(apiKey, secrets.apiKey)) return integration;
+      if (apiKey && secrets.apiKey && safeEqual(apiKey, secrets.apiKey)) matches.push(integration);
     } catch {
       // A malformed credential is not a reason to reveal whether an instance exists.
     }
   }
-  return null;
+  // A webhook must resolve to exactly one tenant connection. Missing or
+  // duplicated credentials never fall through to whichever row was selected first.
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function systemPrompt(): string {
@@ -220,6 +223,7 @@ export async function processEvolutionDeliveryStatus(opts: {
   const result = await updateOutboundDeliveryFromWebhook({
     tenantId: integration.tenantId,
     provider: "evolution",
+    integrationId: integration.id,
     externalId: status.externalId,
     status: status.status,
     providerStatus: status.providerStatus,
@@ -270,6 +274,7 @@ export async function deliverAttendanceReply(opts: {
       sessionId: chatbotConversationsTable.sessionId,
       status: chatbotConversationsTable.status,
       clientId: chatbotConversationsTable.clientId,
+      whatsappIntegrationId: chatbotConversationsTable.whatsappIntegrationId,
       clientWhatsappOptIn: clientsTable.whatsappOptIn,
     }).from(chatbotConversationsTable)
       .leftJoin(clientsTable, and(
@@ -310,6 +315,7 @@ export async function deliverAttendanceReply(opts: {
       metadata: {
         chatbotMessageId: claimed[0].id,
         conversationId: claimed[0].conversationId,
+        whatsappIntegrationId: conversation.whatsappIntegrationId,
       },
     });
     const whatsappDelivery = outbound.deliveries.find((delivery) => delivery.channel === "whatsapp");
@@ -438,6 +444,7 @@ export async function processEvolutionInbound(opts: {
         eq(chatbotConversationsTable.tenantId, tenantId),
         eq(chatbotConversationsTable.channel, "whatsapp"),
         eq(chatbotConversationsTable.sessionId, inbound.phone!),
+        eq(chatbotConversationsTable.whatsappIntegrationId, integration.id),
       ))
       .orderBy(desc(chatbotConversationsTable.createdAt))
       .limit(1);
@@ -504,13 +511,21 @@ export async function processEvolutionInbound(opts: {
         tenantId,
         clientId: nextClientId,
         channel: "whatsapp",
+        whatsappIntegrationId: integration.id,
         sessionId: inbound.phone!,
         metadata,
       }).returning();
-    } else if (conversation.clientId !== nextClientId || existingMetadata["identityMatchStatus"] !== identityMatchStatus) {
+    } else if (
+      conversation.clientId !== nextClientId
+      || conversation.whatsappIntegrationId !== integration.id
+      || existingMetadata["identityMatchStatus"] !== identityMatchStatus
+    ) {
       [conversation] = await tx.update(chatbotConversationsTable)
-        .set({ clientId: nextClientId, metadata })
-        .where(eq(chatbotConversationsTable.id, conversation.id))
+        .set({ clientId: nextClientId, whatsappIntegrationId: integration.id, metadata })
+        .where(and(
+          eq(chatbotConversationsTable.id, conversation.id),
+          eq(chatbotConversationsTable.tenantId, tenantId),
+        ))
         .returning();
     }
     if (!conversation) throw new Error("Could not create WhatsApp conversation");
@@ -744,7 +759,10 @@ export async function processEvolutionInbound(opts: {
   ) {
     await db.update(chatbotConversationsTable)
       .set({ status: "human_handoff" })
-      .where(eq(chatbotConversationsTable.id, conversation.id));
+      .where(and(
+        eq(chatbotConversationsTable.id, conversation.id),
+        eq(chatbotConversationsTable.tenantId, tenantId),
+      ));
     return "human_handoff";
   }
 
@@ -783,7 +801,10 @@ export async function processEvolutionInbound(opts: {
     logger.warn({ tenantId, reason: sanitizeProviderError(err) }, "[whatsapp-attendance] AI response unavailable");
     await db.update(chatbotConversationsTable)
       .set({ status: "human_handoff" })
-      .where(eq(chatbotConversationsTable.id, conversation.id));
+      .where(and(
+        eq(chatbotConversationsTable.id, conversation.id),
+        eq(chatbotConversationsTable.tenantId, tenantId),
+      ));
     await db.transaction(async (tx) => {
       await ensureSupportTicketForConversation(tx, {
         tenantId,

@@ -1158,12 +1158,14 @@ interface IntegrationFieldDef {
 
 interface IntegrationData {
   type: string;
+  integrationId: string | null;
   label: string;
   name: string;
   config: Record<string, string>;
   maskedSecrets: Record<string, string | null>;
   environment: "production" | "test";
   enabled: boolean;
+  isDefault: boolean;
   status: string;
   lastError: string | null;
   lastSyncAt: string | null;
@@ -1179,7 +1181,113 @@ interface IntegrationLog {
   createdAt: string;
 }
 
-function IntegrationCard({ type }: { type: string }) {
+interface WhatsAppConnectionSummary {
+  id: string;
+  name: string;
+  instanceName: string;
+  enabled: boolean;
+  status: string;
+  isDefault: boolean;
+}
+
+function WhatsAppIntegrationCards() {
+  const { data: me } = useGetMe();
+  const canManage = me?.role === ROLES.AGENCY_ADMIN || me?.role === ROLES.SUPER_ADMIN;
+  const [connections, setConnections] = useState<WhatsAppConnectionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [forbidden, setForbidden] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+
+  const loadConnections = useCallback(async () => {
+    setLoadError(false);
+    try {
+      const res = await fetch(`${BASE}/api/integrations/whatsapp_evolution/connections`, {
+        credentials: "include",
+      });
+      if (res.status === 403) {
+        setForbidden(true);
+        return;
+      }
+      if (!res.ok) throw new Error("load failed");
+      setConnections(await res.json() as WhatsAppConnectionSummary[]);
+    } catch {
+      setLoadError(true);
+      setConnections([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (canManage) void loadConnections();
+    else setLoading(false);
+  }, [canManage, loadConnections]);
+
+  if (!canManage || forbidden) return null;
+
+  return (
+    <div className="space-y-3 md:col-span-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold">Números do WhatsApp</h3>
+          <p className="text-xs text-muted-foreground">
+            As respostas dos tickets usam o mesmo número que recebeu a conversa.
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={adding}>
+          Adicionar número
+        </Button>
+      </div>
+      {loading ? (
+        <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Carregando números...
+        </div>
+      ) : loadError ? (
+        <div className="flex items-center justify-between rounded-md border p-3 text-sm">
+          <span className="text-muted-foreground">Não foi possível carregar as conexões WhatsApp.</span>
+          <Button size="sm" variant="outline" onClick={() => void loadConnections()}>Tentar novamente</Button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {connections.map((connection) => (
+            <IntegrationCard
+              key={connection.id}
+              type="whatsapp_evolution"
+              integrationId={connection.id}
+              onSaved={() => void loadConnections()}
+            />
+          ))}
+          {(adding || connections.length === 0) && (
+            <IntegrationCard
+              type="whatsapp_evolution"
+              createNew
+              onSaved={() => {
+                setAdding(false);
+                void loadConnections();
+              }}
+              onCancel={connections.length > 0 ? () => setAdding(false) : undefined}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IntegrationCard({
+  type,
+  integrationId,
+  createNew = false,
+  onSaved,
+  onCancel,
+}: {
+  type: string;
+  integrationId?: string;
+  createNew?: boolean;
+  onSaved?: () => void;
+  onCancel?: () => void;
+}) {
   const { toast } = useToast();
   const { data: me } = useGetMe();
   const canManage = me?.role === ROLES.AGENCY_ADMIN || me?.role === ROLES.SUPER_ADMIN;
@@ -1202,13 +1310,23 @@ function IntegrationCard({ type }: { type: string }) {
 
   const loadConfig = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE}/api/integrations/${type}`, { credentials: "include" });
+      const query = integrationId ? `?integrationId=${encodeURIComponent(integrationId)}` : "";
+      const res = await fetch(`${BASE}/api/integrations/${type}${query}`, { credentials: "include" });
       if (res.status === 403) {
         setForbidden(true);
         return;
       }
       if (!res.ok) throw new Error("load failed");
       const d: IntegrationData = await res.json();
+      if (createNew) {
+        d.integrationId = null;
+        d.name = "";
+        d.config = {};
+        d.maskedSecrets = Object.fromEntries(d.fieldDefs.filter((field) => field.secret).map((field) => [field.key, null]));
+        d.enabled = false;
+        d.isDefault = false;
+        d.status = "disconnected";
+      }
       setData(d);
       setFormConfig(d.config);
       setFormSecrets({});
@@ -1221,7 +1339,7 @@ function IntegrationCard({ type }: { type: string }) {
     } finally {
       setLoading(false);
     }
-  }, [type]);
+  }, [createNew, integrationId, type]);
 
   const loadLogs = useCallback(async () => {
     try {
@@ -1257,7 +1375,11 @@ function IntegrationCard({ type }: { type: string }) {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config: formConfig, secrets: formSecrets }),
+        body: JSON.stringify({
+          ...(integrationId ? { integrationId } : {}),
+          config: formConfig,
+          secrets: formSecrets,
+        }),
       });
       const d = await res.json().catch(() => ({}));
       if (d.ok) {
@@ -1286,6 +1408,8 @@ function IntegrationCard({ type }: { type: string }) {
           secrets: formSecrets,
           environment,
           enabled,
+          ...(integrationId ? { integrationId } : {}),
+          ...(createNew ? { createNew: true } : {}),
         }),
       });
       if (!res.ok) {
@@ -1293,6 +1417,7 @@ function IntegrationCard({ type }: { type: string }) {
         throw new Error(err.error || "Erro ao salvar");
       }
       const result = await res.json().catch(() => ({})) as {
+        integrationId?: string;
         webhook?: { ok?: boolean; message?: string };
       };
       if (type === "whatsapp_evolution" && enabled && result.webhook) {
@@ -1310,8 +1435,33 @@ function IntegrationCard({ type }: { type: string }) {
       setDirty(false);
       await loadConfig();
       await loadLogs();
+      onSaved?.();
     } catch (e) {
       toast({ title: e instanceof Error ? e.message : "Erro ao salvar", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function makeDefault() {
+    if (!integrationId) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${BASE}/api/integrations/${type}`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ integrationId, isDefault: true }),
+      });
+      if (!res.ok) throw new Error("Erro ao definir o número padrão");
+      toast({ title: "Número padrão atualizado" });
+      await loadConfig();
+      onSaved?.();
+    } catch (error) {
+      toast({
+        title: error instanceof Error ? error.message : "Erro ao definir o número padrão",
+        variant: "destructive",
+      });
     } finally {
       setSaving(false);
     }
@@ -1323,11 +1473,14 @@ function IntegrationCard({ type }: { type: string }) {
       const res = await fetch(`${BASE}/api/integrations/${type}/revoke`, {
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(integrationId ? { integrationId } : {}),
       });
       if (!res.ok) throw new Error("Erro ao revogar");
       toast({ title: "Credenciais revogadas com sucesso" });
       await loadConfig();
       await loadLogs();
+      onSaved?.();
     } catch {
       toast({ title: "Erro ao revogar credenciais", variant: "destructive" });
     } finally {
@@ -1342,6 +1495,9 @@ function IntegrationCard({ type }: { type: string }) {
           <CardTitle className="text-base flex items-center gap-2">
             <Wifi className="w-4 h-4 text-muted-foreground" />
             {data?.label ?? type}
+            {type === "whatsapp_evolution" && data?.isDefault && (
+              <Badge variant="secondary" className="text-[10px]">Padrão</Badge>
+            )}
           </CardTitle>
           <StatusBadge status={status} />
         </div>
@@ -1468,6 +1624,21 @@ function IntegrationCard({ type }: { type: string }) {
             )}
 
             <div className="flex flex-wrap gap-2 pt-1">
+              {type === "whatsapp_evolution" && integrationId && !data?.isDefault && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void makeDefault()}
+                  disabled={saving || testing}
+                >
+                  Tornar padrão
+                </Button>
+              )}
+              {createNew && onCancel && (
+                <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+                  Cancelar
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
@@ -1661,7 +1832,7 @@ function IntegrationsTab() {
       <GoogleCalendarCard />
       <AICard />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <IntegrationCard type="whatsapp_evolution" />
+        <WhatsAppIntegrationCards />
         <IntegrationCard type="stripe_account" />
         <IntegrationCard type="mercadopago" />
         <IntegrationCard type="google_analytics" />

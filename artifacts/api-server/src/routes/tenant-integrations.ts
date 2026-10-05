@@ -1,7 +1,7 @@
 import { Router, type NextFunction } from "express";
 import { logger } from "../lib/logger";
 import { db, tenantIntegrationsTable, tenantIntegrationLogsTable } from "@workspace/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod/v4";
 import { requireAuth, ADMIN_ROLES } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
@@ -467,23 +467,87 @@ router.get("/integrations", async (req, res, next: NextFunction): Promise<void> 
 
     const rows = await db
       .select({
+        id: tenantIntegrationsTable.id,
         type: tenantIntegrationsTable.type,
+        name: tenantIntegrationsTable.name,
+        config: tenantIntegrationsTable.config,
         status: tenantIntegrationsTable.status,
         enabled: tenantIntegrationsTable.enabled,
+        isDefault: tenantIntegrationsTable.isDefault,
+        createdAt: tenantIntegrationsTable.createdAt,
       })
       .from(tenantIntegrationsTable)
       .where(eq(tenantIntegrationsTable.tenantId, me.tenantId));
 
-    const rowMap = new Map(rows.map((r) => [r.type, r]));
+    const rowsByType = new Map<string, typeof rows>();
+    for (const row of rows) {
+      rowsByType.set(row.type, [...(rowsByType.get(row.type) ?? []), row]);
+    }
 
     res.json(
-      ALLOWED_TYPES.map((type) => ({
-        type,
-        label: REGISTRY[type]!.label,
-        status: rowMap.get(type)?.status ?? "disconnected",
-        enabled: rowMap.get(type)?.enabled ?? false,
-      })),
+      ALLOWED_TYPES.map((type) => {
+        const typeRows = rowsByType.get(type) ?? [];
+        const selected = typeRows.find((row) => row.isDefault) ?? typeRows[0];
+        return {
+          type,
+          label: REGISTRY[type]!.label,
+          status: selected?.status ?? "disconnected",
+          enabled: type === "whatsapp_evolution"
+            ? typeRows.some((row) => row.enabled)
+            : selected?.enabled ?? false,
+          ...(type === "whatsapp_evolution" ? {
+            connections: typeRows.map((row) => {
+              const config = (row.config ?? {}) as Record<string, string>;
+              return {
+                id: row.id,
+                name: row.name ?? "",
+                instanceName: config.instanceName ?? "",
+                isDefault: row.isDefault,
+                status: row.status,
+                enabled: row.enabled,
+              };
+            }),
+          } : {}),
+        };
+      }),
     );
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /integrations/whatsapp_evolution/connections ─────────────────────────
+// Lists connection labels only; encrypted credentials are never returned.
+
+router.get("/integrations/whatsapp_evolution/connections", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireIntegrationAdmin(req, res, next);
+    if (!me) return;
+    const rows = await db.select({
+      id: tenantIntegrationsTable.id,
+      name: tenantIntegrationsTable.name,
+      config: tenantIntegrationsTable.config,
+      enabled: tenantIntegrationsTable.enabled,
+      status: tenantIntegrationsTable.status,
+      isDefault: tenantIntegrationsTable.isDefault,
+      createdAt: tenantIntegrationsTable.createdAt,
+    }).from(tenantIntegrationsTable)
+      .where(and(
+        eq(tenantIntegrationsTable.tenantId, me.tenantId),
+        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+      ))
+      .orderBy(desc(tenantIntegrationsTable.isDefault), asc(tenantIntegrationsTable.createdAt));
+    res.json(rows.map((row) => {
+      const config = (row.config ?? {}) as Record<string, string>;
+      return {
+        id: row.id,
+        name: row.name ?? "",
+        instanceName: config.instanceName ?? "",
+        enabled: row.enabled,
+        status: row.status,
+        isDefault: row.isDefault,
+      };
+    }));
   } catch (err) {
     next(err);
   }
@@ -505,16 +569,28 @@ router.get("/integrations/:type", async (req, res, next: NextFunction): Promise<
     const me = await requireIntegrationAdmin(req, res, next);
     if (!me) return;
 
-    const [row] = await db
-      .select()
-      .from(tenantIntegrationsTable)
-      .where(
-        and(
+    const integrationId = typeof req.query["integrationId"] === "string"
+      ? req.query["integrationId"]
+      : null;
+    const [row] = integrationId
+      ? await db.select().from(tenantIntegrationsTable)
+        .where(and(
           eq(tenantIntegrationsTable.tenantId, me.tenantId),
           eq(tenantIntegrationsTable.type, type),
-        ),
-      )
-      .limit(1);
+          eq(tenantIntegrationsTable.id, integrationId),
+        ))
+        .limit(1)
+      : await db.select().from(tenantIntegrationsTable)
+        .where(and(
+          eq(tenantIntegrationsTable.tenantId, me.tenantId),
+          eq(tenantIntegrationsTable.type, type),
+        ))
+        .orderBy(desc(tenantIntegrationsTable.isDefault), asc(tenantIntegrationsTable.createdAt))
+        .limit(1);
+    if (integrationId && !row) {
+      next(new NotFoundError("Integração não encontrada.", "NOT_FOUND"));
+      return;
+    }
 
     // Decrypt and mask each secret field.
     const maskedSecrets: Record<string, string | null> = {};
@@ -535,12 +611,14 @@ router.get("/integrations/:type", async (req, res, next: NextFunction): Promise<
 
     res.json({
       type,
+      integrationId: row?.id ?? null,
       label: entry.label,
       name: row?.name ?? "",
       config: (row?.config as Record<string, string>) ?? {},
       maskedSecrets,
       environment: row?.environment ?? "production",
       enabled: row?.enabled ?? false,
+      isDefault: row?.isDefault ?? false,
       status: row?.status ?? "disconnected",
       lastError: row?.lastError ?? null,
       lastSyncAt: row?.lastSyncAt ? row.lastSyncAt.toISOString() : null,
@@ -562,11 +640,14 @@ router.get("/integrations/:type", async (req, res, next: NextFunction): Promise<
 // ever mutates the stored status; the transient /test endpoint never does.
 
 const putSchema = z.object({
+  integrationId: z.string().min(1).max(200).optional(),
+  createNew: z.boolean().optional(),
   name: z.string().optional(),
   config: z.record(z.string(), z.string()).optional(),
   secrets: z.record(z.string(), z.string()).optional(),
   environment: z.enum(["production", "test"]).optional(),
   enabled: z.boolean().optional(),
+  isDefault: z.boolean().optional(),
 });
 
 router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<void> => {
@@ -587,6 +668,13 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       return;
     }
     const body = parsed.data;
+    if (
+      type !== "whatsapp_evolution"
+      && (body.integrationId || body.createNew !== undefined || body.isDefault !== undefined)
+    ) {
+      next(new ValidationError("Essas opções só estão disponíveis para conexões WhatsApp.", "VALIDATION_ERROR"));
+      return;
+    }
 
     // SSRF-check any config fields marked ssrfCheck before storing them.
     const incomingConfig = body.config ?? {};
@@ -605,7 +693,7 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
     }
 
     // Load the existing row to carry over secrets that were not re-submitted.
-    const [existing] = await db
+    const [firstConnection] = await db
       .select()
       .from(tenantIntegrationsTable)
       .where(
@@ -614,7 +702,25 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
           eq(tenantIntegrationsTable.type, type),
         ),
       )
+      .orderBy(desc(tenantIntegrationsTable.isDefault), asc(tenantIntegrationsTable.createdAt))
       .limit(1);
+    let existing: typeof firstConnection | undefined = firstConnection;
+    if (body.integrationId) {
+      const [selected] = await db.select().from(tenantIntegrationsTable)
+        .where(and(
+          eq(tenantIntegrationsTable.tenantId, me.tenantId),
+          eq(tenantIntegrationsTable.type, type),
+          eq(tenantIntegrationsTable.id, body.integrationId),
+        ))
+        .limit(1);
+      if (!selected) {
+        next(new NotFoundError("Integração não encontrada.", "NOT_FOUND"));
+        return;
+      }
+      existing = selected;
+    } else if (body.createNew) {
+      existing = undefined;
+    }
 
     // Resolve final secrets: incoming non-mask values replace stored ones;
     // masked / absent values carry over from storage.
@@ -646,6 +752,9 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
     const enabled = body.enabled ?? existing?.enabled ?? false;
     const environment = body.environment ?? existing?.environment ?? "production";
     const name = body.name ?? existing?.name ?? null;
+    const isDefault = type === "whatsapp_evolution"
+      ? body.isDefault ?? existing?.isDefault ?? !firstConnection
+      : false;
     if (type === "distribution_reference" && enabled && environment !== "test") {
       next(new ValidationError(
         "O adaptador de referência só pode ser ativado no ambiente de teste.",
@@ -662,6 +771,10 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       const v = incomingConfig[f.key]?.trim();
       if (v !== undefined) resolvedConfig[f.key] = v;
     }
+    if (type === "whatsapp_evolution" && !resolvedConfig["instanceName"]?.trim()) {
+      next(new ValidationError("Informe o nome da instância Evolution.", "VALIDATION_ERROR"));
+      return;
+    }
 
     // Reset status when credentials, config, or environment change so the stored
     // status always reflects what is actually stored.
@@ -669,37 +782,59 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       JSON.stringify(resolvedConfig) !== JSON.stringify(existingConfig) ||
       environment !== (existing?.environment ?? "production");
     const resetStatus = !existing || secretsChanged || configChanged || !enabled;
-    const status = resetStatus ? "disconnected" : existing.status;
+    const status = resetStatus ? "disconnected" : existing?.status ?? "disconnected";
+    const integrationId = existing?.id ?? generateId();
 
-    if (existing) {
-      await db
-        .update(tenantIntegrationsTable)
-        .set({
-          name,
-          config: resolvedConfig,
-          secretsEncrypted: newSecretsEncrypted,
-          environment,
-          enabled,
-          status,
-          ...(resetStatus ? { lastError: null } : {}),
-        })
-        .where(
-          and(
+    const savedValues = {
+      name,
+      config: resolvedConfig,
+      secretsEncrypted: newSecretsEncrypted,
+      environment,
+      enabled,
+      isDefault,
+      status,
+      ...(resetStatus ? { lastError: null } : {}),
+    };
+    if (type === "whatsapp_evolution" && isDefault) {
+      await db.transaction(async (tx) => {
+        await tx.update(tenantIntegrationsTable)
+          .set({ isDefault: false })
+          .where(and(
             eq(tenantIntegrationsTable.tenantId, me.tenantId),
             eq(tenantIntegrationsTable.type, type),
-          ),
-        );
+            eq(tenantIntegrationsTable.isDefault, true),
+          ));
+        if (existing) {
+          await tx.update(tenantIntegrationsTable)
+            .set(savedValues)
+            .where(and(
+              eq(tenantIntegrationsTable.tenantId, me.tenantId),
+              eq(tenantIntegrationsTable.type, type),
+              eq(tenantIntegrationsTable.id, integrationId),
+            ));
+        } else {
+          await tx.insert(tenantIntegrationsTable).values({
+            id: integrationId,
+            tenantId: me.tenantId,
+            type,
+            ...savedValues,
+          });
+        }
+      });
+    } else if (existing) {
+      await db.update(tenantIntegrationsTable)
+        .set(savedValues)
+        .where(and(
+          eq(tenantIntegrationsTable.tenantId, me.tenantId),
+          eq(tenantIntegrationsTable.type, type),
+          eq(tenantIntegrationsTable.id, integrationId),
+        ));
     } else {
       await db.insert(tenantIntegrationsTable).values({
-        id: generateId(),
+        id: integrationId,
         tenantId: me.tenantId,
         type,
-        name,
-        config: resolvedConfig,
-        secretsEncrypted: newSecretsEncrypted,
-        environment,
-        enabled,
-        status,
+        ...savedValues,
       });
     }
 
@@ -726,7 +861,7 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
             .where(
               and(
                 eq(tenantIntegrationsTable.tenantId, me.tenantId),
-                eq(tenantIntegrationsTable.type, type),
+                eq(tenantIntegrationsTable.id, integrationId),
               ),
             );
           await writeLog(me, type, "test", "info", `Conexão verificada após salvar: ${testResult.message}`);
@@ -737,7 +872,7 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
             .where(
               and(
                 eq(tenantIntegrationsTable.tenantId, me.tenantId),
-                eq(tenantIntegrationsTable.type, type),
+                eq(tenantIntegrationsTable.id, integrationId),
               ),
             );
           await writeLog(me, type, "test", "error", `Falha ao verificar após salvar: ${testResult.message}`);
@@ -766,7 +901,7 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
           .where(
             and(
               eq(tenantIntegrationsTable.tenantId, me.tenantId),
-              eq(tenantIntegrationsTable.type, type),
+              eq(tenantIntegrationsTable.id, integrationId),
             ),
           );
         await writeLog(me, type, "test", "error", `Falha ao verificar após salvar: ${msg}`);
@@ -786,7 +921,12 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       await writeLog(me, type, "webhook_setup", "warn", webhookSetup.message);
     }
 
-    res.json({ ok: true, ...(webhookSetup ? { webhook: webhookSetup } : {}) });
+    res.json({
+      ok: true,
+      integrationId,
+      isDefault,
+      ...(webhookSetup ? { webhook: webhookSetup } : {}),
+    });
   } catch (err) {
     next(err);
   }
@@ -798,6 +938,7 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
 // entry is written. This lets the admin validate credentials before saving.
 
 const testSchema = z.object({
+  integrationId: z.string().min(1).max(200).optional(),
   config: z.record(z.string(), z.string()).optional(),
   secrets: z.record(z.string(), z.string()).optional(),
 });
@@ -821,16 +962,25 @@ router.post("/integrations/:type/test", async (req, res, next: NextFunction): Pr
     }
 
     // Load existing row to resolve secrets not re-submitted (MASK sentinel).
-    const [existing] = await db
-      .select()
-      .from(tenantIntegrationsTable)
-      .where(
-        and(
+    const [existing] = parsed.data.integrationId
+      ? await db.select().from(tenantIntegrationsTable)
+        .where(and(
           eq(tenantIntegrationsTable.tenantId, me.tenantId),
           eq(tenantIntegrationsTable.type, type),
-        ),
-      )
-      .limit(1);
+          eq(tenantIntegrationsTable.id, parsed.data.integrationId),
+        ))
+        .limit(1)
+      : await db.select().from(tenantIntegrationsTable)
+        .where(and(
+          eq(tenantIntegrationsTable.tenantId, me.tenantId),
+          eq(tenantIntegrationsTable.type, type),
+        ))
+        .orderBy(desc(tenantIntegrationsTable.isDefault), asc(tenantIntegrationsTable.createdAt))
+        .limit(1);
+    if (parsed.data.integrationId && !existing) {
+      next(new NotFoundError("Integração não encontrada.", "NOT_FOUND"));
+      return;
+    }
 
     let existingSecrets: Record<string, string> = {};
     if (existing?.secretsEncrypted) {
@@ -911,6 +1061,21 @@ router.post("/integrations/:type/revoke", async (req, res, next: NextFunction): 
     const me = await requireIntegrationAdmin(req, res, next);
     if (!me) return;
 
+    const parsed = z.object({ integrationId: z.string().min(1).max(200).optional() })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) {
+      next(new ValidationError("Dados inválidos.", "VALIDATION_ERROR"));
+      return;
+    }
+    const integrationId = parsed.data.integrationId;
+    const rowConditions = [
+      eq(tenantIntegrationsTable.tenantId, me.tenantId),
+      eq(tenantIntegrationsTable.type, type),
+      ...(integrationId
+        ? [eq(tenantIntegrationsTable.id, integrationId)]
+        : type === "whatsapp_evolution" ? [eq(tenantIntegrationsTable.isDefault, true)] : []),
+    ];
+
     await db
       .update(tenantIntegrationsTable)
       .set({
@@ -919,12 +1084,7 @@ router.post("/integrations/:type/revoke", async (req, res, next: NextFunction): 
         status: "disconnected",
         lastError: null,
       })
-      .where(
-        and(
-          eq(tenantIntegrationsTable.tenantId, me.tenantId),
-          eq(tenantIntegrationsTable.type, type),
-        ),
-      );
+      .where(and(...rowConditions));
 
     await writeLog(
       me,

@@ -4425,6 +4425,8 @@ export type SupportTicketListItem = SupportTicket & {
   clientPhone: string | null;
   channel: string;
   /** @nullable */
+  whatsappConnectionName: string | null;
+  /** @nullable */
   queueName: string | null;
   /** @nullable */
   assignedUserName: string | null;

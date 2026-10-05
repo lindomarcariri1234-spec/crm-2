@@ -88,6 +88,11 @@ vi.mock("../lib/ai-client.js", () => ({
   getAIClientForTenant: mockGetAIClientForTenant,
   sanitizeProviderError: vi.fn(() => "provider error"),
 }));
+
+vi.mock("./support-ticketing.js", () => ({
+  ensureSupportTicketForConversation: vi.fn(async () => null),
+  recordSupportTicketEvent: vi.fn(async () => undefined),
+}));
 vi.mock("../lib/id.js", () => ({
   generateId: vi.fn(() => "generated-id"),
 }));
@@ -141,6 +146,7 @@ describe("Evolution inbound attendance consent", () => {
     mockGetAIClientForTenant.mockReset();
 
     const integration = {
+      id: "integration-1",
       tenantId: "tenant-1",
       enabled: true,
       config: { instanceName: "agency-instance", baseUrl: "https://evolution.example" },
@@ -162,6 +168,7 @@ describe("Evolution inbound attendance consent", () => {
       tenantId: "tenant-1",
       clientId: "client-1",
       channel: "whatsapp",
+      whatsappIntegrationId: "integration-1",
       sessionId: "5511999999999",
       status: mockConsentState.conversationStatus,
       metadata: { source: "evolution", identityMatchStatus: "matched" },
