@@ -355,6 +355,33 @@ function DelayedHistoryRefreshHarness() {
   );
 }
 
+function LargeConversationHistoryHarness({ conversationCount }: { conversationCount: number }) {
+  const conversations = Array.from({ length: conversationCount }, (_, index) => ({
+    id: `large-conversation-${String(index).padStart(2, "0")}`,
+    clientId: "client-many",
+    channel: "whatsapp",
+    startedAt: "2026-10-02T12:00:00.000Z",
+  }));
+  const { messages, loading, error } = useConversationAiMessages({
+    enabled: true,
+    selectedClientId: "client-many",
+    conversations,
+    refreshToken: 0,
+  });
+
+  return createElement(
+    "section",
+    null,
+    createElement("p", { "data-testid": "large-history-loading" }, String(loading)),
+    createElement("p", { "data-testid": "large-history-error" }, error ?? ""),
+    createElement(
+      "div",
+      { "data-testid": "large-history-messages" },
+      messages.map((message) => createElement("p", { key: message.id }, message.content)),
+    ),
+  );
+}
+
 function setInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   if (!setter) throw new Error("HTMLInputElement.value setter is unavailable");
@@ -650,5 +677,71 @@ describe("delayed conversation history refreshes", () => {
       .toContain("Sessão iniciada em 02/10/2026, 09:00 (sessão 1)");
     expect(failedSessions!.textContent)
       .toContain("Sessão iniciada em 02/10/2026, 09:00 (sessão 2)");
+  });
+
+  it("bounds concurrent history loads and keeps successful results when one of many fails", async () => {
+    const conversationCount = 13;
+    const conversationIds = Array.from(
+      { length: conversationCount },
+      (_, index) => `large-conversation-${String(index).padStart(2, "0")}`,
+    );
+    const requests = new Map<string, Deferred<Response>>();
+    let activeRequests = 0;
+    let peakActiveRequests = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const conversationId = decodeURIComponent(
+        String(input).match(/\/chatbot-conversations\/([^/]+)\/messages/)?.[1] ?? "",
+      );
+      if (!conversationId) throw new Error("History URL did not contain a conversation ID");
+
+      const request = createDeferred<Response>();
+      requests.set(conversationId, request);
+      activeRequests++;
+      peakActiveRequests = Math.max(peakActiveRequests, activeRequests);
+      return request.promise.finally(() => {
+        activeRequests--;
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = await renderComponent(
+      createElement(LargeConversationHistoryHarness, { conversationCount }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(activeRequests).toBe(5);
+
+    for (const [index, conversationId] of conversationIds.entries()) {
+      const request = requests.get(conversationId);
+      expect(request).toBeDefined();
+      await flushAct(async () => {
+        if (index === 7) {
+          await settleHistoryFailure(request!);
+        } else {
+          await settleHistorySuccess(
+            request!,
+            [makeHistoryMessage(conversationId, `Histórico carregado ${index}`)],
+          );
+        }
+      });
+      expect(peakActiveRequests).toBeLessThanOrEqual(5);
+    }
+
+    const historyError = container.querySelector<HTMLElement>(
+      '[data-testid="large-history-error"]',
+    );
+    const history = container.querySelector<HTMLElement>(
+      '[data-testid="large-history-messages"]',
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(conversationCount);
+    expect(activeRequests).toBe(0);
+    expect(peakActiveRequests).toBe(5);
+    expect(container.querySelector('[data-testid="large-history-loading"]')?.textContent)
+      .toBe("false");
+    expect(historyError?.textContent)
+      .toBe("Não foi possível carregar 1 de 13 conversas vinculadas. Os demais históricos continuam disponíveis.");
+    expect(history?.textContent).toContain("Histórico carregado 0");
+    expect(history?.textContent).toContain("Histórico carregado 12");
+    expect(history?.textContent).not.toContain("Histórico carregado 7");
   });
 });

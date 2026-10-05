@@ -49,6 +49,7 @@ type ConversationLoadResult =
   | { conversationId: string; failed: true };
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const MAX_CONCURRENT_CONVERSATION_HISTORY_REQUESTS = 5;
 const conversationStartFormatter = new Intl.DateTimeFormat("pt-BR", {
   day: "2-digit",
   month: "2-digit",
@@ -176,6 +177,7 @@ export function useConversationAiMessages({
     }
 
     let cancelled = false;
+    const abortController = new AbortController();
     setLoading(true);
     setRefreshError((current) => current?.scopeKey === scopeKey ? null : current);
     // A retry token narrows the request to the current failures; a scope change reloads every link.
@@ -188,22 +190,33 @@ export function useConversationAiMessages({
       : conversationIds;
     const conversationIdSet = new Set(conversationIds);
     const requestedConversationIdSet = new Set(conversationIdsToLoad);
-    Promise.all(conversationIdsToLoad.map(async (conversationId): Promise<ConversationLoadResult> => {
-      try {
-        const response = await fetch(
-          `${BASE}/api/chatbot-conversations/${encodeURIComponent(conversationId)}/messages`,
-          { credentials: "include" },
-        );
-        if (!response.ok) throw new Error("failed");
-        return {
-          conversationId,
-          messages: await response.json() as AiConversationMessage[],
-        };
-      } catch {
-        return { conversationId, failed: true };
+    const results = new Array<ConversationLoadResult>(conversationIdsToLoad.length);
+    let nextConversationIndex = 0;
+    const loadNextConversation = async (): Promise<void> => {
+      while (!cancelled && nextConversationIndex < conversationIdsToLoad.length) {
+        const resultIndex = nextConversationIndex++;
+        const conversationId = conversationIdsToLoad[resultIndex]!;
+        try {
+          const response = await fetch(
+            `${BASE}/api/chatbot-conversations/${encodeURIComponent(conversationId)}/messages`,
+            { credentials: "include", signal: abortController.signal },
+          );
+          if (!response.ok) throw new Error("failed");
+          results[resultIndex] = {
+            conversationId,
+            messages: await response.json() as AiConversationMessage[],
+          };
+        } catch {
+          results[resultIndex] = { conversationId, failed: true };
+        }
       }
-    }))
-      .then((results) => {
+    };
+    const workerCount = Math.min(
+      MAX_CONCURRENT_CONVERSATION_HISTORY_REQUESTS,
+      conversationIdsToLoad.length,
+    );
+    Promise.all(Array.from({ length: workerCount }, () => loadNextConversation()))
+      .then(() => {
         if (cancelled) return;
         const successfulResults = results.filter(
           (result): result is Extract<ConversationLoadResult, { messages: AiConversationMessage[] }> =>
@@ -239,6 +252,7 @@ export function useConversationAiMessages({
 
     return () => {
       cancelled = true;
+      abortController.abort();
     };
   }, [enabled, selectedClientId, linkedConversationIds, refreshToken, scopeKey]);
 
