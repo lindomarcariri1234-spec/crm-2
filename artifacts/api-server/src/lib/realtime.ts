@@ -17,6 +17,7 @@ const SEAT_UPDATE_CHANNEL = "seat-updates";
 const SUPPORT_TICKET_UPDATE_CHANNEL = "support-ticket-updates";
 
 let _subscriber: Redis | null = null;
+let _cancelRecoveryRetry: (() => void) | null = null;
 
 /**
  * Initialises a dedicated Redis subscriber connection for realtime fan-out.
@@ -40,47 +41,90 @@ export function initSeatUpdateSubscriber(): void {
   let recoveryPending = false;
   let recoveryGeneration = 0;
   let recoveryInFlight = false;
+  let subscriberReady = false;
+  let recoveryRetryCount = 0;
+  let recoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
-  subscriber.on("error", (err: Error) => {
-    logger.warn({ err }, "[seat-sse] Subscriber connection error");
-  });
+  const clearRecoveryRetry = () => {
+    if (recoveryRetryTimer !== null) {
+      clearTimeout(recoveryRetryTimer);
+      recoveryRetryTimer = null;
+    }
+  };
+  _cancelRecoveryRetry = clearRecoveryRetry;
 
-  subscriber.on("reconnecting", () => {
-    if (!subscriptionsActive) return;
-    recoveryPending = true;
-    recoveryGeneration += 1;
-  });
+  const attemptRecoverySubscribe = () => {
+    if (
+      _subscriber !== subscriber
+      || !subscriptionsActive
+      || !recoveryPending
+      || !subscriberReady
+      || recoveryInFlight
+    ) {
+      return;
+    }
 
-  // Pub/Sub does not replay messages lost while this connection is offline.
-  // ioredis emits "ready" before its automatic resubscribe is acknowledged,
-  // so refresh open seat and ticket streams only after explicit subscribe succeeds.
-  subscriber.on("ready", () => {
-    if (!subscriptionsActive || !recoveryPending || recoveryInFlight) return;
-
+    clearRecoveryRetry();
     recoveryInFlight = true;
     const generation = recoveryGeneration;
     void subscriber
       .subscribe(SEAT_UPDATE_CHANNEL, SUPPORT_TICKET_UPDATE_CHANNEL)
       .then(() => {
         recoveryInFlight = false;
-        if (
-          _subscriber !== subscriber
-          || !recoveryPending
-          || generation !== recoveryGeneration
-        ) {
+        if (_subscriber !== subscriber || !recoveryPending) return;
+        if (generation !== recoveryGeneration) {
+          // A later disconnect happened while this acknowledgement was pending.
+          // If Redis is already ready again, subscribe once more for that cycle.
+          if (subscriberReady) attemptRecoverySubscribe();
           return;
         }
+
         recoveryPending = false;
+        recoveryRetryCount = 0;
+        clearRecoveryRetry();
         emitSeatRefresh();
         emitSupportTicketRefresh(generateId());
         logger.info("[realtime] Redis SSE subscriptions restored; refreshing connected seat maps and ticket inboxes");
       })
       .catch((err: unknown) => {
         recoveryInFlight = false;
-        if (_subscriber === subscriber) {
-          logger.error({ err }, "[realtime] Failed to restore Redis SSE subscriptions");
+        if (_subscriber !== subscriber) return;
+        logger.error({ err }, "[realtime] Failed to restore Redis SSE subscriptions");
+        if (!recoveryPending) return;
+        if (generation !== recoveryGeneration) {
+          if (subscriberReady) attemptRecoverySubscribe();
+          return;
         }
+        if (!subscriberReady) return;
+
+        const delayMs = Math.min(250 * 2 ** recoveryRetryCount, 5_000);
+        recoveryRetryCount += 1;
+        recoveryRetryTimer = setTimeout(() => {
+          recoveryRetryTimer = null;
+          attemptRecoverySubscribe();
+        }, delayMs);
       });
+  };
+
+  subscriber.on("error", (err: Error) => {
+    logger.warn({ err }, "[seat-sse] Subscriber connection error");
+  });
+
+  subscriber.on("reconnecting", () => {
+    subscriberReady = false;
+    clearRecoveryRetry();
+    if (!subscriptionsActive) return;
+    recoveryPending = true;
+    recoveryGeneration += 1;
+    recoveryRetryCount = 0;
+  });
+
+  // Pub/Sub does not replay messages lost while this connection is offline.
+  // ioredis emits "ready" before its automatic resubscribe is acknowledged,
+  // so refresh open seat and ticket streams only after explicit subscribe succeeds.
+  subscriber.on("ready", () => {
+    subscriberReady = true;
+    attemptRecoverySubscribe();
   });
 
   void subscriber
@@ -158,6 +202,8 @@ export async function broadcastSupportTicketUpdate(
  * Closes the dedicated subscriber connection. Call during graceful shutdown.
  */
 export async function closeSeatUpdateSubscriber(): Promise<void> {
+  _cancelRecoveryRetry?.();
+  _cancelRecoveryRetry = null;
   if (_subscriber) {
     const subscriber = _subscriber;
     _subscriber = null;

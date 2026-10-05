@@ -340,15 +340,19 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
   });
 
-  it("refreshes connected ticket inboxes only after Redis subscriptions are restored", async () => {
+  it("waits through repeated disconnects and refreshes ticket inboxes once after the latest acknowledgement", async () => {
     const { fakePub, fakeSubscriber } = makeFakePub();
     mockGetRedisConnection.mockReturnValue(fakePub);
 
-    let resolveRecoverySubscribe: (() => void) | undefined;
+    let resolveFirstRecoverySubscribe: (() => void) | undefined;
+    let resolveLatestRecoverySubscribe: (() => void) | undefined;
     fakeSubscriber.subscribe
       .mockResolvedValueOnce(undefined)
       .mockImplementationOnce(() => new Promise<void>((resolve) => {
-        resolveRecoverySubscribe = resolve;
+        resolveFirstRecoverySubscribe = resolve;
+      }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveLatestRecoverySubscribe = resolve;
       }));
 
     initSeatUpdateSubscriber();
@@ -358,15 +362,66 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     fakeSubscriber.emit("ready");
     await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledTimes(2));
     expect(mockEmitSupportTicketRefresh).not.toHaveBeenCalled();
+    expect(mockEmitSeatRefresh).not.toHaveBeenCalled();
 
-    if (!resolveRecoverySubscribe) {
-      throw new Error("Expected the recovery subscription acknowledgement to be pending");
+    // A second disconnect invalidates the first acknowledgement. Its ready
+    // event arrives while that subscribe is still pending, so the first ack
+    // must not refresh inboxes or strand recovery.
+    fakeSubscriber.emit("reconnecting", 100);
+    fakeSubscriber.emit("ready");
+    expect(fakeSubscriber.subscribe).toHaveBeenCalledTimes(2);
+    expect(mockEmitSupportTicketRefresh).not.toHaveBeenCalled();
+
+    if (!resolveFirstRecoverySubscribe) {
+      throw new Error("Expected the first recovery acknowledgement to be pending");
     }
-    resolveRecoverySubscribe();
+    resolveFirstRecoverySubscribe();
+
+    await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledTimes(3));
+    expect(mockEmitSupportTicketRefresh).not.toHaveBeenCalled();
+    expect(mockEmitSeatRefresh).not.toHaveBeenCalled();
+
+    if (!resolveLatestRecoverySubscribe) {
+      throw new Error("Expected the latest recovery acknowledgement to be pending");
+    }
+    resolveLatestRecoverySubscribe();
 
     await vi.waitFor(() => expect(mockEmitSupportTicketRefresh).toHaveBeenCalledOnce());
     expect(mockEmitSeatRefresh).toHaveBeenCalledOnce();
     expect(mockEmitSupportTicketRefresh).toHaveBeenCalledWith(expect.any(String));
+  });
+
+  it("retries a failed recovery subscription acknowledgement without refreshing early", async () => {
+    const { fakePub, fakeSubscriber } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+
+    let resolveRetrySubscribe: (() => void) | undefined;
+    fakeSubscriber.subscribe
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("recovery subscribe failed"))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveRetrySubscribe = resolve;
+      }));
+
+    initSeatUpdateSubscriber();
+    await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledOnce());
+    fakeSubscriber.emit("reconnecting", 100);
+    fakeSubscriber.emit("ready");
+    await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledTimes(2));
+
+    // The rejected acknowledgement must leave recovery pending. A retry is
+    // issued while ready, but still cannot refresh until that retry is acked.
+    await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledTimes(3));
+    expect(mockEmitSupportTicketRefresh).not.toHaveBeenCalled();
+    expect(mockEmitSeatRefresh).not.toHaveBeenCalled();
+
+    if (!resolveRetrySubscribe) {
+      throw new Error("Expected the retried recovery acknowledgement to be pending");
+    }
+    resolveRetrySubscribe();
+
+    await vi.waitFor(() => expect(mockEmitSupportTicketRefresh).toHaveBeenCalledOnce());
+    expect(mockEmitSeatRefresh).toHaveBeenCalledOnce();
   });
 
   it("falls back to a local tenant-scoped ticket event when Redis is unavailable", async () => {

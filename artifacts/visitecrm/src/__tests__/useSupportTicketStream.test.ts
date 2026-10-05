@@ -149,6 +149,8 @@ describe("useSupportTicketStream", () => {
     expect(onTicketUpdate).not.toHaveBeenCalled();
     expect(onQueuesUpdate).not.toHaveBeenCalled();
     expect(stream.closeCount).toBe(0);
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(MockEventSource.last()).toBe(stream);
     queryClient.clear();
   });
 
