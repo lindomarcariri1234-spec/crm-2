@@ -95,6 +95,7 @@ function makeProps(overrides: Partial<ConversationsTabProps> = {}): Conversation
 }
 
 function ConversationHistoryRetryHarness({
+  enabled = true,
   selectedClientId = "client-1",
   conversationIds = [
     "conversation-success",
@@ -102,11 +103,12 @@ function ConversationHistoryRetryHarness({
     "conversation-failed-b",
   ],
 }: {
+  enabled?: boolean;
   selectedClientId?: string;
   conversationIds?: string[];
 } = {}) {
   const history = useConversationAiMessages({
-    enabled: true,
+    enabled,
     selectedClientId,
     conversations: conversationIds.map((id) => ({
       id,
@@ -462,6 +464,72 @@ describe("WhatsApp conversation history", () => {
     )?.getAttribute("aria-busy")).toBe("false");
     expect(container.querySelector('[data-testid="loaded-conversation-history"]')?.textContent)
       .not.toContain("Resposta antiga da tentativa abortada");
+  });
+
+  it("aborts a targeted retry when leaving the conversations tab and clears its status on return", async () => {
+    const conversationId = "conversation-tab-disabled";
+    const { requests, fetchMock } = installDeferredFetch();
+    const { container, rerender } = await renderComponent(
+      createElement(ConversationHistoryRetryHarness, {
+        enabled: true,
+        conversationIds: [conversationId],
+      }),
+    );
+
+    await flushAct(async () => {
+      await settleHttpFailure(getMessageRequest(requests, conversationId));
+    });
+    const retryButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-failed-whatsapp-session-0"]',
+    );
+    expect(retryButton?.textContent).toBe("Tentar novamente");
+    await flushAct(() => retryButton!.click());
+
+    const delayedRetry = getMessageRequest(requests, conversationId, 1);
+    const retryCall = fetchMock.mock.calls.find(([input], index) =>
+      index > 0 && String(input).includes(
+        `/chatbot-conversations/${conversationId}/messages`,
+      ),
+    );
+    expect(retryCall?.[1]?.signal?.aborted).toBe(false);
+    expect(container.querySelector(
+      '[data-testid="button-retry-failed-whatsapp-session-0"]',
+    )?.textContent).toBe("Tentando…");
+
+    await rerender(createElement(ConversationHistoryRetryHarness, {
+      enabled: false,
+      conversationIds: [conversationId],
+    }));
+    expect(retryCall?.[1]?.signal?.aborted).toBe(true);
+    expect(container.querySelector(
+      '[data-testid="button-retry-failed-whatsapp-session-0"]',
+    )).toBeNull();
+
+    await rerender(createElement(ConversationHistoryRetryHarness, {
+      enabled: true,
+      conversationIds: [conversationId],
+    }));
+    const refreshedHistoryRequest = getMessageRequest(requests, conversationId, 2);
+
+    await flushAct(async () => {
+      await settleRequest(delayedRetry, [
+        makeAiMessage(conversationId, "Resposta tardia da aba anterior"),
+      ]);
+    });
+    const history = container.querySelector<HTMLElement>(
+      '[data-testid="loaded-conversation-history"]',
+    );
+    expect(history?.textContent).not.toContain("Resposta tardia da aba anterior");
+
+    await flushAct(async () => {
+      await settleHttpFailure(refreshedHistoryRequest);
+    });
+    const returnedRetryButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-failed-whatsapp-session-0"]',
+    );
+    expect(returnedRetryButton?.textContent).toBe("Tentar novamente");
+    expect(returnedRetryButton?.getAttribute("aria-busy")).toBe("false");
+    expect(history?.textContent).not.toContain("Resposta tardia da aba anterior");
   });
 
   it("queues extra session retries without exceeding five active requests", async () => {
