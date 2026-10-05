@@ -17,6 +17,7 @@ import {
   parseSupportTicketBroadcastUpdate,
   parseSupportTicketUpdatePayload,
   parseSupportTicketUpdatePayloadDetailed,
+  SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES,
   type SupportTicketBroadcastUpdate,
   type SupportTicketUpdatePayloadParseResult,
 } from "./support-ticket-sse";
@@ -33,6 +34,7 @@ type SupportTicketRedisRejectionReason =
   | "invalid_json"
   | "invalid_envelope"
   | Extract<SupportTicketUpdatePayloadParseResult, { ok: false }>["reason"]
+  | "oversized_message"
   | "unsupported_refresh"
   | "delivery_error";
 
@@ -41,6 +43,7 @@ const pendingSupportTicketRedisRejections: Record<SupportTicketRedisRejectionRea
   invalid_envelope: 0,
   invalid_event_id: 0,
   invalid_payload_shape: 0,
+  oversized_message: 0,
   unsupported_refresh: 0,
   delivery_error: 0,
 };
@@ -246,6 +249,11 @@ export function initSeatUpdateSubscriber(): void {
   subscriber.on("message", (channel: string, message: string) => {
     if (!subscriptionsActive || recoveryPending) return;
     if (channel === SUPPORT_TICKET_UPDATE_CHANNEL) {
+      if (Buffer.byteLength(message, "utf8") > SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES) {
+        recordSupportTicketRedisRejection("oversized_message");
+        return;
+      }
+
       let parsedMessage: unknown;
       try {
         parsedMessage = JSON.parse(message) as unknown;

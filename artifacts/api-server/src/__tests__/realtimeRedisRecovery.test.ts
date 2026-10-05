@@ -63,6 +63,7 @@ import {
   removeSupportTicketClient,
   SUPPORT_TICKET_EVENT_ID_MAX_LENGTH,
   SUPPORT_TICKET_ID_MAX_LENGTH,
+  SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES,
 } from "../lib/support-ticket-sse.js";
 import {
   malformedSupportTicketSsePayloads,
@@ -969,6 +970,23 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         type: "ticket",
         ticketId: "t".repeat(SUPPORT_TICKET_ID_MAX_LENGTH),
       };
+      const maxLengthTicketMessage = JSON.stringify({
+        tenantId: matchingTenantId,
+        payload: maxLengthTicketEvent,
+      });
+      expect(Buffer.byteLength(maxLengthTicketMessage, "utf8"))
+        .toBeLessThanOrEqual(SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES);
+      const oversizedPayloadMarker = "oversized-private-ticket-envelope";
+      const oversizedExtraMessage = JSON.stringify({
+        tenantId: matchingTenantId,
+        payload: ticketEvent,
+        extra: `${oversizedPayloadMarker}${"x".repeat(SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES)}`,
+      });
+      const oversizedInvalidJsonMessage = `{"${"x".repeat(SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES)}`;
+      expect(Buffer.byteLength(oversizedExtraMessage, "utf8"))
+        .toBeGreaterThan(SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES);
+      expect(Buffer.byteLength(oversizedInvalidJsonMessage, "utf8"))
+        .toBeGreaterThan(SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES);
       const ticketEventWithSensitiveExtra = {
         ...sanitizedTicketEvent,
         customerEmail: "must-not-be-forwarded@example.test",
@@ -997,6 +1015,8 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
           tenantId: matchingTenantId,
           payload: { eventId: "redis-refresh-is-local-only", type: "refresh", ticketId: null },
         }),
+        oversizedExtraMessage,
+        oversizedInvalidJsonMessage,
       ];
       mockEmitSeatUpdate.mockClear();
       mockLoggerWarn.mockClear();
@@ -1037,10 +1057,7 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         tenantId: matchingTenantId,
         payload: queuesEventWithUnexpectedExtra,
       }))).toBe(2);
-      expect(await publisher.publish("support-ticket-updates", JSON.stringify({
-        tenantId: matchingTenantId,
-        payload: maxLengthTicketEvent,
-      }))).toBe(2);
+      expect(await publisher.publish("support-ticket-updates", maxLengthTicketMessage)).toBe(2);
 
       const matchingStreams = streams.filter((stream) => stream.tenantId === matchingTenantId);
       const otherTenantStreams = streams.filter((stream) => stream.tenantId === otherTenantId);
@@ -1091,7 +1108,7 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         message === "[support-ticket-sse] Redis update rejections (aggregated)"
       ))
       .map(([fields]) => fields as { reason: string; count: number });
-    expect(rejectionReports).toHaveLength(10);
+    expect(rejectionReports).toHaveLength(12);
     expect(mockLoggerWarn.mock.calls).toHaveLength(rejectionReports.length);
     for (const report of rejectionReports) {
       expect(Object.keys(report).sort()).toEqual(["count", "reason"]);
@@ -1106,6 +1123,7 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       invalid_envelope: 10,
       invalid_event_id: 42,
       invalid_payload_shape: 26,
+      oversized_message: 4,
       unsupported_refresh: 2,
     });
 
@@ -1118,6 +1136,7 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       "must-not-be-forwarded",
       "customerEmail",
       "event-with-",
+      "oversized-private-ticket-envelope",
     ]) {
       expect(rejectionLogText).not.toContain(forbiddenValue);
     }

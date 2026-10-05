@@ -25,6 +25,9 @@ type SupportTicketUpdateShape =
 // allowance preserves descriptive/internal IDs while bounding SSE fan-out.
 export const SUPPORT_TICKET_EVENT_ID_MAX_LENGTH = 64;
 export const SUPPORT_TICKET_ID_MAX_LENGTH = 64;
+// Covers the largest legitimate ticket envelope using 64-character IDs and
+// generated 16-character tenant IDs, with UTF-8 and JSON overhead headroom.
+export const SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES = 1024;
 
 const SUPPORT_TICKET_EVENT_ID_CONTROL_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 

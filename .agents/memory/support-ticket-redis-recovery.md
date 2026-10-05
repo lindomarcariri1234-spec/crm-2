@@ -48,3 +48,9 @@ The current app-generated and persisted support-ticket IDs are 16 characters; SS
 **Why:** Ticket IDs are stored as unrestricted text, so the practical compatibility limit comes from generated and existing values rather than the database column type. The extra headroom preserves descriptive internal IDs without allowing a single ID to inflate every open SSE frame.
 
 **How to apply:** Keep length checks in the shared parser used by direct delivery and Redis publish/subscriber paths. Before changing the cap, audit current persisted ticket IDs and test both the exact limit and one character over it.
+
+Reject support-ticket Redis envelopes larger than 1 KiB before `JSON.parse`, and aggregate the drop under the fixed `oversized_message` reason. The generated tenant ID and 64-character event/ticket IDs fit comfortably within the ceiling, including UTF-8 and JSON overhead.
+
+**Why:** A large unknown field can consume memory and block the event loop before payload projection runs, even if the public event itself is small.
+
+**How to apply:** Keep the byte check ahead of parsing, and test both an oversized valid envelope with extra data and malformed oversized JSON. Logs and aggregate reports must contain only fixed reasons and counts.
