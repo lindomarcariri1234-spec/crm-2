@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AiConversationMessage } from "@/lib/communicationTimeline";
 
 interface ConversationLink {
@@ -13,16 +13,16 @@ interface UseConversationAiMessagesOptions {
   enabled: boolean;
   selectedClientId: string | null;
   conversations: ConversationLink[];
-  refreshToken: number;
-  retryConversationId?: string | null;
 }
 
 interface UseConversationAiMessagesResult {
   messages: AiConversationMessage[];
   loading: boolean;
-  retryingConversationId: string | null;
+  retryingConversationIds: string[];
+  queuedRetryConversationIds: string[];
   error: string | null;
   failedConversationLabels: FailedConversationLabel[];
+  retryConversationAiMessages: (conversationId?: string) => void;
   updateConversationMessages: (
     conversationId: string,
     conversationMessages: AiConversationMessage[],
@@ -44,6 +44,20 @@ interface PartialConversationFailure {
 interface ScopedRefreshError {
   scopeKey: string;
   message: string;
+}
+
+interface ConversationRetryJob {
+  conversationId: string;
+  scopeKey: string;
+  generation: number;
+  totalConversationCount: number;
+  abortController: AbortController;
+}
+
+interface ConversationRetryStatus {
+  scopeKey: string;
+  activeConversationIds: string[];
+  queuedConversationIds: string[];
 }
 
 type ConversationLoadResult =
@@ -112,20 +126,22 @@ export function useConversationAiMessages({
   enabled,
   selectedClientId,
   conversations,
-  refreshToken,
-  retryConversationId = null,
 }: UseConversationAiMessagesOptions): UseConversationAiMessagesResult {
   const [messages, setMessages] = useState<AiConversationMessage[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [retryingConversationId, setRetryingConversationId] = useState<string | null>(null);
+  const [initialLoading, setInitialLoading] = useState(false);
+  const [retryStatus, setRetryStatus] = useState<ConversationRetryStatus>({
+    scopeKey: "",
+    activeConversationIds: [],
+    queuedConversationIds: [],
+  });
   const [partialFailure, setPartialFailure] = useState<PartialConversationFailure | null>(null);
   const [refreshError, setRefreshError] = useState<ScopedRefreshError | null>(null);
-  const partialFailureRef = useRef(partialFailure);
-  const lastRefreshTokenRef = useRef(refreshToken);
-
-  useEffect(() => {
-    partialFailureRef.current = partialFailure;
-  }, [partialFailure]);
+  const partialFailureRef = useRef<PartialConversationFailure | null>(null);
+  const retryQueueRef = useRef<ConversationRetryJob[]>([]);
+  const activeRetryJobsRef = useRef(new Map<string, ConversationRetryJob>());
+  const retryGenerationRef = useRef(0);
+  const retryScopeKeyRef = useRef<string | null>(null);
+  const retryPumpRef = useRef<(generation: number) => void>(() => undefined);
 
   const linkedConversationIds = conversations
     .filter((conversation) =>
@@ -134,6 +150,10 @@ export function useConversationAiMessages({
     .map((conversation) => conversation.id)
     .sort()
     .join("|");
+  const conversationIds = useMemo(
+    () => linkedConversationIds ? linkedConversationIds.split("|") : [],
+    [linkedConversationIds],
+  );
   const scopeKey = JSON.stringify([selectedClientId, linkedConversationIds]);
   const currentPartialFailure = partialFailure?.scopeKey === scopeKey ? partialFailure : null;
   const failedConversationLabels = currentPartialFailure
@@ -144,6 +164,20 @@ export function useConversationAiMessages({
     currentPartialFailure ? formatPartialFailure(currentPartialFailure) : null,
     currentRefreshError,
   ].filter((message): message is string => Boolean(message)).join(" ") || null;
+  const retryingConversationIds = retryStatus.scopeKey === scopeKey
+    ? retryStatus.activeConversationIds
+    : [];
+  const queuedRetryConversationIds = retryStatus.scopeKey === scopeKey
+    ? retryStatus.queuedConversationIds
+    : [];
+  const loading = initialLoading
+    || retryingConversationIds.length > 0
+    || queuedRetryConversationIds.length > 0;
+
+  const setPartialFailureSnapshot = useCallback((next: PartialConversationFailure | null) => {
+    partialFailureRef.current = next;
+    setPartialFailure(next);
+  }, []);
 
   const updateConversationMessages = useCallback((
     conversationId: string,
@@ -153,89 +187,241 @@ export function useConversationAiMessages({
       ...current.filter((message) => message.conversationId !== conversationId),
       ...conversationMessages,
     ]);
-    setPartialFailure((current) => {
-      if (current?.scopeKey !== scopeKey) return current;
-      const failedConversationIds = current.failedConversationIds.filter(
+    const currentFailure = partialFailureRef.current;
+    if (currentFailure?.scopeKey === scopeKey) {
+      const failedConversationIds = currentFailure.failedConversationIds.filter(
         (failedId) => failedId !== conversationId,
       );
-      return failedConversationIds.length > 0
-        ? { ...current, failedConversationIds }
-        : null;
-    });
+      setPartialFailureSnapshot(failedConversationIds.length > 0
+        ? { ...currentFailure, failedConversationIds }
+        : null);
+    }
     setRefreshError((current) => current?.scopeKey === scopeKey ? null : current);
-  }, [scopeKey]);
+  }, [scopeKey, setPartialFailureSnapshot]);
   const setErrorMessage = useCallback((message: string) => {
     setRefreshError({ scopeKey, message });
   }, [scopeKey]);
 
-  useEffect(() => {
-    const isExplicitRefresh = refreshToken !== lastRefreshTokenRef.current;
-    lastRefreshTokenRef.current = refreshToken;
-    const conversationIds = linkedConversationIds ? linkedConversationIds.split("|") : [];
-    if (!enabled || !selectedClientId || conversationIds.length === 0) {
-      setMessages([]);
-      setLoading(false);
-      setRetryingConversationId(null);
-      setPartialFailure(null);
-      setRefreshError(null);
+  const applyRetryResult = useCallback((
+    job: ConversationRetryJob,
+    result: { messages: AiConversationMessage[] } | { failed: true },
+  ) => {
+    const currentFailure = partialFailureRef.current?.scopeKey === job.scopeKey
+      ? partialFailureRef.current
+      : null;
+    if ("messages" in result) {
+      setMessages((current) => [
+        ...current.filter((message) => message.conversationId !== job.conversationId),
+        ...result.messages,
+      ]);
+      const failedConversationIds = currentFailure?.failedConversationIds.filter(
+        (failedId) => failedId !== job.conversationId,
+      ) ?? [];
+      setPartialFailureSnapshot(
+        currentFailure && failedConversationIds.length > 0
+          ? { ...currentFailure, failedConversationIds }
+          : null,
+      );
       return;
     }
 
-    const currentFailureForScope = partialFailureRef.current?.scopeKey === scopeKey
-      ? partialFailureRef.current
-      : null;
+    const failedConversationIds = currentFailure?.failedConversationIds ?? [];
+    setPartialFailureSnapshot({
+      scopeKey: job.scopeKey,
+      failedConversationIds: failedConversationIds.includes(job.conversationId)
+        ? failedConversationIds
+        : [...failedConversationIds, job.conversationId],
+      totalConversationCount: currentFailure?.totalConversationCount ?? job.totalConversationCount,
+    });
+  }, [setPartialFailureSnapshot]);
+
+  const pumpRetries = useCallback((generation: number) => {
     if (
-      isExplicitRefresh
-      && retryConversationId
-      && !currentFailureForScope?.failedConversationIds.includes(retryConversationId)
+      generation !== retryGenerationRef.current
+      || retryScopeKeyRef.current !== scopeKey
+      || !enabled
+      || !selectedClientId
     ) {
       return;
     }
 
-    let cancelled = false;
-    const abortController = new AbortController();
-    setLoading(true);
-    setRefreshError((current) => current?.scopeKey === scopeKey ? null : current);
-    // A targeted retry loads one failed session; an unscoped retry loads all failures.
-    const failedConversationIdsToRetry = isExplicitRefresh
-      && currentFailureForScope
-      ? retryConversationId
-        ? [retryConversationId]
-        : currentFailureForScope.failedConversationIds
-      : [];
-    const isTargetedRetry = isExplicitRefresh && retryConversationId !== null;
-    const conversationIdsToLoad = isTargetedRetry
-      ? failedConversationIdsToRetry
-      : failedConversationIdsToRetry.length > 0
-        ? failedConversationIdsToRetry
-        : conversationIds;
-    setRetryingConversationId(isTargetedRetry ? retryConversationId : null);
-    const conversationIdSet = new Set(conversationIds);
-    const requestedConversationIdSet = new Set(conversationIdsToLoad);
-    const results = new Array<ConversationLoadResult>(conversationIdsToLoad.length);
-    let nextConversationIndex = 0;
-    const loadNextConversation = async (): Promise<void> => {
-      while (!cancelled && nextConversationIndex < conversationIdsToLoad.length) {
-        const resultIndex = nextConversationIndex++;
-        const conversationId = conversationIdsToLoad[resultIndex]!;
+    const activeJobs = activeRetryJobsRef.current;
+    const queuedJobs = retryQueueRef.current;
+    while (
+      activeJobs.size < MAX_CONCURRENT_CONVERSATION_HISTORY_REQUESTS
+      && queuedJobs.length > 0
+    ) {
+      const job = queuedJobs.shift()!;
+      if (
+        job.generation !== generation
+        || job.scopeKey !== scopeKey
+        || activeJobs.has(job.conversationId)
+      ) {
+        continue;
+      }
+      activeJobs.set(job.conversationId, job);
+
+      void (async () => {
+        let result: { messages: AiConversationMessage[] } | { failed: true };
         try {
           const response = await fetch(
-            `${BASE}/api/chatbot-conversations/${encodeURIComponent(conversationId)}/messages`,
+            `${BASE}/api/chatbot-conversations/${encodeURIComponent(job.conversationId)}/messages`,
+            { credentials: "include", signal: job.abortController.signal },
+          );
+          if (!response.ok) throw new Error("failed");
+          result = {
+            messages: await response.json() as AiConversationMessage[],
+          };
+        } catch {
+          result = { failed: true };
+        }
+
+        if (
+          retryGenerationRef.current === generation
+          && retryScopeKeyRef.current === job.scopeKey
+          && activeJobs.get(job.conversationId) === job
+        ) {
+          applyRetryResult(job, result);
+        }
+      })().finally(() => {
+        if (
+          retryGenerationRef.current !== generation
+          || retryScopeKeyRef.current !== job.scopeKey
+          || activeJobs.get(job.conversationId) !== job
+        ) {
+          return;
+        }
+        activeJobs.delete(job.conversationId);
+        retryPumpRef.current(generation);
+      });
+    }
+
+    setRetryStatus({
+      scopeKey,
+      activeConversationIds: Array.from(activeJobs.keys()),
+      queuedConversationIds: queuedJobs.map((job) => job.conversationId),
+    });
+  }, [
+    applyRetryResult,
+    enabled,
+    scopeKey,
+    selectedClientId,
+  ]);
+  retryPumpRef.current = pumpRetries;
+
+  const retryConversationAiMessages = useCallback((conversationId?: string) => {
+    if (
+      !enabled
+      || !selectedClientId
+      || retryScopeKeyRef.current !== scopeKey
+    ) {
+      return;
+    }
+
+    const currentFailure = partialFailureRef.current?.scopeKey === scopeKey
+      ? partialFailureRef.current
+      : null;
+    const conversationIdsToRetry = conversationId
+      ? currentFailure?.failedConversationIds.includes(conversationId)
+        ? [conversationId]
+        : []
+      : currentFailure?.failedConversationIds ?? (currentRefreshError ? conversationIds : []);
+    if (conversationIdsToRetry.length === 0) return;
+
+    const pendingIds = new Set([
+      ...activeRetryJobsRef.current.keys(),
+      ...retryQueueRef.current.map((job) => job.conversationId),
+    ]);
+    const newConversationIds = conversationIdsToRetry.filter(
+      (id) => conversationIds.includes(id) && !pendingIds.has(id),
+    );
+    if (newConversationIds.length === 0) return;
+
+    const generation = retryGenerationRef.current;
+    retryQueueRef.current.push(...newConversationIds.map((id) => ({
+      conversationId: id,
+      scopeKey,
+      generation,
+      totalConversationCount: conversationIds.length,
+      abortController: new AbortController(),
+    })));
+    setRefreshError((current) => current?.scopeKey === scopeKey ? null : current);
+    retryPumpRef.current(generation);
+  }, [
+    conversationIds,
+    currentRefreshError,
+    enabled,
+    scopeKey,
+    selectedClientId,
+  ]);
+
+  useEffect(() => {
+    const generation = retryGenerationRef.current + 1;
+    retryGenerationRef.current = generation;
+    retryScopeKeyRef.current = scopeKey;
+    retryQueueRef.current = [];
+    for (const job of activeRetryJobsRef.current.values()) {
+      job.abortController.abort();
+    }
+    activeRetryJobsRef.current.clear();
+    setRetryStatus({
+      scopeKey,
+      activeConversationIds: [],
+      queuedConversationIds: [],
+    });
+
+    let cancelled = false;
+    const abortController = new AbortController();
+    const cancelRetries = () => {
+      if (retryGenerationRef.current !== generation) return;
+      retryGenerationRef.current += 1;
+      retryScopeKeyRef.current = null;
+      retryQueueRef.current = [];
+      for (const job of activeRetryJobsRef.current.values()) {
+        job.abortController.abort();
+      }
+      activeRetryJobsRef.current.clear();
+    };
+
+    if (!enabled || !selectedClientId || conversationIds.length === 0) {
+      setMessages([]);
+      setInitialLoading(false);
+      setPartialFailureSnapshot(null);
+      setRefreshError(null);
+      return () => {
+        cancelled = true;
+        abortController.abort();
+        cancelRetries();
+      };
+    }
+
+    setInitialLoading(true);
+    setRefreshError((current) => current?.scopeKey === scopeKey ? null : current);
+    const conversationIdSet = new Set(conversationIds);
+    const results = new Array<ConversationLoadResult>(conversationIds.length);
+    let nextConversationIndex = 0;
+    const loadNextConversation = async (): Promise<void> => {
+      while (!cancelled && nextConversationIndex < conversationIds.length) {
+        const resultIndex = nextConversationIndex++;
+        const id = conversationIds[resultIndex]!;
+        try {
+          const response = await fetch(
+            `${BASE}/api/chatbot-conversations/${encodeURIComponent(id)}/messages`,
             { credentials: "include", signal: abortController.signal },
           );
           if (!response.ok) throw new Error("failed");
           results[resultIndex] = {
-            conversationId,
+            conversationId: id,
             messages: await response.json() as AiConversationMessage[],
           };
         } catch {
-          results[resultIndex] = { conversationId, failed: true };
+          results[resultIndex] = { conversationId: id, failed: true };
         }
       }
     };
     const workerCount = Math.min(
       MAX_CONCURRENT_CONVERSATION_HISTORY_REQUESTS,
-      conversationIdsToLoad.length,
+      conversationIds.length,
     );
     Promise.all(Array.from({ length: workerCount }, () => loadNextConversation()))
       .then(() => {
@@ -249,58 +435,47 @@ export function useConversationAiMessages({
             "failed" in result,
           )
           .map((result) => result.conversationId);
-        const allFailedConversationIds = isTargetedRetry && currentFailureForScope
-          ? currentFailureForScope.failedConversationIds.filter(
-            (conversationId) =>
-              !requestedConversationIdSet.has(conversationId)
-              || failedConversationIds.includes(conversationId),
-          )
-          : failedConversationIds;
-
         setMessages((current) => [
           ...current.filter((message) =>
             conversationIdSet.has(message.conversationId)
-            && (
-              !requestedConversationIdSet.has(message.conversationId)
-              || failedConversationIds.includes(message.conversationId)
-            ),
+            && failedConversationIds.includes(message.conversationId),
           ),
           ...successfulResults.flatMap((result) => result.messages),
         ]);
-        setPartialFailure(allFailedConversationIds.length > 0
+        setPartialFailureSnapshot(failedConversationIds.length > 0
           ? {
               scopeKey,
-              failedConversationIds: allFailedConversationIds,
+              failedConversationIds,
               totalConversationCount: conversationIds.length,
             }
           : null);
       })
       .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-          setRetryingConversationId(null);
-        }
+        if (!cancelled) setInitialLoading(false);
       });
 
     return () => {
       cancelled = true;
       abortController.abort();
+      cancelRetries();
     };
   }, [
     enabled,
     selectedClientId,
     linkedConversationIds,
-    refreshToken,
-    retryConversationId,
     scopeKey,
+    conversationIds,
+    setPartialFailureSnapshot,
   ]);
 
   return {
     messages,
     loading,
-    retryingConversationId,
+    retryingConversationIds,
+    queuedRetryConversationIds,
     error,
     failedConversationLabels,
+    retryConversationAiMessages,
     updateConversationMessages,
     setErrorMessage,
   };

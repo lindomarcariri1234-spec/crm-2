@@ -201,7 +201,8 @@ interface ConversationsTabProps {
   conversationMessages: CommunicationTimelineEntry[];
   selectedClientName: string | undefined;
   loadingConversationAiMessages: boolean;
-  retryingConversationId?: string | null;
+  retryingConversationIds?: string[];
+  queuedRetryConversationIds?: string[];
   conversationAiError: string | null;
   failedConversationLabels?: FailedConversationLabel[];
   onOpenFailedConversation: (conversationId: string) => void;
@@ -237,7 +238,8 @@ export function ConversationsTab({
   conversationMessages,
   selectedClientName,
   loadingConversationAiMessages,
-  retryingConversationId = null,
+  retryingConversationIds = [],
+  queuedRetryConversationIds = [],
   conversationAiError,
   failedConversationLabels = [],
   onOpenFailedConversation,
@@ -411,7 +413,8 @@ export function ConversationsTab({
                               data-testid="failed-conversation-history-labels"
                             >
                               {failedConversationLabels.map(({ conversationId, label }, index) => {
-                                const isRetrying = retryingConversationId === conversationId;
+                                const isRetrying = retryingConversationIds.includes(conversationId);
+                                const isQueued = queuedRetryConversationIds.includes(conversationId);
                                 return (
                                   <li key={conversationId}>
                                     <button
@@ -427,19 +430,25 @@ export function ConversationsTab({
                                       aria-label={
                                         isRetrying
                                           ? `Tentando novamente ${label}`
+                                          : isQueued
+                                            ? `Aguardando na fila para tentar novamente ${label}`
                                           : `Tentar novamente ${label}`
                                       }
                                       aria-busy={isRetrying}
                                       className="ml-2 h-6 px-2 text-xs"
                                       data-testid={`button-retry-failed-whatsapp-session-${index}`}
-                                      disabled={loadingConversationAiMessages}
+                                      disabled={isRetrying || isQueued}
                                       onClick={() => {
                                         void onRetryConversationAiMessages(conversationId);
                                       }}
                                       size="sm"
                                       variant="ghost"
                                     >
-                                      {isRetrying ? "Tentando…" : "Tentar novamente"}
+                                      {isRetrying
+                                        ? "Tentando…"
+                                        : isQueued
+                                          ? "Na fila…"
+                                          : "Tentar novamente"}
                                     </Button>
                                   </li>
                                 );
@@ -452,7 +461,6 @@ export function ConversationsTab({
                         data-testid="button-retry-conversation-ai-messages"
                         variant="outline"
                         size="sm"
-                        disabled={loadingConversationAiMessages}
                         onClick={() => { void onRetryConversationAiMessages(); }}
                       >
                         Tentar novamente todas as sessões

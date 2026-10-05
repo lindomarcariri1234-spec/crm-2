@@ -1,4 +1,4 @@
-import { createElement, useState, type ComponentProps } from "react";
+import { createElement, type ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js";
 import {
@@ -94,19 +94,23 @@ function makeProps(overrides: Partial<ConversationsTabProps> = {}): Conversation
   };
 }
 
-function ConversationHistoryRetryHarness() {
-  const [refreshToken, setRefreshToken] = useState(0);
-  const [retryConversationId, setRetryConversationId] = useState<string | null>(null);
+function ConversationHistoryRetryHarness({
+  conversationIds = [
+    "conversation-success",
+    "conversation-failed-a",
+    "conversation-failed-b",
+  ],
+}: {
+  conversationIds?: string[];
+} = {}) {
   const history = useConversationAiMessages({
     enabled: true,
     selectedClientId: "client-1",
-    conversations: [
-      { id: "conversation-success", clientId: "client-1", channel: "whatsapp" },
-      { id: "conversation-failed-a", clientId: "client-1", channel: "whatsapp" },
-      { id: "conversation-failed-b", clientId: "client-1", channel: "whatsapp" },
-    ],
-    refreshToken,
-    retryConversationId,
+    conversations: conversationIds.map((id) => ({
+      id,
+      clientId: "client-1",
+      channel: "whatsapp",
+    })),
   });
 
   return createElement(
@@ -118,11 +122,9 @@ function ConversationHistoryRetryHarness() {
         conversationAiError: history.error,
         failedConversationLabels: history.failedConversationLabels,
         loadingConversationAiMessages: history.loading,
-        retryingConversationId: history.retryingConversationId,
-        onRetryConversationAiMessages: (conversationId) => {
-          setRetryConversationId(conversationId ?? null);
-          setRefreshToken((current) => current + 1);
-        },
+        retryingConversationIds: history.retryingConversationIds,
+        queuedRetryConversationIds: history.queuedRetryConversationIds,
+        onRetryConversationAiMessages: history.retryConversationAiMessages,
       }),
     ),
     createElement(
@@ -218,7 +220,7 @@ afterEach(async () => {
 });
 
 describe("WhatsApp conversation history", () => {
-  it("retries one failed session and clears only its warning after success", async () => {
+  it("retries distinct failed sessions while another retry is pending", async () => {
     const { requests, fetchMock } = installDeferredFetch();
     const { container } = await renderComponent(
       createElement(ConversationHistoryRetryHarness),
@@ -268,18 +270,38 @@ describe("WhatsApp conversation history", () => {
       .toContain("Tentando novamente");
     expect(retryBButtonWhilePending?.textContent).toBe("Tentar novamente");
     expect(retryBButtonWhilePending?.getAttribute("aria-busy")).toBe("false");
-    expect(retryBButtonWhilePending?.disabled).toBe(true);
+    expect(retryBButtonWhilePending?.disabled).toBe(false);
     expect(container.querySelectorAll(
       '[data-testid^="button-open-failed-whatsapp-session-"]',
     )).toHaveLength(2);
 
+    await flushAct(() => retryBButtonWhilePending!.click());
+    const retriedFailedRequestB = getMessageRequest(
+      requests,
+      "conversation-failed-b",
+      1,
+    );
+    const retryAAndBButtonsWhilePending = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid^="button-retry-failed-whatsapp-session-"]',
+      ),
+    );
+    expect(retryAAndBButtonsWhilePending.map((button) => button.textContent))
+      .toEqual(["Tentando…", "Tentando…"]);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    const retryAllButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-conversation-ai-messages"]',
+    );
+    expect(retryAllButton).not.toBeNull();
+    await flushAct(() => retryAllButton!.click());
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+
     const callsFor = (conversationId: string) => fetchMock.mock.calls.filter(([input]) =>
       String(input).includes(`/chatbot-conversations/${conversationId}/messages`),
     );
-    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(callsFor("conversation-success")).toHaveLength(1);
     expect(callsFor("conversation-failed-a")).toHaveLength(2);
-    expect(callsFor("conversation-failed-b")).toHaveLength(1);
+    expect(callsFor("conversation-failed-b")).toHaveLength(2);
 
     await flushAct(async () => {
       await settleHttpFailure(retriedFailedRequestA);
@@ -287,8 +309,12 @@ describe("WhatsApp conversation history", () => {
     const retryAButtonAfterFailure = container.querySelector<HTMLButtonElement>(
       '[data-testid="button-retry-failed-whatsapp-session-0"]',
     );
+    const retryBButtonStillPending = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-failed-whatsapp-session-1"]',
+    );
     expect(retryAButtonAfterFailure?.textContent).toBe("Tentar novamente");
     expect(retryAButtonAfterFailure?.getAttribute("aria-busy")).toBe("false");
+    expect(retryBButtonStillPending?.textContent).toBe("Tentando…");
     expect(history!.textContent).toContain(successfulMessage.content);
     expect(container.querySelectorAll(
       '[data-testid^="button-retry-failed-whatsapp-session-"]',
@@ -311,10 +337,10 @@ describe("WhatsApp conversation history", () => {
       "Histórico da primeira conversa recuperado",
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
     expect(callsFor("conversation-success")).toHaveLength(1);
     expect(callsFor("conversation-failed-a")).toHaveLength(3);
-    expect(callsFor("conversation-failed-b")).toHaveLength(1);
+    expect(callsFor("conversation-failed-b")).toHaveLength(2);
     await flushAct(async () => {
       await settleRequest(secondRetriedFailedRequestA, [recoveredMessageA]);
     });
@@ -327,18 +353,11 @@ describe("WhatsApp conversation history", () => {
     )).toHaveLength(1);
     expect(container.querySelector('[role="alert"]')?.textContent)
       .toContain("Não foi possível carregar 1 de 3 conversas vinculadas.");
-    expect(callsFor("conversation-failed-b")).toHaveLength(1);
-
-    const remainingRetryButton = container.querySelector<HTMLButtonElement>(
+    const retryBStillRunningButton = container.querySelector<HTMLButtonElement>(
       '[data-testid="button-retry-failed-whatsapp-session-0"]',
     );
-    expect(remainingRetryButton).not.toBeNull();
-    await flushAct(() => remainingRetryButton!.click());
-    const retriedFailedRequestB = getMessageRequest(
-      requests,
-      "conversation-failed-b",
-      1,
-    );
+    expect(retryBStillRunningButton?.textContent).toBe("Tentando…");
+    expect(callsFor("conversation-failed-b")).toHaveLength(2);
     const recoveredMessageB = makeAiMessage(
       "conversation-failed-b",
       "Histórico da segunda conversa recuperado",
@@ -356,6 +375,115 @@ describe("WhatsApp conversation history", () => {
     expect(history!.textContent).toContain(recoveredMessageB.content);
     expect(history!.querySelectorAll("p")).toHaveLength(3);
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("queues extra session retries without exceeding five active requests", async () => {
+    const conversationIds = Array.from({ length: 6 }, (_, index) =>
+      `conversation-failed-${String(index + 1).padStart(2, "0")}`,
+    );
+    const { requests, fetchMock } = installDeferredFetch();
+    const { container } = await renderComponent(
+      createElement(ConversationHistoryRetryHarness, { conversationIds }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+
+    const firstInitialRequest = getMessageRequest(requests, conversationIds[0]!);
+    await flushAct(async () => {
+      await settleHttpFailure(firstInitialRequest);
+    });
+    const remainingInitialRequests = conversationIds.slice(1, 5).map((id) =>
+      getMessageRequest(requests, id),
+    );
+    const sixthInitialRequest = getMessageRequest(requests, conversationIds[5]!);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+
+    await flushAct(async () => {
+      await Promise.all([
+        ...remainingInitialRequests.map((request) => settleHttpFailure(request)),
+        settleHttpFailure(sixthInitialRequest),
+      ]);
+    });
+    expect(container.querySelectorAll(
+      '[data-testid^="button-retry-failed-whatsapp-session-"]',
+    )).toHaveLength(6);
+
+    for (let index = 0; index < conversationIds.length; index += 1) {
+      const button = container.querySelector<HTMLButtonElement>(
+        `[data-testid="button-retry-failed-whatsapp-session-${index}"]`,
+      );
+      expect(button).not.toBeNull();
+      await flushAct(() => button!.click());
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(11);
+    const retryButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid^="button-retry-failed-whatsapp-session-"]',
+      ),
+    );
+    expect(retryButtons.map((button) => button.textContent))
+      .toEqual(["Tentando…", "Tentando…", "Tentando…", "Tentando…", "Tentando…", "Na fila…"]);
+    const callsFor = (conversationId: string) => fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes(`/chatbot-conversations/${conversationId}/messages`),
+    );
+    for (const id of conversationIds.slice(0, 5)) {
+      expect(callsFor(id)).toHaveLength(2);
+    }
+    expect(callsFor(conversationIds[5]!)).toHaveLength(1);
+
+    const firstRetryRequest = getMessageRequest(requests, conversationIds[0]!, 1);
+    await flushAct(async () => {
+      await settleHttpFailure(firstRetryRequest);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(12);
+    expect(callsFor(conversationIds[5]!)).toHaveLength(2);
+    const retryAfterFailureButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-retry-failed-whatsapp-session-0"]',
+    );
+    expect(retryAfterFailureButton?.textContent).toBe("Tentar novamente");
+    expect(container.querySelector('[role="alert"]')?.textContent)
+      .toContain("Não foi possível carregar nenhuma das 6 conversas vinculadas.");
+
+    await flushAct(() => retryAfterFailureButton!.click());
+    expect(fetchMock).toHaveBeenCalledTimes(12);
+    const queuedRetryButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid^="button-retry-failed-whatsapp-session-"]',
+      ),
+    );
+    expect(queuedRetryButtons.map((button) => button.textContent))
+      .toEqual(["Na fila…", "Tentando…", "Tentando…", "Tentando…", "Tentando…", "Tentando…"]);
+
+    const remainingRetryRequests = conversationIds.slice(1).map((id) =>
+      getMessageRequest(requests, id, 1),
+    );
+    await flushAct(async () => {
+      await Promise.all(remainingRetryRequests.map((request, index) =>
+        settleRequest(request, [
+          makeAiMessage(conversationIds[index + 1]!, `Histórico ${index + 2} recuperado`),
+        ]),
+      ));
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(13);
+    const secondRetryRequest = getMessageRequest(requests, conversationIds[0]!, 2);
+    const history = container.querySelector<HTMLElement>(
+      '[data-testid="loaded-conversation-history"]',
+    );
+    expect(history?.querySelectorAll("p")).toHaveLength(5);
+    expect(container.querySelector('[role="alert"]')?.textContent)
+      .toContain("Não foi possível carregar 1 de 6 conversas vinculadas.");
+    expect(container.querySelector(
+      '[data-testid="button-retry-failed-whatsapp-session-0"]',
+    )?.textContent).toBe("Tentando…");
+
+    await flushAct(async () => {
+      await settleRequest(secondRetryRequest, [
+        makeAiMessage(conversationIds[0]!, "Primeiro histórico recuperado"),
+      ]);
+    });
+    expect(history?.querySelectorAll("p")).toHaveLength(6);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(13);
   });
 
   it("retries only failed linked histories and preserves recovered messages without duplicates", async () => {

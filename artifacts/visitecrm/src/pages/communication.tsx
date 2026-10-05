@@ -223,21 +223,18 @@ export default function Communication() {
   const [aiConversations, setAiConversations] = useState<AiConversation[]>([]);
   const [selectedAiConversationId, setSelectedAiConversationId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
-  const [conversationAiRefreshToken, setConversationAiRefreshToken] = useState(0);
-  const [conversationAiRetryConversationId, setConversationAiRetryConversationId] =
-    useState<string | null>(null);
   const {
     messages: conversationAiMessages,
     loading: loadingConversationAiMessages,
-    retryingConversationId: retryingConversationAiId,
+    retryingConversationIds: retryingConversationAiIds,
+    queuedRetryConversationIds,
     error: conversationAiError,
     failedConversationLabels: conversationAiFailureLabels,
+    retryConversationAiMessages,
   } = useConversationAiMessages({
     enabled: tab === "conversations",
     selectedClientId: selectedConversationClientId,
     conversations: aiConversations,
-    refreshToken: conversationAiRefreshToken,
-    retryConversationId: conversationAiRetryConversationId,
   });
   const [aiInboxError, setAiInboxError] = useState<string | null>(null);
   const [aiReply, setAiReply] = useState("");
@@ -1383,14 +1380,12 @@ export default function Communication() {
             conversationMessages={conversationMessages}
             selectedClientName={conversations.find((item) => item.clientId === selectedConversationClientId)?.clientName}
             loadingConversationAiMessages={loadingConversationAiMessages}
-            retryingConversationId={retryingConversationAiId}
+            retryingConversationIds={retryingConversationAiIds}
+            queuedRetryConversationIds={queuedRetryConversationIds}
             conversationAiError={conversationAiError}
             failedConversationLabels={conversationAiFailureLabels}
             onOpenFailedConversation={openFailedWhatsAppConversation}
-            onRetryConversationAiMessages={(conversationId) => {
-              setConversationAiRetryConversationId(conversationId ?? null);
-              setConversationAiRefreshToken((value) => value + 1);
-            }}
+            onRetryConversationAiMessages={retryConversationAiMessages}
             selectedWhatsAppConversation={selectedWhatsAppConversation}
             selectedClientLinkStatus={selectedClientLinkStatus}
             onRetryClientLinkCheck={() => refetchSelectedConversationClientStatus()}
