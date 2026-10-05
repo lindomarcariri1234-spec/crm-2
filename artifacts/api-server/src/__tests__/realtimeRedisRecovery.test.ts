@@ -988,6 +988,7 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         }),
       ];
       mockEmitSeatUpdate.mockClear();
+      mockLoggerWarn.mockClear();
       for (const message of invalidMessages) {
         expect(await publisher.publish("support-ticket-updates", message)).toBe(2);
       }
@@ -996,7 +997,6 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       expect(streams.every((stream) => stream.refreshes.length === 1)).toBe(true);
       expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
 
-      mockLoggerWarn.mockClear();
       for (const payload of supportTicketSsePayloadsWithUnsafeEventIds) {
         const message = JSON.stringify({ tenantId: matchingTenantId, payload });
         expect(await publisher.publish("support-ticket-updates", message)).toBe(2);
@@ -1064,6 +1064,42 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       await stopRedis(redisProcess);
       if (httpServer) await closeHttpServer(httpServer);
       await rm(dataDirectory, { recursive: true, force: true });
+    }
+
+    const rejectionReports = mockLoggerWarn.mock.calls
+      .filter(([, message]) => (
+        message === "[support-ticket-sse] Redis update rejections (aggregated)"
+      ))
+      .map(([fields]) => fields as { reason: string; count: number });
+    expect(rejectionReports).toHaveLength(10);
+    expect(mockLoggerWarn.mock.calls).toHaveLength(rejectionReports.length);
+    for (const report of rejectionReports) {
+      expect(Object.keys(report).sort()).toEqual(["count", "reason"]);
+    }
+
+    const totalsByReason = Object.create(null) as Record<string, number>;
+    for (const { reason, count } of rejectionReports) {
+      totalsByReason[reason] = (totalsByReason[reason] ?? 0) + count;
+    }
+    expect(totalsByReason).toEqual({
+      invalid_json: 2,
+      invalid_envelope: 10,
+      invalid_event_id: 40,
+      invalid_payload_shape: 24,
+      unsupported_refresh: 2,
+    });
+
+    const rejectionLogText = JSON.stringify(rejectionReports);
+    for (const forbiddenValue of [
+      "tenant-redis-target",
+      "tenant-redis-other",
+      "ticket-redis-multi-instance",
+      "ticket-unsafe",
+      "must-not-be-forwarded",
+      "customerEmail",
+      "event-with-",
+    ]) {
+      expect(rejectionLogText).not.toContain(forbiddenValue);
     }
   }, 30_000);
 });

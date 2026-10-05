@@ -8,6 +8,10 @@ export type SupportTicketUpdatePayload =
   | { eventId: string; type: "queues"; ticketId: null }
   | { eventId: string; type: "refresh"; ticketId: null };
 
+export type SupportTicketUpdatePayloadParseResult =
+  | { ok: true; payload: SupportTicketUpdatePayload }
+  | { ok: false; reason: "invalid_event_id" | "invalid_payload_shape" };
+
 export type SupportTicketBroadcastUpdate =
   | { type: "ticket"; ticketId: string }
   | { type: "queues"; ticketId: null };
@@ -66,17 +70,27 @@ function parseSupportTicketUpdateShape(value: unknown): SupportTicketUpdateShape
 export function parseSupportTicketUpdatePayload(
   payload: unknown,
 ): SupportTicketUpdatePayload | null {
+  const result = parseSupportTicketUpdatePayloadDetailed(payload);
+  return result.ok ? result.payload : null;
+}
+
+export function parseSupportTicketUpdatePayloadDetailed(
+  payload: unknown,
+): SupportTicketUpdatePayloadParseResult {
+  if (!isRecord(payload)) return { ok: false, reason: "invalid_payload_shape" };
+
   if (
-    !isRecord(payload)
-    || typeof payload.eventId !== "string"
+    typeof payload.eventId !== "string"
     || !payload.eventId.trim()
     || SUPPORT_TICKET_EVENT_ID_CONTROL_CHARACTERS.test(payload.eventId)
   ) {
-    return null;
+    return { ok: false, reason: "invalid_event_id" };
   }
 
   const shape = parseSupportTicketUpdateShape(payload);
-  return shape ? { eventId: payload.eventId, ...shape } : null;
+  return shape
+    ? { ok: true, payload: { eventId: payload.eventId, ...shape } }
+    : { ok: false, reason: "invalid_payload_shape" };
 }
 
 /** Parse caller updates while keeping recovery-only refreshes off Redis. */

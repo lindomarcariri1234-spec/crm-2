@@ -36,3 +36,9 @@ Long-lived support-ticket SSE streams must recheck the persisted user's active s
 **Why:** HTTP authorization runs only when an SSE request opens; the connection can outlive later account and role changes while still receiving tenant broadcasts.
 
 **How to apply:** Revalidate against current database fields rather than the connection's initial user snapshot, fail closed when current access cannot be confirmed, and test revocation plus ordinary disconnect cleanup.
+
+For rejected support-ticket Redis messages, aggregate counts under a fixed set of reason codes and report only the reason and count at most once per minute. Flush pending counts when the subscriber closes; never log parse errors or envelope/payload fields.
+
+**Why:** Invalid JSON and broker messages can contain customer or cross-tenant identifiers; per-message error logs could expose those values and flood logs during a bad producer rollout.
+
+**How to apply:** Keep reason keys bounded, use only fixed reason codes plus aggregate counts in reports, clear the reporting timer during flush/shutdown, and test that counts aggregate without sensitive values.

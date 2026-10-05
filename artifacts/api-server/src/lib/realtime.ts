@@ -8,7 +8,9 @@ import {
   emitSupportTicketUpdate,
   parseSupportTicketBroadcastUpdate,
   parseSupportTicketUpdatePayload,
+  parseSupportTicketUpdatePayloadDetailed,
   type SupportTicketBroadcastUpdate,
+  type SupportTicketUpdatePayloadParseResult,
 } from "./support-ticket-sse";
 import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES } from "@workspace/permissions";
 import { getRedisConnection } from "./redis";
@@ -17,9 +19,64 @@ import { generateId } from "./id";
 
 const SEAT_UPDATE_CHANNEL = "seat-updates";
 const SUPPORT_TICKET_UPDATE_CHANNEL = "support-ticket-updates";
+const SUPPORT_TICKET_REJECTION_REPORT_INTERVAL_MS = 60_000;
+
+type SupportTicketRedisRejectionReason =
+  | "invalid_json"
+  | "invalid_envelope"
+  | Extract<SupportTicketUpdatePayloadParseResult, { ok: false }>["reason"]
+  | "unsupported_refresh"
+  | "delivery_error";
+
+const pendingSupportTicketRedisRejections: Record<SupportTicketRedisRejectionReason, number> = {
+  invalid_json: 0,
+  invalid_envelope: 0,
+  invalid_event_id: 0,
+  invalid_payload_shape: 0,
+  unsupported_refresh: 0,
+  delivery_error: 0,
+};
 
 let _subscriber: Redis | null = null;
 let _cancelRecoveryRetry: (() => void) | null = null;
+let supportTicketRejectionReportTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushSupportTicketRedisRejections(): void {
+  if (supportTicketRejectionReportTimer !== null) {
+    clearTimeout(supportTicketRejectionReportTimer);
+    supportTicketRejectionReportTimer = null;
+  }
+
+  const reasons = Object.keys(
+    pendingSupportTicketRedisRejections,
+  ) as SupportTicketRedisRejectionReason[];
+  for (const reason of reasons) {
+    const count = pendingSupportTicketRedisRejections[reason];
+    if (count === 0) continue;
+    pendingSupportTicketRedisRejections[reason] = 0;
+    logger.warn(
+      { reason, count },
+      "[support-ticket-sse] Redis update rejections (aggregated)",
+    );
+  }
+}
+
+function recordSupportTicketRedisRejection(
+  reason: SupportTicketRedisRejectionReason,
+): void {
+  pendingSupportTicketRedisRejections[reason] += 1;
+  if (supportTicketRejectionReportTimer !== null) return;
+
+  supportTicketRejectionReportTimer = setTimeout(
+    flushSupportTicketRedisRejections,
+    SUPPORT_TICKET_REJECTION_REPORT_INTERVAL_MS,
+  );
+  supportTicketRejectionReportTimer.unref?.();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 /**
  * Initialises a dedicated Redis subscriber connection for realtime fan-out.
@@ -181,19 +238,41 @@ export function initSeatUpdateSubscriber(): void {
   subscriber.on("message", (channel: string, message: string) => {
     if (!subscriptionsActive || recoveryPending) return;
     if (channel === SUPPORT_TICKET_UPDATE_CHANNEL) {
+      let parsedMessage: unknown;
       try {
-        const envelope = JSON.parse(message) as {
-          tenantId?: unknown;
-          payload?: unknown;
-        };
-        if (typeof envelope.tenantId !== "string" || !envelope.tenantId.trim()) {
-          return;
-        }
-        const payload = parseSupportTicketUpdatePayload(envelope.payload);
-        if (!payload || payload.type === "refresh") return;
-        emitSupportTicketUpdate(envelope.tenantId, payload);
-      } catch (err) {
-        logger.warn({ err }, "[support-ticket-sse] Ignoring malformed Redis update");
+        parsedMessage = JSON.parse(message) as unknown;
+      } catch {
+        recordSupportTicketRedisRejection("invalid_json");
+        return;
+      }
+
+      if (!isRecord(parsedMessage)) {
+        recordSupportTicketRedisRejection("invalid_envelope");
+        return;
+      }
+      if (
+        typeof parsedMessage.tenantId !== "string"
+        || !parsedMessage.tenantId.trim()
+        || !Object.prototype.hasOwnProperty.call(parsedMessage, "payload")
+      ) {
+        recordSupportTicketRedisRejection("invalid_envelope");
+        return;
+      }
+
+      const parsedPayload = parseSupportTicketUpdatePayloadDetailed(parsedMessage.payload);
+      if (!parsedPayload.ok) {
+        recordSupportTicketRedisRejection(parsedPayload.reason);
+        return;
+      }
+      if (parsedPayload.payload.type === "refresh") {
+        recordSupportTicketRedisRejection("unsupported_refresh");
+        return;
+      }
+
+      try {
+        emitSupportTicketUpdate(parsedMessage.tenantId, parsedPayload.payload);
+      } catch {
+        recordSupportTicketRedisRejection("delivery_error");
       }
       return;
     }
@@ -241,6 +320,7 @@ export async function broadcastSupportTicketUpdate(
  * Closes the dedicated subscriber connection. Call during graceful shutdown.
  */
 export async function closeSeatUpdateSubscriber(): Promise<void> {
+  flushSupportTicketRedisRejections();
   _cancelRecoveryRetry?.();
   _cancelRecoveryRetry = null;
   if (_subscriber) {
