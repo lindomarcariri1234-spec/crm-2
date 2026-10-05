@@ -284,6 +284,17 @@ export function ConversationsTab({
           WhatsApp e e-mail
         </span>
       </div>
+      <div
+        className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border/70 bg-card/70 px-3 py-2 text-xs"
+        data-testid="communication-channel-status"
+      >
+        <span className="font-semibold text-foreground">Envio disponível:</span>
+        <span className="text-muted-foreground">WhatsApp e e-mail.</span>
+        <span className="hidden text-muted-foreground sm:inline" aria-hidden="true">·</span>
+        <span className="text-muted-foreground">
+          Instagram Direct, Facebook Messenger, Telegram e TikTok ainda não estão integrados nesta caixa.
+        </span>
+      </div>
       {loadingMessages || loadingOutboundMessages || loadingAiInbox ? (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(270px,0.82fr)_minmax(0,1.8fr)]">
           <div className="space-y-2 rounded-xl border border-border/70 bg-card p-3">
