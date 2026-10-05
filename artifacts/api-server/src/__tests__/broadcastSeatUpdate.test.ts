@@ -324,6 +324,7 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     const { fakePub, fakeSubscriber } = makeFakePub();
     mockGetRedisConnection.mockReturnValue(fakePub);
     initSeatUpdateSubscriber();
+    await vi.waitFor(() => expect(mockEmitSupportTicketRefresh).toHaveBeenCalledOnce());
     const payload = {
       eventId: "update-123",
       type: "ticket" as const,
@@ -357,6 +358,10 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
 
     initSeatUpdateSubscriber();
     await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mockEmitSupportTicketRefresh).toHaveBeenCalledOnce());
+    expect(mockEmitSeatRefresh).toHaveBeenCalledOnce();
+    mockEmitSupportTicketRefresh.mockClear();
+    mockEmitSeatRefresh.mockClear();
 
     fakeSubscriber.emit("reconnecting", 100);
     fakeSubscriber.emit("ready");
@@ -405,6 +410,11 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
 
     initSeatUpdateSubscriber();
     await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mockEmitSupportTicketRefresh).toHaveBeenCalledOnce());
+    expect(mockEmitSeatRefresh).toHaveBeenCalledOnce();
+    mockEmitSupportTicketRefresh.mockClear();
+    mockEmitSeatRefresh.mockClear();
+
     fakeSubscriber.emit("reconnecting", 100);
     fakeSubscriber.emit("ready");
     await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledTimes(2));
@@ -422,6 +432,53 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
 
     await vi.waitFor(() => expect(mockEmitSupportTicketRefresh).toHaveBeenCalledOnce());
     expect(mockEmitSeatRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("retries a failed startup subscription and refreshes only after its acknowledgement", async () => {
+    const { fakePub, fakeSubscriber } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+
+    let resolveStartupRetry: (() => void) | undefined;
+    fakeSubscriber.subscribe
+      .mockRejectedValueOnce(new Error("initial subscribe failed"))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveStartupRetry = resolve;
+      }));
+
+    initSeatUpdateSubscriber();
+    await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockEmitSupportTicketRefresh).not.toHaveBeenCalled();
+    expect(mockEmitSeatRefresh).not.toHaveBeenCalled();
+    fakeSubscriber.emit("ready");
+    await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledTimes(2));
+
+    const startupTicketPayload = {
+      eventId: "startup-ticket-update",
+      type: "ticket" as const,
+      ticketId: "ticket-startup",
+    };
+    fakeSubscriber.emitMessage("support-ticket-updates", JSON.stringify({
+      tenantId: "tenant-startup",
+      payload: startupTicketPayload,
+    }));
+    expect(mockEmitSupportTicketUpdate).not.toHaveBeenCalled();
+    expect(mockEmitSupportTicketRefresh).not.toHaveBeenCalled();
+
+    if (!resolveStartupRetry) {
+      throw new Error("Expected the startup recovery acknowledgement to be pending");
+    }
+    resolveStartupRetry();
+
+    await vi.waitFor(() => expect(mockEmitSupportTicketRefresh).toHaveBeenCalledOnce());
+    expect(mockEmitSeatRefresh).toHaveBeenCalledOnce();
+    fakeSubscriber.emitMessage("support-ticket-updates", JSON.stringify({
+      tenantId: "tenant-startup",
+      payload: startupTicketPayload,
+    }));
+    expect(mockEmitSupportTicketUpdate).toHaveBeenCalledOnce();
+    expect(mockEmitSupportTicketUpdate).toHaveBeenCalledWith("tenant-startup", startupTicketPayload);
   });
 
   it("falls back to a local tenant-scoped ticket event when Redis is unavailable", async () => {

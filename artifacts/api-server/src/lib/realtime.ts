@@ -53,10 +53,28 @@ export function initSeatUpdateSubscriber(): void {
   };
   _cancelRecoveryRetry = clearRecoveryRetry;
 
-  const attemptRecoverySubscribe = () => {
+  function scheduleRecoveryRetry(generation: number): void {
     if (
       _subscriber !== subscriber
-      || !subscriptionsActive
+      || !recoveryPending
+      || !subscriberReady
+      || generation !== recoveryGeneration
+    ) {
+      return;
+    }
+
+    clearRecoveryRetry();
+    const delayMs = Math.min(250 * 2 ** recoveryRetryCount, 5_000);
+    recoveryRetryCount += 1;
+    recoveryRetryTimer = setTimeout(() => {
+      recoveryRetryTimer = null;
+      attemptRecoverySubscribe();
+    }, delayMs);
+  }
+
+  function attemptRecoverySubscribe(): void {
+    if (
+      _subscriber !== subscriber
       || !recoveryPending
       || !subscriberReady
       || recoveryInFlight
@@ -79,12 +97,17 @@ export function initSeatUpdateSubscriber(): void {
           return;
         }
 
+        const wasActive = subscriptionsActive;
+        subscriptionsActive = true;
         recoveryPending = false;
         recoveryRetryCount = 0;
         clearRecoveryRetry();
         emitSeatRefresh();
         emitSupportTicketRefresh(generateId());
-        logger.info("[realtime] Redis SSE subscriptions restored; refreshing connected seat maps and ticket inboxes");
+        logger.info(
+          { phase: wasActive ? "recovery" : "startup-recovery" },
+          "[realtime] Redis SSE subscriptions restored; refreshing connected seat maps and ticket inboxes",
+        );
       })
       .catch((err: unknown) => {
         recoveryInFlight = false;
@@ -95,16 +118,9 @@ export function initSeatUpdateSubscriber(): void {
           if (subscriberReady) attemptRecoverySubscribe();
           return;
         }
-        if (!subscriberReady) return;
-
-        const delayMs = Math.min(250 * 2 ** recoveryRetryCount, 5_000);
-        recoveryRetryCount += 1;
-        recoveryRetryTimer = setTimeout(() => {
-          recoveryRetryTimer = null;
-          attemptRecoverySubscribe();
-        }, delayMs);
+        scheduleRecoveryRetry(generation);
       });
-  };
+  }
 
   subscriber.on("error", (err: Error) => {
     logger.warn({ err }, "[seat-sse] Subscriber connection error");
@@ -113,7 +129,6 @@ export function initSeatUpdateSubscriber(): void {
   subscriber.on("reconnecting", () => {
     subscriberReady = false;
     clearRecoveryRetry();
-    if (!subscriptionsActive) return;
     recoveryPending = true;
     recoveryGeneration += 1;
     recoveryRetryCount = 0;
@@ -127,18 +142,42 @@ export function initSeatUpdateSubscriber(): void {
     attemptRecoverySubscribe();
   });
 
+  recoveryInFlight = true;
+  const initialGeneration = recoveryGeneration;
   void subscriber
     .subscribe(SEAT_UPDATE_CHANNEL, SUPPORT_TICKET_UPDATE_CHANNEL)
     .then(() => {
+      recoveryInFlight = false;
       if (_subscriber !== subscriber) return;
+
+      if (initialGeneration !== recoveryGeneration) {
+        recoveryPending = true;
+        if (subscriberReady) attemptRecoverySubscribe();
+        return;
+      }
+
       subscriptionsActive = true;
+      recoveryPending = false;
+      recoveryRetryCount = 0;
+      clearRecoveryRetry();
+      emitSeatRefresh();
+      emitSupportTicketRefresh(generateId());
       logger.info("[realtime] Subscribed to Redis SSE channels — multi-instance fan-out active");
     })
     .catch((err: unknown) => {
+      recoveryInFlight = false;
+      if (_subscriber !== subscriber) return;
       logger.error({ err }, "[realtime] Failed to subscribe to Redis SSE channels");
+      recoveryPending = true;
+      if (initialGeneration !== recoveryGeneration) {
+        if (subscriberReady) attemptRecoverySubscribe();
+        return;
+      }
+      scheduleRecoveryRetry(initialGeneration);
     });
 
   subscriber.on("message", (channel: string, message: string) => {
+    if (!subscriptionsActive || recoveryPending) return;
     if (channel === SUPPORT_TICKET_UPDATE_CHANNEL) {
       try {
         const envelope = JSON.parse(message) as {

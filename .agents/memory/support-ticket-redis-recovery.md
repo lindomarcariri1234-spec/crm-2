@@ -7,6 +7,8 @@ When the shared Redis subscriber reconnects, browser SSE connections may still b
 
 Track a recovery generation for each reconnect. An acknowledgement from an older generation must not refresh clients; if Redis is already ready again, issue a subscription for the latest generation, otherwise wait for the next `ready` event. If the current resubscription rejects while Redis remains ready, keep recovery pending and retry with bounded exponential backoff.
 
-**Why:** ioredis emits `ready` before its automatic resubscription is acknowledged, so `ready` alone is too early to tell connected clients to rehydrate. A second outage can also make an in-flight acknowledgement stale, while a rejected acknowledgement can otherwise leave recovery pending forever.
+Keep initial channel fan-out inactive until the first explicit subscription acknowledgement. If that acknowledgement fails, treat startup as recovery-pending; retry after `ready` or with backoff while ready, then send one safe refresh after the successful acknowledgement.
 
-**How to apply:** For similar SSE consumers, detect each subscriber reconnect, await an acknowledgement for the latest recovery generation, retry failed acknowledgements while the subscriber is ready, and emit a safe refresh/reconciliation signal instead of trying to replay ephemeral events.
+**Why:** ioredis emits `ready` before its automatic resubscription is acknowledged, so `ready` alone is too early to tell connected clients to rehydrate. A second outage can make an in-flight acknowledgement stale, and either an initial or later rejected acknowledgement can otherwise leave recovery pending forever.
+
+**How to apply:** For similar SSE consumers, keep fan-out disabled until acknowledged, detect each subscriber reconnect, await an acknowledgement for the latest recovery generation, retry failed acknowledgements while ready, and emit a safe refresh/reconciliation signal instead of trying to replay ephemeral events.
