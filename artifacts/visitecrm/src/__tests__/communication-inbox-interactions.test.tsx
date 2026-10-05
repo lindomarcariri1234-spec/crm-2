@@ -1,4 +1,9 @@
-import { createElement, useState, type ComponentProps } from "react";
+import {
+  createElement,
+  useState,
+  type ComponentProps,
+  type FormEvent,
+} from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   cleanupRoots,
@@ -6,6 +11,10 @@ import {
   renderComponent,
 } from "./eventSourceHarness.js";
 import { ConversationsTab } from "../pages/communication/CommunicationInboxTabs";
+import {
+  submitInboxMessage,
+  type InboxMessageToast,
+} from "../pages/communication/submitInboxMessage";
 import type {
   ClientConversationSummary,
   CommunicationTimelineEntry,
@@ -125,6 +134,47 @@ function ConversationInteractionHarness() {
   );
 }
 
+interface InboxSendInteractionHarnessProps {
+  attempts: string[];
+  notifications: InboxMessageToast[];
+  submission: { current: Promise<void> | null };
+}
+
+function InboxSendInteractionHarness({
+  attempts,
+  notifications,
+  submission,
+}: InboxSendInteractionHarnessProps) {
+  const [draft, setDraft] = useState("");
+  const handleSendInbox = (event: FormEvent<HTMLFormElement>) => {
+    const pending = submitInboxMessage({
+      event,
+      selectedClientId: "client-a",
+      message: draft,
+      channel: "whatsapp",
+      clientLinkStatus: "valid",
+      whatsappOptedOut: false,
+      sendMessage: async ({ data }) => {
+        attempts.push(data.content);
+        if (attempts.length === 1) throw new Error("Falha temporária da API");
+      },
+      setInboxMessage: setDraft,
+      refetchMessages: async () => undefined,
+      refetchOutboundMessages: async () => undefined,
+      toast: (notification) => notifications.push(notification),
+    });
+    submission.current = pending;
+    return pending;
+  };
+
+  return createElement(ConversationsTab, {
+    ...makeProps("client-a", () => undefined, [firstMessage]),
+    inboxMessage: draft,
+    setInboxMessage: setDraft,
+    handleSendInbox,
+  });
+}
+
 function setInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   if (!setter) throw new Error("HTMLInputElement.value setter is unavailable");
@@ -230,5 +280,58 @@ describe("conversation timeline interactions", () => {
     expect(timeline!.textContent).toContain(secondMessage.content);
     expect(timeline!.scrollTop).toBe(timeline!.scrollHeight);
     expect(timeline!.scrollTop).not.toBe(100);
+  });
+});
+
+describe("client conversation message sending", () => {
+  it("keeps the draft after a failed send and retries with the same content", async () => {
+    const attempts: string[] = [];
+    const notifications: InboxMessageToast[] = [];
+    const submission: { current: Promise<void> | null } = { current: null };
+    const { container } = await renderComponent(
+      createElement(InboxSendInteractionHarness, {
+        attempts,
+        notifications,
+        submission,
+      }),
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      '[data-testid="input-conversation-message"]',
+    );
+    const sendButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-send-conversation-message"]',
+    );
+    expect(input).not.toBeNull();
+    expect(sendButton).not.toBeNull();
+
+    const message = "Olá, preciso confirmar o horário da viagem.";
+    await flushAct(() => setInputValue(input!, message));
+    expect(input!.value).toBe(message);
+
+    await flushAct(() => sendButton!.click());
+    expect(submission.current).not.toBeNull();
+    await flushAct(async () => {
+      await submission.current;
+    });
+
+    expect(input!.value).toBe(message);
+    expect(attempts).toEqual([message]);
+    expect(notifications).toEqual([
+      {
+        title: "Não foi possível enviar a mensagem.",
+        description: "Falha temporária da API",
+        variant: "destructive",
+      },
+    ]);
+
+    await flushAct(() => sendButton!.click());
+    expect(submission.current).not.toBeNull();
+    await flushAct(async () => {
+      await submission.current;
+    });
+
+    expect(attempts).toEqual([message, message]);
+    expect(input!.value).toBe("");
+    expect(notifications).toHaveLength(1);
   });
 });

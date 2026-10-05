@@ -107,6 +107,7 @@ import {
   type CommunicationHistoryFilters,
 } from "./communication/CommunicationHistoryTab";
 import { useConversationAiMessages } from "./communication/useConversationAiMessages";
+import { submitInboxMessage } from "./communication/submitInboxMessage";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const OUTBOUND_HISTORY_PAGE_SIZE = 50;
@@ -909,45 +910,20 @@ export default function Communication() {
     void selectAiConversation(selectedWhatsAppConversation.id);
   };
 
-  const handleSendInbox = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!selectedConversationClientId || !inboxMessage.trim()) return;
-    if (selectedClientLinkStatus !== "valid") {
-      toast({
-        title: "Envio bloqueado",
-        description: selectedClientLinkStatus === "missing"
-          ? "Associe este histórico a um cliente válido antes de enviar."
-          : "Aguarde a confirmação do vínculo do cliente antes de enviar.",
-        variant: "destructive",
-      });
-      return;
-    }
-    if (inboxChannel === "whatsapp" && selectedWhatsAppConversation?.status === "opted_out") {
-      toast({
-        title: "WhatsApp indisponível para esta conversa",
-        description: "O contato pediu para não receber novas mensagens por este canal.",
-        variant: "destructive",
-      });
-      return;
-    }
-    try {
-      await sendMessage.mutateAsync({
-        data: {
-          toClientId: selectedConversationClientId,
-          channel: inboxChannel,
-          content: inboxMessage,
-        },
-      });
-      setInboxMessage("");
-      await Promise.all([refetchMessages(), refetchConversationOutboundMessages()]);
-    } catch (error) {
-      toast({
-        title: "Não foi possível enviar a mensagem.",
-        description: error instanceof Error ? error.message : "Tente novamente.",
-        variant: "destructive",
-      });
-    }
-  };
+  const handleSendInbox = (e: React.FormEvent<HTMLFormElement>) =>
+    submitInboxMessage({
+      event: e,
+      selectedClientId: selectedConversationClientId,
+      message: inboxMessage,
+      channel: inboxChannel,
+      clientLinkStatus: selectedClientLinkStatus,
+      whatsappOptedOut: selectedWhatsAppConversation?.status === "opted_out",
+      sendMessage: (input) => sendMessage.mutateAsync(input),
+      setInboxMessage,
+      refetchMessages,
+      refetchOutboundMessages: refetchConversationOutboundMessages,
+      toast,
+    });
 
   const handleAiReply = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
