@@ -152,6 +152,12 @@ interface RefreshEnvelope {
   ticketId: null;
 }
 
+type TicketUpdatePayload =
+  | { eventId: string; type: "ticket"; ticketId: string }
+  | { eventId: string; type: "queues"; ticketId: null };
+
+type TicketStreamEnvelope = RefreshEnvelope | TicketUpdatePayload;
+
 describe("ticket SSE recovery with a disposable Redis server", () => {
   afterEach(async () => {
     await closeSeatUpdateSubscriber();
@@ -169,8 +175,11 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
     let subscriber: Redis | undefined;
     let httpServer: ReturnType<typeof createHttpServer> | undefined;
     let streamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let otherStreamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let streamTask: Promise<void> | undefined;
+    let otherStreamTask: Promise<void> | undefined;
     const streamAbort = new AbortController();
+    const otherStreamAbort = new AbortController();
     let currentRecoveryAcknowledged = false;
     let reconnectCount = 0;
     let holdRecoverySubscribeCompletions = false;
@@ -181,10 +190,16 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       release?: () => void;
     }> = [];
     const refreshes: Array<{ payload: RefreshEnvelope; acknowledgedAtDelivery: boolean }> = [];
+    const otherTenantRefreshes: Array<{ payload: RefreshEnvelope; acknowledgedAtDelivery: boolean }> = [];
+    const ticketUpdates: TicketUpdatePayload[] = [];
+    const queueUpdates: TicketUpdatePayload[] = [];
+    const otherTenantUpdates: TicketUpdatePayload[] = [];
     let ticketRevision = "initial";
     let inboxRevision: string | null = null;
     let streamClosed = false;
+    let otherStreamClosed = false;
     let streamError: unknown;
+    let otherStreamError: unknown;
 
     try {
       redisProcess = await startDisposableRedis(port, dataDirectory);
@@ -236,6 +251,10 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       );
       expect(subscriptionAcks).toHaveLength(1);
 
+      const tenantByStreamPath = new Map([
+        ["/api/tickets/stream", "tenant-redis-test"],
+        ["/api/tickets/other-stream", "tenant-redis-other"],
+      ]);
       httpServer = createHttpServer((request, response) => {
         if (request.url === "/api/tickets") {
           response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
@@ -243,17 +262,19 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
           return;
         }
 
-        if (request.url === "/api/tickets/stream") {
+        const streamTenantId = tenantByStreamPath.get(request.url ?? "");
+        if (streamTenantId) {
           response.writeHead(200, {
             "content-type": "text/event-stream",
             "cache-control": "no-cache, no-transform",
             connection: "keep-alive",
           });
           response.write(": stream-open\n\n");
-          addSupportTicketClient("tenant-redis-test", response as unknown as Response);
+          addSupportTicketClient(streamTenantId, response as unknown as Response);
           response.once("close", () => {
-            streamClosed = true;
-            removeSupportTicketClient("tenant-redis-test", response as unknown as Response);
+            if (streamTenantId === "tenant-redis-test") streamClosed = true;
+            else otherStreamClosed = true;
+            removeSupportTicketClient(streamTenantId, response as unknown as Response);
           });
           return;
         }
@@ -272,12 +293,21 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       expect(streamResponse.status).toBe(200);
       if (!streamResponse.body) throw new Error("Expected an open ticket SSE response body");
       streamReader = streamResponse.body.getReader();
+      const otherStreamResponse = await fetch(`${baseUrl}/api/tickets/other-stream`, {
+        signal: otherStreamAbort.signal,
+      });
+      expect(otherStreamResponse.status).toBe(200);
+      if (!otherStreamResponse.body) throw new Error("Expected the other tenant ticket SSE response body");
+      otherStreamReader = otherStreamResponse.body.getReader();
 
-      streamTask = (async () => {
+      const consumeStream = (
+        reader: ReadableStreamDefaultReader<Uint8Array>,
+        tenantId: string,
+      ) => (async () => {
         const decoder = new TextDecoder();
         let buffer = "";
         while (true) {
-          const { done, value } = await streamReader!.read();
+          const { done, value } = await reader.read();
           if (done) return;
           buffer += decoder.decode(value, { stream: true });
 
@@ -287,27 +317,45 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
             buffer = buffer.slice(separator + 2);
             const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
             if (dataLine) {
-              const payload = JSON.parse(dataLine.slice(5).trim()) as RefreshEnvelope;
+              const payload = JSON.parse(dataLine.slice(5).trim()) as TicketStreamEnvelope;
               if (payload.type === "refresh") {
-                refreshes.push({
+                const refresh = {
                   payload,
                   acknowledgedAtDelivery: currentRecoveryAcknowledged,
-                });
-                const snapshotResponse = await fetch(`${baseUrl}/api/tickets`);
-                if (!snapshotResponse.ok) {
-                  throw new Error(`Ticket refresh returned HTTP ${snapshotResponse.status}`);
+                };
+                if (tenantId === "tenant-redis-test") {
+                  refreshes.push(refresh);
+                  const snapshotResponse = await fetch(`${baseUrl}/api/tickets`);
+                  if (!snapshotResponse.ok) {
+                    throw new Error(`Ticket refresh returned HTTP ${snapshotResponse.status}`);
+                  }
+                  inboxRevision = (await snapshotResponse.json() as TicketSnapshot).revision;
+                } else {
+                  otherTenantRefreshes.push(refresh);
                 }
-                inboxRevision = (await snapshotResponse.json() as TicketSnapshot).revision;
+              } else if (tenantId === "tenant-redis-test") {
+                if (payload.type === "ticket") ticketUpdates.push(payload);
+                else queueUpdates.push(payload);
+              } else {
+                otherTenantUpdates.push(payload);
               }
             }
             separator = buffer.indexOf("\n\n");
           }
         }
-      })().catch((error: unknown) => {
+      })();
+
+      streamTask = consumeStream(streamReader, "tenant-redis-test").catch((error: unknown) => {
         if (!streamAbort.signal.aborted) streamError = error;
       });
+      otherStreamTask = consumeStream(otherStreamReader, "tenant-redis-other").catch((error: unknown) => {
+        if (!otherStreamAbort.signal.aborted) otherStreamError = error;
+      });
 
-      await waitUntil(() => !streamClosed, "the browser ticket stream to stay open");
+      await waitUntil(
+        () => !streamClosed && !otherStreamClosed,
+        "both tenant ticket streams to stay open",
+      );
 
       const recoverOnce = async (revision: string, refreshCount: number) => {
         ticketRevision = revision;
@@ -507,10 +555,48 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
       expect(refreshes).toHaveLength(2);
       expect(refreshes.every((refresh) => refresh.acknowledgedAtDelivery)).toBe(true);
       expect(streamClosed).toBe(false);
+      expect(otherStreamClosed).toBe(false);
+
+      if (!publisher) throw new Error("Expected the real Redis publisher to remain connected");
+      const ticketEvent: TicketUpdatePayload = {
+        eventId: "ticket-event-after-recovery",
+        type: "ticket",
+        ticketId: "ticket-redis-123",
+      };
+      const queuesEvent: TicketUpdatePayload = {
+        eventId: "queues-event-after-recovery",
+        type: "queues",
+        ticketId: null,
+      };
+      expect(await publisher.publish("support-ticket-updates", JSON.stringify({
+        tenantId: "tenant-redis-test",
+        payload: ticketEvent,
+      }))).toBe(1);
+      expect(await publisher.publish("support-ticket-updates", JSON.stringify({
+        tenantId: "tenant-redis-test",
+        payload: queuesEvent,
+      }))).toBe(1);
+
+      await waitUntil(
+        () => ticketUpdates.length === 1 && queueUpdates.length === 1,
+        "ticket and queue events to reach the matching tenant inbox",
+      );
+      await sleep(100);
+      expect(ticketUpdates).toEqual([ticketEvent]);
+      expect(queueUpdates).toEqual([queuesEvent]);
+      expect(otherTenantUpdates).toHaveLength(0);
+      expect(refreshes).toHaveLength(2);
+      expect(otherTenantRefreshes).toHaveLength(2);
+      expect(otherTenantRefreshes.every((refresh) => refresh.acknowledgedAtDelivery)).toBe(true);
+      expect(streamError).toBeUndefined();
+      expect(otherStreamError).toBeUndefined();
     } finally {
       streamAbort.abort();
+      otherStreamAbort.abort();
       await streamReader?.cancel().catch(() => {});
+      await otherStreamReader?.cancel().catch(() => {});
       await streamTask;
+      await otherStreamTask;
       if (subscriber && subscriber.status !== "ready") subscriber.disconnect();
       await closeSeatUpdateSubscriber();
       holdRecoverySubscribeCompletions = false;
