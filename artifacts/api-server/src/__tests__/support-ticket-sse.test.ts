@@ -1,18 +1,35 @@
+import { EventEmitter } from "node:events";
 import type { Response } from "express";
+import { ALL_STAFF_ROLES } from "@workspace/permissions";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   addSupportTicketClient,
   emitSupportTicketRefresh,
   emitSupportTicketUpdate,
+  isSupportTicketStreamAuthorized,
+  monitorSupportTicketClient,
   parseSupportTicketBroadcastUpdate,
   parseSupportTicketUpdatePayload,
   removeSupportTicketClient,
+  SUPPORT_TICKET_STREAM_HEARTBEAT_MS,
   type SupportTicketUpdatePayload,
 } from "../lib/support-ticket-sse.js";
 import { malformedSupportTicketSsePayloads } from "./support-ticket-sse-fixtures.js";
 
 function mockResponse() {
   return { write: vi.fn() } as unknown as Response & { write: ReturnType<typeof vi.fn> };
+}
+
+function mockStreamingResponse() {
+  const response = new EventEmitter();
+  const write = vi.fn();
+  const end = vi.fn();
+  Object.assign(response, { write, end });
+  return response as unknown as Response & {
+    write: typeof write;
+    end: typeof end;
+    emit: typeof response.emit;
+  };
 }
 
 describe("support ticket SSE tenant fan-out", () => {
@@ -22,6 +39,7 @@ describe("support ticket SSE tenant fan-out", () => {
     for (const client of clients.splice(0)) {
       removeSupportTicketClient(client.tenantId, client.response);
     }
+    vi.useRealTimers();
   });
 
   it("models only valid event and ticket ID combinations", () => {
@@ -179,5 +197,98 @@ describe("support ticket SSE tenant fan-out", () => {
     });
 
     expect(disconnectedResponse.write).toHaveBeenCalledOnce();
+  });
+
+  it("rejects streams for disabled, moved, or no-longer-staff users", () => {
+    const connectedUser = { id: "user-one", tenantId: "tenant-one" };
+    const activeStaff = {
+      id: "user-one",
+      tenantId: "tenant-one",
+      role: ALL_STAFF_ROLES[ALL_STAFF_ROLES.length - 1]!,
+      isActive: true,
+    };
+
+    expect(isSupportTicketStreamAuthorized(connectedUser, activeStaff)).toBe(true);
+    expect(isSupportTicketStreamAuthorized(connectedUser, null)).toBe(false);
+    expect(isSupportTicketStreamAuthorized(connectedUser, {
+      ...activeStaff,
+      isActive: false,
+    })).toBe(false);
+    expect(isSupportTicketStreamAuthorized(connectedUser, {
+      ...activeStaff,
+      tenantId: "tenant-two",
+    })).toBe(false);
+    expect(isSupportTicketStreamAuthorized(connectedUser, {
+      ...activeStaff,
+      role: "customer",
+    })).toBe(false);
+  });
+
+  it("ends and unregisters a stream when its access is revoked", async () => {
+    vi.useFakeTimers();
+    const response = mockStreamingResponse();
+    const isAuthorized = vi.fn(async () => false);
+    clients.push({ tenantId: "tenant-revoked", response });
+    monitorSupportTicketClient("tenant-revoked", response, isAuthorized);
+
+    await vi.advanceTimersByTimeAsync(SUPPORT_TICKET_STREAM_HEARTBEAT_MS);
+
+    expect(isAuthorized).toHaveBeenCalledOnce();
+    expect(response.end).toHaveBeenCalledOnce();
+    response.write.mockClear();
+    emitSupportTicketUpdate("tenant-revoked", {
+      eventId: "after-revocation",
+      type: "ticket",
+      ticketId: "ticket-one",
+    });
+    expect(response.write).not.toHaveBeenCalled();
+  });
+
+  it("keeps authorized streams tenant-scoped and removes them on normal disconnect", async () => {
+    vi.useFakeTimers();
+    const authorizedResponse = mockStreamingResponse();
+    const otherTenantResponse = mockResponse();
+    const isAuthorized = vi.fn(async () => true);
+    clients.push(
+      { tenantId: "tenant-authorized", response: authorizedResponse },
+      { tenantId: "tenant-other", response: otherTenantResponse },
+    );
+    monitorSupportTicketClient("tenant-authorized", authorizedResponse, isAuthorized);
+    addSupportTicketClient("tenant-other", otherTenantResponse);
+
+    await vi.advanceTimersByTimeAsync(SUPPORT_TICKET_STREAM_HEARTBEAT_MS);
+    expect(isAuthorized).toHaveBeenCalledOnce();
+    expect(authorizedResponse.end).not.toHaveBeenCalled();
+
+    authorizedResponse.write.mockClear();
+    emitSupportTicketUpdate("tenant-authorized", {
+      eventId: "authorized-update",
+      type: "ticket",
+      ticketId: "ticket-one",
+    });
+    emitSupportTicketUpdate("tenant-other", {
+      eventId: "other-tenant-update",
+      type: "ticket",
+      ticketId: "ticket-two",
+    });
+    expect(authorizedResponse.write).toHaveBeenCalledOnce();
+    expect(otherTenantResponse.write).toHaveBeenCalledWith(
+      `id: other-tenant-update\ndata: {"eventId":"other-tenant-update","type":"ticket","ticketId":"ticket-two"}\n\n`,
+    );
+    expect(otherTenantResponse.write).not.toHaveBeenCalledWith(
+      `id: authorized-update\ndata: {"eventId":"authorized-update","type":"ticket","ticketId":"ticket-one"}\n\n`,
+    );
+
+    authorizedResponse.emit("close");
+    expect(vi.getTimerCount()).toBe(0);
+    authorizedResponse.write.mockClear();
+    emitSupportTicketUpdate("tenant-authorized", {
+      eventId: "after-disconnect",
+      type: "ticket",
+      ticketId: "ticket-one",
+    });
+    expect(authorizedResponse.write).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(SUPPORT_TICKET_STREAM_HEARTBEAT_MS);
+    expect(isAuthorized).toHaveBeenCalledOnce();
   });
 });

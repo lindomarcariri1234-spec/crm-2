@@ -1,4 +1,5 @@
 import type { Response } from "express";
+import { ALL_STAFF_ROLES } from "@workspace/permissions";
 
 const clients = new Map<string, Set<Response>>();
 
@@ -15,6 +16,26 @@ type SupportTicketUpdateShape =
   | { type: "ticket"; ticketId: string }
   | { type: "queues"; ticketId: null }
   | { type: "refresh"; ticketId: null };
+
+export const SUPPORT_TICKET_STREAM_HEARTBEAT_MS = 30_000;
+
+export type SupportTicketStreamPrincipal = {
+  id: string;
+  tenantId: string | null;
+  role: string;
+  isActive: boolean;
+};
+
+export function isSupportTicketStreamAuthorized(
+  connectedUser: { id: string; tenantId: string },
+  currentUser: SupportTicketStreamPrincipal | null,
+): boolean {
+  return currentUser !== null
+    && currentUser.isActive
+    && currentUser.id === connectedUser.id
+    && (currentUser.tenantId ?? "") === connectedUser.tenantId
+    && ALL_STAFF_ROLES.includes(currentUser.role);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -69,6 +90,64 @@ export function removeSupportTicketClient(tenantId: string, res: Response): void
   if (!set) return;
   set.delete(res);
   if (set.size === 0) clients.delete(tenantId);
+}
+
+/**
+ * Register a staff stream, send heartbeats, and close it when current access
+ * can no longer be confirmed. The caller supplies a fresh authorization check.
+ */
+export function monitorSupportTicketClient(
+  tenantId: string,
+  res: Response,
+  isAuthorized: () => Promise<boolean>,
+): void {
+  addSupportTicketClient(tenantId, res);
+
+  let active = true;
+  let authorizationCheckInFlight = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  const stop = (endResponse: boolean) => {
+    if (!active) return;
+    active = false;
+    if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+    res.off("close", onClose);
+    removeSupportTicketClient(tenantId, res);
+    if (endResponse) {
+      try {
+        res.end();
+      } catch {
+        // The stream may have been closed by the client during revalidation.
+      }
+    }
+  };
+  const onClose = () => stop(false);
+
+  res.on("close", onClose);
+  heartbeatTimer = setInterval(() => {
+    if (!active) return;
+    try {
+      res.write(": ping\n\n");
+    } catch {
+      stop(false);
+      return;
+    }
+
+    if (authorizationCheckInFlight) return;
+    authorizationCheckInFlight = true;
+    void Promise.resolve()
+      .then(isAuthorized)
+      .then((authorized) => {
+        if (!authorized) stop(true);
+      })
+      .catch(() => {
+        // Fail closed if the current user's access cannot be verified.
+        stop(true);
+      })
+      .finally(() => {
+        authorizationCheckInFlight = false;
+      });
+  }, SUPPORT_TICKET_STREAM_HEARTBEAT_MS);
 }
 
 /** Sends refresh hints only to staff streams belonging to the affected tenant. */

@@ -30,3 +30,9 @@ Keep `SupportTicketUpdatePayload` as a discriminated union: ticket events requir
 **Why:** Redis subscribers ignore `refresh` messages from the update channel, so allowing the broadcaster to publish them can make a successful publish appear valid while every subscriber drops the hint. A broad type can also represent impossible type/ID pairs, and direct emitter callers need runtime protection.
 
 **How to apply:** Preserve these distinctions when extending support-ticket event types; update both the discriminated union and runtime validator, and keep compile-time/runtime tests for valid shapes and recovery-only routing.
+
+Long-lived support-ticket SSE streams must recheck the persisted user's active state, identity, tenant, and staff role on the heartbeat. Close and unregister a stream if the user is missing, disabled, moved to another tenant, no longer staff, or the check fails.
+
+**Why:** HTTP authorization runs only when an SSE request opens; the connection can outlive later account and role changes while still receiving tenant broadcasts.
+
+**How to apply:** Revalidate against current database fields rather than the connection's initial user snapshot, fail closed when current access cannot be confirmed, and test revocation plus ordinary disconnect cleanup.

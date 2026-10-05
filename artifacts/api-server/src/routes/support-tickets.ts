@@ -20,7 +20,10 @@ import { generateId } from "../lib/id.js";
 import { deliverAttendanceReply } from "../services/whatsapp-attendance.js";
 import { ensureSupportTicketForConversation, recordSupportTicketEvent } from "../services/support-ticketing.js";
 import { broadcastSupportTicketUpdate } from "../lib/realtime.js";
-import { addSupportTicketClient, removeSupportTicketClient } from "../lib/support-ticket-sse.js";
+import {
+  isSupportTicketStreamAuthorized,
+  monitorSupportTicketClient,
+} from "../lib/support-ticket-sse.js";
 
 const router = Router();
 
@@ -216,18 +219,18 @@ router.get("/support/tickets/stream", async (req, res: Response, next: NextFunct
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
-    addSupportTicketClient(me.tenantId, res);
-
-    const ping = setInterval(() => {
-      try {
-        res.write(": ping\n\n");
-      } catch {
-        clearInterval(ping);
-      }
-    }, 30_000);
-    res.on("close", () => {
-      clearInterval(ping);
-      removeSupportTicketClient(me.tenantId, res);
+    monitorSupportTicketClient(me.tenantId, res, async () => {
+      const [currentUser] = await db
+        .select({
+          id: usersTable.id,
+          tenantId: usersTable.tenantId,
+          role: usersTable.role,
+          isActive: usersTable.isActive,
+        })
+        .from(usersTable)
+        .where(eq(usersTable.clerkId, me.clerkId))
+        .limit(1);
+      return isSupportTicketStreamAuthorized(me, currentUser ?? null);
     });
   } catch (err) {
     next(err);
