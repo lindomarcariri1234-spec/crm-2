@@ -69,11 +69,11 @@ import type { Campaign } from "@workspace/api-client-react";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 const statusConfig: Record<string, { label: string; className: string }> = {
-  draft: { label: "Rascunho", className: "bg-gray-100 text-gray-800" },
-  scheduled: { label: "Agendada", className: "bg-blue-100 text-blue-800" },
-  sending: { label: "Enviando", className: "bg-yellow-100 text-yellow-800" },
-  sent: { label: "Enviada", className: "bg-green-100 text-green-800" },
-  cancelled: { label: "Cancelada", className: "bg-red-100 text-red-800" },
+  draft: { label: "Rascunho", className: "bg-muted text-muted-foreground" },
+  scheduled: { label: "Agendada", className: "bg-secondary text-secondary-foreground" },
+  sending: { label: "Enviando", className: "bg-accent text-accent-foreground" },
+  sent: { label: "Enviada", className: "bg-primary/10 text-primary" },
+  cancelled: { label: "Cancelada", className: "bg-destructive/10 text-destructive" },
 };
 
 const typeLabels: Record<string, string> = {
@@ -102,7 +102,7 @@ const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     name: "Feliz Aniversário",
     description: "Parabenize clientes dias antes do seu aniversário com uma oferta especial.",
     icon: Cake,
-    color: "bg-pink-100 text-pink-700",
+    color: "bg-accent text-accent-foreground",
     defaultConfig: { daysAhead: 3 },
     configKey: "daysAhead",
     configLabel: "Dias antes do aniversário",
@@ -115,7 +115,7 @@ const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     name: "Pós-Viagem",
     description: "Solicite avaliação e incentive a próxima viagem após o retorno do cliente.",
     icon: Plane,
-    color: "bg-blue-100 text-blue-700",
+    color: "bg-primary/10 text-primary",
     defaultConfig: { daysAfter: 7 },
     configKey: "daysAfter",
     configLabel: "Dias após a viagem",
@@ -128,7 +128,7 @@ const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     name: "Reativação",
     description: "Reconquiste clientes inativos há mais de 120 dias com uma proposta irresistível.",
     icon: RefreshCw,
-    color: "bg-orange-100 text-orange-700",
+    color: "bg-secondary text-secondary-foreground",
     defaultConfig: { inactiveDays: 120 },
     configKey: "inactiveDays",
     configLabel: "Dias de inatividade",
@@ -141,7 +141,7 @@ const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     name: "Recompra",
     description: "Estimule a próxima reserva 30 dias após a última viagem concluída.",
     icon: ShoppingBag,
-    color: "bg-green-100 text-green-700",
+    color: "bg-accent/80 text-accent-foreground",
     defaultConfig: { days: 30 },
     configKey: "days",
     configLabel: "Dias após última viagem",
@@ -154,7 +154,7 @@ const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     name: "Abandono de Reserva",
     description: "Recupere clientes que não concluíram a reserva nas últimas 24 horas.",
     icon: ShoppingCart,
-    color: "bg-purple-100 text-purple-700",
+    color: "bg-muted text-foreground",
     defaultConfig: { hours: 24 },
     configKey: "hours",
     configLabel: "Horas após abandono",
@@ -176,16 +176,14 @@ function StatCard({
   color: string;
 }) {
   return (
-    <Card>
-      <CardContent className="pt-5 pb-4">
-        <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${color}`}>
-            <Icon className="w-4 h-4" />
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{label}</p>
-            <p className="text-xl font-bold">{value}</p>
-          </div>
+    <Card className="overflow-hidden rounded-xl border-border/75 bg-card shadow-sm transition-shadow hover:shadow-md">
+      <CardContent className="flex items-center gap-3 px-4 py-4">
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${color}`}>
+          <Icon className="h-4 w-4" aria-hidden="true" />
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-[11px] font-medium text-muted-foreground">{label}</p>
+          <p className="mt-0.5 text-xl font-semibold tabular-nums tracking-tight text-foreground">{value}</p>
         </div>
       </CardContent>
     </Card>
@@ -200,7 +198,7 @@ function CopyButton({ text }: { text: string }) {
     setTimeout(() => setCopied(false), 2000);
   }, [text]);
   return (
-    <Button size="sm" variant="ghost" onClick={handleCopy} className="h-7 px-2">
+    <Button size="sm" variant="ghost" onClick={handleCopy} aria-label={copied ? "Conteúdo copiado" : "Copiar conteúdo"} className="h-8 w-8 p-0">
       {copied ? (
         <Check className="w-3 h-3 text-green-600" />
       ) : (
@@ -229,23 +227,23 @@ function SegmentPanel({
     onChange({ ...value, [key]: val || undefined });
   };
   return (
-    <div className="space-y-3 p-3 border rounded-lg bg-muted/20">
+    <div className="space-y-4 rounded-xl border border-border/70 bg-secondary/25 p-4">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+        <span className="text-xs font-semibold uppercase tracking-[0.12em] text-foreground">
           Segmentação Inteligente
         </span>
-        <Button size="sm" variant="outline" onClick={onPreview} disabled={isPreviewing} className="h-7 text-xs gap-1.5">
+        <Button size="sm" variant="outline" onClick={onPreview} disabled={isPreviewing} className="h-8 gap-1.5 text-xs">
           {isPreviewing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
           {isPreviewing ? "Calculando..." : "Pré-visualizar Audiência"}
           {previewCount !== null && !isPreviewing && (
-            <Badge className="ml-1 h-5 text-xs bg-primary/15 text-primary border-0">
+            <Badge className="ml-1 h-5 border-0 bg-primary/10 text-[10px] text-primary">
               {previewCount.toLocaleString("pt-BR")} clientes
             </Badge>
           )}
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground">Gênero</label>
           <Select value={(value.gender as string) ?? "__all__"} onValueChange={(v) => set("gender", v === "__all__" ? "" : v)}>
@@ -340,7 +338,7 @@ function SegmentPanel({
             className="h-8 text-xs"
           />
         </div>
-        <div className="col-span-2 space-y-1">
+        <div className="col-span-1 space-y-1 sm:col-span-2">
           <label className="text-xs text-muted-foreground">Viagem específica</label>
           <Select
             value={(value.tripId as string) ?? "__all__"}
@@ -451,18 +449,19 @@ function CampaignsTab() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold">Campanhas Manuais</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">Envios pontuais para segmentos de clientes.</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">Relacionamento e alcance</p>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight text-foreground">Campanhas manuais</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Envios pontuais para segmentos de clientes.</p>
         </div>
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
           <DialogTrigger asChild>
-            <Button>
+            <Button className="h-10 w-full rounded-lg sm:w-auto">
               <Plus className="w-4 h-4 mr-2" /> Nova Campanha
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-h-[90dvh] w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>Criar Campanha</DialogTitle>
             </DialogHeader>
@@ -471,7 +470,7 @@ function CampaignsTab() {
                 <Label>Nome da Campanha</Label>
                 <Input name="name" required placeholder="Ex: Promoção Verão — Pacotes Nordeste" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label>Canal</Label>
                   <Select value={campaignType} onValueChange={setCampaignType}>
@@ -490,7 +489,7 @@ function CampaignsTab() {
                   <Input name="scheduledAt" type="datetime-local" />
                 </div>
               </div>
-              <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+              <div className="rounded-lg border border-border/70 bg-secondary/35 p-3 text-xs leading-relaxed text-muted-foreground">
                 Uma campanha unificada cria uma entrega independente por canal para cada destinatário. Uma falha não duplica nem bloqueia a outra.
               </div>
               <SegmentPanel
@@ -530,20 +529,20 @@ function CampaignsTab() {
         </Dialog>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <StatCard icon={Megaphone} label="Campanhas" value={manualCampaigns.length} color="bg-blue-100 text-blue-700" />
-        <StatCard icon={Users} label="Destinatários" value={totalRecipients.toLocaleString("pt-BR")} color="bg-purple-100 text-purple-700" />
-        <StatCard icon={Send} label="Enviados" value={totalSent.toLocaleString("pt-BR")} color="bg-green-100 text-green-700" />
-        <StatCard icon={PackageCheck} label="Entregues" value={totalDelivered.toLocaleString("pt-BR")} color="bg-teal-100 text-teal-700" />
-        <StatCard icon={MailOpen} label="Taxa Abertura" value={avgOpen === "—" ? "—" : `${avgOpen}%`} color="bg-orange-100 text-orange-700" />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+        <StatCard icon={Megaphone} label="Campanhas" value={manualCampaigns.length} color="bg-primary/10 text-primary" />
+        <StatCard icon={Users} label="Destinatários" value={totalRecipients.toLocaleString("pt-BR")} color="bg-secondary text-secondary-foreground" />
+        <StatCard icon={Send} label="Enviados" value={totalSent.toLocaleString("pt-BR")} color="bg-accent/80 text-accent-foreground" />
+        <StatCard icon={PackageCheck} label="Entregues" value={totalDelivered.toLocaleString("pt-BR")} color="bg-primary/10 text-primary" />
+        <StatCard icon={MailOpen} label="Taxa Abertura" value={avgOpen === "—" ? "—" : `${avgOpen}%`} color="bg-accent text-accent-foreground" />
       </div>
 
       {analyticsTarget && (
-        <Card className="border-primary/30 bg-primary/5">
+        <Card className="overflow-hidden rounded-xl border-primary/25 bg-primary/[0.035] shadow-sm">
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base flex items-center gap-2">
-                <BarChart2 className="w-4 h-4" /> Análise: {analyticsTarget.name}
+            <div className="flex items-start justify-between gap-3">
+              <CardTitle className="flex min-w-0 items-center gap-2 text-base">
+                <BarChart2 className="h-4 w-4 shrink-0 text-primary" /> <span className="truncate">Análise: {analyticsTarget.name}</span>
               </CardTitle>
               <Button size="sm" variant="ghost" onClick={() => setAnalyticsId(null)}>
                 Fechar
@@ -559,9 +558,9 @@ function CampaignsTab() {
                 { label: "Abertos", value: analyticsTarget.openedCount, base: getDelivered(analyticsTarget) },
                 { label: "Cliques", value: analyticsTarget.clickedCount, base: analyticsTarget.openedCount },
               ].map(({ label, value, base }) => (
-                <div key={label} className="text-center">
-                  <p className="text-2xl font-bold">{value}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+                <div key={label} className="rounded-lg border border-border/60 bg-card/80 px-2 py-3 text-center">
+                  <p className="text-2xl font-semibold tabular-nums tracking-tight">{value}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{label}</p>
                   {base !== null && base > 0 && (
                     <p className="text-xs text-primary font-medium">
                       {((value / base) * 100).toFixed(1)}%
@@ -574,97 +573,99 @@ function CampaignsTab() {
         </Card>
       )}
 
-      <div className="bg-card rounded-lg border overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Nome</TableHead>
-              <TableHead>Canal</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Destinatários</TableHead>
-              <TableHead className="text-right">Enviados</TableHead>
-              <TableHead className="text-right">Entregues</TableHead>
-              <TableHead className="text-right">Abertos</TableHead>
-              <TableHead className="text-right">Cliques</TableHead>
-              <TableHead>Data</TableHead>
-              <TableHead></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              Array.from({ length: 3 }).map((_, i) => (
-                <TableRow key={i}>
-                  {Array.from({ length: 9 }).map((_, j) => (
-                    <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : isError ? (
-              <ListLoadErrorRow
-                colSpan={10}
-                onRetry={refetch}
-                message="Não foi possível carregar as campanhas."
-              />
-            ) : manualCampaigns.length === 0 ? (
+      <div className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm">
+        <div className="overflow-x-auto">
+          <Table className="min-w-[980px]">
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
-                  <Megaphone className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                  <p className="font-medium">Nenhuma campanha criada.</p>
-                  <p className="text-sm mt-1">Crie sua primeira campanha para engajar clientes.</p>
-                </TableCell>
+                <TableHead>Nome</TableHead>
+                <TableHead>Canal</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Destinatários</TableHead>
+                <TableHead className="text-right">Enviados</TableHead>
+                <TableHead className="text-right">Entregues</TableHead>
+                <TableHead className="text-right">Abertos</TableHead>
+                <TableHead className="text-right">Cliques</TableHead>
+                <TableHead>Data</TableHead>
+                <TableHead></TableHead>
               </TableRow>
-            ) : (
-              manualCampaigns.map((c) => {
-                const st = statusConfig[c.status] ?? { label: c.status, className: "" };
-                return (
-                  <TableRow key={c.id}>
-                    <TableCell className="font-medium">{c.name}</TableCell>
-                    <TableCell><Badge variant="outline">{typeLabels[c.type] ?? c.type}</Badge></TableCell>
-                    <TableCell><Badge className={st.className} variant="secondary">{st.label}</Badge></TableCell>
-                    <TableCell className="text-right">{c.recipientsCount}</TableCell>
-                    <TableCell className="text-right">{c.sentCount}</TableCell>
-                    <TableCell className="text-right">
-                      {getDelivered(c)}
-                      {c.sentCount > 0 && (
-                        <span className="text-xs text-muted-foreground ml-1">({((getDelivered(c) / c.sentCount) * 100).toFixed(0)}%)</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {c.openedCount}
-                      {getDelivered(c) > 0 && (
-                        <span className="text-xs text-muted-foreground ml-1">({((c.openedCount / getDelivered(c)) * 100).toFixed(0)}%)</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {c.clickedCount}
-                      {c.openedCount > 0 && (
-                        <span className="text-xs text-muted-foreground ml-1">({((c.clickedCount / c.openedCount) * 100).toFixed(0)}%)</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {c.sentAt ? new Date(c.sentAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : c.scheduledAt ? new Date(c.scheduledAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "—"}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1 justify-end">
-                        <Button size="sm" variant="ghost" onClick={() => setAnalyticsId(analyticsId === c.id ? null : c.id)} title="Ver análise">
-                          <BarChart2 className="w-4 h-4" />
-                        </Button>
-                        {c.status === "draft" && (
-                          <Button size="sm" variant="ghost" onClick={() => handleSend(c.id)} title="Enviar agora">
-                            <Send className="w-4 h-4 text-primary" />
-                          </Button>
-                        )}
-                        <Button size="sm" variant="ghost" onClick={() => handleDelete(c.id)} title="Excluir">
-                          <Trash2 className="w-4 h-4 text-muted-foreground hover:text-destructive" />
-                        </Button>
-                      </div>
-                    </TableCell>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <TableRow key={i}>
+                    {Array.from({ length: 10 }).map((_, j) => (
+                      <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
+                    ))}
                   </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
+                ))
+              ) : isError ? (
+                <ListLoadErrorRow
+                  colSpan={10}
+                  onRetry={refetch}
+                  message="Não foi possível carregar as campanhas."
+                />
+              ) : manualCampaigns.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={10} className="py-12 text-center text-muted-foreground">
+                    <Megaphone className="mx-auto mb-3 h-10 w-10 opacity-30" />
+                    <p className="font-medium text-foreground">Nenhuma campanha criada.</p>
+                    <p className="mt-1 text-sm">Crie sua primeira campanha para engajar clientes.</p>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                manualCampaigns.map((c) => {
+                  const st = statusConfig[c.status] ?? { label: c.status, className: "" };
+                  return (
+                    <TableRow key={c.id}>
+                      <TableCell className="font-medium text-foreground">{c.name}</TableCell>
+                      <TableCell><Badge variant="outline">{typeLabels[c.type] ?? c.type}</Badge></TableCell>
+                      <TableCell><Badge className={st.className} variant="secondary">{st.label}</Badge></TableCell>
+                      <TableCell className="text-right">{c.recipientsCount}</TableCell>
+                      <TableCell className="text-right">{c.sentCount}</TableCell>
+                      <TableCell className="text-right">
+                        {getDelivered(c)}
+                        {c.sentCount > 0 && (
+                          <span className="text-xs text-muted-foreground ml-1">({((getDelivered(c) / c.sentCount) * 100).toFixed(0)}%)</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {c.openedCount}
+                        {getDelivered(c) > 0 && (
+                          <span className="text-xs text-muted-foreground ml-1">({((c.openedCount / getDelivered(c)) * 100).toFixed(0)}%)</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {c.clickedCount}
+                        {c.openedCount > 0 && (
+                          <span className="text-xs text-muted-foreground ml-1">({((c.clickedCount / c.openedCount) * 100).toFixed(0)}%)</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {c.sentAt ? new Date(c.sentAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : c.scheduledAt ? new Date(c.scheduledAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "—"}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1 justify-end">
+                          <Button size="sm" variant="ghost" onClick={() => setAnalyticsId(analyticsId === c.id ? null : c.id)} title="Ver análise">
+                            <BarChart2 className="w-4 h-4" />
+                          </Button>
+                          {c.status === "draft" && (
+                            <Button size="sm" variant="ghost" onClick={() => handleSend(c.id)} title="Enviar agora">
+                              <Send className="w-4 h-4 text-primary" />
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost" onClick={() => handleDelete(c.id)} title="Excluir">
+                            <Trash2 className="w-4 h-4 text-muted-foreground hover:text-destructive" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </div>
     </div>
   );
@@ -707,7 +708,7 @@ function AutomationConfigDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-h-[90dvh] w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl sm:max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <template.icon className="w-5 h-5" />
@@ -822,13 +823,14 @@ function AutomationsTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold">Automações de Marketing</h2>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">Relacionamento recorrente</p>
+        <h2 className="mt-1 text-xl font-semibold tracking-tight text-foreground">Automações de marketing</h2>
+        <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           Campanhas disparadas automaticamente com base no comportamento dos clientes, no horário configurado em cada automação.
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {AUTOMATION_TEMPLATES.map((template) => {
           const existing = getExisting(template.triggerType);
           const isEnabled = existing?.autoEnabled ?? false;
@@ -837,24 +839,24 @@ function AutomationsTab() {
             (createCampaign.isPending || updateCampaign.isPending);
 
           return (
-            <Card key={template.triggerType} className={`relative transition-all ${isEnabled ? "border-primary/40 shadow-sm" : ""}`}>
+            <Card key={template.triggerType} className={`relative overflow-hidden rounded-xl border-border/75 bg-card shadow-sm transition-all hover:shadow-md ${isEnabled ? "border-primary/35" : ""}`}>
               {isEnabled && (
                 <div className="absolute top-3 right-3">
-                  <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 rounded-full px-2 py-0.5">
-                    <Zap className="w-3 h-3" /> Ativa
+                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+                    <Zap className="h-3 w-3" aria-hidden="true" /> Ativa
                   </span>
                 </div>
               )}
               <CardHeader className="pb-2 pr-24">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${template.color}`}>
-                  <template.icon className="w-5 h-5" />
+                <div className={`mb-3 flex h-11 w-11 items-center justify-center rounded-xl ${template.color}`}>
+                  <template.icon className="h-5 w-5" aria-hidden="true" />
                 </div>
-                <CardTitle className="text-base">{template.name}</CardTitle>
+                <CardTitle className="text-base tracking-tight">{template.name}</CardTitle>
                 <CardDescription className="text-xs leading-relaxed">{template.description}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3 pt-1">
                 {existing && (
-                  <div className="text-xs text-muted-foreground bg-muted/40 rounded-md px-2.5 py-1.5">
+                  <div className="rounded-lg border border-border/60 bg-secondary/35 px-3 py-2 text-xs text-muted-foreground">
                     <span className="font-medium">{template.configLabel}:</span>{" "}
                     {(existing.triggerConfig?.[template.configKey] as number | undefined) ??
                       Object.values(template.defaultConfig)[0]}{" "}
@@ -868,14 +870,15 @@ function AutomationsTab() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="flex-1 gap-1.5 text-xs h-8"
+                    className="h-9 flex-1 gap-1.5 text-xs"
                     onClick={() => setConfiguringType(template.triggerType)}
                   >
-                    <Settings2 className="w-3 h-3" />
+                    <Settings2 className="h-3.5 w-3.5" />
                     {existing ? "Editar" : "Configurar"}
                   </Button>
                   <div className="flex items-center gap-1.5">
                     <Switch
+                      aria-label={`${isEnabled ? "Desativar" : "Ativar"} automação ${template.name}`}
                       checked={isEnabled}
                       disabled={!existing || updateCampaign.isPending}
                       onCheckedChange={() => handleToggle(template.triggerType, isEnabled)}
@@ -899,9 +902,9 @@ function AutomationsTab() {
         })}
       </div>
 
-      <Card className="bg-muted/30 border-dashed">
-        <CardContent className="pt-4 pb-4">
-          <p className="text-sm text-muted-foreground text-center">
+      <Card className="rounded-xl border-dashed border-border bg-secondary/30 shadow-none">
+        <CardContent className="px-4 py-4 sm:px-5">
+          <p className="text-center text-sm leading-relaxed text-muted-foreground">
             <strong className="text-foreground">Como funciona:</strong> Configure cada automação com o conteúdo desejado, ative o toggle e o sistema enviará automaticamente para os clientes elegíveis a cada dia às 8h (horário de Brasília). Cada cliente recebe a mensagem apenas uma vez por campanha.
           </p>
         </CardContent>
@@ -954,18 +957,19 @@ function AiContentTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold flex items-center gap-2">
-          <Wand2 className="w-5 h-5 text-primary" /> Criador de Conteúdo com IA
+        <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">Laboratório de conteúdo</p>
+        <h2 className="mt-1 flex items-center gap-2 text-xl font-semibold tracking-tight text-foreground">
+          <Wand2 className="h-5 w-5 text-primary" aria-hidden="true" /> Criador de conteúdo com IA
         </h2>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
           Gere e-mail, mensagem de WhatsApp e legenda do Instagram simultaneamente — otimizados para agências de turismo.
         </p>
       </div>
 
-      <Card>
-        <CardContent className="pt-5 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2 space-y-2">
+      <Card className="overflow-hidden rounded-xl border-border/75 bg-card shadow-sm">
+        <CardContent className="space-y-4 px-4 py-5 sm:px-6">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-2 sm:col-span-2">
               <Label>Tema / Produto <span className="text-destructive">*</span></Label>
               <Input
                 value={topic}
@@ -996,7 +1000,7 @@ function AiContentTab() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="col-span-2 space-y-2">
+            <div className="space-y-2 sm:col-span-2">
               <Label>Público-alvo <span className="text-muted-foreground text-xs">(opcional)</span></Label>
               <Input
                 value={audience}
@@ -1005,11 +1009,11 @@ function AiContentTab() {
               />
             </div>
           </div>
-          <div className="flex justify-end">
+          <div className="flex justify-stretch sm:justify-end">
             <Button
               onClick={handleGenerate}
               disabled={isGenerating || !topic.trim()}
-              className="gap-2"
+              className="h-10 w-full gap-2 rounded-lg sm:w-auto"
             >
               {isGenerating ? (
                 <>
@@ -1026,8 +1030,8 @@ function AiContentTab() {
       </Card>
 
       {error && (
-        <Card className="border-destructive/40 bg-destructive/5">
-          <CardContent className="pt-4 pb-4">
+        <Card className="rounded-xl border-destructive/30 bg-destructive/5 shadow-none" role="alert">
+          <CardContent className="px-4 py-4">
             <p className="text-sm text-destructive">{error}</p>
           </CardContent>
         </Card>
@@ -1035,11 +1039,11 @@ function AiContentTab() {
 
       {result && (
         <div className="grid gap-4 lg:grid-cols-1">
-          <Card>
+          <Card className="overflow-hidden rounded-xl border-border/75 shadow-sm">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center justify-between">
                 <span className="flex items-center gap-2">
-                  <Mail className="w-4 h-4 text-blue-600" /> E-mail Marketing
+                  <Mail className="h-4 w-4 text-primary" /> E-mail Marketing
                 </span>
                 <CopyButton text={result.email} />
               </CardTitle>
@@ -1056,50 +1060,52 @@ function AiContentTab() {
           </Card>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <Card>
+            <Card className="rounded-xl border-border/75 shadow-sm">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm flex items-center justify-between">
                   <span className="flex items-center gap-2">
-                    <MessageCircle className="w-4 h-4 text-green-600" /> WhatsApp
+                    <MessageCircle className="h-4 w-4 text-primary" /> WhatsApp
                   </span>
                   <CopyButton text={result.whatsapp} />
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="bg-[#dcf8c6] rounded-2xl rounded-tl-none p-3 text-sm whitespace-pre-wrap max-w-sm leading-relaxed">
+                <div className="max-w-full rounded-2xl rounded-tl-md border border-border/60 bg-secondary/45 p-3 text-sm leading-relaxed whitespace-pre-wrap text-foreground sm:max-w-sm">
                   {result.whatsapp}
                 </div>
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="rounded-xl border-border/75 shadow-sm">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm flex items-center justify-between">
                   <span className="flex items-center gap-2">
-                    <Instagram className="w-4 h-4 text-pink-600" /> Instagram
+                    <Instagram className="h-4 w-4 text-primary" /> Instagram
                   </span>
                   <CopyButton text={result.instagram} />
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-sm bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg p-3 border whitespace-pre-wrap leading-relaxed">
+                <div className="rounded-lg border border-border/60 bg-accent/25 p-3 text-sm leading-relaxed whitespace-pre-wrap text-foreground">
                   {result.instagram}
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          <p className="text-xs text-muted-foreground text-center">
+          <p className="text-center text-xs text-muted-foreground">
             Use <code className="bg-muted px-1 rounded">{"{nome}"}</code> nos textos para personalizar automaticamente com o nome de cada cliente.
           </p>
         </div>
       )}
 
       {!result && !isGenerating && !error && (
-        <div className="text-center py-16 text-muted-foreground">
-          <Wand2 className="w-12 h-12 mx-auto mb-4 opacity-20" />
-          <p className="font-medium">Preencha os campos acima e clique em Gerar Conteúdo</p>
-          <p className="text-sm mt-1">A IA criará e-mail, WhatsApp e legenda do Instagram ao mesmo tempo.</p>
+        <div className="flex min-h-[230px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card/60 px-5 py-10 text-center text-muted-foreground">
+          <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-primary">
+            <Wand2 className="h-5 w-5" />
+          </span>
+          <p className="font-medium text-foreground">Preencha os campos acima e clique em Gerar Conteúdo</p>
+          <p className="mt-1 text-sm">A IA criará e-mail, WhatsApp e legenda do Instagram ao mesmo tempo.</p>
         </div>
       )}
     </div>
@@ -1109,23 +1115,27 @@ function AiContentTab() {
 export default function Campaigns() {
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Marketing Automatizado</h1>
-        <p className="text-muted-foreground mt-1">
+      <div className="relative overflow-hidden rounded-2xl border border-border/70 bg-card px-5 py-5 shadow-sm sm:px-7 sm:py-6">
+        <div className="pointer-events-none absolute -right-8 -top-12 h-40 w-40 rounded-full bg-accent/35" aria-hidden="true" />
+        <div className="relative max-w-3xl">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">VisiteCRM · Relacionamento</p>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Marketing e campanhas</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           Campanhas inteligentes, automações e criação de conteúdo com IA para sua agência.
-        </p>
+          </p>
+        </div>
       </div>
 
       <Tabs defaultValue="campanhas">
-        <TabsList className="grid w-full max-w-md grid-cols-3">
-          <TabsTrigger value="campanhas" className="gap-1.5">
-            <Megaphone className="w-3.5 h-3.5" /> Campanhas
+        <TabsList className="grid h-auto w-full max-w-2xl grid-cols-3 gap-1 rounded-xl border border-border/70 bg-secondary/45 p-1">
+          <TabsTrigger value="campanhas" className="min-h-10 gap-1.5 rounded-lg px-2 text-[11px] sm:text-sm">
+            <Megaphone className="h-3.5 w-3.5 shrink-0" /> Campanhas
           </TabsTrigger>
-          <TabsTrigger value="automacoes" className="gap-1.5">
-            <Zap className="w-3.5 h-3.5" /> Automações
+          <TabsTrigger value="automacoes" className="min-h-10 gap-1.5 rounded-lg px-2 text-[11px] sm:text-sm">
+            <Zap className="h-3.5 w-3.5 shrink-0" /> Automações
           </TabsTrigger>
-          <TabsTrigger value="ia" className="gap-1.5">
-            <Wand2 className="w-3.5 h-3.5" /> Conteúdo IA
+          <TabsTrigger value="ia" className="min-h-10 gap-1.5 rounded-lg px-2 text-[11px] sm:text-sm">
+            <Wand2 className="h-3.5 w-3.5 shrink-0" /> Conteúdo IA
           </TabsTrigger>
         </TabsList>
         <TabsContent value="campanhas" className="mt-6">

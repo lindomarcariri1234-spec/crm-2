@@ -601,66 +601,127 @@ export function AiInboxTab({
   return (
     <>
       {loading ? (
-        <div className="grid grid-cols-3 gap-4">
-          <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
-          <div className="col-span-2"><Skeleton className="h-[400px] w-full" /></div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(270px,0.82fr)_minmax(0,1.8fr)]">
+          <div className="space-y-2 rounded-xl border border-border/70 bg-card p-3">
+            {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[68px] w-full rounded-lg" />)}
+          </div>
+          <div><Skeleton className="h-[420px] w-full rounded-xl md:h-[min(76dvh,760px)]" /></div>
         </div>
       ) : error ? (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm" role="alert">
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm" role="alert">
           <p>{error}</p>
           <Button data-testid="button-retry-ai-inbox" className="mt-3" variant="outline" size="sm" onClick={() => { void onRefresh(); }}>
             Tentar novamente
           </Button>
         </div>
       ) : conversations.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground">
-          <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-30" />
-          <p className="font-medium">Nenhum atendimento WhatsApp ainda.</p>
-          <p className="text-sm mt-1">As conversas recebidas pela integração aparecerão aqui.</p>
+        <div className="flex min-h-[320px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card/60 px-6 py-12 text-center text-muted-foreground">
+          <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-secondary text-primary">
+            <MessageSquare className="h-6 w-6" aria-hidden="true" />
+          </span>
+          <p className="font-semibold text-foreground">Nenhum atendimento WhatsApp ainda.</p>
+          <p className="mt-1 max-w-sm text-sm">As conversas recebidas pela integração aparecerão aqui.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 h-[520px]">
-          <div className="border rounded-lg overflow-hidden flex flex-col">
-            <div className="p-3 border-b bg-muted/30">
-              <p className="text-sm font-semibold">Atendimentos ({conversations.length})</p>
+        <div className="grid min-w-0 grid-cols-1 gap-3 md:h-[min(76dvh,760px)] md:min-h-[560px] md:grid-cols-[minmax(270px,0.82fr)_minmax(0,1.8fr)]">
+          <section
+            aria-label="Lista de atendimentos WhatsApp"
+            className="flex max-h-[38dvh] min-h-[210px] flex-col overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm md:max-h-none md:min-h-0"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-secondary/45 px-4 py-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">Atendimento IA</p>
+                <h2 className="mt-0.5 text-base font-semibold tracking-tight text-foreground">Conversas</h2>
+              </div>
+              <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-card px-2 text-xs font-semibold tabular-nums text-foreground ring-1 ring-border/70">
+                {conversations.length}
+              </span>
             </div>
-            <div className="flex-1 overflow-y-auto divide-y">
+            <div className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
               {conversations.map((conversation) => (
                 <button
                   key={conversation.id}
                   data-testid={`button-ai-conversation-${conversation.id}`}
                   onClick={() => onSelectConversation(conversation.id)}
-                  className={`w-full text-left p-3 hover:bg-muted/40 transition-colors ${selectedConversationId === conversation.id ? "bg-primary/5 border-l-2 border-primary" : ""}`}
+                  type="button"
+                  aria-pressed={selectedConversationId === conversation.id}
+                  className={`relative w-full p-3.5 text-left transition-colors hover:bg-secondary/45 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${
+                    selectedConversationId === conversation.id ? "bg-primary/[0.07] before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:bg-primary" : ""
+                  }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-medium text-sm truncate">{conversation.sessionId ?? "Contato sem telefone"}</p>
-                    <Badge variant={conversation.status === "human_handoff" ? "default" : "secondary"}>
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                      selectedConversationId === conversation.id ? "bg-primary text-primary-foreground" : "bg-accent text-accent-foreground"
+                    }`} aria-hidden="true">
+                      {(conversation.sessionId ?? "Contato").replace(/\D/g, "").slice(-2) || "WA"}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="min-w-0 truncate text-sm font-semibold text-foreground">{conversation.sessionId ?? "Contato sem telefone"}</p>
+                        <Badge className="h-5 shrink-0 rounded-md px-1.5 text-[10px]" variant={conversation.status === "human_handoff" ? "default" : "secondary"}>
                       {conversation.status === "human_handoff" ? "Humano" : conversation.status === "opted_out" ? "Opt-out" : "IA"}
                     </Badge>
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                        {conversation.lastMessageContent || "Atendimento iniciado"}
+                      </p>
+                      <p className="mt-1.5 text-[11px] tabular-nums text-muted-foreground">
+                        {new Date(conversation.lastMessageAt ?? conversation.createdAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                        <span aria-hidden="true"> · </span>{conversation.messageCount} mensagens
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {new Date(conversation.createdAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                  </p>
                 </button>
               ))}
             </div>
-          </div>
-          <div className="md:col-span-2 border rounded-lg overflow-hidden flex flex-col">
+          </section>
+          <section
+            aria-label={selectedConversationId ? "Histórico do atendimento WhatsApp" : "Atendimento selecionado"}
+            className="flex min-h-[64dvh] min-w-0 flex-col overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm md:min-h-0"
+          >
             {!selectedConversationId ? (
-              <div className="flex-1 flex items-center justify-center text-muted-foreground">
-                <p className="text-sm">Selecione um atendimento para ver o histórico.</p>
+              <div className="flex flex-1 flex-col items-center justify-center px-6 text-center text-muted-foreground">
+                <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-primary">
+                  <MessageSquare className="h-5 w-5" aria-hidden="true" />
+                </span>
+                <p className="text-sm font-medium text-foreground">Escolha um atendimento</p>
+                <p className="mt-1 text-xs">Selecione uma conversa para abrir o histórico.</p>
               </div>
             ) : (
               <>
-                <div className="p-3 border-b bg-muted/30">
-                  <p className="font-semibold text-sm">Atendimento WhatsApp</p>
-                  <p className="text-xs text-muted-foreground">A IA interrompe respostas ao detectar uma solicitação de atendimento humano.</p>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 bg-secondary/35 px-4 py-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground" aria-hidden="true">
+                      {selectedConversationId.replace(/\D/g, "").slice(-2) || "WA"}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-foreground">Atendimento WhatsApp</p>
+                      <p className="text-xs text-muted-foreground">
+                        {conversations.find((conversation) => conversation.id === selectedConversationId)?.sessionId ?? "Contato sem telefone"}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+                    A IA interrompe respostas ao detectar uma solicitação de atendimento humano.
+                  </p>
                 </div>
-                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                <div aria-label="Mensagens do atendimento" className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background/55 px-3 py-4 sm:px-5" role="log" aria-live="polite">
+                  {selectedMessages.length === 0 && (
+                    <div className="flex h-full min-h-40 flex-col items-center justify-center text-center text-muted-foreground">
+                      <MessageSquare className="mb-2 h-5 w-5 opacity-60" aria-hidden="true" />
+                      <p className="text-sm font-medium text-foreground">Ainda não há mensagens neste atendimento.</p>
+                    </div>
+                  )}
                   {selectedMessages.map((message) => (
-                    <div key={message.id} className={`flex ${message.role === "user" ? "justify-start" : "justify-end"}`}>
-                      <div className={`max-w-xs rounded-lg px-3 py-2 text-sm ${message.role === "user" ? "bg-muted" : message.isBot ? "bg-primary/10 text-foreground" : "bg-primary text-primary-foreground"}`}>
-                        <p>{message.content || (message.mediaUrl ? "Mídia recebida" : "Mensagem sem texto")}</p>
+                    <div key={message.id} className={`flex min-w-0 ${message.role === "user" ? "justify-start" : "justify-end"}`}>
+                      <div className={`min-w-0 max-w-[min(88%,34rem)] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed shadow-sm ${
+                        message.role === "user"
+                          ? "rounded-tl-md border border-border/70 bg-card text-card-foreground"
+                          : message.isBot
+                            ? "rounded-tr-md bg-accent/70 text-foreground"
+                            : "rounded-tr-md bg-primary text-primary-foreground"
+                      }`}>
+                        <p className="whitespace-pre-wrap break-words">{message.content || (message.mediaUrl ? "Mídia recebida" : "Mensagem sem texto")}</p>
                         {(message.mediaUrl || message.mediaMimeType || message.mediaExpiredAt) && (
                           <MessageMediaAttachment
                             url={message.mediaUrl}
@@ -669,31 +730,32 @@ export function AiInboxTab({
                             expiredAt={message.mediaExpiredAt}
                           />
                         )}
-                        <p className="mt-1 text-[10px] opacity-70">
+                        <p className="mt-1.5 text-[10px] opacity-75">
                           {message.isBot ? "IA" : message.role === "user" ? "Cliente" : "Equipe"} · {new Date(message.sentAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
                         </p>
                       </div>
                     </div>
                   ))}
                 </div>
-                <div className="p-3 border-t">
-                  <form onSubmit={onReply} className="flex gap-2">
+                <div className="border-t border-border/70 bg-card px-3 py-3 sm:px-4">
+                  <form onSubmit={onReply} className="flex min-w-0 items-center gap-2">
                     <input
                       data-testid="input-ai-inbox-reply"
                       type="text"
-                      className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                      aria-label="Responder no atendimento WhatsApp"
+                      className="h-10 min-w-0 flex-1 rounded-lg border border-border bg-background px-3 text-sm placeholder:text-muted-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       placeholder="Responder como equipe..."
                       value={reply}
                       onChange={(event) => onReplyChange(event.target.value)}
                     />
-                    <Button data-testid="button-send-ai-inbox-reply" type="submit" size="sm" disabled={sendingReply || !reply.trim()}>
-                      <Send className="w-4 h-4" />
+                    <Button data-testid="button-send-ai-inbox-reply" type="submit" size="sm" className="h-10 w-10 shrink-0 rounded-lg" aria-label="Enviar resposta no atendimento WhatsApp" disabled={sendingReply || !reply.trim()}>
+                      <Send className="h-4 w-4" />
                     </Button>
                   </form>
                 </div>
               </>
             )}
-          </div>
+          </section>
         </div>
       )}
     </>
