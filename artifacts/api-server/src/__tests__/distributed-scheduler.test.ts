@@ -1,10 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { logger } = vi.hoisted(() => ({
+const { logger, redisDailyLimitCircuit } = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  redisDailyLimitCircuit: {
+    isOpen: vi.fn(() => false),
+    reportError: vi.fn(() => false),
+  },
 }));
 vi.mock("../lib/logger", () => ({ logger }));
-vi.mock("../lib/redis", () => ({ getRedisConnection: vi.fn(() => null) }));
+vi.mock("../lib/redis", () => ({
+  getRedisConnection: vi.fn(() => null),
+  isRedisDailyLimitCircuitOpen: redisDailyLimitCircuit.isOpen,
+  reportRedisDailyLimitError: redisDailyLimitCircuit.reportError,
+}));
 
 import { RedisSchedulerLease, runScheduledJob, type SchedulerRedis } from "../lib/distributed-scheduler";
 
@@ -66,6 +74,11 @@ describe("RedisSchedulerLease", () => {
 });
 
 describe("runScheduledJob", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    redisDailyLimitCircuit.isOpen.mockReturnValue(false);
+  });
+
   it("fails closed rather than executing when production Redis is unavailable", async () => {
     const previous = process.env.NODE_ENV;
     process.env.NODE_ENV = "production";
@@ -101,6 +114,9 @@ describe("runScheduledJob", () => {
 
       expect(task).not.toHaveBeenCalled();
       expect(databaseFallbackTask).toHaveBeenCalledOnce();
+      expect(redisDailyLimitCircuit.reportError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "max daily request limit" }),
+      );
       expect(logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           jobName: "outbound-delivery-recovery",
@@ -111,6 +127,27 @@ describe("runScheduledJob", () => {
     } finally {
       process.env.NODE_ENV = previous;
     }
+  });
+
+  it("does not retry Redis leases while the shared daily-limit circuit is open", async () => {
+    const redis: SchedulerRedis = {
+      status: "ready",
+      set: vi.fn().mockRejectedValue(new Error("max daily request limit")),
+      eval: vi.fn(),
+    };
+    const task = vi.fn();
+    const databaseFallbackTask = vi.fn();
+    redisDailyLimitCircuit.isOpen.mockReturnValue(true);
+
+    await runScheduledJob("outbound-delivery-recovery", task, {
+      redis,
+      databaseFallbackTask,
+    });
+
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(redis.eval).not.toHaveBeenCalled();
+    expect(task).not.toHaveBeenCalled();
+    expect(databaseFallbackTask).toHaveBeenCalledOnce();
   });
 
   it("runs the opted-in database fallback when Redis is unavailable in production", async () => {

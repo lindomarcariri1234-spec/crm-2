@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import cron, { type TaskOptions } from "node-cron";
 import { logger } from "./logger";
-import { getRedisConnection } from "./redis";
+import {
+  getRedisConnection,
+  isRedisDailyLimitCircuitOpen,
+  reportRedisDailyLimitError,
+} from "./redis";
 
 const RELEASE_IF_OWNER = `
   if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -83,6 +87,20 @@ function isProduction(): boolean {
   return process.env["NODE_ENV"] === "production";
 }
 
+const DAILY_LIMIT_SKIP_LOG_COOLDOWN_MS = 60 * 60_000;
+const lastDailyLimitSkipLogAt = new Map<string, number>();
+
+function logDailyLimitSkip(jobName: string): void {
+  const now = Date.now();
+  const lastLoggedAt = lastDailyLimitSkipLogAt.get(jobName);
+  if (lastLoggedAt !== undefined && now - lastLoggedAt < DAILY_LIMIT_SKIP_LOG_COOLDOWN_MS) return;
+  lastDailyLimitSkipLogAt.set(jobName, now);
+  logger.warn(
+    { jobName, mode: "daily-limit-circuit-open" },
+    "[scheduler] Redis daily-limit circuit is open; scheduled execution skipped",
+  );
+}
+
 /**
  * Runs an in-process scheduled task under a Redis lease.  Redis is mandatory
  * in production, where replicas may be added independently of application
@@ -94,7 +112,6 @@ export async function runScheduledJob(
   task: ScheduledTask,
   dependencies: ScheduledJobDependencies = {},
 ): Promise<void> {
-  const redis = dependencies.redis === undefined ? getRedisConnection() : dependencies.redis;
   const fallback = dependencies.allowDevelopmentFallback ?? !isProduction();
   const runDatabaseFallback = async () => {
     if (!dependencies.databaseFallbackTask) return;
@@ -115,6 +132,17 @@ export async function runScheduledJob(
     }
   };
 
+  if (isRedisDailyLimitCircuitOpen()) {
+    if (dependencies.databaseFallbackTask) {
+      await runDatabaseFallback();
+    } else {
+      logDailyLimitSkip(jobName);
+    }
+    return;
+  }
+
+  const redis = dependencies.redis === undefined ? getRedisConnection() : dependencies.redis;
+
   if (!redis || redis.status !== "ready") {
     if (fallback) {
       logger.warn({ jobName, mode: "single-instance-development" }, "[scheduler] Redis unavailable; running local fallback");
@@ -133,6 +161,7 @@ export async function runScheduledJob(
   try {
     lease = await RedisSchedulerLease.acquire(redis, key, ttlMs);
   } catch (error) {
+    reportRedisDailyLimitError(error);
     if (dependencies.databaseFallbackTask) {
       await runDatabaseFallback();
     } else {
@@ -156,7 +185,10 @@ export async function runScheduledJob(
   const renewal = setInterval(() => {
     void lease!.renew().then((renewed) => {
       if (!renewed) logger.warn({ jobName }, "[scheduler] Lease renewal lost");
-    }).catch((err) => logger.warn({ err, jobName }, "[scheduler] Lease renewal failed"));
+    }).catch((err) => {
+      reportRedisDailyLimitError(err);
+      logger.warn({ err, jobName }, "[scheduler] Lease renewal failed");
+    });
   }, Math.floor(ttlMs / 3));
   renewal.unref();
 
@@ -170,6 +202,7 @@ export async function runScheduledJob(
       const released = await lease.release();
       logger.info({ jobName, released }, "[scheduler] Lease released");
     } catch (err) {
+      reportRedisDailyLimitError(err);
       logger.warn({ err, jobName }, "[scheduler] Lease release failed; TTL will recover");
     }
   }

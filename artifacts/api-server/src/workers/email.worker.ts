@@ -3,7 +3,10 @@ import { db, emailLogsTable, campaignSendsTable, reservationsTable } from "@work
 import { eq, and } from "drizzle-orm";
 import { sendReservationConfirmationEmail, sendReservationCancellationEmail, sendBirthdayEmail, sendNewBookingNotificationEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendReferralWelcomeEmail, sendReminderHtmlEmail, sendReferralLoyaltyPointsEmail } from "@workspace/email";
 import { getRedisConnection } from "../lib/redis";
-import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
+import {
+  attachCircuitBreaker,
+  WORKER_IDLE_DRAIN_DELAY_SECONDS,
+} from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
 import type { ReservationEmailJobData, CancellationEmailJobData, BirthdayEmailJobData, NewBookingNotificationEmailJobData, ReferralBonusPaidEmailJobData, ReferralConvertedEmailJobData, ReferralExpiredEmailJobData, ReferralExpiringSoonEmailJobData, ReferralBonusReleasedEmailJobData, ReferralWelcomeEmailJobData, CampaignEmailJobData, ReferralLoyaltyPointsEmailJobData } from "../queues/index";
 import type { SendEmailResult } from "@workspace/email";
@@ -138,8 +141,8 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
 
   const isDev = process.env.NODE_ENV !== "production";
   const workerOptions = isDev
-    ? { connection: conn, concurrency: 1, stalledInterval: 60_000, drainDelay: 30 }
-    : { connection: conn, concurrency: 5, stalledInterval: 15_000 };
+    ? { connection: conn, concurrency: 1, stalledInterval: 60_000, drainDelay: WORKER_IDLE_DRAIN_DELAY_SECONDS }
+    : { connection: conn, concurrency: 5, stalledInterval: 15_000, drainDelay: WORKER_IDLE_DRAIN_DELAY_SECONDS };
 
   _worker = new Worker<EmailJobData>(
     "emails",

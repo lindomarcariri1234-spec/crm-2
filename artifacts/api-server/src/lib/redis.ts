@@ -4,9 +4,37 @@ import { db, platformSettingsTable, redisAlertLogTable, tenantsTable } from "@wo
 import { eq } from "drizzle-orm";
 import { generateId } from "./id";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
+import {
+  createRedisDailyLimitCircuit,
+  type RedisQuotaWorker,
+} from "./redis-daily-limit-circuit";
 
 let _connection: Redis | null = null;
 export let isQueueEnabled = false;
+
+const redisDailyLimitCircuit = createRedisDailyLimitCircuit({
+  probe: async () => {
+    const connection = _connection;
+    if (!connection || connection.status !== "ready") {
+      throw new Error("redis_not_ready");
+    }
+    await connection.ping();
+  },
+  onOpened: recordTransientRedisError,
+  onRecovered: resetTransientRedisErrors,
+});
+
+export function isRedisDailyLimitCircuitOpen(): boolean {
+  return redisDailyLimitCircuit.isOpen();
+}
+
+export function registerRedisDailyLimitWorker(worker: RedisQuotaWorker): () => void {
+  return redisDailyLimitCircuit.registerWorker(worker);
+}
+
+export function reportRedisDailyLimitError(error: unknown): boolean {
+  return redisDailyLimitCircuit.reportError(error);
+}
 
 // ─── Eviction policy ──────────────────────────────────────────────────────────
 // Tracked per process so we only attempt the CONFIG SET once at startup (not on
@@ -277,6 +305,7 @@ export function resetTransientRedisErrors(): void {
 
 export function getRedisStatus(): "ok" | "degraded" | "unavailable" {
   if (!process.env["REDIS_URL"]?.trim()) return "ok"; // Redis not configured — not applicable
+  if (redisDailyLimitCircuit.isOpen()) return "unavailable";
 
   // If the connection is currently ready AND the last transient error is old
   // enough, treat the service as recovered — even if the counter hasn't been
@@ -453,19 +482,20 @@ export function getRedisConnection(): Redis | null {
 
       _connection.on("connect", () => {
         isQueueEnabled = true;
-        resetTransientRedisErrors();
+        if (!isRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
         logger.info("[redis] Connected");
       });
 
       _connection.on("ready", () => {
-        resetTransientRedisErrors();
+        if (!isRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
         // Attempt to enforce noeviction policy for BullMQ safety (once per startup).
         void maybeFixEvictionPolicy(_connection!);
       });
 
       _connection.on("error", (err: Error) => {
+        const dailyLimit = reportRedisDailyLimitError(err);
         if (isTransientRedisError(err)) {
-          recordTransientRedisError();
+          if (!dailyLimit) recordTransientRedisError();
           logger.warn({ err }, "[redis] Transient error (will retry)");
         } else {
           logger.error({ err }, "[redis] Error");
@@ -526,7 +556,9 @@ export function getBullMQQueueConnection(): Redis | null {
     });
 
     _producerConnection.on("error", (err: Error) => {
+      const dailyLimit = reportRedisDailyLimitError(err);
       if (isTransientRedisError(err)) {
+        if (!dailyLimit) recordTransientRedisError();
         logger.warn({ err }, "[redis-producer] Transient error");
       } else {
         logger.error({ err }, "[redis-producer] Error");
@@ -538,6 +570,7 @@ export function getBullMQQueueConnection(): Redis | null {
 }
 
 export async function closeRedisConnection(): Promise<void> {
+  redisDailyLimitCircuit.stop();
   // Resolve any pending eviction-policy waiters before tearing down.
   _evictionPolicyResolve?.();
   _evictionPolicyResolve = null;

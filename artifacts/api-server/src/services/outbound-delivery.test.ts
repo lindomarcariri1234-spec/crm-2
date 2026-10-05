@@ -460,7 +460,7 @@ describe("legacy email history synchronization", () => {
     )).toBe(false);
   });
 
-  it("does not re-send a delivery whose provider result became ambiguous after lease expiry", async () => {
+  it("does not re-send an ambiguous delivery during database fallback after lease expiry", async () => {
     const staleDelivery = {
       id: "delivery-1",
       tenantId: "tenant-a",
@@ -476,7 +476,7 @@ describe("legacy email history synchronization", () => {
       .mockReturnValueOnce(makeUpdateQuery())
       .mockReturnValueOnce(makeUpdateQuery());
 
-    await expect(recoverOutboundDeliveries()).resolves.toEqual({
+    await expect(recoverOutboundDeliveries({ databaseFallback: true })).resolves.toEqual({
       recovered: 1,
       enqueued: 0,
       inlineAttempted: 0,

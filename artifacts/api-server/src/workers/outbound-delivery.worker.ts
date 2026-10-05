@@ -1,6 +1,9 @@
 import { Worker } from "bullmq";
 import { getRedisConnection } from "../lib/redis";
-import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
+import {
+  attachCircuitBreaker,
+  WORKER_IDLE_DRAIN_DELAY_SECONDS,
+} from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
 import { safeErrorLogFields } from "../lib/safe-error-log";
 import type { OutboundDeliveryJobData } from "../queues";
@@ -22,8 +25,8 @@ export function startOutboundDeliveryWorker(): Worker<OutboundDeliveryJobData> |
       if (!delivered) logger.debug({ jobId: job.id }, "[outbound-delivery-worker] Delivery was already claimed or terminal");
     },
     isDev
-      ? { connection, concurrency: 1, stalledInterval: 60_000, drainDelay: 30 }
-      : { connection, concurrency: 5, stalledInterval: 15_000 },
+      ? { connection, concurrency: 1, stalledInterval: 60_000, drainDelay: WORKER_IDLE_DRAIN_DELAY_SECONDS }
+      : { connection, concurrency: 5, stalledInterval: 15_000, drainDelay: WORKER_IDLE_DRAIN_DELAY_SECONDS },
   );
   worker.on("failed", (job, error) => {
     logger.warn(

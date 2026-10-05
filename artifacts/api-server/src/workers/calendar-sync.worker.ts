@@ -1,6 +1,9 @@
 import { Worker } from "bullmq";
 import { getRedisConnection } from "../lib/redis";
-import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
+import {
+  attachCircuitBreaker,
+  WORKER_IDLE_DRAIN_DELAY_SECONDS,
+} from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
 import type { CalendarSyncJobData } from "../queues/index";
@@ -50,8 +53,8 @@ export function startCalendarSyncWorker(): Worker<CalendarSyncJobData> | null {
       logger.info({ jobId: job.id, type }, "[calendar-sync-worker] Job complete");
     },
     isDev
-      ? { connection: conn, concurrency: 1, stalledInterval: 60_000, drainDelay: 30 }
-      : { connection: conn, concurrency: 3, stalledInterval: 15_000 },
+      ? { connection: conn, concurrency: 1, stalledInterval: 60_000, drainDelay: WORKER_IDLE_DRAIN_DELAY_SECONDS }
+      : { connection: conn, concurrency: 3, stalledInterval: 15_000, drainDelay: WORKER_IDLE_DRAIN_DELAY_SECONDS },
   );
 
   _worker.on("failed", (job, err) => {
