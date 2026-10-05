@@ -25,8 +25,8 @@ For ticket SSE delivery, project payloads onto the explicit public contract fiel
 
 **How to apply:** When adding a ticket SSE field, update the public type and shared projection together. Never forward parsed Redis payloads or caller-supplied update objects verbatim; test both Redis fan-out and fallback paths.
 
-Keep recovery `refresh` hints separate from broadcastable ticket and queue updates. The Redis broadcaster accepts and runtime-validates only ticket/queue changes; recovery refreshes use their explicit local rehydration path after subscription acknowledgement.
+Keep `SupportTicketUpdatePayload` as a discriminated union: ticket events require a nonblank ticket ID, while queue and recovery-refresh events require `ticketId: null`. The SSE emitter validates this shape at runtime too. Keep recovery `refresh` hints separate from broadcastable ticket and queue updates; recovery refreshes use their explicit local rehydration path after subscription acknowledgement.
 
-**Why:** Redis subscribers ignore `refresh` messages from the update channel, so allowing the broadcaster to publish them can make a successful publish appear valid while every subscriber drops the hint.
+**Why:** Redis subscribers ignore `refresh` messages from the update channel, so allowing the broadcaster to publish them can make a successful publish appear valid while every subscriber drops the hint. A broad type can also represent impossible type/ID pairs, and direct emitter callers need runtime protection.
 
-**How to apply:** Preserve this distinction when extending support-ticket event types, and keep compile-time and runtime coverage that prevents recovery-only refresh events from entering the ticket update broadcaster.
+**How to apply:** Preserve these distinctions when extending support-ticket event types; update both the discriminated union and runtime validator, and keep compile-time/runtime tests for valid shapes and recovery-only routing.

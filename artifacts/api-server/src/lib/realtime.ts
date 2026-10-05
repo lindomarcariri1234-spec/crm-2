@@ -20,11 +20,18 @@ const SUPPORT_TICKET_UPDATE_CHANNEL = "support-ticket-updates";
 function toPublicSupportTicketPayload(
   payload: SupportTicketUpdatePayload,
 ): SupportTicketUpdatePayload {
-  return {
-    eventId: payload.eventId,
-    type: payload.type,
-    ticketId: payload.type === "ticket" ? payload.ticketId : null,
-  };
+  switch (payload.type) {
+    case "ticket":
+      return { eventId: payload.eventId, type: "ticket", ticketId: payload.ticketId };
+    case "queues":
+      return { eventId: payload.eventId, type: "queues", ticketId: null };
+    case "refresh":
+      return { eventId: payload.eventId, type: "refresh", ticketId: null };
+    default: {
+      const exhaustiveCheck: never = payload;
+      return exhaustiveCheck;
+    }
+  }
 }
 
 function isSupportTicketBroadcastUpdate(update: unknown): update is SupportTicketBroadcastUpdate {

@@ -2,15 +2,30 @@ import type { Response } from "express";
 
 const clients = new Map<string, Set<Response>>();
 
-export interface SupportTicketUpdatePayload {
-  eventId: string;
-  type: "ticket" | "queues" | "refresh";
-  ticketId: string | null;
-}
+export type SupportTicketUpdatePayload =
+  | { eventId: string; type: "ticket"; ticketId: string }
+  | { eventId: string; type: "queues"; ticketId: null }
+  | { eventId: string; type: "refresh"; ticketId: null };
 
 export type SupportTicketBroadcastUpdate =
   | { type: "ticket"; ticketId: string }
   | { type: "queues"; ticketId: null };
+
+function isValidSupportTicketUpdatePayload(
+  payload: unknown,
+): payload is SupportTicketUpdatePayload {
+  if (!payload || typeof payload !== "object") return false;
+  const candidate = payload as { eventId?: unknown; type?: unknown; ticketId?: unknown };
+  if (typeof candidate.eventId !== "string" || !candidate.eventId.trim()) return false;
+
+  if (candidate.type === "ticket") {
+    return typeof candidate.ticketId === "string" && candidate.ticketId.trim().length > 0;
+  }
+  return (
+    (candidate.type === "queues" || candidate.type === "refresh")
+    && candidate.ticketId === null
+  );
+}
 
 export function addSupportTicketClient(tenantId: string, res: Response): void {
   if (!clients.has(tenantId)) clients.set(tenantId, new Set());
@@ -29,6 +44,10 @@ export function emitSupportTicketUpdate(
   tenantId: string,
   payload: SupportTicketUpdatePayload,
 ): void {
+  if (!isValidSupportTicketUpdatePayload(payload)) {
+    throw new TypeError("Invalid support-ticket SSE payload");
+  }
+
   const set = clients.get(tenantId);
   if (!set || set.size === 0) return;
   const data = JSON.stringify(payload);
