@@ -899,6 +899,54 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         type: "queues",
         ticketId: null,
       };
+      const invalidMessages = [
+        "{invalid-json",
+        JSON.stringify({ payload: ticketEvent }),
+        JSON.stringify({ tenantId: "", payload: ticketEvent }),
+        JSON.stringify({ tenantId: "   ", payload: ticketEvent }),
+        JSON.stringify({ tenantId: 42, payload: ticketEvent }),
+        JSON.stringify({ tenantId: matchingTenantId }),
+        JSON.stringify({ tenantId: matchingTenantId, payload: null }),
+        JSON.stringify({
+          tenantId: matchingTenantId,
+          payload: { type: "ticket", ticketId: "ticket-without-event-id" },
+        }),
+        JSON.stringify({
+          tenantId: matchingTenantId,
+          payload: { eventId: "", type: "ticket", ticketId: "ticket-empty-event-id" },
+        }),
+        JSON.stringify({
+          tenantId: matchingTenantId,
+          payload: { eventId: "   ", type: "ticket", ticketId: "ticket-whitespace-event-id" },
+        }),
+        JSON.stringify({
+          tenantId: matchingTenantId,
+          payload: { eventId: "ticket-empty-id", type: "ticket", ticketId: "" },
+        }),
+        JSON.stringify({
+          tenantId: matchingTenantId,
+          payload: { eventId: "ticket-whitespace-id", type: "ticket", ticketId: "   " },
+        }),
+        JSON.stringify({
+          tenantId: matchingTenantId,
+          payload: { eventId: "ticket-invalid-type", type: "reservation", ticketId: null },
+        }),
+        JSON.stringify({
+          tenantId: matchingTenantId,
+          payload: { eventId: "ticket-missing-id", type: "ticket", ticketId: null },
+        }),
+        JSON.stringify({
+          tenantId: matchingTenantId,
+          payload: { eventId: "queues-unexpected-id", type: "queues", ticketId: "ticket-123" },
+        }),
+      ];
+      for (const message of invalidMessages) {
+        expect(await publisher.publish("support-ticket-updates", message)).toBe(2);
+      }
+      await sleep(100);
+      expect(streams.every((stream) => stream.updates.length === 0)).toBe(true);
+      expect(streams.every((stream) => stream.refreshes.length === 1)).toBe(true);
+
       expect(await publisher.publish("support-ticket-updates", JSON.stringify({
         tenantId: matchingTenantId,
         payload: ticketEvent,

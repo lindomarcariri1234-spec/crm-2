@@ -187,12 +187,15 @@ export function initSeatUpdateSubscriber(): void {
         const payload = envelope.payload as SupportTicketUpdatePayload | undefined;
         if (
           typeof envelope.tenantId !== "string"
-          || !envelope.tenantId
+          || !envelope.tenantId.trim()
           || !payload
           || typeof payload.eventId !== "string"
-          || !payload.eventId
+          || !payload.eventId.trim()
           || (payload.type !== "ticket" && payload.type !== "queues")
-          || (payload.type === "ticket" && typeof payload.ticketId !== "string")
+          || (
+            payload.type === "ticket"
+            && (typeof payload.ticketId !== "string" || !payload.ticketId.trim())
+          )
           || (payload.type === "queues" && payload.ticketId !== null)
         ) {
           return;
