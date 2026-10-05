@@ -5,6 +5,8 @@ interface ConversationLink {
   id: string;
   clientId: string | null;
   channel: string;
+  startedAt?: string | null;
+  createdAt?: string | null;
 }
 
 interface UseConversationAiMessagesOptions {
@@ -18,6 +20,7 @@ interface UseConversationAiMessagesResult {
   messages: AiConversationMessage[];
   loading: boolean;
   error: string | null;
+  failedConversationLabels: string[];
   updateConversationMessages: (
     conversationId: string,
     conversationMessages: AiConversationMessage[],
@@ -41,6 +44,25 @@ type ConversationLoadResult =
   | { conversationId: string; failed: true };
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const conversationStartFormatter = new Intl.DateTimeFormat("pt-BR", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "America/Sao_Paulo",
+});
+
+function formatConversationStart(conversation: ConversationLink | undefined): string {
+  for (const timestamp of [conversation?.startedAt, conversation?.createdAt]) {
+    if (!timestamp) continue;
+    const date = new Date(timestamp);
+    if (!Number.isNaN(date.getTime())) {
+      return `Sessão iniciada em ${conversationStartFormatter.format(date)}`;
+    }
+  }
+  return "Sessão do WhatsApp sem data de início";
+}
 
 function formatPartialFailure(failure: PartialConversationFailure): string {
   const failedCount = failure.failedConversationIds.length;
@@ -79,6 +101,9 @@ export function useConversationAiMessages({
     .join("|");
   const scopeKey = JSON.stringify([selectedClientId, linkedConversationIds]);
   const currentPartialFailure = partialFailure?.scopeKey === scopeKey ? partialFailure : null;
+  const failedConversationLabels = currentPartialFailure?.failedConversationIds.map((failedId) =>
+    formatConversationStart(conversations.find((conversation) => conversation.id === failedId)),
+  ) ?? [];
   const currentRefreshError = refreshError?.scopeKey === scopeKey ? refreshError.message : null;
   const error = [
     currentPartialFailure ? formatPartialFailure(currentPartialFailure) : null,
@@ -187,5 +212,12 @@ export function useConversationAiMessages({
     };
   }, [enabled, selectedClientId, linkedConversationIds, refreshToken, scopeKey]);
 
-  return { messages, loading, error, updateConversationMessages, setErrorMessage };
+  return {
+    messages,
+    loading,
+    error,
+    failedConversationLabels,
+    updateConversationMessages,
+    setErrorMessage,
+  };
 }

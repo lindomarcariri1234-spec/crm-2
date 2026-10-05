@@ -201,6 +201,7 @@ interface ConversationsTabProps {
   selectedClientName: string | undefined;
   loadingConversationAiMessages: boolean;
   conversationAiError: string | null;
+  failedConversationLabels?: string[];
   onRetryConversationAiMessages: () => unknown;
   selectedWhatsAppConversation: AiConversation | null;
   selectedClientLinkStatus: ClientLinkStatus;
@@ -234,6 +235,7 @@ export function ConversationsTab({
   selectedClientName,
   loadingConversationAiMessages,
   conversationAiError,
+  failedConversationLabels = [],
   onRetryConversationAiMessages,
   selectedWhatsAppConversation,
   selectedClientLinkStatus,
@@ -350,9 +352,33 @@ export function ConversationsTab({
                     <p className="text-xs text-muted-foreground" role="status">Carregando mensagens recebidas…</p>
                   )}
                   {conversationAiError && (
-                    <div className="flex items-center gap-2 text-xs text-destructive" role="alert">
-                      <span>{conversationAiError}</span>
-                      <Button data-testid="button-retry-conversation-ai-messages" variant="outline" size="sm" onClick={() => { void onRetryConversationAiMessages(); }}>
+                    <div
+                      className="flex items-start gap-2 text-xs text-destructive"
+                      data-testid="conversation-ai-history-error"
+                      role="alert"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p>{conversationAiError}</p>
+                        {failedConversationLabels.length > 0 && (
+                          <div className="mt-1">
+                            <p className="font-medium">Sessões com histórico incompleto:</p>
+                            <ul
+                              className="list-inside list-disc space-y-0.5 text-muted-foreground"
+                              data-testid="failed-conversation-history-labels"
+                            >
+                              {failedConversationLabels.map((label, index) => (
+                                <li key={`${label}-${index}`}>{label}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        data-testid="button-retry-conversation-ai-messages"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => { void onRetryConversationAiMessages(); }}
+                      >
                         Tentar novamente
                       </Button>
                     </div>

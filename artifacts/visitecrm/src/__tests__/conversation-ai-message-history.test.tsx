@@ -114,6 +114,7 @@ function ConversationHistoryRetryHarness() {
       ConversationsTab,
       makeProps({
         conversationAiError: history.error,
+        failedConversationLabels: history.failedConversationLabels,
         loadingConversationAiMessages: history.loading,
         onRetryConversationAiMessages: () =>
           setRefreshToken((current) => current + 1),

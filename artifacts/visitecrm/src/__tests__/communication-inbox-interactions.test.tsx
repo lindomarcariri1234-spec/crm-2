@@ -263,12 +263,32 @@ async function settleHistoryFailure(request: Deferred<Response>): Promise<void> 
 function DelayedHistoryRefreshHarness() {
   const [selectedClientId, setSelectedClientId] = useState<string | null>("client-a");
   const [conversations, setConversations] = useState([
-    { id: "conversation-a", clientId: "client-a", channel: "whatsapp" },
-    { id: "conversation-b-main", clientId: "client-b", channel: "whatsapp" },
-    { id: "conversation-b-failed-1", clientId: "client-b", channel: "whatsapp" },
-    { id: "conversation-b-failed-2", clientId: "client-b", channel: "whatsapp" },
+    {
+      id: "conversation-a",
+      clientId: "client-a",
+      channel: "whatsapp",
+      startedAt: "2026-10-01T12:00:00.000Z",
+    },
+    {
+      id: "conversation-b-main",
+      clientId: "client-b",
+      channel: "whatsapp",
+      startedAt: "2026-10-01T12:00:00.000Z",
+    },
+    {
+      id: "conversation-b-failed-1",
+      clientId: "client-b",
+      channel: "whatsapp",
+      startedAt: "2026-10-02T12:00:00.000Z",
+    },
+    {
+      id: "conversation-b-failed-2",
+      clientId: "client-b",
+      channel: "whatsapp",
+      startedAt: "2026-10-03T12:00:00.000Z",
+    },
   ]);
-  const { messages, error } = useConversationAiMessages({
+  const { messages, loading, error, failedConversationLabels } = useConversationAiMessages({
     enabled: true,
     selectedClientId,
     conversations,
@@ -285,7 +305,12 @@ function DelayedHistoryRefreshHarness() {
         "data-testid": "button-simulate-periodic-client-a-update",
         onClick: () => setConversations((current) => [
           ...current,
-          { id: "conversation-a-new", clientId: "client-a", channel: "whatsapp" },
+          {
+            id: "conversation-a-new",
+            clientId: "client-a",
+            channel: "whatsapp",
+            startedAt: "2026-10-04T12:00:00.000Z",
+          },
         ]),
       },
       "Atualizar conversas vinculadas",
@@ -300,6 +325,12 @@ function DelayedHistoryRefreshHarness() {
       "Selecionar cliente B",
     ),
     createElement("p", { "data-testid": "selected-history-client" }, selectedClientId),
+    createElement(ConversationsTab, {
+      ...makeProps(selectedClientId, setSelectedClientId, []),
+      loadingConversationAiMessages: loading,
+      conversationAiError: error,
+      failedConversationLabels,
+    }),
     createElement(
       "div",
       { "data-testid": "selected-client-history" },
@@ -535,6 +566,19 @@ describe("delayed conversation history refreshes", () => {
     expect(history!.textContent).toContain(currentBMessage.content);
     expect(history!.textContent).not.toContain(initialAMessage.content);
     expect(historyError!.textContent).toBe(clientBError);
+    const failedSessions = container.querySelector<HTMLElement>(
+      '[data-testid="failed-conversation-history-labels"]',
+    );
+    const failureWarning = container.querySelector<HTMLElement>(
+      '[data-testid="conversation-ai-history-error"]',
+    );
+    expect(failedSessions).not.toBeNull();
+    expect(failureWarning?.textContent).toContain("Sessões com histórico incompleto:");
+    expect(failedSessions!.querySelectorAll("li")).toHaveLength(2);
+    expect(failedSessions!.textContent).toContain("Sessão iniciada em 02/10/2026, 09:00");
+    expect(failedSessions!.textContent).toContain("Sessão iniciada em 03/10/2026, 09:00");
+    expect(failedSessions!.textContent).not.toContain("conversation-b-failed");
+    expect(failureWarning?.textContent).not.toContain("conversation-b-failed");
 
     await flushAct(async () => {
       await Promise.all([
@@ -549,5 +593,7 @@ describe("delayed conversation history refreshes", () => {
     expect(history!.textContent).toContain(currentBMessage.content);
     expect(history!.textContent).not.toContain("Atualização atrasada da Ana");
     expect(historyError!.textContent).toBe(clientBError);
+    expect(failedSessions!.textContent).toContain("Sessão iniciada em 02/10/2026, 09:00");
+    expect(failedSessions!.textContent).toContain("Sessão iniciada em 03/10/2026, 09:00");
   });
 });

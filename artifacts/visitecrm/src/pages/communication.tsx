@@ -228,6 +228,7 @@ export default function Communication() {
     messages: conversationAiMessages,
     loading: loadingConversationAiMessages,
     error: conversationAiError,
+    failedConversationLabels: conversationAiFailureLabels,
   } = useConversationAiMessages({
     enabled: tab === "conversations",
     selectedClientId: selectedConversationClientId,
@@ -1366,6 +1367,7 @@ export default function Communication() {
             selectedClientName={conversations.find((item) => item.clientId === selectedConversationClientId)?.clientName}
             loadingConversationAiMessages={loadingConversationAiMessages}
             conversationAiError={conversationAiError}
+            failedConversationLabels={conversationAiFailureLabels}
             onRetryConversationAiMessages={() => setConversationAiRefreshToken((value) => value + 1)}
             selectedWhatsAppConversation={selectedWhatsAppConversation}
             selectedClientLinkStatus={selectedClientLinkStatus}
