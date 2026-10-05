@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, expectTypeOf, vi, beforeEach, afterEach } from "vitest";
 
 const {
   mockEmitSeatUpdate,
@@ -318,6 +318,26 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
         ticketId: "ticket-123",
       },
     });
+  });
+
+  it("restricts ticket broadcasts to ticket and queue changes", () => {
+    expectTypeOf<Parameters<typeof broadcastSupportTicketUpdate>[1]>().toEqualTypeOf<
+      | { type: "ticket"; ticketId: string }
+      | { type: "queues"; ticketId: null }
+    >();
+  });
+
+  it("rejects recovery refresh hints before Redis can discard them", async () => {
+    const { fakePub } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+    initSeatUpdateSubscriber();
+
+    const refreshUpdate = { type: "refresh" as const, ticketId: null };
+    await expect(
+      broadcastSupportTicketUpdate("tenant-one", refreshUpdate as never),
+    ).rejects.toThrow("Only valid ticket and queue updates can be broadcast");
+    expect(fakePub.publish).not.toHaveBeenCalled();
+    expect(mockEmitSupportTicketUpdate).not.toHaveBeenCalled();
   });
 
   it("fans a Redis ticket event out only through its tenant-keyed emitter", async () => {

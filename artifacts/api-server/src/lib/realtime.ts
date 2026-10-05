@@ -6,6 +6,7 @@ import { emitSeatRefresh, emitSeatUpdate, type SeatUpdatePayload } from "./seat-
 import {
   emitSupportTicketRefresh,
   emitSupportTicketUpdate,
+  type SupportTicketBroadcastUpdate,
   type SupportTicketUpdatePayload,
 } from "./support-ticket-sse";
 import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES } from "@workspace/permissions";
@@ -24,6 +25,15 @@ function toPublicSupportTicketPayload(
     type: payload.type,
     ticketId: payload.type === "ticket" ? payload.ticketId : null,
   };
+}
+
+function isSupportTicketBroadcastUpdate(update: unknown): update is SupportTicketBroadcastUpdate {
+  if (!update || typeof update !== "object") return false;
+  const payload = update as { type?: unknown; ticketId?: unknown };
+  if (payload.type === "ticket") {
+    return typeof payload.ticketId === "string" && payload.ticketId.trim().length > 0;
+  }
+  return payload.type === "queues" && payload.ticketId === null;
 }
 
 let _subscriber: Redis | null = null;
@@ -229,8 +239,12 @@ export function initSeatUpdateSubscriber(): void {
 
 export async function broadcastSupportTicketUpdate(
   tenantId: string,
-  update: Omit<SupportTicketUpdatePayload, "eventId">,
+  update: SupportTicketBroadcastUpdate,
 ): Promise<void> {
+  if (!isSupportTicketBroadcastUpdate(update)) {
+    throw new TypeError("Only valid ticket and queue updates can be broadcast");
+  }
+
   const payload: SupportTicketUpdatePayload = {
     ...update,
     eventId: generateId(),

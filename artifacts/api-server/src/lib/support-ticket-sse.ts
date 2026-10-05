@@ -8,6 +8,10 @@ export interface SupportTicketUpdatePayload {
   ticketId: string | null;
 }
 
+export type SupportTicketBroadcastUpdate =
+  | { type: "ticket"; ticketId: string }
+  | { type: "queues"; ticketId: null };
+
 export function addSupportTicketClient(tenantId: string, res: Response): void {
   if (!clients.has(tenantId)) clients.set(tenantId, new Set());
   clients.get(tenantId)!.add(res);
