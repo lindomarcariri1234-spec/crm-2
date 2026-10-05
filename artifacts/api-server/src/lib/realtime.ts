@@ -3,7 +3,11 @@ import { db } from "@workspace/db";
 import { reservationsTable, tripsTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { emitSeatUpdate, type SeatUpdatePayload } from "./seat-sse";
-import { emitSupportTicketUpdate, type SupportTicketUpdatePayload } from "./support-ticket-sse";
+import {
+  emitSupportTicketRefresh,
+  emitSupportTicketUpdate,
+  type SupportTicketUpdatePayload,
+} from "./support-ticket-sse";
 import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES } from "@workspace/permissions";
 import { getRedisConnection } from "./redis";
 import { logger } from "./logger";
@@ -31,21 +35,65 @@ export function initSeatUpdateSubscriber(): void {
   }
 
   _subscriber = conn.duplicate();
+  const subscriber = _subscriber;
+  let subscriptionsActive = false;
+  let recoveryPending = false;
+  let recoveryGeneration = 0;
+  let recoveryInFlight = false;
 
-  _subscriber.on("error", (err: Error) => {
+  subscriber.on("error", (err: Error) => {
     logger.warn({ err }, "[seat-sse] Subscriber connection error");
   });
 
-  void _subscriber
+  subscriber.on("reconnecting", () => {
+    if (!subscriptionsActive) return;
+    recoveryPending = true;
+    recoveryGeneration += 1;
+  });
+
+  // Pub/Sub does not replay messages lost while this connection is offline.
+  // ioredis emits "ready" before its automatic resubscribe is acknowledged,
+  // so refresh open ticket streams only after an explicit subscribe succeeds.
+  subscriber.on("ready", () => {
+    if (!subscriptionsActive || !recoveryPending || recoveryInFlight) return;
+
+    recoveryInFlight = true;
+    const generation = recoveryGeneration;
+    void subscriber
+      .subscribe(SEAT_UPDATE_CHANNEL, SUPPORT_TICKET_UPDATE_CHANNEL)
+      .then(() => {
+        recoveryInFlight = false;
+        if (
+          _subscriber !== subscriber
+          || !recoveryPending
+          || generation !== recoveryGeneration
+        ) {
+          return;
+        }
+        recoveryPending = false;
+        emitSupportTicketRefresh(generateId());
+        logger.info("[realtime] Redis SSE subscriptions restored; refreshing connected ticket inboxes");
+      })
+      .catch((err: unknown) => {
+        recoveryInFlight = false;
+        if (_subscriber === subscriber) {
+          logger.error({ err }, "[realtime] Failed to restore Redis SSE subscriptions");
+        }
+      });
+  });
+
+  void subscriber
     .subscribe(SEAT_UPDATE_CHANNEL, SUPPORT_TICKET_UPDATE_CHANNEL)
     .then(() => {
+      if (_subscriber !== subscriber) return;
+      subscriptionsActive = true;
       logger.info("[realtime] Subscribed to Redis SSE channels — multi-instance fan-out active");
     })
     .catch((err: unknown) => {
       logger.error({ err }, "[realtime] Failed to subscribe to Redis SSE channels");
     });
 
-  _subscriber.on("message", (channel: string, message: string) => {
+  subscriber.on("message", (channel: string, message: string) => {
     if (channel === SUPPORT_TICKET_UPDATE_CHANNEL) {
       try {
         const envelope = JSON.parse(message) as {
@@ -110,8 +158,9 @@ export async function broadcastSupportTicketUpdate(
  */
 export async function closeSeatUpdateSubscriber(): Promise<void> {
   if (_subscriber) {
-    await _subscriber.quit().catch(() => {});
+    const subscriber = _subscriber;
     _subscriber = null;
+    await subscriber.quit().catch(() => {});
   }
 }
 

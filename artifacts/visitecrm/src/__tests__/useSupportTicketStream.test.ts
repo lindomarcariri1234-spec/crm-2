@@ -1,9 +1,12 @@
+import { createElement } from "react";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupRoots,
   flushAct,
   installMockEventSource,
   MockEventSource,
+  renderComponent,
   renderHook,
   restoreEventSource,
 } from "./eventSourceHarness.js";
@@ -83,6 +86,70 @@ describe("useSupportTicketStream", () => {
 
     await hook.unmount();
     expect(tenantTwoStream.closeCount).toBe(1);
+  });
+
+  it("shows the latest ticket data after Redis recovery without reconnecting the browser stream", async () => {
+    let serverData = "before Redis recovery";
+    const queryKey = ["support-ticket-recovery-test"] as const;
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          staleTime: Infinity,
+          gcTime: 0,
+        },
+      },
+    });
+    const onOpen = vi.fn(() => {
+      void queryClient.invalidateQueries({ queryKey });
+    });
+    const onTicketUpdate = vi.fn();
+    const onQueuesUpdate = vi.fn();
+    function TestInbox() {
+      const ticketQuery = useQuery({
+        queryKey,
+        queryFn: async () => serverData,
+      });
+      useSupportTicketStream({
+        tenantId: "tenant-one",
+        enabled: true,
+        onOpen,
+        onTicketUpdate,
+        onQueuesUpdate,
+      });
+      return createElement("output", null, ticketQuery.data ?? "Loading");
+    }
+
+    const rendered = await renderComponent(createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(TestInbox),
+    ));
+    const stream = MockEventSource.last();
+
+    await vi.waitFor(() => {
+      expect(rendered.container.textContent).toBe("before Redis recovery");
+    });
+    await flushAct(() => stream.emitOpen());
+    await vi.waitFor(() => {
+      expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe("idle");
+    });
+
+    serverData = "after Redis recovery";
+    await flushAct(() => stream.emitMessage(JSON.stringify({
+      eventId: "redis-recovery-1",
+      type: "refresh",
+      ticketId: null,
+    })));
+
+    await vi.waitFor(() => {
+      expect(rendered.container.textContent).toBe("after Redis recovery");
+    });
+    expect(onOpen).toHaveBeenCalledTimes(2);
+    expect(onTicketUpdate).not.toHaveBeenCalled();
+    expect(onQueuesUpdate).not.toHaveBeenCalled();
+    expect(stream.closeCount).toBe(0);
+    queryClient.clear();
   });
 
   it("does not open a stream until an authenticated tenant is available", async () => {

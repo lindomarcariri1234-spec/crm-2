@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const {
   mockEmitSeatUpdate,
   mockEmitSupportTicketUpdate,
+  mockEmitSupportTicketRefresh,
   mockResWhere,
   mockTripLimit,
   mockSelect,
@@ -27,6 +28,7 @@ const {
 
     const mockEmitSeatUpdate = vi.fn();
     const mockEmitSupportTicketUpdate = vi.fn();
+    const mockEmitSupportTicketRefresh = vi.fn();
 
     // Default: no Redis connection (null → fallback path)
     const mockGetRedisConnection = vi.fn().mockReturnValue(null);
@@ -34,6 +36,7 @@ const {
     return {
       mockEmitSeatUpdate,
       mockEmitSupportTicketUpdate,
+      mockEmitSupportTicketRefresh,
       mockResWhere,
       mockTripLimit,
       mockSelect,
@@ -59,6 +62,7 @@ vi.mock("../lib/seat-sse.js", () => ({
 
 vi.mock("../lib/support-ticket-sse.js", () => ({
   emitSupportTicketUpdate: mockEmitSupportTicketUpdate,
+  emitSupportTicketRefresh: mockEmitSupportTicketRefresh,
 }));
 
 vi.mock("../lib/redis.js", () => ({
@@ -174,6 +178,9 @@ function makeFakeSubscriber() {
     quit: vi.fn().mockResolvedValue(undefined),
     emitMessage: (channel: string, message: string) => {
       listeners.get("message")?.(channel, message);
+    },
+    emit: (event: string, ...args: unknown[]) => {
+      listeners.get(event)?.(...args);
     },
   };
   return fake;
@@ -327,6 +334,34 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     expect(mockEmitSupportTicketUpdate).toHaveBeenCalledOnce();
     expect(mockEmitSupportTicketUpdate).toHaveBeenCalledWith("tenant-one", payload);
     expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
+  });
+
+  it("refreshes connected ticket inboxes only after Redis subscriptions are restored", async () => {
+    const { fakePub, fakeSubscriber } = makeFakePub();
+    mockGetRedisConnection.mockReturnValue(fakePub);
+
+    let resolveRecoverySubscribe: (() => void) | undefined;
+    fakeSubscriber.subscribe
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveRecoverySubscribe = resolve;
+      }));
+
+    initSeatUpdateSubscriber();
+    await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledOnce());
+
+    fakeSubscriber.emit("reconnecting", 100);
+    fakeSubscriber.emit("ready");
+    await vi.waitFor(() => expect(fakeSubscriber.subscribe).toHaveBeenCalledTimes(2));
+    expect(mockEmitSupportTicketRefresh).not.toHaveBeenCalled();
+
+    if (!resolveRecoverySubscribe) {
+      throw new Error("Expected the recovery subscription acknowledgement to be pending");
+    }
+    resolveRecoverySubscribe();
+
+    await vi.waitFor(() => expect(mockEmitSupportTicketRefresh).toHaveBeenCalledOnce());
+    expect(mockEmitSupportTicketRefresh).toHaveBeenCalledWith(expect.any(String));
   });
 
   it("falls back to a local tenant-scoped ticket event when Redis is unavailable", async () => {

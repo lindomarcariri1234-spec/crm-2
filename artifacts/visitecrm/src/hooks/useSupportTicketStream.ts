@@ -4,7 +4,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 export interface SupportTicketStreamUpdate {
   eventId: string;
-  type: "ticket" | "queues";
+  type: "ticket" | "queues" | "refresh";
   ticketId: string | null;
 }
 
@@ -25,6 +25,9 @@ function parseUpdate(data: string): SupportTicketStreamUpdate | null {
     }
     if (value.type === "queues" && value.ticketId === null) {
       return { eventId: value.eventId, type: "queues", ticketId: null };
+    }
+    if (value.type === "refresh" && value.ticketId === null) {
+      return { eventId: value.eventId, type: "refresh", ticketId: null };
     }
     return null;
   } catch {
@@ -66,7 +69,8 @@ export function useSupportTicketStream({
       }
 
       if (update.type === "ticket") onTicketUpdate(update.ticketId!);
-      else onQueuesUpdate();
+      else if (update.type === "queues") onQueuesUpdate();
+      else onOpen();
     };
     stream.onerror = () => {
       // Leave the connection open so EventSource can reconnect automatically.

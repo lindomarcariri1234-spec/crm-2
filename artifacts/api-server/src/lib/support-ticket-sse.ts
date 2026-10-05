@@ -4,7 +4,7 @@ const clients = new Map<string, Set<Response>>();
 
 export interface SupportTicketUpdatePayload {
   eventId: string;
-  type: "ticket" | "queues";
+  type: "ticket" | "queues" | "refresh";
   ticketId: string | null;
 }
 
@@ -37,4 +37,15 @@ export function emitSupportTicketUpdate(
     }
   }
   for (const res of dead) removeSupportTicketClient(tenantId, res);
+}
+
+/** Prompts every connected tenant inbox on this instance to rehydrate after Redis recovery. */
+export function emitSupportTicketRefresh(eventId: string): void {
+  for (const tenantId of clients.keys()) {
+    emitSupportTicketUpdate(tenantId, {
+      eventId,
+      type: "refresh",
+      ticketId: null,
+    });
+  }
 }

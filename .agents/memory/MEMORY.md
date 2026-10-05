@@ -144,3 +144,4 @@
 - [Unified WhatsApp timeline sends](unified-whatsapp-timeline-send-path.md) — keep the client timeline on the tenant/client/consent-aware send route; reserve chatbot replies for the AI inbox flow.
 - [Raw SQL timestamp decoding](raw-sql-timestamp-decoding.md) — normalize raw PostgreSQL timestamp aggregates before writing them through Drizzle Date columns.
 - [PNPM workspace package adds](pnpm-workspace-package-adds.md) — review config normalization and unrelated peer-snapshot changes after scoped dependency adds.
+- [Ticket SSE recovery](support-ticket-redis-recovery.md) — after Redis subscriber reconnect, wait for subscribe acknowledgment then send local ticket streams a tenant-scoped refresh hint.

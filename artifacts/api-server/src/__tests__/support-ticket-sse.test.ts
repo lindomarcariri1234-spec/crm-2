@@ -2,6 +2,7 @@ import type { Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addSupportTicketClient,
+  emitSupportTicketRefresh,
   emitSupportTicketUpdate,
   removeSupportTicketClient,
   type SupportTicketUpdatePayload,
@@ -42,6 +43,32 @@ describe("support ticket SSE tenant fan-out", () => {
       `id: ${payload.eventId}\ndata: ${JSON.stringify(payload)}\n\n`,
     );
     expect(tenantTwoResponse.write).not.toHaveBeenCalled();
+  });
+
+  it("refreshes each connected tenant's own inbox after Redis recovery", () => {
+    const firstTenantResponse = mockResponse();
+    const secondTenantResponse = mockResponse();
+    const otherTenantResponse = mockResponse();
+    clients.push(
+      { tenantId: "tenant-one", response: firstTenantResponse },
+      { tenantId: "tenant-one", response: secondTenantResponse },
+      { tenantId: "tenant-two", response: otherTenantResponse },
+    );
+    addSupportTicketClient("tenant-one", firstTenantResponse);
+    addSupportTicketClient("tenant-one", secondTenantResponse);
+    addSupportTicketClient("tenant-two", otherTenantResponse);
+
+    emitSupportTicketRefresh("redis-recovery-1");
+
+    const expectedPayload: SupportTicketUpdatePayload = {
+      eventId: "redis-recovery-1",
+      type: "refresh",
+      ticketId: null,
+    };
+    const expectedEvent = `id: ${expectedPayload.eventId}\ndata: ${JSON.stringify(expectedPayload)}\n\n`;
+    expect(firstTenantResponse.write).toHaveBeenCalledWith(expectedEvent);
+    expect(secondTenantResponse.write).toHaveBeenCalledWith(expectedEvent);
+    expect(otherTenantResponse.write).toHaveBeenCalledWith(expectedEvent);
   });
 
   it("does not retain disconnected streams after a write fails", () => {
