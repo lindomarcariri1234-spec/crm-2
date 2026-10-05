@@ -14,6 +14,7 @@ interface UseConversationAiMessagesOptions {
   selectedClientId: string | null;
   conversations: ConversationLink[];
   refreshToken: number;
+  retryConversationId?: string | null;
 }
 
 interface UseConversationAiMessagesResult {
@@ -111,6 +112,7 @@ export function useConversationAiMessages({
   selectedClientId,
   conversations,
   refreshToken,
+  retryConversationId = null,
 }: UseConversationAiMessagesOptions): UseConversationAiMessagesResult {
   const [messages, setMessages] = useState<AiConversationMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -176,18 +178,34 @@ export function useConversationAiMessages({
       return;
     }
 
+    const currentFailureForScope = partialFailureRef.current?.scopeKey === scopeKey
+      ? partialFailureRef.current
+      : null;
+    if (
+      isExplicitRefresh
+      && retryConversationId
+      && !currentFailureForScope?.failedConversationIds.includes(retryConversationId)
+    ) {
+      return;
+    }
+
     let cancelled = false;
     const abortController = new AbortController();
     setLoading(true);
     setRefreshError((current) => current?.scopeKey === scopeKey ? null : current);
-    // A retry token narrows the request to the current failures; a scope change reloads every link.
+    // A targeted retry loads one failed session; an unscoped retry loads all failures.
     const failedConversationIdsToRetry = isExplicitRefresh
-      && partialFailureRef.current?.scopeKey === scopeKey
-      ? partialFailureRef.current.failedConversationIds
+      && currentFailureForScope
+      ? retryConversationId
+        ? [retryConversationId]
+        : currentFailureForScope.failedConversationIds
       : [];
-    const conversationIdsToLoad = failedConversationIdsToRetry.length > 0
+    const isTargetedRetry = isExplicitRefresh && retryConversationId !== null;
+    const conversationIdsToLoad = isTargetedRetry
       ? failedConversationIdsToRetry
-      : conversationIds;
+      : failedConversationIdsToRetry.length > 0
+        ? failedConversationIdsToRetry
+        : conversationIds;
     const conversationIdSet = new Set(conversationIds);
     const requestedConversationIdSet = new Set(conversationIdsToLoad);
     const results = new Array<ConversationLoadResult>(conversationIdsToLoad.length);
@@ -227,6 +245,13 @@ export function useConversationAiMessages({
             "failed" in result,
           )
           .map((result) => result.conversationId);
+        const allFailedConversationIds = isTargetedRetry && currentFailureForScope
+          ? currentFailureForScope.failedConversationIds.filter(
+            (conversationId) =>
+              !requestedConversationIdSet.has(conversationId)
+              || failedConversationIds.includes(conversationId),
+          )
+          : failedConversationIds;
 
         setMessages((current) => [
           ...current.filter((message) =>
@@ -238,10 +263,10 @@ export function useConversationAiMessages({
           ),
           ...successfulResults.flatMap((result) => result.messages),
         ]);
-        setPartialFailure(failedConversationIds.length > 0
+        setPartialFailure(allFailedConversationIds.length > 0
           ? {
               scopeKey,
-              failedConversationIds,
+              failedConversationIds: allFailedConversationIds,
               totalConversationCount: conversationIds.length,
             }
           : null);
@@ -254,7 +279,14 @@ export function useConversationAiMessages({
       cancelled = true;
       abortController.abort();
     };
-  }, [enabled, selectedClientId, linkedConversationIds, refreshToken, scopeKey]);
+  }, [
+    enabled,
+    selectedClientId,
+    linkedConversationIds,
+    refreshToken,
+    retryConversationId,
+    scopeKey,
+  ]);
 
   return {
     messages,

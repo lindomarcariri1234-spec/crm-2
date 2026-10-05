@@ -204,7 +204,7 @@ interface ConversationsTabProps {
   conversationAiError: string | null;
   failedConversationLabels?: FailedConversationLabel[];
   onOpenFailedConversation: (conversationId: string) => void;
-  onRetryConversationAiMessages: () => unknown;
+  onRetryConversationAiMessages: (conversationId?: string) => unknown;
   selectedWhatsAppConversation: AiConversation | null;
   selectedClientLinkStatus: ClientLinkStatus;
   onRetryClientLinkCheck: () => unknown;
@@ -419,6 +419,19 @@ export function ConversationsTab({
                                   >
                                     {label}
                                   </button>
+                                  <Button
+                                    aria-label={`Tentar novamente ${label}`}
+                                    className="ml-2 h-6 px-2 text-xs"
+                                    data-testid={`button-retry-failed-whatsapp-session-${index}`}
+                                    disabled={loadingConversationAiMessages}
+                                    onClick={() => {
+                                      void onRetryConversationAiMessages(conversationId);
+                                    }}
+                                    size="sm"
+                                    variant="ghost"
+                                  >
+                                    Tentar novamente
+                                  </Button>
                                 </li>
                               ))}
                             </ul>
@@ -429,9 +442,10 @@ export function ConversationsTab({
                         data-testid="button-retry-conversation-ai-messages"
                         variant="outline"
                         size="sm"
+                        disabled={loadingConversationAiMessages}
                         onClick={() => { void onRetryConversationAiMessages(); }}
                       >
-                        Tentar novamente
+                        Tentar novamente todas as sessões
                       </Button>
                     </div>
                   )}

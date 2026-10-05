@@ -224,6 +224,8 @@ export default function Communication() {
   const [selectedAiConversationId, setSelectedAiConversationId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
   const [conversationAiRefreshToken, setConversationAiRefreshToken] = useState(0);
+  const [conversationAiRetryConversationId, setConversationAiRetryConversationId] =
+    useState<string | null>(null);
   const {
     messages: conversationAiMessages,
     loading: loadingConversationAiMessages,
@@ -234,6 +236,7 @@ export default function Communication() {
     selectedClientId: selectedConversationClientId,
     conversations: aiConversations,
     refreshToken: conversationAiRefreshToken,
+    retryConversationId: conversationAiRetryConversationId,
   });
   const [aiInboxError, setAiInboxError] = useState<string | null>(null);
   const [aiReply, setAiReply] = useState("");
@@ -1382,7 +1385,10 @@ export default function Communication() {
             conversationAiError={conversationAiError}
             failedConversationLabels={conversationAiFailureLabels}
             onOpenFailedConversation={openFailedWhatsAppConversation}
-            onRetryConversationAiMessages={() => setConversationAiRefreshToken((value) => value + 1)}
+            onRetryConversationAiMessages={(conversationId) => {
+              setConversationAiRetryConversationId(conversationId ?? null);
+              setConversationAiRefreshToken((value) => value + 1);
+            }}
             selectedWhatsAppConversation={selectedWhatsAppConversation}
             selectedClientLinkStatus={selectedClientLinkStatus}
             onRetryClientLinkCheck={() => refetchSelectedConversationClientStatus()}

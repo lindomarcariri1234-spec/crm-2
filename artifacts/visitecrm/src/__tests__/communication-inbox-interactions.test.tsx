@@ -618,7 +618,9 @@ describe("delayed conversation history refreshes", () => {
     expect(failureWarning?.textContent).toContain("Sessões com histórico incompleto:");
     expect(failedSessions!.querySelectorAll("li")).toHaveLength(2);
     const failedSessionLabels = Array.from(
-      failedSessions!.querySelectorAll("button"),
+      failedSessions!.querySelectorAll(
+        'button[data-testid^="button-open-failed-whatsapp-session-"]',
+      ),
       (button) => button.textContent,
     );
     expect(failedSessionLabels).toEqual([
@@ -627,12 +629,24 @@ describe("delayed conversation history refreshes", () => {
     ]);
     expect(new Set(failedSessionLabels).size).toBe(2);
     const failedSessionAriaLabels = Array.from(
-      failedSessions!.querySelectorAll("button"),
+      failedSessions!.querySelectorAll(
+        'button[data-testid^="button-open-failed-whatsapp-session-"]',
+      ),
       (button) => button.getAttribute("aria-label"),
     );
     expect(failedSessionAriaLabels).toEqual([
       "Abrir Sessão iniciada em 02/10/2026, 09:00 (sessão 1) no Atendimento IA",
       "Abrir Sessão iniciada em 02/10/2026, 09:00 (sessão 2) no Atendimento IA",
+    ]);
+    const retrySessionAriaLabels = Array.from(
+      failedSessions!.querySelectorAll(
+        'button[data-testid^="button-retry-failed-whatsapp-session-"]',
+      ),
+      (button) => button.getAttribute("aria-label"),
+    );
+    expect(retrySessionAriaLabels).toEqual([
+      "Tentar novamente Sessão iniciada em 02/10/2026, 09:00 (sessão 1)",
+      "Tentar novamente Sessão iniciada em 02/10/2026, 09:00 (sessão 2)",
     ]);
     expect(failedSessions!.textContent).not.toContain("conversation-b-failed");
     expect(failedSessions!.textContent).not.toContain("+5511999990001");
@@ -651,6 +665,12 @@ describe("delayed conversation history refreshes", () => {
     expect(failedSessionAriaLabels.join(" "))
       .not.toContain("+5511999990001");
     expect(failedSessionAriaLabels.join(" "))
+      .not.toContain("+5511999990002");
+    expect(retrySessionAriaLabels.join(" "))
+      .not.toContain("conversation-b-failed");
+    expect(retrySessionAriaLabels.join(" "))
+      .not.toContain("+5511999990001");
+    expect(retrySessionAriaLabels.join(" "))
       .not.toContain("+5511999990002");
     await flushAct(() => failedSessionLink?.click());
     expect(container.querySelector('[data-testid="active-communication-tab"]')?.textContent)
