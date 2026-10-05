@@ -148,3 +148,4 @@
 - [Seat stream recovery](seat-stream-redis-recovery.md) — recovery hints carry only a trip ID; clients re-fetch occupancy through the current tenant- and trip-scoped seat-map route.
 - [Seat update payload bounds](seat-update-payload-bounds.md) — validate/project at publisher, Redis and SSE boundaries; preserve statuses without an allowlist and never log raw payloads.
 - [API Vitest integration selection](api-vitest-integration-selection.md) — register new integration files explicitly and invoke Vitest directly when targeting one file.
+- [CHECK constraint drift scope](check-constraint-drift-scope.md) — reconcile legacy CHECK definitions individually before broadening live drift comparisons.
