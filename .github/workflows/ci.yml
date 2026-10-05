@@ -98,7 +98,10 @@ jobs:
           NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter @workspace/visitecrm run typecheck
 
       - name: Test API suite
-        run: pnpm --filter @workspace/api-server run test -- --pool=forks --maxWorkers=1 --no-file-parallelism
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y redis-server
+          pnpm --filter @workspace/api-server run test -- --pool=forks --maxWorkers=1 --no-file-parallelism
 
       - name: Test API integration suite
         run: pnpm --filter @workspace/api-server run test:integration

@@ -135,17 +135,22 @@ describe("useSupportTicketStream", () => {
       expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe("idle");
     });
 
-    serverData = "after Redis recovery";
-    await flushAct(() => stream.emitMessage(JSON.stringify({
-      eventId: "redis-recovery-1",
-      type: "refresh",
-      ticketId: null,
-    })));
+    for (const [index, latestData] of [
+      "after first Redis recovery",
+      "after second Redis recovery",
+    ].entries()) {
+      serverData = latestData;
+      await flushAct(() => stream.emitMessage(JSON.stringify({
+        eventId: `redis-recovery-${index + 1}`,
+        type: "refresh",
+        ticketId: null,
+      })));
 
-    await vi.waitFor(() => {
-      expect(rendered.container.textContent).toBe("after Redis recovery");
-    });
-    expect(onOpen).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => {
+        expect(rendered.container.textContent).toBe(latestData);
+      });
+    }
+    expect(onOpen).toHaveBeenCalledTimes(3);
     expect(onTicketUpdate).not.toHaveBeenCalled();
     expect(onQueuesUpdate).not.toHaveBeenCalled();
     expect(stream.closeCount).toBe(0);
