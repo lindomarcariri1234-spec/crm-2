@@ -899,6 +899,10 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         type: "queues",
         ticketId: null,
       };
+      const seatEvent = {
+        tripId: "trip-after-malformed-ticket-events",
+        seats: [{ number: "A1", status: "reserved" }],
+      };
       const invalidMessages = [
         "{invalid-json",
         JSON.stringify({ payload: ticketEvent }),
@@ -940,12 +944,23 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
           payload: { eventId: "queues-unexpected-id", type: "queues", ticketId: "ticket-123" },
         }),
       ];
+      mockEmitSeatUpdate.mockClear();
       for (const message of invalidMessages) {
         expect(await publisher.publish("support-ticket-updates", message)).toBe(2);
       }
       await sleep(100);
       expect(streams.every((stream) => stream.updates.length === 0)).toBe(true);
       expect(streams.every((stream) => stream.refreshes.length === 1)).toBe(true);
+      expect(mockEmitSeatUpdate).not.toHaveBeenCalled();
+
+      expect(await publisher.publish("seat-updates", JSON.stringify(seatEvent))).toBe(2);
+      await waitUntil(
+        () => mockEmitSeatUpdate.mock.calls.length === 2,
+        "one seat update to reach the seat SSE emitter in both realtime instances",
+      );
+      await sleep(100);
+      expect(mockEmitSeatUpdate.mock.calls).toEqual([[seatEvent], [seatEvent]]);
+      expect(streams.every((stream) => stream.updates.length === 0)).toBe(true);
 
       expect(await publisher.publish("support-ticket-updates", JSON.stringify({
         tenantId: matchingTenantId,
