@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { inArray } from "drizzle-orm";
-import { db, tenantsTable, TENANT_ID_MAX_BYTES } from "@workspace/db";
+import {
+  db,
+  insertTenantSchema,
+  tenantsTable,
+  TENANT_ID_MAX_BYTES,
+} from "@workspace/db";
 import { generateId } from "../lib/id.js";
 import {
   parseSupportTicketUpdatePayloadDetailed,
@@ -21,6 +26,39 @@ function tenantInsertValues(id: string, suffix: string) {
     email: `ticket-envelope-boundary-${suffix}@example.test`,
   };
 }
+
+describe("tenant insert ID validation", () => {
+  it("accepts 64-byte IDs and returns a field-specific error at 65 bytes", () => {
+    const validIds = ["a".repeat(TENANT_ID_MAX_BYTES), acceptedTenantId];
+    const invalidIds = ["a".repeat(TENANT_ID_MAX_BYTES + 1), overLimitTenantId];
+
+    for (const [index, id] of validIds.entries()) {
+      expect(
+        insertTenantSchema.safeParse(
+          tenantInsertValues(id, `schema-valid-${index}`),
+        ).success,
+      ).toBe(true);
+    }
+
+    for (const [index, id] of invalidIds.entries()) {
+      const parsed = insertTenantSchema.safeParse(
+        tenantInsertValues(id, `schema-invalid-${index}`),
+      );
+      expect(parsed.success).toBe(false);
+      expect(parsed).toMatchObject({
+        success: false,
+        error: {
+          issues: expect.arrayContaining([
+            expect.objectContaining({
+              path: ["id"],
+              message: expect.stringContaining("UTF-8"),
+            }),
+          ]),
+        },
+      });
+    }
+  });
+});
 
 describe("tenant ID byte limit protects ticket Redis envelopes", () => {
   beforeAll(async () => {
@@ -89,8 +127,10 @@ describe("tenant ID byte limit protects ticket Redis envelopes", () => {
         .insert(tenantsTable)
         .values(tenantInsertValues(overLimitTenantId, `${uniqueSuffix}-over`)),
     ).rejects.toMatchObject({
-      code: "23514",
-      constraint: "tenants_id_max_bytes_check",
+      cause: {
+        code: "23514",
+        constraint: "tenants_id_max_bytes_check",
+      },
     });
   });
 });

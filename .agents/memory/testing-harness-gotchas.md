@@ -15,6 +15,7 @@ Detailed notes by failure mode:
 - [Concurrent mock call ordering](concurrent-mock-order.md)
 - [Referral select-count expectations](referrals-test-select-count.md)
 - [Integration test isolation and batching](vitest-db-integration-isolation.md)
+- [Drizzle integration error causes](drizzle-integration-error-cause.md)
 - [Test-suite batching](test-suite-batching.md)
 - [Vitest mock-call typing](vitest-mock-call-typing.md)
 - [Tests excluded from typecheck](test-files-excluded-from-typecheck.md)

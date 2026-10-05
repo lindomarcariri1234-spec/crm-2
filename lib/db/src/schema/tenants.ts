@@ -44,7 +44,15 @@ export const tenantsTable = pgTable("tenants", {
   ),
 ]);
 
-export const insertTenantSchema = createInsertSchema(tenantsTable).omit({ createdAt: true, updatedAt: true });
+export const insertTenantSchema = createInsertSchema(tenantsTable)
+  .omit({ createdAt: true, updatedAt: true })
+  .refine(
+    ({ id }) => Buffer.byteLength(id, "utf8") <= TENANT_ID_MAX_BYTES,
+    {
+      path: ["id"],
+      message: `O identificador da agência deve ter no máximo ${TENANT_ID_MAX_BYTES} bytes em UTF-8.`,
+    },
+  );
 export type InsertTenant = z.infer<typeof insertTenantSchema>;
 export type Tenant = typeof tenantsTable.$inferSelect;
 
