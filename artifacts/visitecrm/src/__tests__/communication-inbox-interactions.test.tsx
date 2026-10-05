@@ -102,6 +102,7 @@ function makeProps(
     selectedClientLinkStatus: "valid",
     onRetryClientLinkCheck: () => undefined,
     onReassociateConversation: () => undefined,
+    onOpenFailedConversation: () => undefined,
     inboxChannel: "whatsapp",
     setInboxChannel: () => undefined,
     inboxMessage: "",
@@ -262,6 +263,8 @@ async function settleHistoryFailure(request: Deferred<Response>): Promise<void> 
 
 function DelayedHistoryRefreshHarness() {
   const [selectedClientId, setSelectedClientId] = useState<string | null>("client-a");
+  const [activeTab, setActiveTab] = useState("conversations");
+  const [selectedAiConversationId, setSelectedAiConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState([
     {
       id: "conversation-a",
@@ -325,11 +328,21 @@ function DelayedHistoryRefreshHarness() {
       "Selecionar cliente B",
     ),
     createElement("p", { "data-testid": "selected-history-client" }, selectedClientId),
+    createElement("p", { "data-testid": "active-communication-tab" }, activeTab),
+    createElement(
+      "p",
+      { "data-testid": "selected-ai-conversation" },
+      selectedAiConversationId,
+    ),
     createElement(ConversationsTab, {
       ...makeProps(selectedClientId, setSelectedClientId, []),
       loadingConversationAiMessages: loading,
       conversationAiError: error,
       failedConversationLabels,
+      onOpenFailedConversation: (conversationId) => {
+        setActiveTab("ai-inbox");
+        setSelectedAiConversationId(conversationId);
+      },
     }),
     createElement(
       "div",
@@ -579,6 +592,21 @@ describe("delayed conversation history refreshes", () => {
     expect(failedSessions!.textContent).toContain("Sessão iniciada em 03/10/2026, 09:00");
     expect(failedSessions!.textContent).not.toContain("conversation-b-failed");
     expect(failureWarning?.textContent).not.toContain("conversation-b-failed");
+
+    const failedSessionLink = container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-open-failed-whatsapp-session-0"]',
+    );
+    expect(failedSessionLink?.textContent).toBe("Sessão iniciada em 02/10/2026, 09:00");
+    expect(failedSessionLink?.getAttribute("aria-label")).not.toContain(
+      "conversation-b-failed-1",
+    );
+    await flushAct(() => failedSessionLink?.click());
+    expect(container.querySelector('[data-testid="active-communication-tab"]')?.textContent)
+      .toBe("ai-inbox");
+    expect(container.querySelector('[data-testid="selected-ai-conversation"]')?.textContent)
+      .toBe("conversation-b-failed-1");
+    expect(container.querySelector('[data-testid="selected-history-client"]')?.textContent)
+      .toBe("client-b");
 
     await flushAct(async () => {
       await Promise.all([

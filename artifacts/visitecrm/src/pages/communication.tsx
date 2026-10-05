@@ -911,6 +911,19 @@ export default function Communication() {
     void selectAiConversation(selectedWhatsAppConversation.id);
   };
 
+  const openFailedWhatsAppConversation = (conversationId: string) => {
+    const failedConversation = aiConversations.find((conversation) => conversation.id === conversationId);
+    if (
+      !failedConversation ||
+      failedConversation.clientId !== selectedConversationClientId ||
+      failedConversation.channel !== "whatsapp"
+    ) {
+      return;
+    }
+    setTab("ai-inbox");
+    void selectAiConversation(failedConversation.id);
+  };
+
   const handleSendInbox = (e: React.FormEvent<HTMLFormElement>) =>
     submitInboxMessage({
       event: e,
@@ -1368,6 +1381,7 @@ export default function Communication() {
             loadingConversationAiMessages={loadingConversationAiMessages}
             conversationAiError={conversationAiError}
             failedConversationLabels={conversationAiFailureLabels}
+            onOpenFailedConversation={openFailedWhatsAppConversation}
             onRetryConversationAiMessages={() => setConversationAiRefreshToken((value) => value + 1)}
             selectedWhatsAppConversation={selectedWhatsAppConversation}
             selectedClientLinkStatus={selectedClientLinkStatus}

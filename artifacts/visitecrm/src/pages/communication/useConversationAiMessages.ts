@@ -20,12 +20,17 @@ interface UseConversationAiMessagesResult {
   messages: AiConversationMessage[];
   loading: boolean;
   error: string | null;
-  failedConversationLabels: string[];
+  failedConversationLabels: FailedConversationLabel[];
   updateConversationMessages: (
     conversationId: string,
     conversationMessages: AiConversationMessage[],
   ) => void;
   setErrorMessage: (message: string) => void;
+}
+
+export interface FailedConversationLabel {
+  conversationId: string;
+  label: string;
 }
 
 interface PartialConversationFailure {
@@ -101,9 +106,10 @@ export function useConversationAiMessages({
     .join("|");
   const scopeKey = JSON.stringify([selectedClientId, linkedConversationIds]);
   const currentPartialFailure = partialFailure?.scopeKey === scopeKey ? partialFailure : null;
-  const failedConversationLabels = currentPartialFailure?.failedConversationIds.map((failedId) =>
-    formatConversationStart(conversations.find((conversation) => conversation.id === failedId)),
-  ) ?? [];
+  const failedConversationLabels = currentPartialFailure?.failedConversationIds.map((failedId) => ({
+    conversationId: failedId,
+    label: formatConversationStart(conversations.find((conversation) => conversation.id === failedId)),
+  })) ?? [];
   const currentRefreshError = refreshError?.scopeKey === scopeKey ? refreshError.message : null;
   const error = [
     currentPartialFailure ? formatPartialFailure(currentPartialFailure) : null,

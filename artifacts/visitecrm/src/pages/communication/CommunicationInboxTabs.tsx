@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/query-error-state";
 import { ClientConversationList } from "./ClientConversationList";
+import type { FailedConversationLabel } from "./useConversationAiMessages";
 
 export interface AiConversation {
   id: string;
@@ -201,7 +202,8 @@ interface ConversationsTabProps {
   selectedClientName: string | undefined;
   loadingConversationAiMessages: boolean;
   conversationAiError: string | null;
-  failedConversationLabels?: string[];
+  failedConversationLabels?: FailedConversationLabel[];
+  onOpenFailedConversation: (conversationId: string) => void;
   onRetryConversationAiMessages: () => unknown;
   selectedWhatsAppConversation: AiConversation | null;
   selectedClientLinkStatus: ClientLinkStatus;
@@ -236,6 +238,7 @@ export function ConversationsTab({
   loadingConversationAiMessages,
   conversationAiError,
   failedConversationLabels = [],
+  onOpenFailedConversation,
   onRetryConversationAiMessages,
   selectedWhatsAppConversation,
   selectedClientLinkStatus,
@@ -405,8 +408,18 @@ export function ConversationsTab({
                               className="mt-1 list-inside list-disc space-y-0.5 text-muted-foreground"
                               data-testid="failed-conversation-history-labels"
                             >
-                              {failedConversationLabels.map((label, index) => (
-                                <li key={`${label}-${index}`}>{label}</li>
+                              {failedConversationLabels.map(({ conversationId, label }, index) => (
+                                <li key={conversationId}>
+                                  <button
+                                    aria-label={`Abrir ${label} no Atendimento IA`}
+                                    className="rounded-sm text-left underline decoration-border underline-offset-2 transition-colors hover:text-foreground hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    data-testid={`button-open-failed-whatsapp-session-${index}`}
+                                    onClick={() => onOpenFailedConversation(conversationId)}
+                                    type="button"
+                                  >
+                                    {label}
+                                  </button>
+                                </li>
                               ))}
                             </ul>
                           </div>
