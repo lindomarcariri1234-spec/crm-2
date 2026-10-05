@@ -145,3 +145,4 @@
 - [Raw SQL timestamp decoding](raw-sql-timestamp-decoding.md) — normalize raw PostgreSQL timestamp aggregates before writing them through Drizzle Date columns.
 - [PNPM workspace package adds](pnpm-workspace-package-adds.md) — review config normalization and unrelated peer-snapshot changes after scoped dependency adds.
 - [Ticket SSE recovery](support-ticket-redis-recovery.md) — after Redis subscriber reconnect, wait for subscribe acknowledgment then send local ticket streams a tenant-scoped refresh hint.
+- [Seat stream recovery](seat-stream-redis-recovery.md) — recovery hints carry only a trip ID; clients re-fetch occupancy through the current tenant- and trip-scoped seat-map route.

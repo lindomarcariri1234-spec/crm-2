@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const {
   mockEmitSeatUpdate,
+  mockEmitSeatRefresh,
   mockEmitSupportTicketUpdate,
   mockEmitSupportTicketRefresh,
   mockResWhere,
@@ -27,6 +28,7 @@ const {
     });
 
     const mockEmitSeatUpdate = vi.fn();
+    const mockEmitSeatRefresh = vi.fn();
     const mockEmitSupportTicketUpdate = vi.fn();
     const mockEmitSupportTicketRefresh = vi.fn();
 
@@ -35,6 +37,7 @@ const {
 
     return {
       mockEmitSeatUpdate,
+      mockEmitSeatRefresh,
       mockEmitSupportTicketUpdate,
       mockEmitSupportTicketRefresh,
       mockResWhere,
@@ -58,6 +61,7 @@ vi.mock("drizzle-orm", () => ({
 
 vi.mock("../lib/seat-sse.js", () => ({
   emitSeatUpdate: mockEmitSeatUpdate,
+  emitSeatRefresh: mockEmitSeatRefresh,
 }));
 
 vi.mock("../lib/support-ticket-sse.js", () => ({
@@ -361,6 +365,7 @@ describe("broadcastSeatUpdate — Redis pub/sub path", () => {
     resolveRecoverySubscribe();
 
     await vi.waitFor(() => expect(mockEmitSupportTicketRefresh).toHaveBeenCalledOnce());
+    expect(mockEmitSeatRefresh).toHaveBeenCalledOnce();
     expect(mockEmitSupportTicketRefresh).toHaveBeenCalledWith(expect.any(String));
   });
 

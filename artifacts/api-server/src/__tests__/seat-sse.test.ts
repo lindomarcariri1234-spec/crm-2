@@ -21,6 +21,7 @@ import {
   tryAddSeatClient,
   removeSeatClient,
   emitSeatUpdate,
+  emitSeatRefresh,
   seatStreamLimits,
   type SeatUpdatePayload,
 } from "../lib/seat-sse.js";
@@ -76,6 +77,24 @@ describe("emitSeatUpdate", () => {
 
     expect(target.write).toHaveBeenCalledTimes(1);
     expect(other.write).not.toHaveBeenCalled();
+  });
+
+  it("sends each seat stream a refresh hint containing only its own trip id", () => {
+    const firstTripClient = register("trip-refresh-one", makeClient());
+    const secondClientForTrip = register("trip-refresh-one", makeClient());
+    const otherTripClient = register("trip-refresh-two", makeClient());
+
+    emitSeatRefresh();
+
+    expect(firstTripClient.write).toHaveBeenCalledWith(
+      `data: ${JSON.stringify({ type: "refresh", tripId: "trip-refresh-one" })}\n\n`,
+    );
+    expect(secondClientForTrip.write).toHaveBeenCalledWith(
+      `data: ${JSON.stringify({ type: "refresh", tripId: "trip-refresh-one" })}\n\n`,
+    );
+    expect(otherTripClient.write).toHaveBeenCalledWith(
+      `data: ${JSON.stringify({ type: "refresh", tripId: "trip-refresh-two" })}\n\n`,
+    );
   });
 
   it("prunes a dead client whose write throws and keeps delivering to healthy ones", () => {

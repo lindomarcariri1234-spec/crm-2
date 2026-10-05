@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { useSeatStream } from "../hooks/useSeatStream.js";
@@ -193,6 +193,126 @@ describe("useSeatStream — incoming seat updates", () => {
 
     expect(result.current.occupiedSeats).toEqual({});
     expect(result.current.eventCount).toBe(0);
+  });
+
+  it("reloads the current tenant-and-trip seat snapshot after Redis recovery", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tripId: "trip-1",
+        seats: [
+          { number: "1A", status: "available" },
+          { number: "2B", status: "confirmed" },
+          { number: "3C", status: "free" },
+        ],
+      }),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const { result } = await renderSeatStream({
+        tripId: "trip-1",
+        slug: "loja-x",
+        isPublic: true,
+      });
+
+      await emit((es) => es.emitMessage(JSON.stringify({
+        type: "refresh",
+        tripId: "trip-1",
+      })));
+
+      await vi.waitFor(() => {
+        expect(result.current.occupiedSeats).toEqual({
+          "2B": "confirmed",
+          "3C": "free",
+        });
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${BASE}/api/public/store/loja-x/trips/trip-1/seat-map`,
+        { credentials: "include" },
+      );
+      expect(result.current.eventCount).toBe(1);
+      expect(MockEventSource.last().closeCount).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses the authenticated trip-scoped endpoint for staff seat-map recovery", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tripId: "trip-1",
+        seats: [{ number: "4D", status: "reserved" }],
+      }),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const { result } = await renderSeatStream({ tripId: "trip-1", isPublic: false });
+      await emit((es) => es.emitMessage(JSON.stringify({
+        type: "refresh",
+        tripId: "trip-1",
+      })));
+
+      await vi.waitFor(() => {
+        expect(result.current.occupiedSeats).toEqual({ "4D": "reserved" });
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${BASE}/api/trips/trip-1/seat-map`,
+        { credentials: "include" },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("retries a failed recovery snapshot once so the open map can catch up", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          tripId: "trip-1",
+          seats: [{ number: "5E", status: "confirmed" }],
+        }),
+      });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const { result } = await renderSeatStream({ tripId: "trip-1", isPublic: false });
+      await emit((es) => es.emitMessage(JSON.stringify({
+        type: "refresh",
+        tripId: "trip-1",
+      })));
+
+      await vi.waitFor(() => {
+        expect(result.current.occupiedSeats).toEqual({ "5E": "confirmed" });
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not fetch a seat snapshot for a recovery hint from another trip", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const { result } = await renderSeatStream({ tripId: "trip-1", isPublic: false });
+
+      await emit((es) => es.emitMessage(JSON.stringify({
+        type: "refresh",
+        tripId: "trip-2",
+      })));
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(result.current.eventCount).toBe(0);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
 

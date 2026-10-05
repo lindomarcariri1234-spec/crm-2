@@ -82,8 +82,16 @@ export interface SeatUpdatePayload {
   seats: Array<{ number: string; status: string }>;
 }
 
-export function emitSeatUpdate(payload: SeatUpdatePayload): void {
-  const set = clients.get(payload.tripId);
+interface SeatRefreshPayload {
+  tripId: string;
+  type: "refresh";
+}
+
+function emitSeatStreamPayload(
+  tripId: string,
+  payload: SeatUpdatePayload | SeatRefreshPayload,
+): void {
+  const set = clients.get(tripId);
   if (!set || set.size === 0) return;
   const data = JSON.stringify(payload);
   const dead: Response[] = [];
@@ -94,5 +102,16 @@ export function emitSeatUpdate(payload: SeatUpdatePayload): void {
       dead.push(res);
     }
   }
-  for (const res of dead) removeSeatClient(payload.tripId, res);
+  for (const res of dead) removeSeatClient(tripId, res);
+}
+
+export function emitSeatUpdate(payload: SeatUpdatePayload): void {
+  emitSeatStreamPayload(payload.tripId, payload);
+}
+
+/** Sends a trip-only recovery hint to every currently connected seat stream. */
+export function emitSeatRefresh(): void {
+  for (const tripId of clients.keys()) {
+    emitSeatStreamPayload(tripId, { type: "refresh", tripId });
+  }
 }

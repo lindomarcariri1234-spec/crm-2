@@ -2,7 +2,7 @@ import type { Redis } from "ioredis";
 import { db } from "@workspace/db";
 import { reservationsTable, tripsTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
-import { emitSeatUpdate, type SeatUpdatePayload } from "./seat-sse";
+import { emitSeatRefresh, emitSeatUpdate, type SeatUpdatePayload } from "./seat-sse";
 import {
   emitSupportTicketRefresh,
   emitSupportTicketUpdate,
@@ -53,7 +53,7 @@ export function initSeatUpdateSubscriber(): void {
 
   // Pub/Sub does not replay messages lost while this connection is offline.
   // ioredis emits "ready" before its automatic resubscribe is acknowledged,
-  // so refresh open ticket streams only after an explicit subscribe succeeds.
+  // so refresh open seat and ticket streams only after explicit subscribe succeeds.
   subscriber.on("ready", () => {
     if (!subscriptionsActive || !recoveryPending || recoveryInFlight) return;
 
@@ -71,8 +71,9 @@ export function initSeatUpdateSubscriber(): void {
           return;
         }
         recoveryPending = false;
+        emitSeatRefresh();
         emitSupportTicketRefresh(generateId());
-        logger.info("[realtime] Redis SSE subscriptions restored; refreshing connected ticket inboxes");
+        logger.info("[realtime] Redis SSE subscriptions restored; refreshing connected seat maps and ticket inboxes");
       })
       .catch((err: unknown) => {
         recoveryInFlight = false;
