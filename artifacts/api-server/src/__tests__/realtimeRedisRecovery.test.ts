@@ -966,15 +966,36 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         ticketId: "ticket-redis-sensitive-extra",
       };
       const maxLengthTicketEvent: TicketUpdatePayload = {
-        eventId: "e".repeat(SUPPORT_TICKET_EVENT_ID_MAX_LENGTH),
+        eventId: "\u0800".repeat(SUPPORT_TICKET_EVENT_ID_MAX_LENGTH),
         type: "ticket",
-        ticketId: "t".repeat(SUPPORT_TICKET_ID_MAX_LENGTH),
+        ticketId: "\u0801".repeat(SUPPORT_TICKET_ID_MAX_LENGTH),
       };
+      const maxLengthQueuesEvent: TicketUpdatePayload = {
+        eventId: "\u0802".repeat(SUPPORT_TICKET_EVENT_ID_MAX_LENGTH),
+        type: "queues",
+        ticketId: null,
+      };
+      const maxLengthTicketEnvelope = JSON.stringify({
+        tenantId: "t".repeat(16),
+        payload: maxLengthTicketEvent,
+      });
+      const maxLengthQueuesEnvelope = JSON.stringify({
+        tenantId: "t".repeat(16),
+        payload: maxLengthQueuesEvent,
+      });
+      expect(Buffer.byteLength(maxLengthTicketEnvelope, "utf8")).toBe(470);
+      expect(Buffer.byteLength(maxLengthQueuesEnvelope, "utf8")).toBe(280);
       const maxLengthTicketMessage = JSON.stringify({
         tenantId: matchingTenantId,
         payload: maxLengthTicketEvent,
       });
+      const maxLengthQueuesMessage = JSON.stringify({
+        tenantId: matchingTenantId,
+        payload: maxLengthQueuesEvent,
+      });
       expect(Buffer.byteLength(maxLengthTicketMessage, "utf8"))
+        .toBeLessThanOrEqual(SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES);
+      expect(Buffer.byteLength(maxLengthQueuesMessage, "utf8"))
         .toBeLessThanOrEqual(SUPPORT_TICKET_REDIS_MAX_MESSAGE_BYTES);
       const oversizedPayloadMarker = "oversized-private-ticket-envelope";
       const oversizedExtraMessage = JSON.stringify({
@@ -1058,12 +1079,13 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
         payload: queuesEventWithUnexpectedExtra,
       }))).toBe(2);
       expect(await publisher.publish("support-ticket-updates", maxLengthTicketMessage)).toBe(2);
+      expect(await publisher.publish("support-ticket-updates", maxLengthQueuesMessage)).toBe(2);
 
       const matchingStreams = streams.filter((stream) => stream.tenantId === matchingTenantId);
       const otherTenantStreams = streams.filter((stream) => stream.tenantId === otherTenantId);
       await waitUntil(
-        () => matchingStreams.every((stream) => stream.updates.length === 4),
-        "sanitized ticket, ticket, queue, and maximum-length events to reach both matching tenant streams",
+        () => matchingStreams.every((stream) => stream.updates.length === 5),
+        "sanitized ticket, ticket, queue, and maximum-length ticket/queue events to reach both matching tenant streams",
       );
       await sleep(100);
       for (const stream of matchingStreams) {
@@ -1072,6 +1094,7 @@ describe("ticket SSE recovery with a disposable Redis server", () => {
           ticketEvent,
           queuesEvent,
           maxLengthTicketEvent,
+          maxLengthQueuesEvent,
         ]);
       }
       for (const stream of otherTenantStreams) {
