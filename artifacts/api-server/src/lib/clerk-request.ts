@@ -1,3 +1,5 @@
+import type { IncomingHttpHeaders } from "node:http";
+
 const CLERK_BYPASS_PATHS = new Set([
   "/api",
   "/api/health",
@@ -39,6 +41,67 @@ export function requireClerkAuthorizedParties(
   }
 
   return authorizedParties;
+}
+
+function headerHostname(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const firstValue = raw?.split(",")[0]?.trim();
+  if (!firstValue) return null;
+  try {
+    const withScheme = firstValue.includes("://") ? firstValue : `https://${firstValue}`;
+    return new URL(withScheme).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Clerk's session handshake builds redirect_url from x-forwarded-host (or Host).
+ * Vercel's external API rewrite can make the Replit upstream hostname appear
+ * there, even when the browser is on the canonical frontend. Normalize only the
+ * Instagram connect navigation and only when one of those hosts is a configured
+ * Replit deployment alias; Clerk still validates the canonical URL normally.
+ */
+export function canonicalizeInstagramConnectClerkRequest(
+  request: { path: string; headers: IncomingHttpHeaders },
+  options: {
+    isProduction: boolean;
+    canonicalFrontendOrigin: string;
+    replitDomains: readonly string[];
+  },
+): boolean {
+  if (!options.isProduction || request.path !== "/api/instagram-messaging/connect") {
+    return false;
+  }
+
+  let canonical: URL;
+  try {
+    canonical = new URL(options.canonicalFrontendOrigin);
+  } catch {
+    return false;
+  }
+  if (canonical.protocol !== "https:" || canonical.username || canonical.password) {
+    return false;
+  }
+
+  const aliasHosts = new Set(
+    options.replitDomains
+      .map((domain) => headerHostname(domain))
+      .filter((hostname): hostname is string => hostname !== null),
+  );
+  if (aliasHosts.size === 0) return false;
+
+  const incomingHosts = [
+    headerHostname(request.headers["x-forwarded-host"]),
+    headerHostname(request.headers.host),
+  ];
+  if (!incomingHosts.some((hostname) => hostname !== null && aliasHosts.has(hostname))) {
+    return false;
+  }
+
+  request.headers["x-forwarded-host"] = canonical.host;
+  request.headers["x-forwarded-proto"] = "https";
+  return true;
 }
 
 export function shouldBypassClerkForPath(pathname: string): boolean {

@@ -21,6 +21,7 @@ import {
   productSlugFromStorefrontPath,
 } from "./lib/storefront-metadata";
 import {
+  canonicalizeInstagramConnectClerkRequest,
   requireClerkAuthorizedParties,
   resolveClerkPublishableKey,
   shouldBypassClerkForPath,
@@ -284,6 +285,11 @@ app.use((req, res, next) => {
   if (shouldBypassClerkForPath(req.path)) {
     return next();
   }
+  canonicalizeInstagramConnectClerkRequest(req, {
+    isProduction: !isDev,
+    canonicalFrontendOrigin: frontendUrls[0] ?? "https://visitecrm.com",
+    replitDomains,
+  });
   return clerkAuth(req, res, next);
 });
 
