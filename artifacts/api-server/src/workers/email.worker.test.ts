@@ -96,9 +96,13 @@ vi.mock("../lib/redis", () => ({
   getRedisConnection: vi.fn(() => ({})),
 }));
 
-vi.mock("../lib/worker-circuit-breaker", () => ({
-  attachCircuitBreaker: vi.fn(),
-}));
+vi.mock("../lib/worker-circuit-breaker", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/worker-circuit-breaker")>();
+  return {
+    ...actual,
+    attachCircuitBreaker: vi.fn(),
+  };
+});
 
 vi.mock("../lib/logger", () => ({
   logger: {
