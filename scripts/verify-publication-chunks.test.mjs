@@ -725,6 +725,9 @@ function fakeBrowserFactory({
   responseUrl = "https://visitecrm.com/assets/interaction.js",
   authState,
   authStateByProfile,
+  signInResponseStatus = 200,
+  signInTitle = "Sign in to VisiteCRM",
+  followAccountPortalRedirect = true,
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
@@ -745,11 +748,23 @@ function fakeBrowserFactory({
           if (method === "Page.navigate") {
             browserCall.navigations.push(params.url);
             const requestedUrl = new URL(params.url);
-            currentUrl =
-              requestedUrl.searchParams.get("redirect_url") ??
-              requestedUrl.href;
+            currentUrl = followAccountPortalRedirect
+              ? requestedUrl.searchParams.get("redirect_url") ??
+                requestedUrl.href
+              : requestedUrl.href;
             navigationNumber += 1;
             const requestId = String(navigationNumber);
+            if (requestedUrl.origin === "https://accounts.visitecrm.com") {
+              listeners.get("Network.responseReceived")?.({
+                requestId: `portal-${requestId}`,
+                type: "Document",
+                response: {
+                  url: `${requestedUrl.origin}${requestedUrl.pathname}`,
+                  status: signInResponseStatus,
+                  mimeType: "text/html",
+                },
+              });
+            }
             listeners.get("Network.requestWillBeSent")?.({
               requestId,
               request: { url: requestUrl },
@@ -768,13 +783,24 @@ function fakeBrowserFactory({
           if (method === "Runtime.evaluate") {
             if (params.expression?.includes("window.Clerk")) {
               const location = new URL(currentUrl);
+              const isAccountPortal =
+                location.origin === "https://accounts.visitecrm.com";
+              const userId = browserAuthState?.userId ?? null;
+              const sessionId = browserAuthState?.sessionId ?? null;
               return {
                 result: {
                   value: {
                     origin: location.origin,
                     pathname: location.pathname,
-                    userId: browserAuthState?.userId ?? null,
-                    sessionId: browserAuthState?.sessionId ?? null,
+                    documentTitle: isAccountPortal
+                      ? signInTitle
+                      : "VisiteCRM",
+                    clerkPresent: !isAccountPortal || Boolean(browserAuthState),
+                    clerkLoaded: !isAccountPortal || Boolean(browserAuthState),
+                    userId,
+                    sessionId,
+                    hasUser: Boolean(userId),
+                    hasSession: Boolean(sessionId),
                   },
                 },
               };
@@ -904,6 +930,53 @@ test("uses one-time Clerk links for isolated seller, superadmin, and client brow
       "https://visitecrm.com/",
     );
   }
+});
+
+test("reports privacy-safe Account Portal diagnostics when sign-in is blocked", async () => {
+  const browser = fakeBrowserFactory({
+    signInResponseStatus: 403,
+    signInTitle: "Just a moment... test.user@example.com",
+    followAccountPortalRedirect: false,
+  });
+
+  await assert.rejects(
+    verifyPublishedInteractions({
+      publicUrl: "https://visitecrm.com",
+      protectedProfiles: [
+        {
+          name: "seller",
+          label: "vendedor",
+          paths: ["/meu-painel"],
+          signInUrl:
+            "https://accounts.visitecrm.com/sign-in?ticket=private-ticket-value&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
+          expectedUserId: "user_private_test_id",
+        },
+      ],
+      interactionSelectors: [],
+      browserFactory: browser.factory,
+      timeoutMs: 1,
+    }),
+    (error) => {
+      assert.match(
+        error.message,
+        /last page: https:\/\/accounts\.visitecrm\.com\/sign-in/,
+      );
+      assert.match(error.message, /title="Just a moment\.\.\. \[redacted email\]"/);
+      assert.match(
+        error.message,
+        /Clerk=absent, user=absent, session=absent/,
+      );
+      assert.match(
+        error.message,
+        /Account Portal responses: HTTP 403 Document https:\/\/accounts\.visitecrm\.com\/sign-in/,
+      );
+      assert.doesNotMatch(
+        error.message,
+        /private-ticket-value|user_private_test_id/,
+      );
+      return true;
+    },
+  );
 });
 
 test("fails when an interacted route serves a non-JavaScript response", async () => {
