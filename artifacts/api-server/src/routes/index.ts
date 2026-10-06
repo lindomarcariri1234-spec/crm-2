@@ -64,6 +64,7 @@ import spreadsheetImportsRouter from "./spreadsheet-imports";
 import financialMetricsRouter from "./financial-metrics";
 import outboundMessagesRouter from "./outbound-messages";
 import pmsRouter from "./pms";
+import instagramMessagingRouter from "./instagram-messaging";
 
 const router: IRouter = Router();
 
@@ -119,6 +120,7 @@ router.use(reportsRouter);
 router.use(insightsRouter);
 router.use(aiIntegrationRouter);
 router.use(tenantIntegrationsRouter);
+router.use(instagramMessagingRouter);
 router.use(systemHealthRouter);
 router.use(subscriptionsRouter);
 router.use(clientPortalRouter);

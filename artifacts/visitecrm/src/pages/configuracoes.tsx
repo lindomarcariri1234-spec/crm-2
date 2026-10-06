@@ -1820,19 +1820,20 @@ function IntegrationsTab() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Controles de comunicação multicanal</CardTitle>
           <CardDescription>
-            Cada envio registra E-mail e WhatsApp como entregas independentes da mesma mensagem.
+            Campanhas usam E-mail e WhatsApp. O Direct do Instagram fica restrito às conversas iniciadas pelo cliente.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 text-sm md:grid-cols-3">
           <div><p className="font-medium">Consentimento</p><p className="text-muted-foreground">Opt-out por canal é respeitado antes do envio.</p></div>
           <div><p className="font-medium">Disponibilidade</p><p className="text-muted-foreground">Contato ausente aparece como “ignorado” no histórico, sem tentativa artificial.</p></div>
-          <div><p className="font-medium">Integração responsável</p><p className="text-muted-foreground">E-mail usa Resend e WhatsApp usa a integração configurada abaixo. Nenhum segredo é exibido.</p></div>
+          <div><p className="font-medium">Integração responsável</p><p className="text-muted-foreground">E-mail usa Resend; WhatsApp e Instagram exigem uma conexão ativa. Nenhum segredo é exibido.</p></div>
         </CardContent>
       </Card>
       <GoogleCalendarCard />
       <AICard />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <WhatsAppIntegrationCards />
+        <InstagramDirectIntegrationCard />
         <IntegrationCard type="stripe_account" />
         <IntegrationCard type="mercadopago" />
         <IntegrationCard type="google_analytics" />
@@ -1840,6 +1841,169 @@ function IntegrationsTab() {
       </div>
       <DistributionHealthCard />
     </div>
+  );
+}
+
+interface InstagramMessagingStatus {
+  appConfigured: boolean;
+  connected: boolean;
+  status: string;
+  accountUsername: string | null;
+  tokenExpiresAt: string | null;
+  lastError: string | null;
+  oauthRedirectUri: string | null;
+  webhookUrl: string | null;
+  deauthorizationUrl: string | null;
+  dataDeletionUrl: string | null;
+  requiredPermissions: string[];
+}
+
+function InstagramDirectIntegrationCard() {
+  const [status, setStatus] = useState<InstagramMessagingStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+
+  const callbackNotice = (() => {
+    const result = new URLSearchParams(window.location.search).get("instagram");
+    if (result === "connected") return "Instagram Direct conectado. As próximas DMs recebidas aparecerão na caixa multicanal.";
+    if (result === "already_connected") return "Esta conta já está conectada a outra agência.";
+    if (result === "authorization_denied") return "A autorização do Instagram foi cancelada.";
+    if (result === "invalid_state") return "A tentativa de conexão expirou. Inicie a conexão novamente.";
+    if (result === "connect_error") return "A Meta não concluiu a conexão ou a ativação do webhook. Revise as permissões e tente novamente.";
+    return null;
+  })();
+
+  const loadStatus = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const response = await fetch(`${BASE}/api/instagram-messaging/status`, { credentials: "include" });
+      if (!response.ok) throw new Error("status");
+      setStatus(await response.json() as InstagramMessagingStatus);
+    } catch {
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadStatus();
+  }, [loadStatus]);
+
+  const disconnect = async () => {
+    if (!window.confirm("Desconectar o Instagram Direct? O histórico de mensagens será mantido.")) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`${BASE}/api/instagram-messaging/disconnect`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("disconnect");
+      await loadStatus();
+    } catch {
+      setLoadError(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Instagram Direct</CardTitle>
+            <CardDescription className="mt-1">
+              Receba DMs e responda pelo painel da agência. A conexão é feita com a conta profissional de cada agência.
+            </CardDescription>
+          </div>
+          <Badge variant={status?.connected ? "default" : "secondary"}>
+            {loading ? "Verificando" : status?.connected ? "Conectado" : status?.appConfigured ? "Desconectado" : "Meta pendente"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" role="alert">
+            Não foi possível consultar a conexão do Instagram.
+            <Button className="ml-2" variant="outline" size="sm" onClick={() => { void loadStatus(); }}>
+              Tentar novamente
+            </Button>
+          </div>
+        )}
+        {callbackNotice && <p className="text-sm text-muted-foreground" role="status">{callbackNotice}</p>}
+        {status?.connected && (
+          <div className="rounded-md bg-muted/50 p-3 text-sm">
+            <p className="font-medium">{status.accountUsername ? `@${status.accountUsername}` : "Conta profissional conectada"}</p>
+            {status.tokenExpiresAt && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Acesso válido até {new Date(status.tokenExpiresAt).toLocaleDateString("pt-BR")}; a renovação é automática.
+              </p>
+            )}
+          </div>
+        )}
+        {!status?.appConfigured && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50/70 p-3 text-sm text-amber-950">
+            <p>O app Meta do VisiteCRM ainda precisa ser criado e configurado. A conexão permanecerá desativada até essa etapa.</p>
+            <p className="mt-2">
+              Configure as Secrets do workspace <code>INSTAGRAM_APP_ID</code>, <code>INSTAGRAM_APP_SECRET</code> e <code>INSTAGRAM_WEBHOOK_VERIFY_TOKEN</code>.
+            </p>
+          </div>
+        )}
+        {status?.lastError && <p className="text-sm text-destructive" role="alert">{status.lastError}</p>}
+        {(status?.oauthRedirectUri || status?.webhookUrl || status?.deauthorizationUrl || status?.dataDeletionUrl) && (
+          <div className="space-y-2 text-xs">
+            {status.oauthRedirectUri && (
+              <div>
+                <p className="font-medium">URL de retorno OAuth</p>
+                <code className="mt-1 block break-all rounded bg-muted p-2">{status.oauthRedirectUri}</code>
+              </div>
+            )}
+            {status.webhookUrl && (
+              <div>
+                <p className="font-medium">URL do webhook</p>
+                <code className="mt-1 block break-all rounded bg-muted p-2">{status.webhookUrl}</code>
+              </div>
+            )}
+            {status.deauthorizationUrl && (
+              <div>
+                <p className="font-medium">URL de desautorização</p>
+                <code className="mt-1 block break-all rounded bg-muted p-2">{status.deauthorizationUrl}</code>
+              </div>
+            )}
+            {status.dataDeletionUrl && (
+              <div>
+                <p className="font-medium">URL para exclusão de dados</p>
+                <code className="mt-1 block break-all rounded bg-muted p-2">{status.dataDeletionUrl}</code>
+              </div>
+            )}
+            <p className="text-muted-foreground">
+              Permissões necessárias: {status.requiredPermissions.join(", ")}. Ative o campo de webhook messages. Para conectar agências fora dos papéis do app, conclua a análise da Meta e solicite acesso avançado; publique como Live para produção.
+            </p>
+            <p className="text-muted-foreground">
+              Uma solicitação de exclusão da Meta remove a conexão e as conversas/mensagens do Instagram, mas mantém os cadastros compartilhados de clientes e o histórico de outros canais.
+            </p>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2">
+          {status?.connected ? (
+            <Button type="button" variant="outline" onClick={() => { void disconnect(); }} disabled={busy}>
+              {busy ? "Desconectando..." : "Desconectar"}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              onClick={() => window.location.assign(`${BASE}/api/instagram-messaging/connect`)}
+              disabled={loading || !status?.appConfigured || busy}
+            >
+              Conectar Instagram
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

@@ -56,6 +56,7 @@ import type {
   CartItem,
   ChartDataPoint,
   ChatbotConversation,
+  ChatbotConversationReplyBody,
   ChatbotMessage,
   Client,
   ClientActivity,
@@ -145,6 +146,11 @@ import type {
   GetSalesCycleParams,
   HealthStatus,
   InsightsSummary,
+  InstagramDataDeletionResponse,
+  InstagramDisconnectResponse,
+  InstagramMessagingStatus,
+  InstagramMetaCallbackResponse,
+  InstagramMetaSignedRequestBody,
   Invoice,
   InvoiceWithTenant,
   LinkExpenseTripCostBody,
@@ -211,6 +217,7 @@ import type {
   Product,
   ProductCategory,
   ProductImage,
+  ReceiveInstagramWebhookBody,
   Referral,
   ReferralSettings,
   ReferralStats,
@@ -305,6 +312,7 @@ import type {
   ValidatePublicReferralCodeBody,
   Vehicle,
   VehicleLayout,
+  VerifyInstagramWebhookParams,
   WhatsAppBroadcastBody,
   WhatsAppBroadcastResult,
 } from "./api.schemas";
@@ -30802,6 +30810,1325 @@ export const useSyncLoyaltyPoints = <
   return useMutation(getSyncLoyaltyPointsMutationOptions(options), queryClient);
 };
 
+export const getGetInstagramMessagingStatusUrl = () => {
+  return `/api/instagram-messaging/status`;
+};
+
+/**
+ * @summary Get the agency's Instagram Direct connection status
+ */
+export const getInstagramMessagingStatus = async (
+  options?: Parameters<typeof customFetch>[1],
+): Promise<InstagramMessagingStatus> => {
+  return customFetch<InstagramMessagingStatus>(
+    getGetInstagramMessagingStatusUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetInstagramMessagingStatusQueryKey = () => {
+  return [`/api/instagram-messaging/status`] as const;
+};
+
+export const getGetInstagramMessagingStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetInstagramMessagingStatusQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getInstagramMessagingStatus>>
+  > = ({ signal }) =>
+    getInstagramMessagingStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetInstagramMessagingStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getInstagramMessagingStatus>>
+>;
+export type GetInstagramMessagingStatusQueryError = ErrorType<unknown>;
+
+export function useGetInstagramMessagingStatus<
+  TData = Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+          TError,
+          Awaited<ReturnType<typeof getInstagramMessagingStatus>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetInstagramMessagingStatus<
+  TData = Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+          TError,
+          Awaited<ReturnType<typeof getInstagramMessagingStatus>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetInstagramMessagingStatus<
+  TData = Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get the agency's Instagram Direct connection status
+ */
+
+export function useGetInstagramMessagingStatus<
+  TData = Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getInstagramMessagingStatus>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetInstagramMessagingStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getConnectInstagramMessagingUrl = () => {
+  return `/api/instagram-messaging/connect`;
+};
+
+/**
+ * @summary Start Instagram Business Login for the current agency
+ */
+export const connectInstagramMessaging = async (
+  options?: Parameters<typeof customFetch>[1],
+): Promise<unknown> => {
+  return customFetch<unknown>(getConnectInstagramMessagingUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getConnectInstagramMessagingQueryKey = () => {
+  return [`/api/instagram-messaging/connect`] as const;
+};
+
+export const getConnectInstagramMessagingQueryOptions = <
+  TData = Awaited<ReturnType<typeof connectInstagramMessaging>>,
+  TError = ErrorType<void>,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof connectInstagramMessaging>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getConnectInstagramMessagingQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof connectInstagramMessaging>>
+  > = ({ signal }) => connectInstagramMessaging({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof connectInstagramMessaging>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ConnectInstagramMessagingQueryResult = NonNullable<
+  Awaited<ReturnType<typeof connectInstagramMessaging>>
+>;
+export type ConnectInstagramMessagingQueryError = ErrorType<void>;
+
+export function useConnectInstagramMessaging<
+  TData = Awaited<ReturnType<typeof connectInstagramMessaging>>,
+  TError = ErrorType<void>,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof connectInstagramMessaging>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof connectInstagramMessaging>>,
+          TError,
+          Awaited<ReturnType<typeof connectInstagramMessaging>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useConnectInstagramMessaging<
+  TData = Awaited<ReturnType<typeof connectInstagramMessaging>>,
+  TError = ErrorType<void>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof connectInstagramMessaging>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof connectInstagramMessaging>>,
+          TError,
+          Awaited<ReturnType<typeof connectInstagramMessaging>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useConnectInstagramMessaging<
+  TData = Awaited<ReturnType<typeof connectInstagramMessaging>>,
+  TError = ErrorType<void>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof connectInstagramMessaging>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start Instagram Business Login for the current agency
+ */
+
+export function useConnectInstagramMessaging<
+  TData = Awaited<ReturnType<typeof connectInstagramMessaging>>,
+  TError = ErrorType<void>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof connectInstagramMessaging>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getConnectInstagramMessagingQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getInstagramMessagingCallbackUrl = () => {
+  return `/api/instagram-messaging/callback`;
+};
+
+/**
+ * @summary Complete Instagram Business Login
+ */
+export const instagramMessagingCallback = async (
+  options?: Parameters<typeof customFetch>[1],
+): Promise<unknown> => {
+  return customFetch<unknown>(getInstagramMessagingCallbackUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getInstagramMessagingCallbackQueryKey = () => {
+  return [`/api/instagram-messaging/callback`] as const;
+};
+
+export const getInstagramMessagingCallbackQueryOptions = <
+  TData = Awaited<ReturnType<typeof instagramMessagingCallback>>,
+  TError = ErrorType<void>,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof instagramMessagingCallback>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getInstagramMessagingCallbackQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof instagramMessagingCallback>>
+  > = ({ signal }) => instagramMessagingCallback({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof instagramMessagingCallback>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type InstagramMessagingCallbackQueryResult = NonNullable<
+  Awaited<ReturnType<typeof instagramMessagingCallback>>
+>;
+export type InstagramMessagingCallbackQueryError = ErrorType<void>;
+
+export function useInstagramMessagingCallback<
+  TData = Awaited<ReturnType<typeof instagramMessagingCallback>>,
+  TError = ErrorType<void>,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof instagramMessagingCallback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof instagramMessagingCallback>>,
+          TError,
+          Awaited<ReturnType<typeof instagramMessagingCallback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useInstagramMessagingCallback<
+  TData = Awaited<ReturnType<typeof instagramMessagingCallback>>,
+  TError = ErrorType<void>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof instagramMessagingCallback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof instagramMessagingCallback>>,
+          TError,
+          Awaited<ReturnType<typeof instagramMessagingCallback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useInstagramMessagingCallback<
+  TData = Awaited<ReturnType<typeof instagramMessagingCallback>>,
+  TError = ErrorType<void>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof instagramMessagingCallback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Complete Instagram Business Login
+ */
+
+export function useInstagramMessagingCallback<
+  TData = Awaited<ReturnType<typeof instagramMessagingCallback>>,
+  TError = ErrorType<void>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof instagramMessagingCallback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getInstagramMessagingCallbackQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getDisconnectInstagramMessagingUrl = () => {
+  return `/api/instagram-messaging/disconnect`;
+};
+
+/**
+ * @summary Remove the agency's local Instagram Direct credentials
+ */
+export const disconnectInstagramMessaging = async (
+  options?: Parameters<typeof customFetch>[1],
+): Promise<InstagramDisconnectResponse> => {
+  return customFetch<InstagramDisconnectResponse>(
+    getDisconnectInstagramMessagingUrl(),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getDisconnectInstagramMessagingMutationKey = () =>
+  ["disconnectInstagramMessaging"] as const;
+
+export const getDisconnectInstagramMessagingMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof disconnectInstagramMessaging>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof disconnectInstagramMessaging>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = getDisconnectInstagramMessagingMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof disconnectInstagramMessaging>>,
+    void
+  > = () => {
+    return disconnectInstagramMessaging(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DisconnectInstagramMessagingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof disconnectInstagramMessaging>>
+>;
+
+export type DisconnectInstagramMessagingMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Remove the agency's local Instagram Direct credentials
+ */
+export const useDisconnectInstagramMessaging = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof disconnectInstagramMessaging>>,
+      TError,
+      void,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof disconnectInstagramMessaging>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(
+    getDisconnectInstagramMessagingMutationOptions(options),
+    queryClient,
+  );
+};
+
+export const getInstagramMetaDeauthorizationUrl = () => {
+  return `/api/instagram-messaging/deauthorize`;
+};
+
+/**
+ * @summary Process a signed Meta Instagram deauthorization callback
+ */
+export const instagramMetaDeauthorization = async (
+  instagramMetaSignedRequestBody: InstagramMetaSignedRequestBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<InstagramMetaCallbackResponse> => {
+  const formUrlEncoded = new URLSearchParams();
+  formUrlEncoded.append(
+    `signed_request`,
+    instagramMetaSignedRequestBody.signed_request,
+  );
+
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return customFetch<InstagramMetaCallbackResponse>(
+    getInstagramMetaDeauthorizationUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        ...getHeaders(options?.headers),
+      },
+      body: formUrlEncoded,
+    },
+  );
+};
+
+export const getInstagramMetaDeauthorizationMutationKey = () =>
+  ["instagramMetaDeauthorization"] as const;
+
+export const getInstagramMetaDeauthorizationMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof instagramMetaDeauthorization>>,
+    TError,
+    InstagramMetaDeauthorizationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof instagramMetaDeauthorization>>,
+  TError,
+  InstagramMetaDeauthorizationMutationVariables,
+  TContext
+> => {
+  const mutationKey = getInstagramMetaDeauthorizationMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof instagramMetaDeauthorization>>,
+    InstagramMetaDeauthorizationMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return instagramMetaDeauthorization(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type InstagramMetaDeauthorizationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof instagramMetaDeauthorization>>
+>;
+export type InstagramMetaDeauthorizationMutationBody =
+  BodyType<InstagramMetaSignedRequestBody>;
+export type InstagramMetaDeauthorizationMutationError = ErrorType<void>;
+export type InstagramMetaDeauthorizationMutationVariables = {
+  data: BodyType<InstagramMetaSignedRequestBody>;
+};
+
+/**
+ * @summary Process a signed Meta Instagram deauthorization callback
+ */
+export const useInstagramMetaDeauthorization = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof instagramMetaDeauthorization>>,
+      TError,
+      InstagramMetaDeauthorizationMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof instagramMetaDeauthorization>>,
+  TError,
+  InstagramMetaDeauthorizationMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getInstagramMetaDeauthorizationMutationOptions(options),
+    queryClient,
+  );
+};
+
+export const getInstagramMetaDataDeletionUrl = () => {
+  return `/api/instagram-messaging/data-deletion`;
+};
+
+/**
+ * @summary Process a signed Meta Instagram data-deletion callback
+ */
+export const instagramMetaDataDeletion = async (
+  instagramMetaSignedRequestBody: InstagramMetaSignedRequestBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<InstagramDataDeletionResponse> => {
+  const formUrlEncoded = new URLSearchParams();
+  formUrlEncoded.append(
+    `signed_request`,
+    instagramMetaSignedRequestBody.signed_request,
+  );
+
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return customFetch<InstagramDataDeletionResponse>(
+    getInstagramMetaDataDeletionUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        ...getHeaders(options?.headers),
+      },
+      body: formUrlEncoded,
+    },
+  );
+};
+
+export const getInstagramMetaDataDeletionMutationKey = () =>
+  ["instagramMetaDataDeletion"] as const;
+
+export const getInstagramMetaDataDeletionMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof instagramMetaDataDeletion>>,
+    TError,
+    InstagramMetaDataDeletionMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof instagramMetaDataDeletion>>,
+  TError,
+  InstagramMetaDataDeletionMutationVariables,
+  TContext
+> => {
+  const mutationKey = getInstagramMetaDataDeletionMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof instagramMetaDataDeletion>>,
+    InstagramMetaDataDeletionMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return instagramMetaDataDeletion(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type InstagramMetaDataDeletionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof instagramMetaDataDeletion>>
+>;
+export type InstagramMetaDataDeletionMutationBody =
+  BodyType<InstagramMetaSignedRequestBody>;
+export type InstagramMetaDataDeletionMutationError = ErrorType<void>;
+export type InstagramMetaDataDeletionMutationVariables = {
+  data: BodyType<InstagramMetaSignedRequestBody>;
+};
+
+/**
+ * @summary Process a signed Meta Instagram data-deletion callback
+ */
+export const useInstagramMetaDataDeletion = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof instagramMetaDataDeletion>>,
+      TError,
+      InstagramMetaDataDeletionMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof instagramMetaDataDeletion>>,
+  TError,
+  InstagramMetaDataDeletionMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getInstagramMetaDataDeletionMutationOptions(options),
+    queryClient,
+  );
+};
+
+export const getGetInstagramDataDeletionStatusUrl = (
+  confirmationCode: string,
+) => {
+  return `/api/instagram-messaging/data-deletion-status/${confirmationCode}`;
+};
+
+/**
+ * @summary Show the completion status of a Meta Instagram data-deletion request
+ */
+export const getInstagramDataDeletionStatus = async (
+  confirmationCode: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<string> => {
+  return customFetch<string>(
+    getGetInstagramDataDeletionStatusUrl(confirmationCode),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetInstagramDataDeletionStatusQueryKey = (
+  confirmationCode: string,
+) => {
+  return [
+    `/api/instagram-messaging/data-deletion-status/${confirmationCode}`,
+  ] as const;
+};
+
+export const getGetInstagramDataDeletionStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+  TError = ErrorType<void>,
+>(
+  confirmationCode: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetInstagramDataDeletionStatusQueryKey(confirmationCode);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>
+  > = ({ signal }) =>
+    getInstagramDataDeletionStatus(confirmationCode, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: confirmationCode !== null && confirmationCode !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetInstagramDataDeletionStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>
+>;
+export type GetInstagramDataDeletionStatusQueryError = ErrorType<void>;
+
+export function useGetInstagramDataDeletionStatus<
+  TData = Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+  TError = ErrorType<void>,
+>(
+  confirmationCode: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+          TError,
+          Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetInstagramDataDeletionStatus<
+  TData = Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+  TError = ErrorType<void>,
+>(
+  confirmationCode: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+          TError,
+          Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetInstagramDataDeletionStatus<
+  TData = Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+  TError = ErrorType<void>,
+>(
+  confirmationCode: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Show the completion status of a Meta Instagram data-deletion request
+ */
+
+export function useGetInstagramDataDeletionStatus<
+  TData = Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+  TError = ErrorType<void>,
+>(
+  confirmationCode: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getInstagramDataDeletionStatus>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetInstagramDataDeletionStatusQueryOptions(
+    confirmationCode,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getVerifyInstagramWebhookUrl = (
+  params: VerifyInstagramWebhookParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/webhooks/instagram?${stringifiedParams}`
+    : `/api/webhooks/instagram`;
+};
+
+/**
+ * @summary Verify the Instagram webhook callback with Meta
+ */
+export const verifyInstagramWebhook = async (
+  params: VerifyInstagramWebhookParams,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<string> => {
+  return customFetch<string>(getVerifyInstagramWebhookUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getVerifyInstagramWebhookQueryKey = (
+  params?: VerifyInstagramWebhookParams,
+) => {
+  return [`/api/webhooks/instagram`, ...(params ? [params] : [])] as const;
+};
+
+export const getVerifyInstagramWebhookQueryOptions = <
+  TData = Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+  TError = ErrorType<void>,
+>(
+  params: VerifyInstagramWebhookParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getVerifyInstagramWebhookQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof verifyInstagramWebhook>>
+  > = ({ signal }) =>
+    verifyInstagramWebhook(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type VerifyInstagramWebhookQueryResult = NonNullable<
+  Awaited<ReturnType<typeof verifyInstagramWebhook>>
+>;
+export type VerifyInstagramWebhookQueryError = ErrorType<void>;
+
+export function useVerifyInstagramWebhook<
+  TData = Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+  TError = ErrorType<void>,
+>(
+  params: VerifyInstagramWebhookParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+          TError,
+          Awaited<ReturnType<typeof verifyInstagramWebhook>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useVerifyInstagramWebhook<
+  TData = Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+  TError = ErrorType<void>,
+>(
+  params: VerifyInstagramWebhookParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+          TError,
+          Awaited<ReturnType<typeof verifyInstagramWebhook>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useVerifyInstagramWebhook<
+  TData = Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+  TError = ErrorType<void>,
+>(
+  params: VerifyInstagramWebhookParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Verify the Instagram webhook callback with Meta
+ */
+
+export function useVerifyInstagramWebhook<
+  TData = Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+  TError = ErrorType<void>,
+>(
+  params: VerifyInstagramWebhookParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyInstagramWebhook>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getVerifyInstagramWebhookQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getReceiveInstagramWebhookUrl = () => {
+  return `/api/webhooks/instagram`;
+};
+
+/**
+ * @summary Receive signed Instagram messaging events
+ */
+export const receiveInstagramWebhook = async (
+  receiveInstagramWebhookBody: ReceiveInstagramWebhookBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<void> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return customFetch<void>(getReceiveInstagramWebhookUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(receiveInstagramWebhookBody),
+  });
+};
+
+export const getReceiveInstagramWebhookMutationKey = () =>
+  ["receiveInstagramWebhook"] as const;
+
+export const getReceiveInstagramWebhookMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof receiveInstagramWebhook>>,
+    TError,
+    ReceiveInstagramWebhookMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof receiveInstagramWebhook>>,
+  TError,
+  ReceiveInstagramWebhookMutationVariables,
+  TContext
+> => {
+  const mutationKey = getReceiveInstagramWebhookMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof receiveInstagramWebhook>>,
+    ReceiveInstagramWebhookMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return receiveInstagramWebhook(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReceiveInstagramWebhookMutationResult = NonNullable<
+  Awaited<ReturnType<typeof receiveInstagramWebhook>>
+>;
+export type ReceiveInstagramWebhookMutationBody =
+  BodyType<ReceiveInstagramWebhookBody>;
+export type ReceiveInstagramWebhookMutationError = ErrorType<void>;
+export type ReceiveInstagramWebhookMutationVariables = {
+  data: BodyType<ReceiveInstagramWebhookBody>;
+};
+
+/**
+ * @summary Receive signed Instagram messaging events
+ */
+export const useReceiveInstagramWebhook = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof receiveInstagramWebhook>>,
+      TError,
+      ReceiveInstagramWebhookMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof receiveInstagramWebhook>>,
+  TError,
+  ReceiveInstagramWebhookMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getReceiveInstagramWebhookMutationOptions(options),
+    queryClient,
+  );
+};
+
 export const getListChatbotConversationsUrl = () => {
   return `/api/chatbot-conversations`;
 };
@@ -31402,6 +32729,132 @@ export function useListChatbotMessages<
 
   return withQueryKey(query, queryOptions.queryKey);
 }
+
+export const getReplyToChatbotConversationUrl = (id: string) => {
+  return `/api/chatbot-conversations/${id}/reply`;
+};
+
+/**
+ * Instagram replies are limited to 1,000 UTF-8 bytes and the 24-hour messaging window.
+ * @summary Reply to a WhatsApp or Instagram conversation
+ */
+export const replyToChatbotConversation = async (
+  id: string,
+  chatbotConversationReplyBody: ChatbotConversationReplyBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<ChatbotMessage> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return customFetch<ChatbotMessage>(getReplyToChatbotConversationUrl(id), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(chatbotConversationReplyBody),
+  });
+};
+
+export const getReplyToChatbotConversationMutationKey = () =>
+  ["replyToChatbotConversation"] as const;
+
+export const getReplyToChatbotConversationMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof replyToChatbotConversation>>,
+    TError,
+    ReplyToChatbotConversationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof replyToChatbotConversation>>,
+  TError,
+  ReplyToChatbotConversationMutationVariables,
+  TContext
+> => {
+  const mutationKey = getReplyToChatbotConversationMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof replyToChatbotConversation>>,
+    ReplyToChatbotConversationMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return replyToChatbotConversation(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReplyToChatbotConversationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof replyToChatbotConversation>>
+>;
+export type ReplyToChatbotConversationMutationBody =
+  BodyType<ChatbotConversationReplyBody>;
+export type ReplyToChatbotConversationMutationError = ErrorType<void>;
+export type ReplyToChatbotConversationMutationVariables = {
+  id: string;
+  data: BodyType<ChatbotConversationReplyBody>;
+};
+
+/**
+ * @summary Reply to a WhatsApp or Instagram conversation
+ */
+export const useReplyToChatbotConversation = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof replyToChatbotConversation>>,
+      TError,
+      ReplyToChatbotConversationMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof replyToChatbotConversation>>,
+  TError,
+  ReplyToChatbotConversationMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getReplyToChatbotConversationMutationOptions(options),
+    queryClient,
+  );
+};
 
 export const getCreateChatbotMessageUrl = () => {
   return `/api/chatbot-messages`;

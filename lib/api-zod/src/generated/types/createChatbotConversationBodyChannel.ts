@@ -13,4 +13,5 @@ export const CreateChatbotConversationBodyChannel = {
   webchat: "webchat",
   whatsapp: "whatsapp",
   email: "email",
+  instagram: "instagram",
 } as const;

@@ -6,6 +6,7 @@ import {
   clientsTable,
   usersTable,
   supportTicketsTable,
+  tenantIntegrationsTable,
 } from "@workspace/db";
 import { eq, and, desc, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod/v4";
@@ -14,6 +15,14 @@ import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { deliverAttendanceReply } from "../services/whatsapp-attendance";
+import {
+  getInstagramMetaConfig,
+  isInstagramReplyWindowOpen,
+  INSTAGRAM_MESSAGING_TYPE,
+  InstagramProviderError,
+  readInstagramAccessToken,
+  sendInstagramText,
+} from "../services/instagram-messaging";
 import { recomputeClientClassification, recordClientClassificationEvent } from "../services/client-classification.js";
 import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
 import { extractVerifiedUploadThingKey, utapi } from "../lib/uploadthing";
@@ -449,8 +458,10 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
       id: chatbotConversationsTable.id,
       tenantId: chatbotConversationsTable.tenantId,
       clientId: chatbotConversationsTable.clientId,
+      channel: chatbotConversationsTable.channel,
       sessionId: chatbotConversationsTable.sessionId,
       status: chatbotConversationsTable.status,
+      metadata: chatbotConversationsTable.metadata,
       clientWhatsappOptIn: clientsTable.whatsappOptIn,
     }).from(chatbotConversationsTable)
       .leftJoin(clientsTable, and(
@@ -460,11 +471,159 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
       .where(and(
         eq(chatbotConversationsTable.id, req.params.id),
         eq(chatbotConversationsTable.tenantId, me.tenantId),
-        eq(chatbotConversationsTable.channel, "whatsapp"),
       ))
       .limit(1);
     if (!conversation?.sessionId || conversation.status === "opted_out") {
       next(new NotFoundError("WhatsApp conversation not available for delivery", "NOT_FOUND"));
+      return;
+    }
+    if (conversation.channel === "instagram") {
+      const metadata = conversation.metadata
+        && typeof conversation.metadata === "object"
+        && !Array.isArray(conversation.metadata)
+        ? conversation.metadata as Record<string, unknown>
+        : {};
+      const integrationId = typeof metadata["instagramIntegrationId"] === "string"
+        ? metadata["instagramIntegrationId"]
+        : null;
+      const [integration] = integrationId
+        ? await db.select().from(tenantIntegrationsTable)
+          .where(and(
+            eq(tenantIntegrationsTable.id, integrationId),
+            eq(tenantIntegrationsTable.tenantId, me.tenantId),
+            eq(tenantIntegrationsTable.type, INSTAGRAM_MESSAGING_TYPE),
+            eq(tenantIntegrationsTable.enabled, true),
+            eq(tenantIntegrationsTable.status, "connected"),
+          ))
+          .limit(1)
+        : [];
+      if (!integration) {
+        res.status(409).json({
+          code: "INSTAGRAM_CONNECTION_UNAVAILABLE",
+          error: "A conta do Instagram não está conectada. Reconecte-a nas configurações.",
+        });
+        return;
+      }
+      if (Buffer.byteLength(parsed.data.content, "utf8") > 1000) {
+        res.status(422).json({
+          code: "INSTAGRAM_MESSAGE_TOO_LONG",
+          error: "O Direct do Instagram permite até 1.000 bytes por mensagem.",
+        });
+        return;
+      }
+      const [lastInbound] = await db.select({ sentAt: chatbotMessagesTable.sentAt })
+        .from(chatbotMessagesTable)
+        .where(and(
+          eq(chatbotMessagesTable.tenantId, me.tenantId),
+          eq(chatbotMessagesTable.conversationId, conversation.id),
+          eq(chatbotMessagesTable.role, "user"),
+        ))
+        .orderBy(desc(chatbotMessagesTable.sentAt), desc(chatbotMessagesTable.id))
+        .limit(1);
+      if (!isInstagramReplyWindowOpen(lastInbound?.sentAt ?? null)) {
+        res.status(403).json({
+          code: "INSTAGRAM_REPLY_WINDOW_EXPIRED",
+          error: "A janela de resposta do Instagram expirou. Peça ao cliente para enviar uma nova mensagem.",
+        });
+        return;
+      }
+
+      const sourceMessageId = `instagram:staff:${parsed.data.idempotencyKey}`;
+      const id = generateId();
+      const [created] = await db.insert(chatbotMessagesTable).values({
+        id,
+        tenantId: me.tenantId,
+        conversationId: conversation.id,
+        sourceMessageId,
+        role: "assistant",
+        content: parsed.data.content,
+        isBot: false,
+        deliveryStatus: "pending",
+      }).onConflictDoNothing().returning({ id: chatbotMessagesTable.id });
+      if (!created) {
+        const [existing] = await db.select().from(chatbotMessagesTable)
+          .where(and(
+            eq(chatbotMessagesTable.tenantId, me.tenantId),
+            eq(chatbotMessagesTable.conversationId, conversation.id),
+            eq(chatbotMessagesTable.sourceMessageId, sourceMessageId),
+          ))
+          .limit(1);
+        if (existing?.deliveryStatus === "sent") {
+          res.status(200).json(existing);
+          return;
+        }
+        res.status(409).json({
+          code: "INSTAGRAM_DELIVERY_UNRESOLVED",
+          error: "O envio anterior ainda não pode ser confirmado. Não reenvie a mesma mensagem.",
+        });
+        return;
+      }
+
+      try {
+        const meta = getInstagramMetaConfig();
+        if (!meta.appConfigured) throw new InstagramProviderError("rejected");
+        const integrationConfig = (integration.config ?? {}) as Record<string, string>;
+        const instagramUserId = integrationConfig["instagramUserId"];
+        if (!instagramUserId) throw new InstagramProviderError("rejected");
+        await sendInstagramText(
+          meta,
+          readInstagramAccessToken(integration),
+          instagramUserId,
+          conversation.sessionId,
+          parsed.data.content,
+        );
+        await db.update(chatbotMessagesTable).set({
+          deliveryStatus: "sent",
+          deliveryAttempts: 1,
+          deliveryUpdatedAt: new Date(),
+          lastDeliveryError: null,
+        }).where(and(
+          eq(chatbotMessagesTable.id, id),
+          eq(chatbotMessagesTable.tenantId, me.tenantId),
+        ));
+        await db.update(chatbotConversationsTable)
+          .set({ status: "human_handoff", assignedUserId: me.id })
+          .where(and(
+            eq(chatbotConversationsTable.id, conversation.id),
+            eq(chatbotConversationsTable.tenantId, me.tenantId),
+          ));
+        const [message] = await db.select().from(chatbotMessagesTable)
+          .where(and(eq(chatbotMessagesTable.id, id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
+          .limit(1);
+        res.status(201).json(message);
+      } catch (error) {
+        const providerError = error instanceof InstagramProviderError ? error : null;
+        const outcomeUnknown = providerError?.kind === "unknown";
+        await db.update(chatbotMessagesTable).set({
+          deliveryStatus: outcomeUnknown ? "unknown" : "failed",
+          deliveryAttempts: 1,
+          deliveryUpdatedAt: new Date(),
+          lastDeliveryError: outcomeUnknown ? "instagram-outcome-unknown" : "instagram-provider-rejected",
+        }).where(and(
+          eq(chatbotMessagesTable.id, id),
+          eq(chatbotMessagesTable.tenantId, me.tenantId),
+        ));
+        if (providerError?.httpStatus === 401) {
+          await db.update(tenantIntegrationsTable).set({
+            enabled: false,
+            status: "error",
+            lastError: "O acesso ao Instagram expirou. Reconecte a conta.",
+          }).where(and(
+            eq(tenantIntegrationsTable.id, integration.id),
+            eq(tenantIntegrationsTable.tenantId, me.tenantId),
+          ));
+        }
+        res.status(outcomeUnknown ? 502 : 422).json({
+          code: outcomeUnknown ? "INSTAGRAM_DELIVERY_UNKNOWN" : "INSTAGRAM_DELIVERY_FAILED",
+          error: outcomeUnknown
+            ? "A Meta não confirmou o resultado do envio. Verifique a conversa antes de tentar novamente."
+            : "A Meta recusou o envio. Revise a conexão e as permissões do Instagram.",
+        });
+      }
+      return;
+    }
+    if (conversation.channel !== "whatsapp") {
+      next(new NotFoundError("Conversation channel is not available for delivery", "NOT_FOUND"));
       return;
     }
     if (conversation.clientId && conversation.clientWhatsappOptIn !== true) {

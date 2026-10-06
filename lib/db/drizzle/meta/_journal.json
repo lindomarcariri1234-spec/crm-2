@@ -757,6 +757,20 @@
       "when": 1809960008000,
       "tag": "0108_tenants_id_max_bytes",
       "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1809960009000,
+      "tag": "0109_instagram_messaging",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1809960010000,
+      "tag": "0110_instagram_data_deletion",
+      "breakpoints": true
     }
   ]
 }

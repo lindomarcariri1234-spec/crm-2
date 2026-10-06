@@ -5232,6 +5232,176 @@ paths:
               schema:
                 $ref: "#/components/schemas/LoyaltySyncResult"
 
+  # ─── INSTAGRAM MESSAGING ────────────────────────────────────────
+  /instagram-messaging/status:
+    get:
+      operationId: getInstagramMessagingStatus
+      summary: Get the agency's Instagram Direct connection status
+      tags: [Integrations]
+      responses:
+        "200":
+          description: Connection status and Meta setup URLs; no credentials are returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstagramMessagingStatus"
+
+  /instagram-messaging/connect:
+    get:
+      operationId: connectInstagramMessaging
+      summary: Start Instagram Business Login for the current agency
+      tags: [Integrations]
+      responses:
+        "302":
+          description: Redirect to Instagram authorization
+        "503":
+          description: Meta app configuration is missing
+
+  /instagram-messaging/callback:
+    get:
+      operationId: instagramMessagingCallback
+      summary: Complete Instagram Business Login
+      tags: [Integrations]
+      responses:
+        "303":
+          description: Return to agency integration settings
+        "503":
+          description: Public settings URL is unavailable
+
+  /instagram-messaging/disconnect:
+    post:
+      operationId: disconnectInstagramMessaging
+      summary: Remove the agency's local Instagram Direct credentials
+      tags: [Integrations]
+      responses:
+        "200":
+          description: Disconnected; conversation history is retained
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstagramDisconnectResponse"
+
+  /instagram-messaging/deauthorize:
+    post:
+      operationId: instagramMetaDeauthorization
+      summary: Process a signed Meta Instagram deauthorization callback
+      tags: [Integrations]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/InstagramMetaSignedRequestBody"
+      responses:
+        "200":
+          description: Meta account access removed; conversation history is retained
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstagramMetaCallbackResponse"
+        "401":
+          description: Meta signed request rejected
+        "503":
+          description: Meta app secret is not configured
+
+  /instagram-messaging/data-deletion:
+    post:
+      operationId: instagramMetaDataDeletion
+      summary: Process a signed Meta Instagram data-deletion callback
+      tags: [Integrations]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/InstagramMetaSignedRequestBody"
+      responses:
+        "200":
+          description: Instagram data removed with a public confirmation status URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstagramDataDeletionResponse"
+        "401":
+          description: Meta signed request rejected
+        "503":
+          description: Data-deletion callback is not fully configured
+
+  /instagram-messaging/data-deletion-status/{confirmationCode}:
+    get:
+      operationId: getInstagramDataDeletionStatus
+      summary: Show the completion status of a Meta Instagram data-deletion request
+      tags: [Integrations]
+      parameters:
+        - in: path
+          name: confirmationCode
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-F0-9]{32}$"
+      responses:
+        "200":
+          description: Human-readable completed deletion status
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          description: Confirmation code not found
+
+  /webhooks/instagram:
+    get:
+      operationId: verifyInstagramWebhook
+      summary: Verify the Instagram webhook callback with Meta
+      tags: [Webhooks]
+      parameters:
+        - in: query
+          name: hub.mode
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: hub.verify_token
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: hub.challenge
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Verification challenge
+          content:
+            text/plain:
+              schema:
+                type: string
+        "403":
+          description: Verification token rejected
+    post:
+      operationId: receiveInstagramWebhook
+      summary: Receive signed Instagram messaging events
+      tags: [Webhooks]
+      parameters:
+        - in: header
+          name: X-Hub-Signature-256
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Event accepted
+        "401":
+          description: Signature rejected
+
   # ─── CHATBOT ────────────────────────────────────────────────────
   /chatbot-conversations:
     get:
@@ -5315,6 +5485,46 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/ChatbotMessage"
+
+  /chatbot-conversations/{id}/reply:
+    post:
+      operationId: replyToChatbotConversation
+      summary: Reply to a WhatsApp or Instagram conversation
+      description: Instagram replies are limited to 1,000 UTF-8 bytes and the 24-hour messaging window.
+      tags: [Chatbot]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatbotConversationReplyBody"
+      responses:
+        "201":
+          description: Message created and sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatbotMessage"
+        "200":
+          description: Previously sent idempotent message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatbotMessage"
+        "403":
+          description: Consent or Instagram messaging window does not allow delivery
+        "409":
+          description: Connection or idempotent delivery is unresolved
+        "422":
+          description: Provider rejected the reply or message is too long
+        "502":
+          description: Provider outcome is unknown; do not blindly retry
 
   /chatbot-messages:
     post:
@@ -11989,6 +12199,69 @@ components:
           type: integer
       required: [membersUpdated, transactionsCreated]
 
+    # ─── INSTAGRAM MESSAGING ───────────────────────────────────────
+    InstagramMessagingStatus:
+      type: object
+      properties:
+        appConfigured:
+          type: boolean
+        connected:
+          type: boolean
+        status:
+          type: string
+        accountUsername:
+          type: ["string", "null"]
+        tokenExpiresAt:
+          type: ["string", "null"]
+        lastError:
+          type: ["string", "null"]
+        oauthRedirectUri:
+          type: ["string", "null"]
+        webhookUrl:
+          type: ["string", "null"]
+        deauthorizationUrl:
+          type: ["string", "null"]
+        dataDeletionUrl:
+          type: ["string", "null"]
+        requiredPermissions:
+          type: array
+          items:
+            type: string
+      required: [appConfigured, connected, status, accountUsername, tokenExpiresAt, lastError, oauthRedirectUri, webhookUrl, deauthorizationUrl, dataDeletionUrl, requiredPermissions]
+
+    InstagramDisconnectResponse:
+      type: object
+      properties:
+        disconnected:
+          type: boolean
+      required: [disconnected]
+
+    InstagramMetaSignedRequestBody:
+      type: object
+      properties:
+        signed_request:
+          type: string
+      required: [signed_request]
+      additionalProperties: true
+
+    InstagramMetaCallbackResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required: [success]
+
+    InstagramDataDeletionResponse:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        confirmation_code:
+          type: string
+          pattern: "^[A-F0-9]{32}$"
+      required: [url, confirmation_code]
+
     # ─── CHATBOT CONVERSATION ──────────────────────────────────────
     ChatbotConversation:
       type: object
@@ -12038,7 +12311,7 @@ components:
           type: string
         channel:
           type: string
-          enum: [webchat, whatsapp, email]
+          enum: [webchat, whatsapp, email, instagram]
         sessionId:
           type: string
 
@@ -12053,6 +12326,18 @@ components:
           type: string
         clientId:
           type: ["string", "null"]
+
+    ChatbotConversationReplyBody:
+      type: object
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        idempotencyKey:
+          type: string
+          format: uuid
+      required: [content, idempotencyKey]
 
     # ─── CHATBOT MESSAGE ───────────────────────────────────────────
     ChatbotMessage:
