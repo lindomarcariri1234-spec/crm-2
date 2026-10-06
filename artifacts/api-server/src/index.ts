@@ -29,6 +29,7 @@ import { fileURLToPath } from "url";
 import { runBirthdayCron } from "./lib/birthday";
 import { processNpsDispatch, processInstallmentDueReminders, processTrialExpiryNotifications } from "./workers/reminder.worker";
 import { retryPendingAttendanceReplies } from "./services/whatsapp-attendance";
+import { refreshInstagramTokens } from "./services/instagram-messaging";
 import { retryPendingAccountDeletions } from "./services/account-deletion";
 import { runUploadThingOrphanCleanup } from "./lib/uploadthing-orphan-cleanup";
 import { runReferralAttemptLogCleanup } from "./lib/referral-attempt-log-cleanup";
@@ -374,6 +375,17 @@ void runApiStartup(process.env, {
       scheduleDistributedCron("whatsapp-outbox", "*/5 * * * *", async () => {
         await retryPendingReservationConfirmedWhatsApps();
       }, { timezone: "America/Sao_Paulo" });
+      const runInstagramTokenRefresh = async () => {
+        try {
+          await refreshInstagramTokens();
+        } catch {
+          logger.error("[instagram] Token refresh job failed");
+        }
+      };
+      void runScheduledJob("instagram-token-refresh-startup", runInstagramTokenRefresh);
+      scheduleDistributedCron("instagram-token-refresh", "30 3 * * *", runInstagramTokenRefresh, {
+        timezone: "America/Sao_Paulo",
+      });
       void runScheduledJob(
         "outbound-delivery-startup",
         async () => { await recoverOutboundDeliveries(); },

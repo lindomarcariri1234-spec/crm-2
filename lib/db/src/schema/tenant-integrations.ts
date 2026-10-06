@@ -17,7 +17,7 @@ export const tenantIntegrationsTable = pgTable(
       .notNull()
       .references(() => tenantsTable.id, { onDelete: "cascade" }),
 
-    // whatsapp_evolution | stripe_account | google_analytics
+    // whatsapp_evolution | instagram_messaging | stripe_account | google_analytics
     type: text("type").notNull(),
 
     // Optional human label for the integration.
@@ -63,6 +63,9 @@ export const tenantIntegrationsTable = pgTable(
     uniqueIndex("tenant_integrations_whatsapp_instance_uq")
       .on(table.tenantId, sql`(${table.config} ->> 'instanceName')`)
       .where(sql`${table.type} = 'whatsapp_evolution' AND ${table.config} ? 'instanceName'`),
+    uniqueIndex("tenant_integrations_instagram_account_uq")
+      .on(sql`(${table.config} ->> 'instagramUserId')`)
+      .where(sql`${table.type} = 'instagram_messaging' AND ${table.config} ? 'instagramUserId'`),
   ],
 );
 

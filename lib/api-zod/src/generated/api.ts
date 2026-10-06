@@ -9601,6 +9601,107 @@ export const SyncLoyaltyPointsResponse = zod.object({
 });
 
 /**
+ * @summary Get the agency's Instagram Direct connection status
+ */
+export const GetInstagramMessagingStatusResponse = zod.object({
+  appConfigured: zod.boolean(),
+  connected: zod.boolean(),
+  status: zod.string(),
+  accountUsername: zod.string().nullable(),
+  tokenExpiresAt: zod.string().nullable(),
+  lastError: zod.string().nullable(),
+  oauthRedirectUri: zod.string().nullable(),
+  webhookUrl: zod.string().nullable(),
+  deauthorizationUrl: zod.string().nullable(),
+  dataDeletionUrl: zod.string().nullable(),
+  requiredPermissions: zod.array(zod.string()),
+});
+
+/**
+ * @summary Start Instagram Business Login for the current agency
+ */
+export const ConnectInstagramMessagingResponse = zod.void();
+
+/**
+ * @summary Complete Instagram Business Login
+ */
+export const InstagramMessagingCallbackResponse = zod.void();
+
+/**
+ * @summary Remove the agency's local Instagram Direct credentials
+ */
+export const DisconnectInstagramMessagingResponse = zod.object({
+  disconnected: zod.boolean(),
+});
+
+/**
+ * @summary Process a signed Meta Instagram deauthorization callback
+ */
+export const InstagramMetaDeauthorizationBody = zod.object({
+  signed_request: zod.string(),
+});
+
+export const InstagramMetaDeauthorizationResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
+ * @summary Process a signed Meta Instagram data-deletion callback
+ */
+export const InstagramMetaDataDeletionBody = zod.object({
+  signed_request: zod.string(),
+});
+
+export const instagramMetaDataDeletionResponseConfirmationCodeRegExp =
+  new RegExp("^[A-F0-9]{32}$");
+
+export const InstagramMetaDataDeletionResponse = zod.object({
+  url: zod.string().url(),
+  confirmation_code: zod
+    .string()
+    .regex(instagramMetaDataDeletionResponseConfirmationCodeRegExp),
+});
+
+/**
+ * @summary Show the completion status of a Meta Instagram data-deletion request
+ */
+export const getInstagramDataDeletionStatusPathConfirmationCodeRegExp =
+  new RegExp("^[A-F0-9]{32}$");
+
+export const GetInstagramDataDeletionStatusParams = zod.object({
+  confirmationCode: zod.coerce
+    .string()
+    .regex(getInstagramDataDeletionStatusPathConfirmationCodeRegExp),
+});
+
+export const GetInstagramDataDeletionStatusResponse = zod.unknown();
+
+/**
+ * @summary Verify the Instagram webhook callback with Meta
+ */
+export const VerifyInstagramWebhookQueryParams = zod.object({
+  "hub.mode": zod.coerce.string(),
+  "hub.verify_token": zod.coerce.string(),
+  "hub.challenge": zod.coerce.string(),
+});
+
+export const VerifyInstagramWebhookResponse = zod.string();
+
+/**
+ * @summary Receive signed Instagram messaging events
+ */
+export const ReceiveInstagramWebhookHeader = zod.object({
+  "X-Hub-Signature-256": zod.string(),
+});
+
+export const ReceiveInstagramWebhookBody = zod.record(
+  zod.string(),
+  zod.unknown(),
+);
+
+export const ReceiveInstagramWebhookResponse = zod.unknown();
+
+/**
  * @summary List chatbot conversations
  */
 export const ListChatbotConversationsResponseItem = zod.object({
@@ -9632,7 +9733,7 @@ export const ListChatbotConversationsResponse = zod.array(
  */
 export const CreateChatbotConversationBody = zod.object({
   clientId: zod.string().optional(),
-  channel: zod.enum(["webchat", "whatsapp", "email"]).optional(),
+  channel: zod.enum(["webchat", "whatsapp", "email", "instagram"]).optional(),
   sessionId: zod.string().optional(),
 });
 
@@ -9720,6 +9821,36 @@ export const ListChatbotMessagesResponseItem = zod.object({
 export const ListChatbotMessagesResponse = zod.array(
   ListChatbotMessagesResponseItem,
 );
+
+/**
+ * Instagram replies are limited to 1,000 UTF-8 bytes and the 24-hour messaging window.
+ * @summary Reply to a WhatsApp or Instagram conversation
+ */
+export const ReplyToChatbotConversationParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const replyToChatbotConversationBodyContentMax = 4000;
+
+export const ReplyToChatbotConversationBody = zod.object({
+  content: zod.string().min(1).max(replyToChatbotConversationBodyContentMax),
+  idempotencyKey: zod.string().uuid(),
+});
+
+export const ReplyToChatbotConversationResponse = zod.object({
+  id: zod.string(),
+  conversationId: zod.string(),
+  tenantId: zod.string(),
+  ticketId: zod.string().nullable(),
+  role: zod.string(),
+  content: zod.string(),
+  mediaUrl: zod.string().nullish(),
+  mediaMimeType: zod.string().nullish(),
+  mediaFileName: zod.string().nullish(),
+  mediaExpiredAt: zod.coerce.date().nullish(),
+  isBot: zod.boolean(),
+  sentAt: zod.string(),
+});
 
 /**
  * @summary Send a chatbot message

@@ -223,6 +223,7 @@ export default function Communication() {
   const [inboxChannel, setInboxChannel] = useState<"whatsapp" | "email">("whatsapp");
   const [inboxMessage, setInboxMessage] = useState("");
   const [aiConversations, setAiConversations] = useState<AiConversation[]>([]);
+  const [aiInboxChannelFilter, setAiInboxChannelFilter] = useState<"all" | "whatsapp" | "instagram">("all");
   const [selectedAiConversationId, setSelectedAiConversationId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
   const {
@@ -240,6 +241,24 @@ export default function Communication() {
   });
   const [aiInboxError, setAiInboxError] = useState<string | null>(null);
   const [aiReply, setAiReply] = useState("");
+  const visibleAiConversations = aiConversations.filter((conversation) => {
+    const supportedChannel = conversation.channel === "whatsapp" || conversation.channel === "instagram";
+    return supportedChannel
+      && (aiInboxChannelFilter === "all" || conversation.channel === aiInboxChannelFilter);
+  });
+  const selectedAiConversation = aiConversations.find(
+    (conversation) => conversation.id === selectedAiConversationId,
+  );
+  const lastInstagramInboundAt = aiMessages.reduce((latest, message) => {
+    if (message.role !== "user") return latest;
+    const timestamp = Date.parse(message.sentAt);
+    return Number.isFinite(timestamp) ? Math.max(latest, timestamp) : latest;
+  }, Number.NEGATIVE_INFINITY);
+  const instagramReplyWindowExpired = selectedAiConversation?.channel === "instagram"
+    && (!Number.isFinite(lastInstagramInboundAt)
+      || Date.now() - lastInstagramInboundAt >= 24 * 60 * 60 * 1000);
+  const instagramReplyTooLong = selectedAiConversation?.channel === "instagram"
+    && new TextEncoder().encode(aiReply.trim()).length > 1000;
   const [loadingAiInbox, setLoadingAiInbox] = useState(false);
   const [sendingAiReply, setSendingAiReply] = useState(false);
   const [associatingAiConversationId, setAssociatingAiConversationId] = useState<string | null>(null);
@@ -343,7 +362,7 @@ export default function Communication() {
       setAiInboxError(null);
     } catch {
       if (!silent && requestId === aiInboxRequestId.current) {
-        setAiInboxError("Não foi possível carregar as conversas recebidas pelo WhatsApp.");
+        setAiInboxError("Não foi possível carregar as conversas recebidas pelo WhatsApp e pelo Instagram.");
         toast({ title: "Não foi possível carregar o atendimento por IA.", variant: "destructive" });
       }
     } finally {
@@ -956,12 +975,28 @@ export default function Communication() {
           idempotencyKey: aiReplyKey.current ?? (aiReplyKey.current = crypto.randomUUID()),
         }),
       });
-      if (!res.ok) throw new Error("failed");
+      if (!res.ok) {
+        const responseBody = await res.json().catch(() => ({})) as Record<string, unknown>;
+        const code = typeof responseBody["code"] === "string" ? responseBody["code"] : "";
+        if (code !== "INSTAGRAM_DELIVERY_UNKNOWN" && code !== "INSTAGRAM_DELIVERY_UNRESOLVED") {
+          aiReplyKey.current = null;
+        }
+        throw new Error(typeof responseBody["error"] === "string"
+          ? responseBody["error"]
+          : typeof responseBody["message"] === "string"
+            ? responseBody["message"]
+            : "Não foi possível confirmar o envio.");
+      }
       setAiReply("");
       aiReplyKey.current = null;
       await Promise.all([selectAiConversation(selectedAiConversationId), fetchAiInbox()]);
-    } catch {
-      toast({ title: "Não foi possível enviar pelo WhatsApp.", variant: "destructive" });
+    } catch (error) {
+      const channelLabel = selectedAiConversation?.channel === "instagram" ? "Instagram" : "WhatsApp";
+      toast({
+        title: `Não foi possível enviar pelo ${channelLabel}.`,
+        description: error instanceof Error ? error.message : "Verifique a conexão e tente novamente.",
+        variant: "destructive",
+      });
     } finally {
       setSendingAiReply(false);
     }
@@ -1344,7 +1379,7 @@ export default function Communication() {
         <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="conversations">Mensagens por cliente</TabsTrigger>
           <TabsTrigger value="ai-inbox" className="flex items-center gap-1">
-            <MessageSquare className="w-3.5 h-3.5" /> Atendimento IA
+            <MessageSquare className="w-3.5 h-3.5" /> Atendimento multicanal
           </TabsTrigger>
           <TabsTrigger value="support-tickets" className="flex items-center gap-1">
             <TicketCheck className="w-3.5 h-3.5" /> Tickets
@@ -1417,33 +1452,55 @@ export default function Communication() {
                 Tentar novamente
               </Button>
             </div>
-          ) : aiConversations.length === 0 ? (
+          ) : visibleAiConversations.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
               <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-30" />
-              <p className="font-medium">Nenhum atendimento WhatsApp ainda.</p>
-              <p className="text-sm mt-1">As conversas recebidas pela integração aparecerão aqui.</p>
+              <p className="font-medium">Nenhuma conversa recebida por WhatsApp ou Instagram.</p>
+              <p className="text-sm mt-1">As DMs recebidas aparecem aqui depois que a conta do Instagram for conectada em Configurações → Integrações.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 h-[520px]">
               <div className="border rounded-lg overflow-hidden flex flex-col">
-                <div className="p-3 border-b bg-muted/30">
-                  <p className="text-sm font-semibold">Atendimentos ({aiConversations.length})</p>
+                <div className="p-3 border-b bg-muted/30 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">Conversas ({visibleAiConversations.length})</p>
+                    <Select
+                      value={aiInboxChannelFilter}
+                      onValueChange={(value) => setAiInboxChannelFilter(value as "all" | "whatsapp" | "instagram")}
+                    >
+                      <SelectTrigger aria-label="Filtrar conversas por canal" className="h-8 w-32 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos</SelectItem>
+                        <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                        <SelectItem value="instagram">Instagram</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <div className="flex-1 overflow-y-auto divide-y">
-                  {aiConversations.map((conversation) => (
+                  {visibleAiConversations.map((conversation) => (
                     <button
                       key={conversation.id}
                       onClick={() => selectAiConversation(conversation.id)}
                       className={`w-full text-left p-3 hover:bg-muted/40 transition-colors ${selectedAiConversationId === conversation.id ? "bg-primary/5 border-l-2 border-primary" : ""}`}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <p className="font-medium text-sm truncate">{conversation.sessionId ?? "Contato sem telefone"}</p>
+                        <p className="font-medium text-sm truncate">
+                          {conversation.channel === "instagram" ? "Contato Instagram" : conversation.sessionId ?? "Contato sem telefone"}
+                        </p>
                         <Badge variant={conversation.status === "human_handoff" ? "default" : "secondary"}>
-                          {conversation.status === "human_handoff" ? "Humano" : conversation.status === "opted_out" ? "Opt-out" : "IA"}
+                          {conversation.channel === "instagram"
+                            ? conversation.status === "human_handoff" ? "Humano" : "Direct"
+                            : conversation.status === "human_handoff" ? "Humano" : conversation.status === "opted_out" ? "Opt-out" : "IA"}
                         </Badge>
                       </div>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        {conversation.channel === "instagram" ? "Instagram" : "WhatsApp"}
+                      </p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        {new Date(conversation.createdAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                        {new Date(conversation.lastMessageAt ?? conversation.createdAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                       </p>
                     </button>
                   ))}
@@ -1458,8 +1515,14 @@ export default function Communication() {
                   <>
                     <div className="p-3 border-b bg-muted/30 flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <p className="font-semibold text-sm">Atendimento WhatsApp</p>
-                        <p className="text-xs text-muted-foreground">A IA interrompe respostas ao detectar uma solicitação de atendimento humano.</p>
+                        <p className="font-semibold text-sm">
+                          {selectedAiConversation?.channel === "instagram" ? "Instagram Direct" : "Atendimento WhatsApp"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {selectedAiConversation?.channel === "instagram"
+                            ? "Respostas disponíveis por até 24 horas após a última DM recebida."
+                            : "A IA interrompe respostas ao detectar uma solicitação de atendimento humano."}
+                        </p>
                       </div>
                       <Select
                         value={aiConversations.find((conversation) => conversation.id === selectedAiConversationId)?.clientId ?? NO_ASSOCIATED_CLIENT}
@@ -1490,15 +1553,40 @@ export default function Communication() {
                       ))}
                     </div>
                     <div className="p-3 border-t">
+                      {selectedAiConversation?.channel === "instagram" && (
+                        <p className={`mb-2 rounded-md px-2.5 py-2 text-xs ${
+                          instagramReplyWindowExpired || instagramReplyTooLong
+                            ? "bg-destructive/5 text-destructive"
+                            : "bg-muted text-muted-foreground"
+                        }`} role={instagramReplyWindowExpired || instagramReplyTooLong ? "alert" : undefined}>
+                          {instagramReplyWindowExpired
+                            ? "A janela de resposta da Meta expirou. Peça ao cliente para enviar uma nova DM."
+                            : instagramReplyTooLong
+                              ? "O Direct permite até 1.000 bytes por mensagem."
+                              : "A resposta será enviada pelo Direct do Instagram; mensagens frias não são permitidas."}
+                        </p>
+                      )}
                       <form onSubmit={handleAiReply} className="flex gap-2">
                         <input
                           type="text"
                           className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                          placeholder="Responder como equipe..."
+                          placeholder={selectedAiConversation?.channel === "instagram"
+                            ? "Responder no Instagram Direct..."
+                            : "Responder como equipe..."}
                           value={aiReply}
                           onChange={(e) => setAiReply(e.target.value)}
+                          disabled={selectedAiConversation?.channel === "instagram" && instagramReplyWindowExpired}
                         />
-                        <Button type="submit" size="sm" disabled={sendingAiReply || !aiReply.trim()}>
+                        <Button
+                          type="submit"
+                          size="sm"
+                          disabled={
+                            sendingAiReply
+                            || !aiReply.trim()
+                            || instagramReplyWindowExpired
+                            || instagramReplyTooLong
+                          }
+                        >
                           <Send className="w-4 h-4" />
                         </Button>
                       </form>

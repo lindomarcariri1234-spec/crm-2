@@ -36,6 +36,9 @@ export const chatbotConversationsTable = pgTable("chatbot_conversations", {
 }, (table) => [
   index("chatbot_conversations_tenant_whatsapp_connection_idx")
     .on(table.tenantId, table.channel, table.whatsappIntegrationId, table.sessionId),
+  index("chatbot_conversations_instagram_account_idx")
+    .on(sql`(${table.metadata}->>'instagramUserId')`)
+    .where(sql`${table.channel} = 'instagram'`),
 ]);
 
 export const insertChatbotConversationSchema = createInsertSchema(chatbotConversationsTable).omit({ createdAt: true, startedAt: true });

@@ -4288,6 +4288,46 @@ export interface LoyaltySyncResult {
   transactionsCreated: number;
 }
 
+export interface InstagramMessagingStatus {
+  appConfigured: boolean;
+  connected: boolean;
+  status: string;
+  /** @nullable */
+  accountUsername: string | null;
+  /** @nullable */
+  tokenExpiresAt: string | null;
+  /** @nullable */
+  lastError: string | null;
+  /** @nullable */
+  oauthRedirectUri: string | null;
+  /** @nullable */
+  webhookUrl: string | null;
+  /** @nullable */
+  deauthorizationUrl: string | null;
+  /** @nullable */
+  dataDeletionUrl: string | null;
+  requiredPermissions: string[];
+}
+
+export interface InstagramDisconnectResponse {
+  disconnected: boolean;
+}
+
+export interface InstagramMetaSignedRequestBody {
+  signed_request: string;
+  [key: string]: unknown;
+}
+
+export interface InstagramMetaCallbackResponse {
+  success: boolean;
+}
+
+export interface InstagramDataDeletionResponse {
+  url: string;
+  /** @pattern ^[A-F0-9]{32}$ */
+  confirmation_code: string;
+}
+
 export interface ChatbotConversation {
   id: string;
   tenantId: string;
@@ -4327,6 +4367,7 @@ export const CreateChatbotConversationBodyChannel = {
   webchat: "webchat",
   whatsapp: "whatsapp",
   email: "email",
+  instagram: "instagram",
 } as const;
 
 export interface CreateChatbotConversationBody {
@@ -4341,6 +4382,15 @@ export interface UpdateChatbotConversationBody {
   endedAt?: string;
   /** @nullable */
   clientId?: string | null;
+}
+
+export interface ChatbotConversationReplyBody {
+  /**
+   * @minLength 1
+   * @maxLength 4000
+   */
+  content: string;
+  idempotencyKey: string;
 }
 
 export interface ChatbotMessage {
@@ -6375,6 +6425,14 @@ export type MarkBirthdayConvertedBody = {
 export type MarkBirthdayConverted200 = {
   success: boolean;
 };
+
+export type VerifyInstagramWebhookParams = {
+  "hub.mode": string;
+  "hub.verify_token": string;
+  "hub.challenge": string;
+};
+
+export type ReceiveInstagramWebhookBody = { [key: string]: unknown };
 
 export type ListChatbotMessagesParams = {
   ticketId?: string;
