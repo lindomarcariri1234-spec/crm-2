@@ -953,17 +953,30 @@ async function stopBrowserProcess(browserProcess) {
   }
 }
 
-function findChromium() {
-  const configured = process.env["CHROMIUM_PATH"]?.trim();
+export function findChromium({
+  environment = process.env,
+  exists = existsSync,
+} = {}) {
+  const configured = environment["CHROMIUM_PATH"]?.trim();
   if (configured) return configured;
-  for (const candidate of [
-    "/repl/tools/bin/chromium",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-  ]) {
-    if (existsSync(candidate)) return candidate;
+  const candidates =
+    environment["GITHUB_ACTIONS"] === "true"
+      ? [
+          "/usr/bin/google-chrome",
+          "/usr/bin/google-chrome-stable",
+          "/repl/tools/bin/chromium",
+          "/usr/bin/chromium",
+          "/usr/bin/chromium-browser",
+        ]
+      : [
+          "/repl/tools/bin/chromium",
+          "/usr/bin/chromium",
+          "/usr/bin/chromium-browser",
+          "/usr/bin/google-chrome",
+          "/usr/bin/google-chrome-stable",
+        ];
+  for (const candidate of candidates) {
+    if (exists(candidate)) return candidate;
   }
   return "chromium";
 }

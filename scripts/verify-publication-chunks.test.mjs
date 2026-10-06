@@ -5,6 +5,7 @@ import {
   assertProtectedPublicationRouteCoverage,
   cleanupPublicationClerkSessions,
   createPublicationSignInProfiles,
+  findChromium,
   getChangedProtectedPublicationRoutes,
   getProtectedPublicationRoutes,
   getWorkflowPublicationPaths,
@@ -53,6 +54,38 @@ test("waits for Chromium's page target to appear after startup", async () => {
   assert.strictEqual(target, pageTarget);
   assert.deepEqual(lookupTimeouts, [250, 150]);
   assert.deepEqual(sleepDurations, [100]);
+});
+
+test("prefers runner-installed Google Chrome over snap Chromium in GitHub Actions", () => {
+  const checkedCandidates = [];
+  const browser = findChromium({
+    environment: { GITHUB_ACTIONS: "true" },
+    exists: (candidate) => {
+      checkedCandidates.push(candidate);
+      return (
+        candidate === "/usr/bin/google-chrome" ||
+        candidate === "/usr/bin/chromium"
+      );
+    },
+  });
+
+  assert.equal(browser, "/usr/bin/google-chrome");
+  assert.deepEqual(checkedCandidates, ["/usr/bin/google-chrome"]);
+});
+
+test("respects the configured browser path before environment defaults", () => {
+  assert.equal(
+    findChromium({
+      environment: {
+        CHROMIUM_PATH: "/opt/chrome/chrome",
+        GITHUB_ACTIONS: "true",
+      },
+      exists: () => {
+        throw new Error("configured browser should bypass candidate lookup");
+      },
+    }),
+    "/opt/chrome/chrome",
+  );
 });
 
 test("fails when Chromium never exposes a page target before the timeout", async () => {
