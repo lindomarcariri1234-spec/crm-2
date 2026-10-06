@@ -1036,7 +1036,34 @@ async function runBrowserSmoke({
   const failures = [];
   const assetsByRoute = new Map();
   const requests = new Map();
+  const signInOrigin = signInUrl ? new URL(signInUrl, baseUrl).origin : null;
+  const signInResponseDiagnostics = [];
   let activeRoute = null;
+
+  function recordSignInResponse(type, response) {
+    if (!signInOrigin || !response?.url) return;
+    let responseUrl;
+    try {
+      responseUrl = new URL(response.url);
+    } catch {
+      return;
+    }
+    if (responseUrl.origin !== signInOrigin) return;
+    if (type !== "Document" && response.status < 400) return;
+
+    const status = Number.isFinite(response.status)
+      ? Math.trunc(response.status)
+      : "unknown";
+    const diagnostic =
+      `HTTP ${status} ${type ?? "unknown"} ` +
+      `${responseUrl.origin}${responseUrl.pathname}`;
+    if (
+      signInResponseDiagnostics.length < 8 &&
+      !signInResponseDiagnostics.includes(diagnostic)
+    ) {
+      signInResponseDiagnostics.push(diagnostic);
+    }
+  }
 
   client.on("Network.requestWillBeSent", ({ requestId, request, type }) => {
     if (type !== "Script" && !isJavaScriptAssetUrl(request.url)) return;
@@ -1046,6 +1073,7 @@ async function runBrowserSmoke({
     }
   });
   client.on("Network.responseReceived", ({ requestId, response, type }) => {
+    recordSignInResponse(type, response);
     const requestInfo = requests.get(requestId);
     if (!requestInfo) return;
     const asset = {
@@ -1126,8 +1154,13 @@ async function runBrowserSmoke({
           return {
             origin: window.location.origin,
             pathname: window.location.pathname,
+            documentTitle: document.title ?? null,
+            clerkPresent: Boolean(clerk),
+            clerkLoaded: Boolean(clerk?.loaded),
             userId: clerk?.user?.id ?? null,
             sessionId: clerk?.session?.id ?? null,
+            hasUser: Boolean(clerk?.user?.id),
+            hasSession: Boolean(clerk?.session?.id),
           };
         })()`,
         returnByValue: true,
@@ -1156,8 +1189,24 @@ async function runBrowserSmoke({
       state?.origin && state?.pathname
         ? `${state.origin}${state.pathname}`
         : "no application page";
+    const safeTitle =
+      typeof state?.documentTitle === "string"
+        ? state.documentTitle
+            .replace(/[\r\n\t]+/g, " ")
+            .replace(
+              /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+              "[redacted email]",
+            )
+            .slice(0, 120)
+        : "unavailable";
+    const clerkState = state
+      ? `Clerk=${state.clerkPresent ? (state.clerkLoaded ? "loaded" : "present/not-loaded") : "absent"}, user=${state.hasUser ? "present" : "absent"}, session=${state.hasSession ? "present" : "absent"}`
+      : "browser state unavailable";
+    const portalResponses = signInResponseDiagnostics.length
+      ? signInResponseDiagnostics.join("; ")
+      : "none captured";
     throw new Error(
-      `Clerk did not activate the ${profileLabel ?? profileName} CI session on the published site (last page: ${lastLocation}). Check the Clerk Backend API secret, the configured user ID, and the Account Portal redirect.`,
+      `Clerk did not activate the ${profileLabel ?? profileName} CI session on the published site (last page: ${lastLocation}; title=${JSON.stringify(safeTitle)}; ${clerkState}; Account Portal responses: ${portalResponses}).`,
     );
   }
 
