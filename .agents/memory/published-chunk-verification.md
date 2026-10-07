@@ -14,3 +14,9 @@ For PR verification, do not authenticate against a Vercel preview that rewrites 
 **Why:** a preview can reach production data, and code under review must not receive credentials or sessions it could exfiltrate.
 
 **How to apply:** use the local build and simulated identities for required PR checks; use one-use Clerk tokens only for trusted publication smoke runs.
+
+On GitHub-hosted Ubuntu runners, installing `chromium` through apt can select Canonical's Snap wrapper and stall headless startup even when Google Chrome is already available. In GitHub Actions, prefer the runner-installed Chrome before Chromium while preserving an explicit `CHROMIUM_PATH` override.
+
+**Why:** The Snap wrapper caused the published chunk check to time out before opening a page target; the runner's existing Chrome starts normally.
+
+**How to apply:** use the `GITHUB_ACTIONS` environment to order browser candidates for trusted CI, and keep Replit/local browser selection unchanged.
