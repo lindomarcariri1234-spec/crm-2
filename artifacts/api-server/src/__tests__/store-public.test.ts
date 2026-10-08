@@ -436,6 +436,24 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(res.body.code).toBe("VALIDATION_ERROR");
   });
 
+  it("rejects manual Pix checkout when the store has no active Pix key", async () => {
+    mockLimit.mockResolvedValueOnce([{
+      ...FAKE_STORE,
+      stripeEnabled: false,
+      stripePublicKey: null,
+      stripeSecretKey: null,
+      pixEnabled: false,
+      pixKey: null,
+    }]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, paymentMethod: "pix" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("PIX_MANUAL_NOT_CONFIGURED");
+  });
+
   // ── 2. Store not found (404) ──────────────────────────────────────────────
 
   it("returns 404 when store slug does not exist", async () => {
@@ -1293,7 +1311,10 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
         idempotencyKey: `store-order-store-001-gen-id`,
       }),
     );
-    expect(mockUpdateSet).toHaveBeenCalledWith({ paymentIntentId: id });
+    expect(mockUpdateSet).toHaveBeenCalledWith({
+      paymentIntentId: id,
+      paymentProvider: "stripe",
+    });
   });
 
   it("reuses the existing PaymentIntent and client secret on a retry", async () => {
@@ -1336,6 +1357,10 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
       clientSecret: existingIntent.client_secret,
       paymentIntentId: existingIntent.id,
       reused: true,
+    });
+    expect(mockUpdateSet).toHaveBeenCalledWith({
+      paymentIntentId: existingIntent.id,
+      paymentProvider: "stripe",
     });
     expect(mockStripeCreate).toHaveBeenCalledTimes(1);
     expect(mockStripeRetrieve).toHaveBeenCalledWith(existingIntent.id);

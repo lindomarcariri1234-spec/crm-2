@@ -26,6 +26,7 @@ import { PAYMENT_LABELS } from "@/pages/vitrine/_wizard/constants";
 import { getOrderLookupFromStorage } from "./utils/storage";
 
 const PAYMENT_STATUS_LABELS: Record<string, string> = {
+  pending: "Aguardando Pagamento",
   unpaid: "Aguardando Pagamento",
   paid: "Pago",
   partially_paid: "Parcialmente Pago",
@@ -61,9 +62,10 @@ function formatDateTime(value?: string | null): string | null {
   }).format(date);
 }
 
-function PaymentStatusBadge({ status }: { status: string }) {
+function PaymentStatusBadge({ status, label }: { status: string; label?: string }) {
   const colorMap: Record<string, string> = {
     paid: "bg-green-100 text-green-800 border-green-200",
+    pending: "bg-amber-100 text-amber-800 border-amber-200",
     unpaid: "bg-amber-100 text-amber-800 border-amber-200",
     partially_paid: "bg-blue-100 text-blue-800 border-blue-200",
     refunded: "bg-purple-100 text-purple-800 border-purple-200",
@@ -71,6 +73,7 @@ function PaymentStatusBadge({ status }: { status: string }) {
   };
   const iconMap: Record<string, React.ReactElement> = {
     paid: <CheckCircle2 className="w-3.5 h-3.5" />,
+    pending: <Clock className="w-3.5 h-3.5" />,
     unpaid: <Clock className="w-3.5 h-3.5" />,
     partially_paid: <AlertCircle className="w-3.5 h-3.5" />,
     refunded: <AlertCircle className="w-3.5 h-3.5" />,
@@ -79,7 +82,7 @@ function PaymentStatusBadge({ status }: { status: string }) {
   return (
     <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${colorMap[status] ?? "bg-gray-100 text-gray-800 border-gray-200"}`}>
       {iconMap[status]}
-      {PAYMENT_STATUS_LABELS[status] ?? status}
+      {label ?? PAYMENT_STATUS_LABELS[status] ?? status}
     </span>
   );
 }
@@ -116,6 +119,10 @@ function DiscountBreakdown({ order }: { order: StoreOrder }) {
 function PixQrBlock({ order }: { order: StoreOrder }) {
   const [copied, setCopied] = useState(false);
   if (!order.pixQrCode || !order.pixQrCodeUrl || order.paymentStatus === "paid") return null;
+  const isManualPix = order.paymentMethod === "pix" && order.paymentProvider === "manual";
+  const manualPixAmount = Number(order.depositAmount) > 0
+    ? Number(order.depositAmount)
+    : Number(order.totalAmount);
   function handleCopy() {
     void navigator.clipboard.writeText(order.pixCopyPaste ?? order.pixQrCode ?? "").then(() => {
       setCopied(true);
@@ -125,8 +132,14 @@ function PixQrBlock({ order }: { order: StoreOrder }) {
   return (
     <div className="p-5 bg-teal-50 border border-teal-200 rounded-xl space-y-4">
       <p className="font-semibold text-teal-900 text-base flex items-center gap-2">
-        <KeyRound className="h-5 w-5" /> Pagamento via PIX
+        <KeyRound className="h-5 w-5" />
+        {isManualPix ? "Pix Manual — aguardando conferência" : "Pagamento via PIX"}
       </p>
+      {isManualPix && (
+        <p className="text-sm font-medium text-teal-800">
+          Valor deste Pix: R$ {manualPixAmount.toFixed(2)}
+        </p>
+      )}
       <div className="flex flex-col sm:flex-row gap-6 items-center">
         <div className="flex-shrink-0">
           <img
@@ -155,7 +168,9 @@ function PixQrBlock({ order }: { order: StoreOrder }) {
             {copied ? "Copiado!" : "Copiar código PIX"}
           </button>
           <p className="text-xs text-teal-700">
-            Após o pagamento, a confirmação pode levar alguns instantes.
+            {isManualPix
+              ? "A agência confirmará depois de conferir o crédito no banco. O QR Code ou um comprovante enviado não confirma o pagamento automaticamente."
+              : "Após o pagamento, aguarde a atualização do status."}
           </p>
         </div>
       </div>
@@ -172,6 +187,9 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
   const paidAmt = summary.paidAmount;
   const pendingAmt = summary.amountRemaining;
   const displayPaymentStatus = summary.states.payment;
+  const isManualPix = order.paymentMethod === "pix" && order.paymentProvider === "manual";
+  const isAwaitingManualPixReview =
+    isManualPix && (order.paymentStatus === "pending" || order.paymentStatus === "unpaid");
 
   return (
     <div className="space-y-6">
@@ -183,7 +201,10 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
               {order.orderNumber}
             </p>
           </div>
-          <PaymentStatusBadge status={displayPaymentStatus} />
+           <PaymentStatusBadge
+             status={displayPaymentStatus}
+             label={isAwaitingManualPixReview ? "Aguardando conferência" : undefined}
+           />
         </div>
 
         <div

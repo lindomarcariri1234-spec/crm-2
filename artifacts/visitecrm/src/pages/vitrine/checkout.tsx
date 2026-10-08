@@ -18,6 +18,7 @@ import {
 import {
   Loader2,
   CheckCircle,
+  Clock,
   Tag,
   X,
   ChevronLeft,
@@ -193,44 +194,19 @@ function StepIndicator({ current }: { current: Step }) {
   );
 }
 
-function PixPayment({ store }: { store: PublicStore }) {
-  const [copied, setCopied] = useState(false);
-  const pixKey =
-    store.contactWhatsapp?.replace(/\D/g, "") ??
-    store.contactEmail ??
-    "contato@agencia.com.br";
-
-  function copy() {
-    navigator.clipboard.writeText(pixKey).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
+function PixPayment() {
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Use o aplicativo do seu banco para realizar o pagamento via PIX.
+    <div
+      className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+      role="note"
+    >
+      <p className="font-semibold">Pix Manual</p>
+      <p className="mt-1">
+        O QR Code e o código Pix exclusivos deste pedido serão exibidos depois que você finalizar.
+        Não faça transferência para uma chave recebida por WhatsApp ou e-mail.
       </p>
-      <div className="bg-muted rounded-xl p-6 text-center space-y-3">
-        <div className="w-32 h-32 mx-auto bg-white rounded-lg border-4 border-primary/20 flex items-center justify-center">
-          <div className="text-xs text-muted-foreground leading-tight">
-            QR Code PIX<br />
-            <span className="text-primary font-bold">{store.name}</span>
-          </div>
-        </div>
-        <p className="text-xs text-muted-foreground">ou copie a chave PIX abaixo:</p>
-        <div className="flex items-center gap-2 bg-white rounded-lg border px-3 py-2">
-          <code className="flex-1 text-sm font-mono truncate">{pixKey}</code>
-          <button
-            onClick={copy}
-            className="text-primary hover:text-primary/80 shrink-0"
-          >
-            {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-          </button>
-        </div>
-      </div>
-      <p className="text-xs text-muted-foreground text-center">
-        Após o pagamento, nossa equipe confirmará seu pedido em até 24h.
+      <p className="mt-2 text-xs text-amber-800">
+        A agência confirmará o pagamento somente depois de conferir o crédito no banco.
       </p>
     </div>
   );
@@ -889,6 +865,7 @@ export default function VitrineCheckout({
       || form.paymentMethod === "boleto") &&
     store.stripeEnabled &&
     !!store.stripePublicKey;
+  const isManualPixPayment = form.paymentMethod === "pix" && !isStripePayment;
 
   async function submit() {
     setLoading(true);
@@ -941,6 +918,12 @@ export default function VitrineCheckout({
       setOrderNumber(order.orderNumber);
       setConfirmedOrderTotal(order.totalAmount);
       setConfirmedDepositAmount(order.depositAmount ?? null);
+      if (isManualPixPayment) {
+        setStripePaymentInstructions({
+          pixQrCodeUrl: order.pixQrCodeUrl,
+          pixCopyPaste: order.pixCopyPaste ?? order.pixQrCode,
+        });
+      }
       setConfirmedReferralCreditRequested(
         requestedReferralCredit > 0 ? requestedReferralCredit : null,
       );
@@ -1031,6 +1014,7 @@ export default function VitrineCheckout({
           REFERRAL_FIRST_PURCHASE_RESERVED: "Já existe uma compra pendente com este benefício de indicação. Finalize ou cancele a compra anterior antes de tentar novamente.",
           RESERVATION_NO_AGENCY_USER: "A agência ainda não está pronta para confirmar reservas. Tente novamente mais tarde.",
           RESERVATION_SYNC_FAILED: "Não foi possível confirmar a reserva agora. Tente novamente ou contate a agência.",
+          PIX_MANUAL_NOT_CONFIGURED: "O Pix Manual está indisponível porque a agência ainda não configurou uma chave ativa. Escolha outra forma de pagamento ou fale com a agência.",
         };
         if (code && actionableMessages[code]) {
           setSubmitError(actionableMessages[code]);
@@ -1200,13 +1184,26 @@ export default function VitrineCheckout({
   }
 
   if (step === "confirmado") {
+    const manualPixAmount = Number(confirmedDepositAmount) > 0
+      ? Number(confirmedDepositAmount)
+      : Number(confirmedOrderTotal ?? 0);
+    const hasManualPixInstructions = !!(
+      stripePaymentInstructions.pixQrCodeUrl || stripePaymentInstructions.pixCopyPaste
+    );
+
     return (
       <div className="max-w-2xl mx-auto px-4 py-20 text-center">
         <StepIndicator current="confirmado" />
-        <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-6">
-          <CheckCircle className="w-12 h-12 text-green-500" />
+        <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${
+          isManualPixPayment ? "bg-amber-100" : "bg-green-100"
+        }`}>
+          {isManualPixPayment
+            ? <Clock className="w-12 h-12 text-amber-600" />
+            : <CheckCircle className="w-12 h-12 text-green-500" />}
         </div>
-        <h1 className="text-3xl font-bold mb-2">Pedido Confirmado!</h1>
+        <h1 className="text-3xl font-bold mb-2">
+          {isManualPixPayment ? "Pedido recebido — pagamento pendente" : "Pedido Confirmado!"}
+        </h1>
         <p className="text-muted-foreground mb-2">
           Obrigado pela sua compra, {form.customerName}!
         </p>
@@ -1215,14 +1212,22 @@ export default function VitrineCheckout({
           <strong className="font-mono text-foreground">{orderNumber}</strong>
         </p>
         {confirmedDepositAmount && Number(confirmedDepositAmount) > 0 && Number(confirmedDepositAmount) < Number(confirmedOrderTotal ?? 0) && (
-          <div className="inline-flex flex-col items-center gap-2 bg-green-50 border border-green-200 text-green-800 rounded-xl px-5 py-3 mb-4">
+          <div className={`inline-flex flex-col items-center gap-2 rounded-xl border px-5 py-3 mb-4 ${
+            isManualPixPayment
+              ? "bg-amber-50 border-amber-200 text-amber-900"
+              : "bg-green-50 border-green-200 text-green-800"
+          }`}>
             <div className="flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 shrink-0" />
-              <span className="text-sm font-medium">Reserva Confirmada! Voucher Confirmado.</span>
+              {isManualPixPayment
+                ? <Clock className="w-4 h-4 shrink-0" />
+                : <CheckCircle className="w-4 h-4 shrink-0" />}
+              <span className="text-sm font-medium">
+                {isManualPixPayment ? "Entrada solicitada; aguardando pagamento." : "Reserva Confirmada! Voucher Confirmado."}
+              </span>
             </div>
-            <div className="text-xs text-green-700 space-y-0.5">
-              <p>Depósito pago: <strong>R$ {Number(confirmedDepositAmount).toFixed(2)}</strong></p>
-              <p>Restante a pagar: <strong>R$ {(Number(confirmedOrderTotal ?? 0) - Number(confirmedDepositAmount)).toFixed(2)}</strong></p>
+            <div className={`text-xs space-y-0.5 ${isManualPixPayment ? "text-amber-800" : "text-green-700"}`}>
+              <p>{isManualPixPayment ? "Entrada solicitada" : "Depósito pago"}: <strong>R$ {Number(confirmedDepositAmount).toFixed(2)}</strong></p>
+              <p>Restante após a entrada: <strong>R$ {(Number(confirmedOrderTotal ?? 0) - Number(confirmedDepositAmount)).toFixed(2)}</strong></p>
             </div>
           </div>
         )}
@@ -1261,17 +1266,27 @@ export default function VitrineCheckout({
           </div>
         )}
         <p className="text-sm text-muted-foreground mb-4">
-          Você receberá uma confirmação no e-mail <strong>{form.customerEmail}</strong>.
-          Nossa equipe entrará em contato em breve.
+          {isManualPixPayment
+            ? "A equipe só confirmará o pagamento depois de conferir o crédito no extrato bancário."
+            : <>Você receberá uma confirmação no e-mail <strong>{form.customerEmail}</strong>. Nossa equipe entrará em contato em breve.</>}
         </p>
         {(stripePaymentInstructions.pixQrCodeUrl
           || stripePaymentInstructions.pixCopyPaste
           || stripePaymentInstructions.boletoUrl
           || stripePaymentInstructions.boletoBarcode) && (
-          <div className="text-left rounded-xl border border-blue-200 bg-blue-50 p-4 mb-6 space-y-3">
-            <p className="font-semibold text-blue-900">
+          <div className={`text-left rounded-xl border p-4 mb-6 space-y-3 ${
+            isManualPixPayment
+              ? "border-teal-200 bg-teal-50"
+              : "border-blue-200 bg-blue-50"
+          }`}>
+            <p className={`font-semibold ${isManualPixPayment ? "text-teal-900" : "text-blue-900"}`}>
               {stripePaymentInstructions.pixCopyPaste ? "Pagamento via Pix" : "Pagamento via boleto"}
             </p>
+            {isManualPixPayment && (
+              <p className="text-sm font-medium text-teal-800">
+                Valor deste Pix: R$ {manualPixAmount.toFixed(2)}
+              </p>
+            )}
             {stripePaymentInstructions.pixQrCodeUrl && (
               <img
                 src={stripePaymentInstructions.pixQrCodeUrl}
@@ -1281,12 +1296,16 @@ export default function VitrineCheckout({
             )}
             {stripePaymentInstructions.pixCopyPaste && (
               <div className="space-y-2">
-                <p className="text-xs text-blue-800">Copie o código Pix para pagar no aplicativo do seu banco.</p>
-                <div className="flex items-center gap-2 bg-white rounded-lg border border-blue-200 px-3 py-2">
+                <p className={`text-xs ${isManualPixPayment ? "text-teal-800" : "text-blue-800"}`}>
+                  Copie o código Pix para pagar no aplicativo do seu banco.
+                </p>
+                <div className={`flex items-center gap-2 bg-white rounded-lg border px-3 py-2 ${
+                  isManualPixPayment ? "border-teal-200" : "border-blue-200"
+                }`}>
                   <code className="flex-1 text-xs font-mono truncate">{stripePaymentInstructions.pixCopyPaste}</code>
                   <button
                     type="button"
-                    className="text-blue-700 hover:text-blue-900 shrink-0"
+                    className={`shrink-0 ${isManualPixPayment ? "text-teal-700 hover:text-teal-900" : "text-blue-700 hover:text-blue-900"}`}
                     onClick={() => {
                       void navigator.clipboard.writeText(stripePaymentInstructions.pixCopyPaste!).then(() => {
                         setCopiedStripePix(true);
@@ -1318,9 +1337,26 @@ export default function VitrineCheckout({
                 Abrir boleto Stripe
               </a>
             )}
-            <p className="text-xs text-blue-800">
-              A confirmação do pagamento será atualizada automaticamente após a compensação pela Stripe.
+            <p className={`text-xs ${isManualPixPayment ? "text-teal-800" : "text-blue-800"}`}>
+              {isManualPixPayment
+                ? "O pedido continuará pendente até a equipe conferir o recebimento no banco. O QR Code ou um comprovante enviado pelo cliente não confirma o pagamento."
+                : "A confirmação do pagamento será atualizada automaticamente após a compensação pela Stripe."}
             </p>
+          </div>
+        )}
+        {isManualPixPayment && !hasManualPixInstructions && (
+          <div role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-left text-sm text-red-900">
+            <p className="font-semibold">Não foi possível gerar as instruções Pix deste pedido.</p>
+            <p className="mt-1">
+              Não faça uma transferência para uma chave recebida fora desta tela. Entre em contato com a agência antes de pagar.
+            </p>
+            {(store.contactWhatsapp || store.contactEmail) && (
+              <p className="mt-2 text-xs">
+                {store.contactWhatsapp && <>WhatsApp: {store.contactWhatsapp}</>}
+                {store.contactWhatsapp && store.contactEmail && " · "}
+                {store.contactEmail && <>E-mail: {store.contactEmail}</>}
+              </p>
+            )}
           </div>
         )}
 
@@ -1817,7 +1853,7 @@ export default function VitrineCheckout({
                               />
                             )
                             : <p className="text-sm text-muted-foreground">Ao continuar, a Stripe exibirá o QR Code e o código Pix para pagamento.</p>
-                          : <PixPayment store={store} />
+                          : <PixPayment />
                       )}
                       {form.paymentMethod === "boleto" && (
                         isStripePayment
