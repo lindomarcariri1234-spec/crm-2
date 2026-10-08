@@ -226,6 +226,7 @@ vi.mock("../services/client-financials", () => ({
 
 vi.mock("../services/checkout/post-booking.js", () => ({
   runPostPaymentSideEffects: vi.fn().mockResolvedValue(undefined),
+  runDeferredOrderAccounting: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../services/checkout/deferred-referral-effects.js", () => ({
@@ -622,7 +623,12 @@ describe("POST /api/store/orders/:id/manual-pix-deposit", () => {
       .send({ amount: 15, idempotencyKey: "8f5b7775-8de2-43b9-859e-c6fa44a4f23d" });
 
     expect(res.status).toBe(200);
-    expect(res.body.replayed).toBe(true);
+    expect(res.body).toMatchObject({
+      replayed: true,
+      paymentStatus: "pending",
+      amountRemaining: "85.00",
+      paidAmount: "15.00",
+    });
     expect(mockCreateReservationsForOrder).not.toHaveBeenCalled();
     expect(mockConfirmReservationsForOrder).not.toHaveBeenCalled();
     expect(mockInsertValues).not.toHaveBeenCalled();
@@ -650,5 +656,46 @@ describe("POST /api/store/orders/:id/manual-pix-deposit", () => {
     expect(mockConfirmReservationsForOrder).not.toHaveBeenCalled();
     expect(mockInsertValues).not.toHaveBeenCalled();
     expect(mockSyncStoreOrderFromOrderPayment).not.toHaveBeenCalled();
+  });
+});
+
+describe("PUT /api/store/orders/:id/status — deliberate Manual Pix confirmation", () => {
+  it("confirms payment only on the staff action and does not record a second payment on retry", async () => {
+    const pendingPixOrder = {
+      ...FAKE_MANUAL_PIX_ORDER,
+      status: "pending",
+      paymentStatus: "pending",
+    };
+    const paidPixOrder = {
+      ...pendingPixOrder,
+      paymentStatus: "paid",
+      paidAt: new Date("2026-10-08T12:00:00.000Z"),
+    };
+    selectQueue.push(
+      [FAKE_STORE], // first request: tenant store
+      [pendingPixOrder], // locked unpaid order
+      [], // no linked reservations
+      [], // no prior payments
+      [FAKE_STORE], // retry: tenant store
+      [paidPixOrder], // locked order is already paid
+    );
+
+    const firstResponse = await request(buildApp())
+      .put("/api/store/orders/order-004/status")
+      .send({ paymentStatus: "paid" });
+    const retryResponse = await request(buildApp())
+      .put("/api/store/orders/order-004/status")
+      .send({ paymentStatus: "paid" });
+
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.body).toMatchObject({
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "paid",
+    });
+    expect(retryResponse.status).toBe(200);
+    expect(retryResponse.body.paymentStatus).toBe("paid");
+    expect(mockConfirmReservationsForOrder).toHaveBeenCalledTimes(1);
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
   });
 });

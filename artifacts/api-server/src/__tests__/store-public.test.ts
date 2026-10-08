@@ -85,6 +85,7 @@ vi.mock("@workspace/db", () => ({
   storeReviewsTable: {},
   storeCategoriesTable: {},
   reservationsTable: {},
+  paymentsTable: {},
   tripsTable: {},
   clientsTable: {},
   usersTable: {},
@@ -106,6 +107,8 @@ vi.mock("@workspace/db", () => ({
   partnerAvailabilityTable: {},
   priceAlertSubscriptionsTable: {},
   referralAttemptLogsTable: {},
+  passengersTable: {},
+  boardingLocationsTable: {},
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -152,6 +155,9 @@ vi.mock("../lib/tenant.js", () => ({
 vi.mock("../queues/email-helpers.js", () => ({
   enqueueReservationConfirmationEmail: mockEnqueueConfirmation,
   enqueueReservationCancellationEmail: vi.fn().mockResolvedValue(undefined),
+  sendPriceAlertConfirmationEmail: vi.fn().mockResolvedValue(undefined),
+  enqueuePixOrderAlertEmail: vi.fn().mockResolvedValue(undefined),
+  enqueuePixOrderQr: vi.fn().mockResolvedValue(undefined),
   enqueueNewBookingNotificationEmail: vi.fn().mockResolvedValue(undefined),
   dispatchReferralConvertedEmail: vi.fn().mockResolvedValue(undefined),
   dispatchReferralExpiredEmail: vi.fn().mockResolvedValue(undefined),
@@ -218,6 +224,7 @@ import {
   shouldBypassClerkForPath,
 } from "../lib/clerk-request.js";
 import { getTenantUser } from "../lib/tenant.js";
+import { generatePixQrCodeUrl } from "../lib/pix.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Express app
@@ -366,7 +373,14 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     });
     whereResult.for.mockReturnValue(whereResult);
     mockWhere.mockReturnValue(whereResult);
-    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy } as unknown as { where: typeof mockWhere; limit: typeof mockLimit });
+    const fromResult = {
+      where: mockWhere,
+      limit: mockLimit,
+      orderBy: mockOrderBy,
+      leftJoin: vi.fn(),
+    };
+    fromResult.leftJoin.mockReturnValue(fromResult);
+    mockFrom.mockReturnValue(fromResult as unknown as { where: typeof mockWhere; limit: typeof mockLimit; orderBy: typeof mockOrderBy });
     mockSelect.mockReturnValue({ from: mockFrom });
 
     // Reset once-queues so leaked mockImplementationOnce / mockResolvedValueOnce
@@ -1226,6 +1240,124 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(res.body).toHaveProperty("orderId");
     expect(res.body).toHaveProperty("orderNumber");
     expect(res.body).toHaveProperty("totalAmount");
+  });
+
+  it("returns the configured Manual Pix QR for the requested deposit and leaves payment pending", async () => {
+    const manualPixStore = {
+      ...FAKE_STORE,
+      stripeEnabled: false,
+      stripePublicKey: null,
+      stripeSecretKey: null,
+      pixEnabled: true,
+      pixKey: "pix@minha-loja.example",
+      city: "Fortaleza",
+      minDepositAmount: "50.00",
+    };
+    const pendingPixOrder = {
+      ...FAKE_ORDER,
+      status: "pending",
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      depositAmount: "75.00",
+    };
+    mockLimit
+      .mockResolvedValueOnce([manualPixStore])
+      .mockResolvedValueOnce([FAKE_PRODUCT])
+      .mockResolvedValueOnce([pendingPixOrder])
+      .mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({
+        ...VALID_BODY,
+        paymentMethod: "pix",
+        depositAmount: 75,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      depositAmount: "75.00",
+      paidAmount: 0,
+      amountRemaining: "150.00",
+    });
+    expect(res.body.pixQrCode).toBe(res.body.pixCopyPaste);
+    expect(res.body.pixCopyPaste).toContain("540575.00");
+    expect(res.body.pixQrCodeUrl).toBe(
+      generatePixQrCodeUrl(res.body.pixCopyPaste),
+    );
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      pixQrCode: res.body.pixCopyPaste,
+      pixQrCodeUrl: res.body.pixQrCodeUrl,
+      pixCopyPaste: res.body.pixCopyPaste,
+    }));
+  });
+
+  it("returns the saved Manual Pix instructions through token-protected order tracking", async () => {
+    const paymentToken = "manual-pix-customer-access-token";
+    const pixCopyPaste = "000201010212540575.005802BR5911MINHA LOJA6009FORTALEZA6304ABCD";
+    const trackedOrder = {
+      ...FAKE_ORDER,
+      status: "pending",
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      depositAmount: "75.00",
+      pixQrCode: pixCopyPaste,
+      pixQrCodeUrl: generatePixQrCodeUrl(pixCopyPaste),
+      pixCopyPaste,
+      storedPaymentToken: paymentToken,
+    };
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([trackedOrder]);
+
+    const res = await request(buildApp())
+      .get(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}`)
+      .query({ token: paymentToken });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      orderNumber: FAKE_ORDER.orderNumber,
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      depositAmount: "75.00",
+      pixQrCode: pixCopyPaste,
+      pixQrCodeUrl: trackedOrder.pixQrCodeUrl,
+      pixCopyPaste,
+      paidAmount: 0,
+      amountRemaining: "150.00",
+    });
+    expect(res.body).not.toHaveProperty("storedPaymentToken");
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not expose Manual Pix instructions when order tracking receives the wrong token", async () => {
+    const pixCopyPaste = "000201010212540575.005802BR5911MINHA LOJA6009FORTALEZA6304ABCD";
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod: "pix",
+        paymentProvider: "manual",
+        paymentStatus: "pending",
+        pixQrCode: pixCopyPaste,
+        pixQrCodeUrl: generatePixQrCodeUrl(pixCopyPaste),
+        pixCopyPaste,
+        storedPaymentToken: "correct-order-access-token",
+      }]);
+
+    const res = await request(buildApp())
+      .get(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}`)
+      .query({ token: "wrong-order-access-token" });
+
+    expect(res.status).toBe(404);
+    expect(res.body).not.toHaveProperty("pixQrCode");
+    expect(res.body).not.toHaveProperty("pixCopyPaste");
   });
 
   // ── 9. Post-booking side effects are deferred to payment (task #17 hardening) ──
