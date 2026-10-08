@@ -111,4 +111,32 @@ describe("OrderDetail", () => {
     expect(view.container.textContent).toContain("Cliente B");
     expect(view.container.textContent).not.toContain("Cliente A");
   });
+
+  it("shows bank-verification guidance for unpaid manual Pix orders", async () => {
+    const order = {
+      ...makeOrder("order-pix", "Cliente Pix"),
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      financialSummary: {
+        subtotal: 200,
+        discountAmount: 0,
+        totalAmount: 200,
+        depositRequested: 0,
+        paidAmount: 0,
+        amountRemaining: 200,
+        states: { payment: "pending" },
+        diagnostics: { hasLegacyDivergence: false },
+      },
+    } as StoreOrder;
+    mocks.getOrder.mockResolvedValue(order);
+
+    const view = await renderComponent(createElement(KeyedOrderDetail, { orderId: order.id }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(view.container.textContent).toContain("Pix Manual exige conferência bancária");
+    expect(view.container.textContent).toContain("Confira o crédito no extrato");
+  });
 });
