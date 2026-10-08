@@ -325,7 +325,10 @@ describe("VitrineCheckout — referral credit confirmation", () => {
   });
 
   it("does not show a reduction warning when the server applies the full amount", async () => {
-    createOrderSpy.mockResolvedValue(makeOrder("400.00", 100));
+    createOrderSpy.mockResolvedValue({
+      ...makeOrder("400.00", 100),
+      pixCopyPaste: "pix-copy-paste-test",
+    });
     const { default: VitrineCheckout } = await import(
       "../pages/vitrine/checkout.js"
     );
@@ -343,7 +346,11 @@ describe("VitrineCheckout — referral credit confirmation", () => {
     expect(container.textContent).not.toContain(
       "Seu saldo de cashback mudou durante o checkout.",
     );
-    expect(container.textContent).toContain("Pedido Confirmado!");
+    expect(container.textContent).toContain("Pedido recebido — pagamento pendente");
+    expect(container.textContent).toContain("pix-copy-paste-test");
+    expect(container.textContent).toContain(
+      "A equipe só confirmará o pagamento depois de conferir o crédito no extrato bancário.",
+    );
     expect(trackReferralCreditReductionSpy).toHaveBeenCalledOnce();
     expect(trackReferralCreditReductionSpy).toHaveBeenCalledWith("cart_checkout", 100, 100);
   });
