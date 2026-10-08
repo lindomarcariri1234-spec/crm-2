@@ -148,6 +148,7 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
   const [fulfillmentStatus, setFulfillmentStatus] = useState("");
   const [internalNotes, setInternalNotes] = useState("");
   const [manualPixBankConfirmed, setManualPixBankConfirmed] = useState(false);
+  const [manualPixDepositAmount, setManualPixDepositAmount] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -210,6 +211,104 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
     isManualPixOrder
     && paymentStatus === STORE_PAYMENT_STATUS.PAID
     && order.paymentStatus !== STORE_PAYMENT_STATUS.PAID;
+  const canRecordManualPixDeposit =
+    isManualPixOrder
+    && summary.depositRequested > 0
+    && summary.depositRequested < summary.totalAmount
+    && summary.amountRemaining > 0
+    && order.status !== STORE_ORDER_STATUS.CANCELLED
+    && order.paymentStatus !== STORE_PAYMENT_STATUS.PAID
+    && order.paymentStatus !== STORE_PAYMENT_STATUS.REFUNDED;
+  const manualPixDepositAmountValue = Number(manualPixDepositAmount);
+
+  async function recordManualPixDeposit() {
+    if (!order || !canRecordManualPixDeposit) return;
+    if (
+      !Number.isFinite(manualPixDepositAmountValue)
+      || manualPixDepositAmountValue <= 0
+      || manualPixDepositAmountValue > summary.amountRemaining + 0.001
+    ) {
+      toast({
+        title: "Informe um valor válido",
+        description: `O valor deve ser maior que zero e não pode ultrapassar o saldo de ${money(summary.amountRemaining)}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSaving(true);
+    const storageKey = `store-order-manual-pix-deposit:${order.id}`;
+    try {
+      let idempotencyKey = sessionStorage.getItem(storageKey);
+      if (!idempotencyKey) {
+        idempotencyKey = crypto.randomUUID();
+        sessionStorage.setItem(storageKey, idempotencyKey);
+      }
+
+      const result = await storeApi.recordManualPixDeposit(
+        order.id,
+        Math.round(manualPixDepositAmountValue * 100) / 100,
+        idempotencyKey,
+      );
+      sessionStorage.removeItem(storageKey);
+      setManualPixDepositAmount("");
+      setManualPixBankConfirmed(false);
+
+      try {
+        const refreshedOrder = await storeApi.getOrder(order.id);
+        setOrder(refreshedOrder);
+        setStatus(refreshedOrder.status);
+        setPaymentStatus(refreshedOrder.paymentStatus);
+        setFulfillmentStatus(refreshedOrder.fulfillmentStatus ?? "unfulfilled");
+        onUpdated(refreshedOrder);
+      } catch {
+        const paidAmount = Number(result.paidAmount);
+        const amountRemaining = Number(result.amountRemaining);
+        const updatedOrder: StoreOrder = {
+          ...order,
+          status: result.status,
+          paymentStatus: result.paymentStatus,
+          paidAmount,
+          amountRemaining: result.amountRemaining,
+          financialSummary: {
+            ...summary,
+            paidAmount,
+            amountRemaining,
+            states: {
+              ...summary.states,
+              payment: amountRemaining <= 0
+                ? "paid"
+                : paidAmount > 0
+                  ? "partially_paid"
+                  : "pending",
+            },
+          },
+        };
+        setOrder(updatedOrder);
+        setStatus(updatedOrder.status);
+        setPaymentStatus(updatedOrder.paymentStatus);
+        onUpdated(updatedOrder);
+        toast({
+          title: "Entrada Pix registrada",
+          description: "O recebimento foi salvo, mas não foi possível atualizar os detalhes. Reabra o pedido para conferir o saldo.",
+        });
+        return;
+      }
+
+      toast({
+        title: result.replayed ? "Entrada Pix confirmada" : "Entrada Pix registrada",
+        description: "O saldo do pedido foi atualizado; ele só será marcado como pago quando estiver quitado.",
+      });
+    } catch (err: unknown) {
+      toast({
+        title: "Erro ao registrar entrada Pix",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="space-y-5 max-h-[75vh] overflow-y-auto pr-1">
@@ -412,6 +511,52 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
                 <ExternalLink className="w-3.5 h-3.5" /> Ver Boleto
               </a>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {canRecordManualPixDeposit && (
+        <Card data-testid={`card-manual-pix-deposit-${order.id}`}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Registrar entrada Pix Manual</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Informe somente o valor efetivamente creditado e conferido no extrato. Uma entrada parcial atualiza o recebido e o saldo sem quitar o pedido.
+            </p>
+            <div className="space-y-1">
+              <label htmlFor="manual-pix-deposit-amount" className="text-xs text-muted-foreground">
+                Valor efetivamente recebido (R$)
+              </label>
+              <Input
+                id="manual-pix-deposit-amount"
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                max={summary.amountRemaining}
+                step="0.01"
+                value={manualPixDepositAmount}
+                onChange={(event) => setManualPixDepositAmount(event.target.value)}
+                disabled={saving}
+              />
+              <p className="text-xs text-muted-foreground">
+                Saldo atual: {money(summary.amountRemaining)}. Entrada solicitada: {money(summary.depositRequested)}.
+              </p>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                onClick={recordManualPixDeposit}
+                disabled={
+                  saving
+                  || !Number.isFinite(manualPixDepositAmountValue)
+                  || manualPixDepositAmountValue <= 0
+                  || manualPixDepositAmountValue > summary.amountRemaining + 0.001
+                }
+              >
+                {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Registrar entrada
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}

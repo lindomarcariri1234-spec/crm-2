@@ -83,6 +83,15 @@ export const storeApi = {
     return req<{ data: StoreOrder[]; total: number; page: number; limit: number }>("GET", `/store/orders${qs}`);
   },
   getOrder: (id: string) => req<StoreOrder>("GET", `/store/orders/${id}`),
+  recordManualPixDeposit: (id: string, amount: number, idempotencyKey: string) =>
+    req<{
+      success: boolean;
+      replayed: boolean;
+      status: string;
+      paymentStatus: string;
+      paidAmount: string;
+      amountRemaining: string;
+    }>("POST", `/store/orders/${id}/manual-pix-deposit`, { amount, idempotencyKey }),
   updateOrderStatus: (
     id: string,
     status: string,
