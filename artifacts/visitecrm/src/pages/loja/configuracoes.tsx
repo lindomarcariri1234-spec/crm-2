@@ -331,6 +331,11 @@ export default function LojaConfiguracoes() {
     setUploadingCount((prev) => (uploading ? prev + 1 : Math.max(0, prev - 1)));
   const [store, setStore] = useState<StoreSettings | null>(null);
   const [form, setForm] = useState<Partial<StoreSettings>>({});
+  const [testingStripeConnection, setTestingStripeConnection] = useState(false);
+  const [stripeConnectionResult, setStripeConnectionResult] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
   const [showPixKey, setShowPixKey] = useState(false);
@@ -365,6 +370,9 @@ export default function LojaConfiguracoes() {
 
   function set(field: string, value: unknown) {
     setForm((p) => ({ ...p, [field]: value }));
+    if (field === "stripePublicKey" || field === "stripeSecretKey") {
+      setStripeConnectionResult(null);
+    }
   }
 
   async function save() {
@@ -458,6 +466,42 @@ export default function LojaConfiguracoes() {
       });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function testStripeConnection() {
+    const secretKey = typeof form.stripeSecretKey === "string"
+      ? form.stripeSecretKey.trim()
+      : "";
+    const secretMode = getStripeCredentialMode(secretKey);
+    const publishableMode = getStripeCredentialMode(form.stripePublicKey);
+    if (secretMode && publishableMode && secretMode !== publishableMode) {
+      setStripeConnectionResult({
+        kind: "error",
+        message: "A chave pública e a chave secreta precisam ser do mesmo ambiente (teste ou produção).",
+      });
+      return;
+    }
+
+    setTestingStripeConnection(true);
+    setStripeConnectionResult(null);
+    try {
+      const result = await storeApi.testStripeConnection(
+        secretKey ? { secretKey } : {},
+      );
+      setStripeConnectionResult({
+        kind: "success",
+        message: `Conexão verificada no ambiente de ${result.livemode ? "produção" : "teste"}.`,
+      });
+    } catch (err: unknown) {
+      setStripeConnectionResult({
+        kind: "error",
+        message: err instanceof Error
+          ? err.message
+          : "Não foi possível validar a conexão com o Stripe. Tente novamente.",
+      });
+    } finally {
+      setTestingStripeConnection(false);
     }
   }
 
@@ -1151,8 +1195,7 @@ export default function LojaConfiguracoes() {
           </Card>
 
           {/* Stripe */}
-          {(stripePaymentMethodsSelected.length > 0 || form.stripeEnabled) && (
-            <Card>
+          <Card>
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <CardTitle>Stripe</CardTitle>
@@ -1180,7 +1223,7 @@ export default function LojaConfiguracoes() {
                   </div>
                 </div>
                 <CardDescription>
-                  O checkout pode encaminhar cartão de crédito, débito, Pix e boleto ao Stripe, conforme os métodos selecionados acima.
+                  Configure e teste as credenciais antes de ativar cobranças. A conexão pode ser verificada sem salvar uma chave nova.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1198,7 +1241,6 @@ export default function LojaConfiguracoes() {
                     Selecione cartão, Pix ou boleto em “Métodos Aceitos” para oferecer pagamentos processados pelo Stripe.
                   </div>
                 )}
-                {form.stripeEnabled && (
                   <div className="grid gap-4">
                     {stripeCredentialIssues.length > 0 && (
                       <div
@@ -1275,6 +1317,34 @@ export default function LojaConfiguracoes() {
                           </p>
                         )}
                       </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={testStripeConnection}
+                        disabled={testingStripeConnection}
+                        data-testid="test-stripe-connection"
+                      >
+                        {testingStripeConnection
+                          ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          : <CreditCard className="mr-2 h-4 w-4" />}
+                        {testingStripeConnection ? "Testando conexão..." : "Testar conexão"}
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        Usa a nova chave digitada; deixe o campo vazio para testar a chave salva. O teste não altera as configurações.
+                      </p>
+                      {stripeConnectionResult && (
+                        <p
+                          role={stripeConnectionResult.kind === "error" ? "alert" : "status"}
+                          aria-live="polite"
+                          data-testid="stripe-connection-result"
+                          className={`text-sm ${stripeConnectionResult.kind === "error" ? "text-destructive" : "text-emerald-700 dark:text-emerald-400"}`}
+                        >
+                          {stripeConnectionResult.message}
+                        </p>
+                      )}
                     </div>
 
                     <div className="space-y-2">
@@ -1361,10 +1431,8 @@ export default function LojaConfiguracoes() {
                       </a>
                     </div>
                   </div>
-                )}
               </CardContent>
             </Card>
-          )}
 
           {/* MercadoPago */}
           <Card>

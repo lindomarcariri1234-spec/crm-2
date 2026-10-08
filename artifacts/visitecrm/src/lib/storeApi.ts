@@ -47,6 +47,8 @@ export const storeApi = {
   getSettings: () => req<StoreSettings>("GET", "/store/settings", undefined, { cache: "no-store" }),
   updateSettings: (data: Partial<StoreSettings>) =>
     req<StoreSettings>("PUT", "/store/settings", data),
+  testStripeConnection: (data: { secretKey?: string }) =>
+    req<{ connected: boolean; livemode: boolean }>("POST", "/store/settings/stripe/test", data),
   initStore: (data: InitStoreInput) =>
     req<StoreSettings>("POST", "/store/init", data),
 

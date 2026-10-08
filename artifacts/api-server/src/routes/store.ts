@@ -1,4 +1,5 @@
 import { Router, type NextFunction } from "express";
+import Stripe from "stripe";
 import { db } from "@workspace/db";
 import {
   storesTable,
@@ -38,7 +39,7 @@ import { deleteOrphanedFile, deleteOrphanedImages } from "../lib/uploadthing";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
-import { encryptCredential } from "../lib/crypto";
+import { decryptOrPassthrough, encryptCredential } from "../lib/crypto";
 import { sendPriceDropAlertEmail } from "../queues/email-helpers";
 import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
 import { recalculateClientFinancials } from "../services/client-financials";
@@ -227,6 +228,10 @@ const StoreSettingsBody = z.object({
   maintenanceMessage: z.string().nullish(),
 });
 
+const TestStoreStripeConnectionBody = z.object({
+  secretKey: z.string().optional(),
+}).strict();
+
 const PIX_QR_DELIVERY_MODES = ["screen", "email", "whatsapp", "all"] as const;
 type PixQrDeliveryMode = typeof PIX_QR_DELIVERY_MODES[number];
 
@@ -385,6 +390,81 @@ router.get("/store/settings", async (req, res, next: NextFunction): Promise<void
       ...redactStore(store as unknown as Record<string, unknown>),
       pixQrDeliveryMode: await getPixQrDeliveryMode(me.tenantId),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/store/settings/stripe/test", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    res.setHeader("Cache-Control", "no-store, max-age=0");
+    const parsed = TestStoreStripeConnectionBody.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "O corpo da solicitação não é válido.",
+        code: "VALIDATION_ERROR",
+      });
+      return;
+    }
+
+    const store = await getStoreForTenant(me.tenantId);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+
+    // A non-empty form value is tested without saving it. An omitted or blank
+    // value checks the write-only credential already stored for this store.
+    const secretKey = parsed.data.secretKey?.trim()
+      || decryptOrPassthrough(store.stripeSecretKey);
+    if (!secretKey) {
+      res.status(400).json({
+        error: "Informe uma chave secreta Stripe ou configure uma chave salva.",
+        code: "STRIPE_KEY_MISSING",
+      });
+      return;
+    }
+
+    try {
+      const stripe = new Stripe(secretKey, {
+        apiVersion: "2025-08-27.basil" as Stripe.LatestApiVersion,
+        maxNetworkRetries: 0,
+        timeout: 10_000,
+      });
+      await stripe.accounts.retrieve();
+      // Stripe's Account response has no `livemode` property. Once Stripe has
+      // accepted the credential, its secret/restricted-key prefix identifies
+      // which environment that credential belongs to.
+      const livemode = /^(?:sk|rk)_live_/.test(secretKey);
+      res.json({ connected: true, livemode });
+    } catch (err) {
+      const stripeError = err as { type?: unknown; code?: unknown; statusCode?: unknown };
+      if (
+        stripeError.type === "StripeAuthenticationError"
+        || stripeError.code === "api_key_expired"
+        || stripeError.statusCode === 401
+      ) {
+        res.status(400).json({
+          error: "A Stripe rejeitou a chave secreta. Verifique se ela continua ativa e pertence ao ambiente correto.",
+          code: "STRIPE_AUTHENTICATION_FAILED",
+        });
+        return;
+      }
+      if (stripeError.type === "StripePermissionError" || stripeError.statusCode === 403) {
+        res.status(403).json({
+          error: "A chave foi reconhecida, mas não tem permissão para consultar a conta Stripe.",
+          code: "STRIPE_PERMISSION_DENIED",
+        });
+        return;
+      }
+      // Stripe SDK errors can contain request details. Return only a stable,
+      // credential-free message and never pass the error to request logging.
+      res.status(502).json({
+        error: "Não foi possível validar a conexão com o Stripe. Tente novamente.",
+        code: "STRIPE_CONNECTION_FAILED",
+      });
+    }
   } catch (err) {
     next(err);
   }

@@ -7,12 +7,14 @@ import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js
 // ---------------------------------------------------------------------------
 const mockGetSettings = vi.hoisted(() => vi.fn());
 const mockUpdateSettings = vi.hoisted(() => vi.fn());
+const mockTestStripeConnection = vi.hoisted(() => vi.fn());
 const mockToast = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/storeApi", () => ({
   storeApi: {
     getSettings: mockGetSettings,
     updateSettings: mockUpdateSettings,
+    testStripeConnection: mockTestStripeConnection,
   },
   InitStoreInput: {},
   StoreSettings: {},
@@ -136,6 +138,7 @@ describe("LojaConfiguracoes — Valor M\u00ednimo de Reserva", () => {
     await cleanupRoots();
     mockGetSettings.mockReset();
     mockUpdateSettings.mockReset();
+    mockTestStripeConnection.mockReset();
     mockToast.mockReset();
   });
 
@@ -370,13 +373,80 @@ describe("LojaConfiguracoes — Valor M\u00ednimo de Reserva", () => {
     const { container } = await renderComponent(createElement(LojaConfiguracoes));
     await flushAct(() => {});
 
-    expect(container.textContent).toContain("O checkout pode encaminhar cartão de crédito, débito, Pix e boleto");
+    expect(container.textContent).toContain("Configure e teste as credenciais antes de ativar cobranças.");
     expect(container.querySelector('[data-testid="stripe-public-key"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="stripe-webhook-url"]')?.textContent).toContain(
       "/api/webhooks/stripe/minha-loja",
     );
     expect(container.textContent).toContain("payment_intent.succeeded");
     expect(container.textContent).toContain("charge.dispute.created");
+  });
+
+  it("testa uma chave nova antes de ativar o Stripe sem salvar as configurações", async () => {
+    mockGetSettings.mockResolvedValue(storeFixture({
+      stripeEnabled: false,
+      stripePublicKey: "pk_test_public123",
+      stripeSecretKeyConfigured: false,
+      paymentMethods: [],
+    }));
+    mockTestStripeConnection.mockResolvedValue({ connected: true, livemode: false });
+
+    const { container } = await renderComponent(createElement(LojaConfiguracoes));
+    await flushAct(() => {});
+
+    const secretInput = container.querySelector(
+      '[data-testid="stripe-secret-key"]',
+    ) as HTMLInputElement | null;
+    const testButton = container.querySelector(
+      '[data-testid="test-stripe-connection"]',
+    ) as HTMLButtonElement | null;
+    expect(secretInput).not.toBeNull();
+    expect(testButton).not.toBeNull();
+    expect(testButton?.disabled).toBe(false);
+
+    await flushAct(() => {
+      const setNativeValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setNativeValue?.call(secretInput, "sk_test_candidate123");
+      secretInput!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(secretInput?.value).toBe("sk_test_candidate123");
+    await flushAct(() => testButton!.click());
+
+    expect(mockTestStripeConnection).toHaveBeenCalledWith({
+      secretKey: "sk_test_candidate123",
+    });
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Conexão verificada no ambiente de teste.");
+  });
+
+  it("mostra a falha da verificação sem alterar a chave salva", async () => {
+    mockGetSettings.mockResolvedValue(storeFixture({
+      stripeEnabled: false,
+      stripePublicKey: "pk_test_public123",
+      stripeSecretKeyConfigured: true,
+      paymentMethods: [],
+    }));
+    mockTestStripeConnection.mockRejectedValue(
+      new Error("A Stripe rejeitou a chave secreta. Verifique se ela continua ativa."),
+    );
+
+    const { container } = await renderComponent(createElement(LojaConfiguracoes));
+    await flushAct(() => {});
+
+    const testButton = container.querySelector(
+      '[data-testid="test-stripe-connection"]',
+    ) as HTMLButtonElement | null;
+    expect(testButton).not.toBeNull();
+    await flushAct(() => testButton!.click());
+
+    expect(mockTestStripeConnection).toHaveBeenCalledWith({});
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "continua ativa",
+    );
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
   });
 
   it("bloqueia a ativação do Stripe sem chaves públicas e secretas", async () => {
