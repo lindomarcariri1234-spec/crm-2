@@ -45,6 +45,12 @@ import {
   validatePixManualConfig,
   type PixKeyType,
 } from "@/lib/pix-manual-config";
+import {
+  getStripeCredentialMode,
+  isStripeSupportedPaymentMethod,
+  STRIPE_STORE_PAYMENT_METHODS,
+  validateStripeStoreConfig,
+} from "@/lib/stripe-store-config";
 
 const PIX_KEY_GUIDANCE: Record<string, { placeholder: string; hint: string }> = {
   cpf: {
@@ -384,6 +390,34 @@ export default function LojaConfiguracoes() {
       return;
     }
 
+    const paymentMethods = (form.paymentMethods as string[] | undefined) ?? [];
+    const storedPaymentMethods = store?.paymentMethods ?? [];
+    const stripeSettingsChanged =
+      (form.stripeEnabled ?? false) !== (store?.stripeEnabled ?? false)
+      || (form.stripePublicKey ?? "") !== (store?.stripePublicKey ?? "")
+      || Boolean(typeof form.stripeSecretKey === "string" && form.stripeSecretKey.trim())
+      || Boolean(typeof form.stripeWebhookSecret === "string" && form.stripeWebhookSecret.trim())
+      || STRIPE_STORE_PAYMENT_METHODS.some(
+        (method) => paymentMethods.includes(method) !== storedPaymentMethods.includes(method),
+      );
+    const stripeIssues = validateStripeStoreConfig({
+      enabled: form.stripeEnabled ?? false,
+      paymentMethods,
+      publishableKey: form.stripePublicKey,
+      secretKey: form.stripeSecretKey,
+      secretKeyConfigured: form.stripeSecretKeyConfigured ?? false,
+      webhookSecret: form.stripeWebhookSecret,
+      previousPublishableKey: store?.stripePublicKey,
+    });
+    if (stripeSettingsChanged && stripeIssues.length > 0) {
+      toast({
+        title: "Revise a configuração do Stripe",
+        description: stripeIssues[0]?.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
     setSaving(true);
     try {
       const updatePayload: Partial<StoreSettings> = { ...form };
@@ -393,6 +427,20 @@ export default function LojaConfiguracoes() {
       } else {
         // A blank value means "keep the encrypted key already stored".
         delete updatePayload.pixKey;
+      }
+      if (typeof form.stripePublicKey === "string") {
+        updatePayload.stripePublicKey = form.stripePublicKey.trim();
+      }
+      if (typeof form.stripeSecretKey === "string" && form.stripeSecretKey.trim()) {
+        updatePayload.stripeSecretKey = form.stripeSecretKey.trim();
+      } else {
+        // Stripe secrets are write-only; an empty field must not replace the saved credential.
+        delete updatePayload.stripeSecretKey;
+      }
+      if (typeof form.stripeWebhookSecret === "string" && form.stripeWebhookSecret.trim()) {
+        updatePayload.stripeWebhookSecret = form.stripeWebhookSecret.trim();
+      } else {
+        delete updatePayload.stripeWebhookSecret;
       }
       await storeApi.updateSettings(updatePayload);
       // Re-read the row without browser/intermediary cache so the form always
@@ -450,6 +498,37 @@ export default function LojaConfiguracoes() {
     : encodeURIComponent(store.updatedAt);
   const shareUrl = `${window.location.origin}${storeUrl}?v=${shareVersion}`;
   const paymentMethodsSelected = (form.paymentMethods as string[]) ?? [];
+  const stripePaymentMethodsSelected = paymentMethodsSelected.filter(isStripeSupportedPaymentMethod);
+  const stripeCredentialIssues = validateStripeStoreConfig({
+    enabled: form.stripeEnabled ?? false,
+    paymentMethods: paymentMethodsSelected,
+    publishableKey: form.stripePublicKey,
+    secretKey: form.stripeSecretKey,
+    secretKeyConfigured: form.stripeSecretKeyConfigured ?? false,
+    webhookSecret: form.stripeWebhookSecret,
+    previousPublishableKey: store?.stripePublicKey,
+  });
+  const stripePublicKeyMode = getStripeCredentialMode(form.stripePublicKey);
+  const stripeWebhookUrl = store?.slug
+    ? `${window.location.origin}${BASE_URL}/api/webhooks/stripe/${encodeURIComponent(store.slug)}`
+    : "";
+  const stripePublicKeyIssue = stripeCredentialIssues.find((issue) => issue.field === "publishableKey");
+  const stripeSecretKeyIssue = stripeCredentialIssues.find((issue) => issue.field === "secretKey");
+  const stripeWebhookSecretIssue = stripeCredentialIssues.find((issue) => issue.field === "webhookSecret");
+
+  async function copyStripeWebhookUrl() {
+    if (!stripeWebhookUrl) return;
+    try {
+      await navigator.clipboard.writeText(stripeWebhookUrl);
+      toast({ title: "URL do webhook copiada" });
+    } catch {
+      toast({
+        title: "Não foi possível copiar a URL",
+        description: "Selecione e copie o endereço exibido abaixo.",
+        variant: "destructive",
+      });
+    }
+  }
   const pixKeyValue = typeof form.pixKey === "string" ? form.pixKey : "";
   const pixKeyType = typeof form.pixKeyType === "string" ? form.pixKeyType : "";
   const pixKeyValidationError = validatePixManualConfig({
