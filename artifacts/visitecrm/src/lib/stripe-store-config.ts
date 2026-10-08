@@ -36,6 +36,13 @@ export function getStripeCredentialMode(
   return (match?.[1] as StripeCredentialMode | undefined) ?? null;
 }
 
+export function shouldWarnAboutPublishedStripeTestKey(
+  isProductionBuild: boolean,
+  publishableKey: string | null | undefined,
+): boolean {
+  return isProductionBuild && getStripeCredentialMode(publishableKey) === "test";
+}
+
 export function validateStripeStoreConfig(
   input: ValidateStripeStoreConfigInput,
 ): StripeCredentialIssue[] {

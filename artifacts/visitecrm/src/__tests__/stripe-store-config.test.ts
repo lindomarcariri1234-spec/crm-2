@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getStripeCredentialMode,
   isStripeSupportedPaymentMethod,
+  shouldWarnAboutPublishedStripeTestKey,
   validateStripeStoreConfig,
 } from "../lib/stripe-store-config.js";
 
@@ -21,6 +22,22 @@ describe("Stripe store configuration", () => {
       secretKeyConfigured: false,
       webhookSecret: "whsec_valid-secret==",
     })).toEqual([]);
+  });
+
+  it("keeps test credentials valid in development and warns only in published builds", () => {
+    const testCredentials = {
+      enabled: true,
+      paymentMethods: ["credit_card"],
+      publishableKey: "pk_test_public123",
+      secretKey: "sk_test_secret123",
+      secretKeyConfigured: false,
+    };
+
+    expect(validateStripeStoreConfig(testCredentials)).toEqual([]);
+    expect(shouldWarnAboutPublishedStripeTestKey(false, testCredentials.publishableKey)).toBe(false);
+    expect(shouldWarnAboutPublishedStripeTestKey(true, testCredentials.publishableKey)).toBe(true);
+    expect(shouldWarnAboutPublishedStripeTestKey(true, "pk_live_public123")).toBe(false);
+    expect(shouldWarnAboutPublishedStripeTestKey(true, null)).toBe(false);
   });
 
   it("rejects credentials from different Stripe environments", () => {

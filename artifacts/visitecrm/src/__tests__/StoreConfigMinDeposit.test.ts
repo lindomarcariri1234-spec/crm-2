@@ -144,6 +144,7 @@ describe("LojaConfiguracoes — Valor M\u00ednimo de Reserva", () => {
 
   afterEach(async () => {
     await cleanupRoots();
+    vi.unstubAllEnvs();
   });
 
   function storeFixture(overrides: Record<string, unknown> = {}) {
@@ -380,6 +381,44 @@ describe("LojaConfiguracoes — Valor M\u00ednimo de Reserva", () => {
     );
     expect(container.textContent).toContain("payment_intent.succeeded");
     expect(container.textContent).toContain("charge.dispute.created");
+    expect(container.querySelector('[data-testid="published-stripe-test-key-warning"]')).toBeNull();
+  });
+
+  it("avisa em publicação com chave de teste e mantém a ativação permitida", async () => {
+    vi.stubEnv("PROD", true);
+    const settings = storeFixture({
+      paymentMethods: ["credit_card"],
+      stripeEnabled: false,
+      stripePublicKey: "pk_test_public123",
+      stripeSecretKeyConfigured: true,
+    });
+    mockGetSettings.mockResolvedValue(settings);
+    mockUpdateSettings.mockResolvedValue({ ...settings, stripeEnabled: true });
+
+    const { container } = await renderComponent(createElement(LojaConfiguracoes));
+    await flushAct(() => {});
+
+    const warning = container.querySelector(
+      '[data-testid="published-stripe-test-key-warning"]',
+    );
+    expect(warning?.textContent).toContain("não gerarão cobranças reais");
+    expect(warning?.textContent).toContain("A ativação continua permitida");
+
+    const stripeSwitch = container.querySelector(
+      '[data-testid="stripe-enabled"]',
+    ) as HTMLInputElement | null;
+    expect(stripeSwitch).not.toBeNull();
+    expect(stripeSwitch?.disabled).toBe(false);
+    await flushAct(() => stripeSwitch!.click());
+
+    const saveButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Salvar")
+    ) as HTMLButtonElement | undefined;
+    expect(saveButton).toBeDefined();
+    await flushAct(() => saveButton!.click());
+
+    expect(mockUpdateSettings).toHaveBeenCalledOnce();
+    expect(mockUpdateSettings.mock.calls[0][0]).toMatchObject({ stripeEnabled: true });
   });
 
   it("testa uma chave nova antes de ativar o Stripe sem salvar as configurações", async () => {

@@ -48,6 +48,7 @@ import {
 import {
   getStripeCredentialMode,
   isStripeSupportedPaymentMethod,
+  shouldWarnAboutPublishedStripeTestKey,
   STRIPE_STORE_PAYMENT_METHODS,
   validateStripeStoreConfig,
 } from "@/lib/stripe-store-config";
@@ -553,6 +554,10 @@ export default function LojaConfiguracoes() {
     previousPublishableKey: store?.stripePublicKey,
   });
   const stripePublicKeyMode = getStripeCredentialMode(form.stripePublicKey);
+  const publishedStripeTestKeyWarning = shouldWarnAboutPublishedStripeTestKey(
+    import.meta.env.PROD,
+    form.stripePublicKey,
+  );
   const stripeWebhookUrl = store?.slug
     ? `${window.location.origin}${BASE_URL}/api/webhooks/stripe/${encodeURIComponent(store.slug)}`
     : "";
@@ -1227,6 +1232,22 @@ export default function LojaConfiguracoes() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                {publishedStripeTestKeyWarning && (
+                  <div
+                    role="status"
+                    data-testid="published-stripe-test-key-warning"
+                    className="flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm"
+                  >
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+                    <div className="space-y-1">
+                      <p className="font-medium">Esta versão publicada está configurada para testes do Stripe.</p>
+                      <p className="text-muted-foreground">
+                        Se o Stripe estiver ativado, os pagamentos no checkout usarão o ambiente de teste e não gerarão cobranças reais.
+                        A ativação continua permitida; para cobrar clientes, configure as chaves de produção.
+                      </p>
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <Label htmlFor="stripe-enabled">Ativar Stripe</Label>
                   <Switch

@@ -31,8 +31,10 @@ import {
   Check,
   Gift,
   XCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { PAYMENT_METHOD_LABELS as PAYMENT_LABELS } from "@/lib/labels";
+import { shouldWarnAboutPublishedStripeTestKey } from "@/lib/stripe-store-config";
 import {
   clearStorefrontReferralCode,
   getStorefrontReferralCode,
@@ -865,6 +867,9 @@ export default function VitrineCheckout({
       || form.paymentMethod === "boleto") &&
     store.stripeEnabled &&
     !!store.stripePublicKey;
+  const showPublishedStripeTestKeyWarning =
+    isStripePayment
+    && shouldWarnAboutPublishedStripeTestKey(import.meta.env.PROD, store.stripePublicKey);
   const isManualPixPayment = form.paymentMethod === "pix" && !isStripePayment;
 
   async function submit() {
@@ -1821,6 +1826,19 @@ export default function VitrineCheckout({
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    {showPublishedStripeTestKeyWarning && (
+                      <div
+                        role="status"
+                        data-testid="published-stripe-test-checkout-warning"
+                        className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                      >
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+                        <div>
+                          <p className="font-semibold">Pagamento em ambiente de teste</p>
+                          <p>Este pedido não gerará uma cobrança real.</p>
+                        </div>
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       {effectivePaymentMethods.map((m) => (
                         <button

@@ -196,6 +196,7 @@ async function submitWithCashback(
 }
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   emptyCart.value = false;
   getProfileSpy.mockReset().mockResolvedValueOnce({
     referral: { creditBalance: "100.00" },
@@ -230,6 +231,7 @@ beforeEach(() => {
 afterEach(async () => {
   await cleanupRoots();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   window.history.replaceState({}, "", "/");
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -424,6 +426,7 @@ describe("VitrineCheckout — referral credit confirmation", () => {
     await submitWithCashback(container, "Carlos Lima", "carlos@example.com", true);
 
     expect(createPaymentIntentSpy).toHaveBeenCalledOnce();
+    expect(container.querySelector('[data-testid="published-stripe-test-checkout-warning"]')).toBeNull();
     expect(container.textContent).toContain("Pagar agora");
     await flushAct(() => callOnClick(findButton(container, "Pagar agora")!));
 
@@ -432,6 +435,40 @@ describe("VitrineCheckout — referral credit confirmation", () => {
     expect(text).toContain("Seu saldo de cashback mudou durante o checkout.");
     expect(text).toContain("Aplicamos R$ 40.00 de cashback.");
     expect(text).toContain("O novo total do pedido é R$ 460.00.");
+  });
+
+  it("avisa no checkout publicado que pagamentos com chave de teste não serão cobrados", async () => {
+    vi.stubEnv("PROD", true);
+    createOrderSpy.mockResolvedValue(makeOrder("500.00", 0));
+    createPaymentIntentSpy.mockResolvedValue({
+      clientSecret: "test-client-secret",
+      publishableKey: "pk_test_store",
+    });
+    const { default: VitrineCheckout } = await import(
+      "../pages/vitrine/checkout.js"
+    );
+    const { container } = await renderComponent(
+      createElement(VitrineCheckout, {
+        slug: "loja-teste",
+        store: makeStore({
+          paymentMethods: ["credit_card"],
+          stripeEnabled: true,
+          stripePublicKey: "pk_test_store",
+        }),
+      }),
+    );
+
+    await flushAct(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await submitWithCashback(container, "Ana Costa", "ana@example.com", true);
+
+    const warning = container.querySelector(
+      '[data-testid="published-stripe-test-checkout-warning"]',
+    );
+    expect(warning?.textContent).toContain("Pagamento em ambiente de teste");
+    expect(warning?.textContent).toContain("não gerará uma cobrança real");
   });
 
   it("keeps the reduced cashback warning while card payment is pending", async () => {
