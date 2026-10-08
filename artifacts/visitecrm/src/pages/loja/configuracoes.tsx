@@ -46,6 +46,29 @@ import {
   type PixKeyType,
 } from "@/lib/pix-manual-config";
 
+const PIX_KEY_GUIDANCE: Record<string, { placeholder: string; hint: string }> = {
+  cpf: {
+    placeholder: "Ex.: 123.456.789-09",
+    hint: "Informe o CPF de 11 dígitos cadastrado como chave Pix.",
+  },
+  cnpj: {
+    placeholder: "Ex.: 12.345.678/0001-95",
+    hint: "Informe o CNPJ de 14 caracteres cadastrado como chave Pix.",
+  },
+  email: {
+    placeholder: "Ex.: financeiro@empresa.com.br",
+    hint: "Informe o endereço de e-mail cadastrado como chave Pix.",
+  },
+  phone: {
+    placeholder: "Ex.: +55 (11) 99999-9999",
+    hint: "Informe o telefone com DDD; números brasileiros locais serão salvos no formato +55.",
+  },
+  random: {
+    placeholder: "UUID completo da chave Pix",
+    hint: "Cole o UUID completo gerado pelo banco, com ou sem hífens.",
+  },
+};
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -438,6 +461,13 @@ export default function LojaConfiguracoes() {
   });
   const hasPendingPixKey = pixKeyValue.trim().length > 0;
   const pixKeyTypeChanged = (form.pixKeyType ?? null) !== (store.pixKeyType ?? null);
+  const showPixValidationError = Boolean(
+    pixKeyValidationError && (form.pixEnabled || hasPendingPixKey || pixKeyTypeChanged),
+  );
+  const pixKeyGuidance = PIX_KEY_GUIDANCE[pixKeyType] ?? {
+    placeholder: "Informe a chave cadastrada no seu banco",
+    hint: "Escolha o tipo correspondente ao cadastro da chave no banco.",
+  };
 
   return (
     <div className="space-y-6">
@@ -1169,25 +1199,21 @@ export default function LojaConfiguracoes() {
                   <div className="flex items-center gap-3">
                     <span
                       className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                        form.pixEnabled
-                          ? hasPendingPixKey
-                            ? "bg-blue-100 text-blue-800"
-                            : form.pixKeyConfigured
+                        hasPendingPixKey
+                          ? "bg-blue-100 text-blue-800"
+                          : form.pixEnabled
+                            ? form.pixKeyConfigured
                               ? "bg-emerald-100 text-emerald-800"
                               : "bg-amber-100 text-amber-800"
-                          : "bg-muted text-muted-foreground"
+                            : "bg-muted text-muted-foreground"
                       }`}
                       role="status"
                     >
-                      {form.pixEnabled
-                        ? hasPendingPixKey
-                          ? "Alteração pendente"
-                          : form.pixKeyConfigured
-                            ? "Ativo"
-                            : "Precisa de chave"
-                        : form.pixKeyConfigured
-                          ? "Desativado · chave guardada"
-                          : "Desativado"}
+                      {hasPendingPixKey
+                        ? form.pixEnabled ? "Alteração pendente" : "Chave pendente"
+                        : form.pixEnabled
+                          ? form.pixKeyConfigured ? "Ativo" : "Precisa de chave"
+                          : form.pixKeyConfigured ? "Desativado · chave guardada" : "Desativado"}
                     </span>
                     <Switch
                       id="pix-manual-enabled"
@@ -1215,13 +1241,11 @@ export default function LojaConfiguracoes() {
                           type={showPixKey ? "text" : "password"}
                           value={pixKeyValue}
                           onChange={(e) => set("pixKey", e.target.value)}
-                          placeholder={
-                            form.pixKeyConfigured
-                              ? "Digite uma nova chave para substituir"
-                              : "Informe a chave cadastrada no seu banco"
-                          }
+                          placeholder={form.pixKeyConfigured
+                            ? "Digite uma nova chave para substituir"
+                            : pixKeyGuidance.placeholder}
                           autoComplete="off"
-                          aria-invalid={Boolean(pixKeyValidationError && (form.pixEnabled || hasPendingPixKey))}
+                          aria-invalid={showPixValidationError}
                           aria-describedby="pix-manual-key-help"
                           className="pr-11 font-mono"
                         />
@@ -1238,7 +1262,7 @@ export default function LojaConfiguracoes() {
                         </button>
                       </div>
                       <p id="pix-manual-key-help" className="text-xs text-muted-foreground">
-                        A chave salva nunca é exibida. O campo vazio mantém a atual; somente uma nova chave é enviada ao salvar.
+                        {pixKeyGuidance.hint} A chave salva nunca é exibida; deixe o campo vazio para mantê-la.
                       </p>
                     </div>
                     <div className="space-y-2">
@@ -1248,7 +1272,7 @@ export default function LojaConfiguracoes() {
                         value={pixKeyType}
                         onChange={(e) => set("pixKeyType", e.target.value)}
                         className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
-                        aria-invalid={Boolean(pixKeyValidationError && (form.pixEnabled || hasPendingPixKey))}
+                        aria-invalid={showPixValidationError}
                       >
                         <option value="" disabled>Selecione o tipo</option>
                         <option value="cpf">CPF</option>
@@ -1262,7 +1286,7 @@ export default function LojaConfiguracoes() {
                       </p>
                     </div>
                   </div>
-                    {pixKeyValidationError && (form.pixEnabled || hasPendingPixKey || pixKeyTypeChanged) && (
+                    {pixKeyValidationError && showPixValidationError && (
                       <div
                         role="alert"
                         className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
