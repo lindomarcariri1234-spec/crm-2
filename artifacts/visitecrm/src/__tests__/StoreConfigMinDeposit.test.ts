@@ -59,6 +59,10 @@ vi.mock("@/components/ui/input", () => ({
       step: (props.step as string) || undefined,
       min: (props.min as string) || undefined,
       className: (props.className as string) || "",
+      id: (props.id as string) || undefined,
+      autoComplete: (props.autoComplete as string) || undefined,
+      "aria-invalid": props["aria-invalid"] as boolean | undefined,
+      "aria-describedby": (props["aria-describedby"] as string) || undefined,
       "data-testid": (props["data-testid"] as string) || undefined,
     }),
 }));
@@ -77,11 +81,20 @@ vi.mock("@/components/ui/textarea", () => ({
 }));
 
 vi.mock("@/components/ui/switch", () => ({
-  Switch: ({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (v: boolean) => void }) =>
+  Switch: ({
+    checked,
+    onCheckedChange,
+    ...rest
+  }: {
+    checked: boolean;
+    onCheckedChange: (v: boolean) => void;
+    [key: string]: unknown;
+  }) =>
     createElement("input", {
       type: "checkbox",
       checked,
       onChange: (e: { target: { checked: boolean } }) => onCheckedChange(e.target.checked),
+      ...rest,
     }),
 }));
 
@@ -235,5 +248,113 @@ describe("LojaConfiguracoes — Valor M\u00ednimo de Reserva", () => {
     expect(mockUpdateSettings).toHaveBeenCalledOnce();
     const payload = mockUpdateSettings.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.minDepositAmount == null).toBe(true);
+  });
+
+  it("mostra que a chave salva está protegida sem expor seu valor", async () => {
+    mockGetSettings.mockResolvedValue(storeFixture({
+      paymentMethods: ["pix"],
+      pixEnabled: true,
+      pixKeyConfigured: true,
+      pixKeyType: "email",
+    }));
+
+    const { container } = await renderComponent(createElement(LojaConfiguracoes));
+    await flushAct(() => {});
+
+    const keyInput = container.querySelector(
+      'input[placeholder="Digite uma nova chave para substituir"]'
+    ) as HTMLInputElement | null;
+    expect(keyInput).not.toBeNull();
+    expect(keyInput?.type).toBe("password");
+    expect(container.textContent).toContain("Há uma chave Pix protegida cadastrada.");
+    expect(container.textContent).toContain("Deixe o campo vazio para mantê-la");
+    expect(container.textContent).toContain("Informe o endereço de e-mail cadastrado como chave Pix.");
+  });
+
+  it("não permite ativar o Pix Manual sem uma chave configurada", async () => {
+    mockGetSettings.mockResolvedValue(storeFixture({
+      paymentMethods: ["pix"],
+      pixEnabled: false,
+      pixKeyConfigured: false,
+    }));
+
+    const { container } = await renderComponent(createElement(LojaConfiguracoes));
+    await flushAct(() => {});
+
+    const pixSwitch = container.querySelector(
+      "#pix-manual-enabled"
+    ) as HTMLInputElement | null;
+    expect(pixSwitch).not.toBeNull();
+    await flushAct(() => pixSwitch!.click());
+
+    expect(container.textContent).toContain("Cadastre uma chave Pix antes de ativar");
+    const saveBtn = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Salvar")
+    ) as HTMLButtonElement | undefined;
+    expect(saveBtn).toBeDefined();
+    await flushAct(() => saveBtn!.click());
+
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      description: expect.stringContaining("Cadastre uma chave Pix"),
+    }));
+  });
+
+  it("não permite alterar o tipo de uma chave salva sem informar uma substituta", async () => {
+    mockGetSettings.mockResolvedValue(storeFixture({
+      paymentMethods: ["pix"],
+      pixEnabled: true,
+      pixKeyConfigured: true,
+      pixKeyType: "email",
+    }));
+
+    const { container } = await renderComponent(createElement(LojaConfiguracoes));
+    await flushAct(() => {});
+
+    const keyType = container.querySelector(
+      "#pix-manual-key-type"
+    ) as HTMLSelectElement | null;
+    expect(keyType).not.toBeNull();
+    await flushAct(() => {
+      keyType!.value = "phone";
+      keyType!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("informe também a nova chave Pix");
+    const saveBtn = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Salvar")
+    ) as HTMLButtonElement | undefined;
+    expect(saveBtn).toBeDefined();
+    await flushAct(() => saveBtn!.click());
+
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      description: expect.stringContaining("nova chave Pix"),
+    }));
+  });
+
+  it("omite o campo Pix vazio ao salvar para preservar a chave protegida", async () => {
+    const settings = storeFixture({
+      paymentMethods: ["pix"],
+      pixEnabled: true,
+      pixKeyConfigured: true,
+      pixKeyType: "email",
+    });
+    mockGetSettings.mockResolvedValue(settings);
+    mockUpdateSettings.mockResolvedValue(settings);
+
+    const { container } = await renderComponent(createElement(LojaConfiguracoes));
+    await flushAct(() => {});
+
+    const saveBtn = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Salvar")
+    ) as HTMLButtonElement | undefined;
+    expect(saveBtn).toBeDefined();
+    await flushAct(() => saveBtn!.click());
+
+    expect(mockUpdateSettings).toHaveBeenCalledOnce();
+    const payload = mockUpdateSettings.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("pixKey");
+    expect(payload).toMatchObject({ pixEnabled: true, pixKeyType: "email" });
   });
 });

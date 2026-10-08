@@ -529,7 +529,11 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
       paymentMethods: Array.isArray(store.paymentMethods) ? store.paymentMethods : [],
       pixEnabled: store.pixEnabled,
       boletoEnabled: store.boletoEnabled,
-      stripeEnabled: store.stripeEnabled,
+      stripeEnabled: Boolean(
+        store.stripeEnabled
+        && store.stripePublicKey
+        && decryptOrPassthrough(store.stripeSecretKey),
+      ),
       stripePublicKey: store.stripePublicKey,
       mpEnabled: store.mpEnabled,
       termsOfService: store.termsOfService,
@@ -1657,6 +1661,25 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     
 }
 
+    const stripeCheckoutAvailable = Boolean(
+      store.stripeEnabled
+      && store.stripePublicKey
+      && decryptOrPassthrough(store.stripeSecretKey),
+    );
+    if (data.paymentMethod === "pix") {
+      data.paymentProvider = stripeCheckoutAvailable ? "stripe" : "manual";
+    }
+    if (
+      data.paymentMethod === "pix"
+      && !stripeCheckoutAvailable
+      && !(store.pixEnabled && store.pixKey)
+    ) {
+      next(new ValidationError(
+        "O Pix Manual não está configurado nesta loja.",
+        "PIX_MANUAL_NOT_CONFIGURED",
+      ));
+      return;
+    }
 
     const 
 {
@@ -2416,6 +2439,7 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
       amountRemaining: storeOrdersTable.amountRemaining,
       couponCode: storeOrdersTable.couponCode,
       paymentMethod: storeOrdersTable.paymentMethod,
+      paymentProvider: storeOrdersTable.paymentProvider,
       paymentStatus: storeOrdersTable.paymentStatus,
       installments: storeOrdersTable.installments,
       pixQrCode: storeOrdersTable.pixQrCode,
@@ -3257,6 +3281,13 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
         next(new ValidationError("O pedido já possui uma cobrança Stripe para outra forma de pagamento", "ALREADY_SET"));
         return;
       }
+      await db
+        .update(storeOrdersTable)
+        .set({
+          paymentIntentId: order.existingPaymentIntentId,
+          paymentProvider: "stripe",
+        })
+        .where(eq(storeOrdersTable.id, order.id));
       res.json({
         clientSecret: existingIntent.client_secret,
         paymentIntentId: existingIntent.id,
@@ -3284,7 +3315,10 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
 
     await db
       .update(storeOrdersTable)
-      .set({ paymentIntentId: paymentIntent.id })
+      .set({
+        paymentIntentId: paymentIntent.id,
+        paymentProvider: "stripe",
+      })
       .where(eq(storeOrdersTable.id, order.id));
 
     res.json({ clientSecret: paymentIntent.client_secret, publishableKey: store.stripePublicKey });

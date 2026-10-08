@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -146,6 +147,7 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
   const [paymentStatus, setPaymentStatus] = useState("");
   const [fulfillmentStatus, setFulfillmentStatus] = useState("");
   const [internalNotes, setInternalNotes] = useState("");
+  const [manualPixBankConfirmed, setManualPixBankConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -159,6 +161,7 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
       setPaymentStatus(o.paymentStatus);
       setFulfillmentStatus(o.fulfillmentStatus ?? "unfulfilled");
       setInternalNotes(o.internalNotes ?? "");
+      setManualPixBankConfirmed(false);
     }).catch(() => {
       if (!active) return;
       toast({ title: "Erro ao carregar pedido", variant: "destructive" });
@@ -200,6 +203,13 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
 
   if (!order) return null;
   const summary = order.financialSummary;
+  const isManualPixOrder =
+    order.paymentMethod === "pix"
+    && (!order.paymentProvider || order.paymentProvider === "manual");
+  const manualPixConfirmationRequired =
+    isManualPixOrder
+    && paymentStatus === STORE_PAYMENT_STATUS.PAID
+    && order.paymentStatus !== STORE_PAYMENT_STATUS.PAID;
 
   return (
     <div className="space-y-5 max-h-[75vh] overflow-y-auto pr-1">
@@ -436,6 +446,22 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
           <CardTitle className="text-sm font-medium text-muted-foreground">Atualizar Status</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {isManualPixOrder && order.paymentStatus !== STORE_PAYMENT_STATUS.PAID && (
+            <div
+              role="note"
+              className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+            >
+              <p className="font-semibold">Pix Manual exige conferência bancária.</p>
+              <p className="mt-1 text-xs">
+                Confira o crédito no extrato; QR Code ou comprovante enviado pelo cliente não confirma o recebimento.
+              </p>
+              {summary.depositRequested > 0 && summary.depositRequested < summary.totalAmount && (
+                <p className="mt-1 text-xs">
+                  Este Pix pode cobrar apenas a entrada. Marcar o pedido como pago quita o saldo total; registre uma entrada isolada na reserva, sem quitar o pedido.
+                </p>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Status do Pedido</label>
@@ -452,7 +478,13 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
             </div>
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Pagamento</label>
-              <Select value={paymentStatus} onValueChange={setPaymentStatus}>
+              <Select
+                value={paymentStatus}
+                onValueChange={(value) => {
+                  setPaymentStatus(value);
+                  setManualPixBankConfirmed(false);
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -477,6 +509,23 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
               </Select>
             </div>
           </div>
+          {manualPixConfirmationRequired && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="manual-pix-bank-confirmed"
+                  checked={manualPixBankConfirmed}
+                  onCheckedChange={(checked) => setManualPixBankConfirmed(checked === true)}
+                />
+                <label
+                  htmlFor="manual-pix-bank-confirmed"
+                  className="cursor-pointer text-sm font-medium leading-5 text-amber-950"
+                >
+                  Confirmei no extrato bancário o recebimento que quita integralmente o saldo deste pedido.
+                </label>
+              </div>
+            </div>
+          )}
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground">Notas Internas</label>
             <Textarea
@@ -489,7 +538,10 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={onClose}>Fechar</Button>
-            <Button onClick={save} disabled={saving}>
+            <Button
+              onClick={save}
+              disabled={saving || (manualPixConfirmationRequired && !manualPixBankConfirmed)}
+            >
               {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Salvar
             </Button>
