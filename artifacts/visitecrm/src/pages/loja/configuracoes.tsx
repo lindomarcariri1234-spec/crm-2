@@ -36,8 +36,15 @@ import {
   Download,
   Copy,
   Share2,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
+import {
+  normalizePixKey,
+  validatePixManualConfig,
+  type PixKeyType,
+} from "@/lib/pix-manual-config";
 
 function slugify(text: string): string {
   return text
@@ -297,6 +304,7 @@ export default function LojaConfiguracoes() {
   const [form, setForm] = useState<Partial<StoreSettings>>({});
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
+  const [showPixKey, setShowPixKey] = useState(false);
 
   const generateQr = useCallback(async (slug: string, updatedAt: string) => {
     const cacheVersion = Date.parse(updatedAt);
@@ -331,9 +339,39 @@ export default function LojaConfiguracoes() {
   }
 
   async function save() {
+    const pixKey = typeof form.pixKey === "string" ? form.pixKey : "";
+    const pixKeyType = typeof form.pixKeyType === "string" ? form.pixKeyType : "";
+    const pixSettingsChanged = Boolean(pixKey.trim())
+      || (form.pixEnabled ?? false) !== (store?.pixEnabled ?? false)
+      || (form.pixKeyType ?? null) !== (store?.pixKeyType ?? null);
+    const pixValidationError = validatePixManualConfig({
+      enabled: form.pixEnabled ?? false,
+      keyConfigured: form.pixKeyConfigured ?? false,
+      key: pixKey,
+      keyType: pixKeyType,
+      storedKeyType: store?.pixKeyType,
+    });
+
+    if (pixSettingsChanged && pixValidationError) {
+      toast({
+        title: "Revise a configuração do Pix Manual",
+        description: pixValidationError,
+        variant: "destructive",
+      });
+      return;
+    }
+
     setSaving(true);
     try {
-      await storeApi.updateSettings(form);
+      const updatePayload: Partial<StoreSettings> = { ...form };
+      if (pixKey.trim()) {
+        updatePayload.pixKey = normalizePixKey(pixKey, pixKeyType as PixKeyType);
+        updatePayload.pixKeyType = pixKeyType;
+      } else {
+        // A blank value means "keep the encrypted key already stored".
+        delete updatePayload.pixKey;
+      }
+      await storeApi.updateSettings(updatePayload);
       // Re-read the row without browser/intermediary cache so the form always
       // reflects the version that is actually persisted by the server.
       const latest = await storeApi.getSettings();
@@ -389,6 +427,17 @@ export default function LojaConfiguracoes() {
     : encodeURIComponent(store.updatedAt);
   const shareUrl = `${window.location.origin}${storeUrl}?v=${shareVersion}`;
   const paymentMethodsSelected = (form.paymentMethods as string[]) ?? [];
+  const pixKeyValue = typeof form.pixKey === "string" ? form.pixKey : "";
+  const pixKeyType = typeof form.pixKeyType === "string" ? form.pixKeyType : "";
+  const pixKeyValidationError = validatePixManualConfig({
+    enabled: form.pixEnabled ?? false,
+    keyConfigured: form.pixKeyConfigured ?? false,
+    key: pixKeyValue,
+    keyType: pixKeyType,
+    storedKeyType: store.pixKeyType,
+  });
+  const hasPendingPixKey = pixKeyValue.trim().length > 0;
+  const pixKeyTypeChanged = (form.pixKeyType ?? null) !== (store.pixKeyType ?? null);
 
   return (
     <div className="space-y-6">
@@ -1101,42 +1150,130 @@ export default function LojaConfiguracoes() {
           {paymentMethodsSelected.includes("pix") && (
             <Card>
               <CardHeader>
-                <CardTitle>PIX Manual</CardTitle>
-                <CardDescription>Para receber PIX manualmente sem gateway.</CardDescription>
+                <CardTitle className="flex items-center gap-2">
+                  <QrCode className="h-5 w-5 text-primary" />
+                  PIX Manual
+                </CardTitle>
+                <CardDescription>
+                  Gere QR Code e código Pix para pagamento direto. A confirmação depende da conferência da equipe.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <Label>Ativar PIX Manual</Label>
-                  <Switch
-                    checked={form.pixEnabled ?? false}
-                    onCheckedChange={(v) => set("pixEnabled", v)}
-                  />
+              <CardContent className="space-y-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <Label htmlFor="pix-manual-enabled">Ativar PIX Manual</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Disponibiliza o Pix manual como opção de pagamento na vitrine.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                        form.pixEnabled
+                          ? hasPendingPixKey
+                            ? "bg-blue-100 text-blue-800"
+                            : form.pixKeyConfigured
+                              ? "bg-emerald-100 text-emerald-800"
+                              : "bg-amber-100 text-amber-800"
+                          : "bg-muted text-muted-foreground"
+                      }`}
+                      role="status"
+                    >
+                      {form.pixEnabled
+                        ? hasPendingPixKey
+                          ? "Alteração pendente"
+                          : form.pixKeyConfigured
+                            ? "Ativo"
+                            : "Precisa de chave"
+                        : form.pixKeyConfigured
+                          ? "Desativado · chave guardada"
+                          : "Desativado"}
+                    </span>
+                    <Switch
+                      id="pix-manual-enabled"
+                      checked={form.pixEnabled ?? false}
+                      onCheckedChange={(v) => set("pixEnabled", v)}
+                    />
+                  </div>
                 </div>
                 {form.pixEnabled && (
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-4 border-t pt-4">
+                    {form.pixKeyConfigured && (
+                      <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+                        <CheckCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <p>
+                          Há uma chave Pix protegida cadastrada. Deixe o campo vazio para mantê-la ou informe uma nova para substituí-la.
+                        </p>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_15rem]">
                     <div className="space-y-2">
-                      <Label>Chave PIX</Label>
-                      <Input
-                        type="password"
-                        value={form.pixKey ?? ""}
-                        onChange={(e) => set("pixKey", e.target.value)}
-                        placeholder={form.pixKeyConfigured ? "•••••• (deixe em branco para manter)" : "CPF, CNPJ, e-mail ou chave aleatória"}
-                      />
+                      <Label htmlFor="pix-manual-key">Chave Pix</Label>
+                      <div className="relative">
+                        <Input
+                          id="pix-manual-key"
+                          type={showPixKey ? "text" : "password"}
+                          value={pixKeyValue}
+                          onChange={(e) => set("pixKey", e.target.value)}
+                          placeholder={
+                            form.pixKeyConfigured
+                              ? "Digite uma nova chave para substituir"
+                              : "Informe a chave cadastrada no seu banco"
+                          }
+                          autoComplete="off"
+                          aria-invalid={Boolean(pixKeyValidationError && (form.pixEnabled || hasPendingPixKey))}
+                          aria-describedby="pix-manual-key-help"
+                          className="pr-11 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPixKey((visible) => !visible)}
+                          aria-label={showPixKey ? "Ocultar chave Pix digitada" : "Mostrar chave Pix digitada"}
+                          aria-pressed={showPixKey}
+                          className="absolute inset-y-0 right-0 inline-flex w-10 items-center justify-center text-muted-foreground hover:text-foreground"
+                        >
+                          {showPixKey
+                            ? <EyeOff className="h-4 w-4" />
+                            : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                      <p id="pix-manual-key-help" className="text-xs text-muted-foreground">
+                        A chave salva nunca é exibida. O campo vazio mantém a atual; somente uma nova chave é enviada ao salvar.
+                      </p>
                     </div>
                     <div className="space-y-2">
-                      <Label>Tipo da Chave</Label>
+                      <Label htmlFor="pix-manual-key-type">Tipo da chave</Label>
                       <select
-                        value={form.pixKeyType ?? "email"}
+                        id="pix-manual-key-type"
+                        value={pixKeyType}
                         onChange={(e) => set("pixKeyType", e.target.value)}
                         className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
+                        aria-invalid={Boolean(pixKeyValidationError && (form.pixEnabled || hasPendingPixKey))}
                       >
+                        <option value="" disabled>Selecione o tipo</option>
                         <option value="cpf">CPF</option>
                         <option value="cnpj">CNPJ</option>
                         <option value="email">E-mail</option>
                         <option value="phone">Telefone</option>
                         <option value="random">Chave Aleatória</option>
                       </select>
+                      <p className="text-xs text-muted-foreground">
+                        Escolha o mesmo tipo informado ao cadastrar a chave no banco.
+                      </p>
                     </div>
+                  </div>
+                    {pixKeyValidationError && (form.pixEnabled || hasPendingPixKey || pixKeyTypeChanged) && (
+                      <div
+                        role="alert"
+                        className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+                      >
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <p>{pixKeyValidationError}</p>
+                      </div>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      O Pix Manual não confirma o pagamento automaticamente. Confira o recebimento no banco antes de confirmar o pedido.
+                    </p>
                   </div>
                 )}
               </CardContent>
