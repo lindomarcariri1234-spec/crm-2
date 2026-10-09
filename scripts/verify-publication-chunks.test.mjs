@@ -761,12 +761,16 @@ function fakeBrowserFactory({
   signInResponseStatus = 200,
   signInTitle = "Sign in to VisiteCRM",
   followAccountPortalRedirect = true,
+  mainHeadingVisibleByRoute = {},
+  mainHeadingMatchesMarkerByRoute = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
   const calls = [];
+  const contentChecks = [];
   return {
     calls,
+    contentChecks,
     factory: async ({ headers, profileName }) => {
       const browserCall = { headers, navigations: [] };
       calls.push(browserCall);
@@ -838,6 +842,17 @@ function fakeBrowserFactory({
                 },
               };
             }
+            if (params.expression?.includes('document.querySelector("main h1")')) {
+              const pathname = new URL(currentUrl).pathname;
+              contentChecks.push({ pathname, expression: params.expression });
+              return {
+                result: {
+                  value:
+                    (mainHeadingVisibleByRoute[pathname] ?? true) &&
+                    (mainHeadingMatchesMarkerByRoute[pathname] ?? true),
+                },
+              };
+            }
             return { result: { value: 0 } };
           }
           return {};
@@ -882,6 +897,44 @@ test("navigates every configured protected route and validates browser-observed 
   assert.equal(browser.calls[0].headers.Cookie, "clerk_test_session=short-lived");
 });
 
+test("rejects blank and incorrectly blocked authenticated pages with profile and route", async () => {
+  const browser = fakeBrowserFactory({
+    mainHeadingVisibleByRoute: { "/admin/tenants": false },
+    mainHeadingMatchesMarkerByRoute: { "/admin": false },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "superadmin",
+        label: "superadmin",
+        paths: ["/admin", "/admin/tenants"],
+        headers: { Cookie: "short-lived-test-session" },
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.deepEqual(results.map(({ route, ok }) => ({ route, ok })), [
+    { route: "/admin", ok: false },
+    { route: "/admin/tenants", ok: false },
+  ]);
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/admin: superadmin page is missing its visible main-content marker \(main h1 must contain the configured page title\)/,
+  );
+  assert.match(
+    results[1].failures.join("\n"),
+    /\/admin\/tenants: superadmin page is missing its visible main-content marker \(main h1 must contain the configured page title\)/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /short-lived-test-session/,
+  );
+});
+
 test("uses one-time Clerk links for isolated seller, superadmin, and client browser sessions", async () => {
   const browser = fakeBrowserFactory({
     authStateByProfile: {
@@ -900,7 +953,7 @@ test("uses one-time Clerk links for isolated seller, superadmin, and client brow
       {
         name: "seller",
         label: "vendedor",
-        paths: ["/meu-painel"],
+        paths: ["/meu-painel", "/vouchers"],
         signInUrl:
           "https://accounts.visitecrm.com/sign-in?ticket=seller-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
         expectedUserId: "user_seller_test",
@@ -908,7 +961,7 @@ test("uses one-time Clerk links for isolated seller, superadmin, and client brow
       {
         name: "superadmin",
         label: "superadmin",
-        paths: ["/admin"],
+        paths: ["/admin", "/admin/tenants"],
         signInUrl:
           "https://accounts.visitecrm.com/sign-in?ticket=admin-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
         expectedUserId: "user_superadmin_test",
@@ -932,10 +985,21 @@ test("uses one-time Clerk links for isolated seller, superadmin, and client brow
     results.map(({ route, profile, ok }) => ({ route, profile, ok })),
     [
       { route: "/meu-painel", profile: "seller", ok: true },
+      { route: "/vouchers", profile: "seller", ok: true },
       { route: "/admin", profile: "superadmin", ok: true },
+      { route: "/admin/tenants", profile: "superadmin", ok: true },
       { route: "/perfil", profile: "client", ok: true },
     ],
   );
+  const contentMarkersByPath = Object.fromEntries(
+    browser.contentChecks.map(({ pathname, expression }) => [pathname, expression]),
+  );
+  assert.match(contentMarkersByPath["/meu-painel"], /Meu Painel/);
+  assert.match(contentMarkersByPath["/vouchers"], /Vouchers e Check-in/);
+  assert.match(contentMarkersByPath["/admin"], /Visão Geral da Plataforma/);
+  assert.match(contentMarkersByPath["/admin/tenants"], /Tenants/);
+  assert.match(contentMarkersByPath["/perfil"], /Tem mundo te esperando\./);
+  assert.doesNotMatch(contentMarkersByPath["/perfil"], /Oi,/);
   assert.deepEqual(
     browser.calls.map(({ headers }) => ({
       Cookie: headers.Cookie,
