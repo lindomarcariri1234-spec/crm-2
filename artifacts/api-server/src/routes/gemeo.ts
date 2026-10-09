@@ -99,6 +99,7 @@ async function revenueInRange(tenantId: string, from: Date, to: Date): Promise<n
     .where(
       and(
         eq(paymentsTable.tenantId, tenantId),
+        eq(paymentsTable.isTestMode, false),
         eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
         eq(paymentsTable.status, PAYMENT_STATUS.PAID),
         gte(paymentsTable.paidAt, from),
@@ -249,6 +250,7 @@ async function buildMetrics(tenantId: string): Promise<GemeoMetricsPayload> {
       .where(
         and(
           eq(paymentsTable.tenantId, tenantId),
+          eq(paymentsTable.isTestMode, false),
           eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
           eq(paymentsTable.status, PAYMENT_STATUS.PENDING),
         ),

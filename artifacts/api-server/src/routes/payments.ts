@@ -1,7 +1,7 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
 import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, storeOrdersTable, clientsTable, commissionRulesTable, commissionsTable, tripsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
-import { eq, and, sql, asc, desc, inArray, isNull, gte, lt } from "drizzle-orm";
+import { eq, and, sql, asc, desc, inArray, isNull, gte, lt, notExists } from "drizzle-orm";
 import { formatBRL, localToday } from "@workspace/shared";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser } from "../lib/tenant";
@@ -275,7 +275,17 @@ router.get("/trips/:tripId/financial-report", async (req, res, next: NextFunctio
     const { tripId } = req.params;
 
     const tripReservations = await db.select().from(reservationsTable)
-      .where(and(eq(reservationsTable.tenantId, me.tenantId), eq(reservationsTable.tripId, tripId)));
+      .where(and(
+        eq(reservationsTable.tenantId, me.tenantId),
+        eq(reservationsTable.tripId, tripId),
+        notExists(db.select({ id: storeOrdersTable.id })
+          .from(storeOrdersTable)
+          .where(and(
+            eq(storeOrdersTable.tenantId, me.tenantId),
+            eq(storeOrdersTable.orderNumber, reservationsTable.storeOrderId),
+            eq(storeOrdersTable.stripeLivemode, false),
+          ))),
+      ));
 
     const reservationIds = tripReservations.map(r => r.id);
 
@@ -288,9 +298,24 @@ router.get("/trips/:tripId/financial-report", async (req, res, next: NextFunctio
     const tripExpenses = await db.select().from(expensesTable)
       .where(and(eq(expensesTable.tenantId, me.tenantId), eq(expensesTable.tripId, tripId)));
 
+    const testPaidByReservation = new Map<string, number>();
+    for (const payment of tripPayments) {
+      if (payment.status === PAYMENT_STATUS.PAID && payment.isTestMode && payment.reservationId) {
+        testPaidByReservation.set(
+          payment.reservationId,
+          (testPaidByReservation.get(payment.reservationId) ?? 0) + Number(payment.amount),
+        );
+      }
+    }
     const totalRevenue = tripReservations.reduce((s, r) => s + Number(r.totalValue), 0);
-    const totalPaid = tripReservations.reduce((s, r) => s + Number(r.paidValue), 0);
-    const totalPending = tripReservations.reduce((s, r) => s + Math.max(Number(r.balance), 0), 0);
+    const totalPaid = tripReservations.reduce(
+      (s, r) => s + Math.max(0, Number(r.paidValue) - (testPaidByReservation.get(r.id) ?? 0)),
+      0,
+    );
+    const totalPending = tripReservations.reduce(
+      (s, r) => s + Math.max(0, Number(r.balance) + (testPaidByReservation.get(r.id) ?? 0)),
+      0,
+    );
     const totalExpenses = tripExpenses.reduce((s, e) => s + Number(e.amount), 0);
     const netProfit = totalPaid - totalExpenses;
 
@@ -299,7 +324,7 @@ router.get("/trips/:tripId/financial-report", async (req, res, next: NextFunctio
     const cancelledCount = tripReservations.filter(r => r.status === RESERVATION_STATUS.CANCELLED).length;
 
     const revenueByMethod: Record<string, number> = {};
-    for (const p of tripPayments.filter(p => p.status === PAYMENT_STATUS.PAID)) {
+    for (const p of tripPayments.filter(p => p.status === PAYMENT_STATUS.PAID && !p.isTestMode)) {
       const m = p.paymentMethod ?? "other";
       revenueByMethod[m] = (revenueByMethod[m] ?? 0) + Number(p.amount);
     }
@@ -682,6 +707,7 @@ router.get("/payments/summary", async (req, res, next: NextFunction): Promise<vo
     let totalReceivable = 0, totalPayable = 0, overdueReceivable = 0, overduePayable = 0, collectedThisMonth = 0, paidThisMonth = 0;
 
     for (const p of payments) {
+      if (p.isTestMode) continue;
       const amount = Number(p.amount);
       if (p.type === PAYMENT_TYPE.RECEIVABLE) {
         if (p.status === PAYMENT_STATUS.PENDING) {
@@ -761,6 +787,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
     }
 
     const conditions: ReturnType<typeof eq>[] = [eq(paymentsTable.tenantId, me.tenantId)];
+    conditions.push(eq(paymentsTable.isTestMode, false));
     if (reservationId) conditions.push(eq(paymentsTable.reservationId, reservationId));
     if (status) conditions.push(eq(paymentsTable.status, parsePaymentStatus(status)));
     if (type) conditions.push(eq(paymentsTable.type, parsePaymentType(type)));

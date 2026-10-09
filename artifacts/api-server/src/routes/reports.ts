@@ -135,6 +135,7 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
           createdAt: paymentsTable.createdAt,
         }).from(paymentsTable).where(and(
           eq(paymentsTable.tenantId, tenantId),
+          eq(paymentsTable.isTestMode, false),
           gte(paymentsTable.createdAt, start),
           lte(paymentsTable.createdAt, end),
         )).limit(MAX_EXPORT_ROWS + 1),

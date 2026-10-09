@@ -2,7 +2,7 @@ import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreOrder } from "@/lib/storeApi";
 import { cleanupRoots, renderComponent } from "../../__tests__/eventSourceHarness";
-import { OrderDetail } from "./pedidos";
+import { OrderDetail, StripeTestModeBadge } from "./pedidos";
 
 const mocks = vi.hoisted(() => ({
   getOrder: vi.fn(),
@@ -92,6 +92,26 @@ function KeyedOrderDetail({ orderId }: { orderId: string }) {
 }
 
 describe("OrderDetail", () => {
+  it("clearly labels Stripe test-mode orders and leaves live or unknown mode unmarked", async () => {
+    const view = await renderComponent(createElement(StripeTestModeBadge, {
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+    }));
+    expect(view.container.textContent).toContain("Stripe · TESTE");
+
+    await view.rerender(createElement(StripeTestModeBadge, {
+      paymentProvider: "stripe",
+      stripeLivemode: true,
+    }));
+    expect(view.container.textContent).toBe("");
+
+    await view.rerender(createElement(StripeTestModeBadge, {
+      paymentProvider: "stripe",
+      stripeLivemode: null,
+    }));
+    expect(view.container.textContent).toBe("");
+  });
+
   it("keeps a late response from a previously selected order out of the current details", async () => {
     const oldOrderRequest = deferred<StoreOrder>();
     const currentOrderRequest = deferred<StoreOrder>();

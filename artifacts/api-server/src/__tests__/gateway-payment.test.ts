@@ -27,6 +27,7 @@ vi.mock("@workspace/db", () => ({
     paymentMethod: "payment_method",
     paymentStatus: "payment_status",
     paymentIntentId: "payment_intent_id",
+    stripeLivemode: "stripe_livemode",
     paidAt: "paid_at",
     status: "status",
     confirmedAt: "confirmed_at",
@@ -37,7 +38,13 @@ vi.mock("@workspace/db", () => ({
     storeOrderId: "store_order_id",
     totalValue: "total_value",
   },
-  paymentsTable: {},
+  paymentsTable: {
+    tenantId: "tenant_id",
+    orderId: "order_id",
+    gateway: "gateway",
+    transactionId: "transaction_id",
+    isTestMode: "is_test_mode",
+  },
   storesTable: {},
   tripsTable: {},
   pipelineStagesTable: {},
@@ -100,6 +107,7 @@ let selectResults: object[][] = [];
 
 function makeTx() {
   const insertedValues: Array<Record<string, unknown>> = [];
+  const updatedValues: Array<Record<string, unknown>> = [];
   return {
     select: vi.fn(() => {
       const chain: Record<string, unknown> = {};
@@ -117,11 +125,14 @@ function makeTx() {
       return chain;
     }),
     update: vi.fn(() => ({
-      set: vi.fn(() => ({
+      set: vi.fn((values: Record<string, unknown>) => {
+        updatedValues.push(values);
+        return {
         where: vi.fn(() => ({
           returning: vi.fn(() => Promise.resolve([{ id: "order-1" }])),
         })),
-      })),
+        };
+      }),
     })),
     insert: vi.fn(() => ({
       values: vi.fn((values: Record<string, unknown>) => {
@@ -130,6 +141,7 @@ function makeTx() {
       }),
     })),
     insertedValues,
+    updatedValues,
   };
 }
 
@@ -178,6 +190,19 @@ beforeEach(() => {
 });
 
 describe("applyGatewayPayment", () => {
+  it.each([
+    { label: "test", stripeLivemode: false, isTestMode: true },
+    { label: "live", stripeLivemode: true, isTestMode: false },
+  ])("persists Stripe $label mode on the order and payment", async ({ stripeLivemode, isTestMode }) => {
+    const tx = makeTx();
+    selectResults = [[ORDER], [], []];
+
+    await applyGatewayPayment(tx as any, { ...BASE_ARGS, stripeLivemode } as any);
+
+    expect(tx.insertedValues[0]).toMatchObject({ isTestMode });
+    expect(tx.updatedValues).toContainEqual(expect.objectContaining({ stripeLivemode }));
+  });
+
   it("returns a non-null result with empty reservationIds for a PAID product-only order (regression guard)", async () => {
     selectResults = [[ORDER], [], []]; // order found, no previous payments, no linked reservations
 

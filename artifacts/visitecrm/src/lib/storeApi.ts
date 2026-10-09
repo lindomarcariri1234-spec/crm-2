@@ -618,6 +618,7 @@ export interface StoreOrder extends LinkedData {
   couponCode?: string | null;
   paymentMethod?: string | null;
   paymentProvider?: string | null;
+  stripeLivemode?: boolean | null;
   paymentStatus: string;
   installments?: number | null;
   installmentAmount?: string | null;

@@ -890,6 +890,7 @@ router.get("/store/orders", async (req, res, next: NextFunction): Promise<void> 
         couponCode: storeOrdersTable.couponCode,
         paymentMethod: storeOrdersTable.paymentMethod,
         paymentProvider: storeOrdersTable.paymentProvider,
+        stripeLivemode: storeOrdersTable.stripeLivemode,
         paymentStatus: storeOrdersTable.paymentStatus,
         installments: storeOrdersTable.installments,
         installmentAmount: storeOrdersTable.installmentAmount,

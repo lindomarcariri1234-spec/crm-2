@@ -44,6 +44,26 @@ describe("canonical financial metrics", () => {
     expect(result.byTrip).toEqual([expect.objectContaining({ tripId: "t", receivedRevenue: 33.34 })]);
   });
 
+  it("excludes Stripe test-mode payments from cash received and trip totals", () => {
+    const result = calculateFinancialMetrics(sources({
+      reservations: [{
+        id: "reservation",
+        tripId: "trip",
+        status: "confirmed",
+        totalValue: "100",
+        createdAt: date("2025-02-10T12:00:00Z"),
+      }],
+      payments: [
+        { id: "live", reservationId: "reservation", type: "receivable", status: "paid", amount: "40", paidAt: date("2025-02-11T12:00:00Z"), isTestMode: false },
+        { id: "test", reservationId: "reservation", type: "receivable", status: "paid", amount: "60", paidAt: date("2025-02-11T12:00:00Z"), isTestMode: true },
+      ],
+    }), period);
+
+    expect(result.totals.receivedRevenue).toBe(40);
+    expect(result.byTrip).toEqual([expect.objectContaining({ tripId: "trip", receivedRevenue: 40 })]);
+    expect(result.diagnostics.excluded.payments).toBe(1);
+  });
+
   it("excludes cancelled/refunded rows and avoids reservation/order payment double count", () => {
     const result = calculateFinancialMetrics(sources({
       reservations: [

@@ -3286,6 +3286,7 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
         .set({
           paymentIntentId: order.existingPaymentIntentId,
           paymentProvider: "stripe",
+        stripeLivemode: existingIntent.livemode,
         })
         .where(eq(storeOrdersTable.id, order.id));
       res.json({
@@ -3318,6 +3319,7 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
       .set({
         paymentIntentId: paymentIntent.id,
         paymentProvider: "stripe",
+        stripeLivemode: paymentIntent.livemode,
       })
       .where(eq(storeOrdersTable.id, order.id));
 

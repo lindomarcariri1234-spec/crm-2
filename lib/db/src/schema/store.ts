@@ -268,6 +268,7 @@ export const storeOrdersTable = pgTable("store_orders", {
 
   paymentMethod: text("payment_method").notNull(),
   paymentProvider: text("payment_provider").notNull(),
+  stripeLivemode: boolean("stripe_livemode"),
   paymentStatus: text("payment_status").notNull().default("pending"),
 
   paymentIntentId: text("payment_intent_id"),

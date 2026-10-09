@@ -412,6 +412,7 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
         paymentIntentId,
         amount: amountReceived,
         paidAt: new Date(),
+        stripeLivemode: typeof obj["livemode"] === "boolean" ? obj["livemode"] : undefined,
       });
     });
     if (result) {
@@ -826,6 +827,7 @@ interface ApplyArgs {
   paymentIntentId: string;
   amount: number;
   paidAt: Date;
+  stripeLivemode?: boolean;
 }
 
 interface ApplyResult {
@@ -841,7 +843,11 @@ interface ApplyResult {
 }
 
 export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Promise<ApplyResult | null> {
-  const { store, gateway, transactionId, paymentIntentId, amount, paidAt } = args;
+  const { store, gateway, transactionId, paymentIntentId, amount, paidAt, stripeLivemode } = args;
+  const isTestMode = gateway === "stripe" && stripeLivemode === false;
+  const stripeModeUpdate = gateway === "stripe" && typeof stripeLivemode === "boolean"
+    ? { stripeLivemode }
+    : {};
   if (amount <= 0) return null;
 
   // Look up the order scoped to this store/tenant so we never accidentally
@@ -880,6 +886,19 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
 
   // Idempotency: if we already recorded this exact gateway transaction, stop.
   if (await paymentExistsForGatewayTx(order.tenantId, gateway, transactionId, tx)) {
+    if (gateway === "stripe" && typeof stripeLivemode === "boolean") {
+      await tx.update(storeOrdersTable)
+        .set({ stripeLivemode })
+        .where(and(eq(storeOrdersTable.id, order.id), eq(storeOrdersTable.tenantId, order.tenantId)));
+      await tx.update(paymentsTable)
+        .set({ isTestMode: !stripeLivemode })
+        .where(and(
+          eq(paymentsTable.tenantId, order.tenantId),
+          eq(paymentsTable.orderId, order.id),
+          eq(paymentsTable.gateway, gateway),
+          eq(paymentsTable.transactionId, transactionId),
+        ));
+    }
     logger.info({ paymentIntentId, gateway, transactionId }, "[webhooks] Duplicate event ignored");
     return {
       orderId: order.id,
@@ -953,6 +972,7 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
         status: STORE_ORDER_STATUS.CONFIRMED,
         confirmedAt: paidAt,
         amountRemaining: "0",
+        ...stripeModeUpdate,
       })
       .where(and(
         eq(storeOrdersTable.id, order.id),
@@ -988,6 +1008,7 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       status: PAYMENT_STATUS.PAID,
       gateway,
       transactionId,
+      isTestMode,
       description: `Pagamento ${gateway} confirmado via webhook`,
     });
     await recordOrderPaymentSettlement(tx, {
@@ -1001,6 +1022,7 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     if (isPartialPayment) {
       await tx.update(storeOrdersTable).set({
         amountRemaining: Math.max(0, totalOrderAmount - receivedAfterEvent).toFixed(2),
+        ...stripeModeUpdate,
       }).where(and(
         eq(storeOrdersTable.id, order.id),
         eq(storeOrdersTable.tenantId, order.tenantId),
@@ -1065,6 +1087,7 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       status: PAYMENT_STATUS.PAID,
       gateway,
       transactionId,
+      isTestMode,
       description: `Pagamento ${gateway} confirmado via webhook`,
     });
 
@@ -1098,6 +1121,7 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       status: PAYMENT_STATUS.PAID,
       gateway,
       transactionId,
+      isTestMode,
       description: `Pagamento ${gateway} confirmado via webhook`,
     });
   }
@@ -1118,6 +1142,7 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
   if (isPartialPayment) {
     await tx.update(storeOrdersTable).set({
       amountRemaining: Math.max(0, totalOrderAmount - receivedAfterEvent).toFixed(2),
+      ...stripeModeUpdate,
     }).where(and(
       eq(storeOrdersTable.id, order.id),
       eq(storeOrdersTable.tenantId, order.tenantId),

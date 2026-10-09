@@ -2,7 +2,7 @@ import { and, eq, gte, ilike, inArray, isNotNull, lt, ne, notExists, notInArray,
 import {
   db, commissionsTable, expensesTable, financialLedgerEntriesTable, paymentsTable,
   pmsPaymentAdjustmentsTable, pmsReservationsTable, referralCommissionsTable, referralsTable,
-  reservationsTable, tripCostsTable, usersTable,
+  reservationsTable, storeOrdersTable, tripCostsTable, usersTable,
 } from "@workspace/db";
 
 /**
@@ -16,8 +16,8 @@ export const FINANCIAL_TIMEZONE = "America/Sao_Paulo";
 
 export const FINANCIAL_METRIC_CONTRACTS = {
   grossBookedRevenue: "Eligible reservations created in the period; totalValue plus discountTotal, before discounts.",
-  bookedRevenue: "Eligible reservations created in the period; totalValue (net booked value).",
-  receivedRevenue: "Eligible receivable payments paid in the period; each payment id is counted once.",
+  bookedRevenue: "Eligible reservations created in the period; excludes reservations linked to known Stripe test-mode orders.",
+  receivedRevenue: "Eligible non-test receivable payments paid in the period; each payment id is counted once.",
   receivable: "Open receivable payments due in the period (pending, overdue, or approved); cancelled/refunded/failed payments are excluded.",
   overdueReceivable: "Open receivable payments with a due date in the selected period that is before the report generation time.",
   payable: "Open payable payments due in the period (pending, overdue, or approved).",
@@ -147,6 +147,7 @@ export function buildFinancialMetricFilters(
       eq(paymentsTable.tenantId, tenantId),
       eq(paymentsTable.type, "receivable"),
       eq(paymentsTable.status, "paid"),
+      eq(paymentsTable.isTestMode, false),
       gte(paymentsTable.paidAt, period.start),
       lt(paymentsTable.paidAt, period.end),
       isNotNull(paymentsTable.reservationId),
@@ -188,6 +189,13 @@ export function buildFinancialMetricFilters(
     reservations: and(
       eq(reservationsTable.tenantId, tenantId),
       notInArray(reservationsTable.status, ["cancelled", "refunded", "failed"]),
+      notExists(db.select({ id: storeOrdersTable.id })
+        .from(storeOrdersTable)
+        .where(and(
+          eq(storeOrdersTable.tenantId, tenantId),
+          eq(storeOrdersTable.orderNumber, reservationsTable.storeOrderId),
+          eq(storeOrdersTable.stripeLivemode, false),
+        ))),
       or(
         and(gte(reservationsTable.createdAt, period.start), lt(reservationsTable.createdAt, period.end)),
         inArray(reservationsTable.id, paidReservationsInPeriod),
@@ -195,6 +203,7 @@ export function buildFinancialMetricFilters(
     ),
     payments: and(
       eq(paymentsTable.tenantId, tenantId),
+      eq(paymentsTable.isTestMode, false),
       and(
         ne(paymentsTable.status, "cancelled"),
         ne(paymentsTable.status, "refunded"),
@@ -262,6 +271,7 @@ export function buildFinancialMetricFilters(
     users: eq(usersTable.tenantId, tenantId),
     overduePayments: and(
       eq(paymentsTable.tenantId, tenantId),
+      eq(paymentsTable.isTestMode, false),
       inArray(paymentsTable.type, ["receivable", "payable"]),
       inArray(paymentsTable.status, ["pending", "overdue", "approved"]),
       gte(paymentsTable.dueDate, period.start),
@@ -385,6 +395,7 @@ export function calculateFinancialMetrics(
   }
   for (const row of sources.payments) {
     if (!unique("payment", row)) continue;
+    if (row.isTestMode === true) { diagnostics.excluded.payments++; continue; }
     if (!eligibleRow(row)) { diagnostics.excluded.payments++; continue; }
     const type = String(row.type).toLowerCase();
     const status = String(row.status).toLowerCase();

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, numeric, integer, index, uniqueIndex, check } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, integer, boolean, index, uniqueIndex, check } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -28,6 +28,7 @@ export const paymentsTable = pgTable("payments", {
   receiptUrl: text("receipt_url"),
   gateway: text("gateway"),
   transactionId: text("transaction_id"),
+  isTestMode: boolean("is_test_mode").notNull().default(false),
   description: text("description"),
   notes: text("notes"),
   sourceExpenseId: text("source_expense_id").references(() => expensesTable.id, { onDelete: "set null" }),
