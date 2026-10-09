@@ -1,7 +1,10 @@
 import { SignUp } from "@clerk/react";
-import { CheckCircle2, Building2, Users, TrendingUp } from "lucide-react";
+import { ArrowRight, CheckCircle2, Building2, Users, TrendingUp } from "lucide-react";
+import { Link } from "wouter";
+import { getSafeRedirectTarget } from "@/lib/safe-redirect";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+const defaultRedirect = `${basePath}/`;
 
 const FEATURES = [
   { icon: Building2, text: "Perfil completo da sua agência" },
@@ -11,6 +14,13 @@ const FEATURES = [
 ];
 
 export default function SignUpPage() {
+  const redirectTarget = getSafeRedirectTarget(
+    window.location.search,
+    "redirect_url",
+    defaultRedirect,
+  );
+  const signInUrl = `${basePath}/sign-in?redirect_url=${encodeURIComponent(redirectTarget)}`;
+
   return (
     <div className="min-h-screen flex">
       <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-emerald-600 via-emerald-600/90 to-teal-700 flex-col justify-between p-12 text-white relative overflow-hidden">
@@ -84,12 +94,18 @@ export default function SignUpPage() {
 
           <div className="space-y-1">
             <h2 className="text-2xl font-bold text-foreground">Cadastrar minha agência</h2>
-            <p className="text-muted-foreground text-sm">
-              Já tem uma conta?{" "}
-              <a href={`${basePath}/sign-in`} className="text-primary font-medium hover:underline">
-                Fazer login
-              </a>
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <p className="text-muted-foreground text-sm">Já tem uma conta?</p>
+              <Link
+                href={signInUrl}
+                data-testid="auth-mode-link-sign-in"
+                aria-label="Entrar em uma conta existente"
+                className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                Entrar
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </Link>
+            </div>
           </div>
 
           <div className="flex items-start gap-3 p-4 rounded-xl bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800">
@@ -109,8 +125,8 @@ export default function SignUpPage() {
           <SignUp
             routing="path"
             path={`${basePath}/sign-up`}
-            signInUrl={`${basePath}/sign-in`}
-            fallbackRedirectUrl={`${basePath}/`}
+            signInUrl={signInUrl}
+            fallbackRedirectUrl={redirectTarget}
             oauthFlow="redirect"
             appearance={{
               elements: {

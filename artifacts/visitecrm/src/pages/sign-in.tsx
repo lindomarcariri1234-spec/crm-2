@@ -1,5 +1,6 @@
 import { SignIn } from "@clerk/react";
-import { Map, ShieldCheck, Users, TrendingUp } from "lucide-react";
+import { ArrowRight, Map, ShieldCheck, Users, TrendingUp } from "lucide-react";
+import { Link } from "wouter";
 import { getSafeRedirectTarget } from "@/lib/safe-redirect";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -18,6 +19,7 @@ export default function SignInPage() {
     "redirect_url",
     defaultRedirect,
   );
+  const signUpUrl = `${basePath}/sign-up?redirect_url=${encodeURIComponent(redirectTarget)}`;
 
   return (
     <div className="min-h-screen flex">
@@ -85,12 +87,17 @@ export default function SignInPage() {
 
           <div className="space-y-1">
             <h2 className="text-2xl font-bold text-foreground">Entrar na conta</h2>
-            <p className="text-muted-foreground text-sm">
-              Não tem conta?{" "}
-              <a href={`${basePath}/sign-up`} className="text-primary font-medium hover:underline">
-                Cadastre sua agência
-              </a>
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <p className="text-muted-foreground text-sm">Ainda não tem conta?</p>
+              <Link
+                href={signUpUrl}
+                data-testid="auth-mode-link-sign-up"
+                className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                Criar conta
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </Link>
+            </div>
           </div>
 
           <p className="text-sm text-muted-foreground">
@@ -100,7 +107,7 @@ export default function SignInPage() {
           <SignIn
             routing="path"
             path={`${basePath}/sign-in`}
-            signUpUrl={`${basePath}/sign-up`}
+            signUpUrl={signUpUrl}
             fallbackRedirectUrl={redirectTarget}
             oauthFlow="redirect"
             appearance={{
