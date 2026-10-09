@@ -765,19 +765,23 @@ function fakeBrowserFactory({
   mainHeadingMatchesMarkerByRoute = {},
   runtimeExceptionsByRoute = {},
   interactionCountByRoute = {},
+  delayedRuntimeExceptionByRoute = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
+  let executionContextId = 0;
   const calls = [];
   const contentChecks = [];
-  function emitConfiguredRuntimeException(pathname, phase) {
+  const executionContextIdByPath = new Map();
+  function emitConfiguredRuntimeException(pathname, phase, contextId) {
     const phases = runtimeExceptionsByRoute[pathname] ?? [];
     const isPromiseRejection =
       phase === "navigation" && phases.includes("promise-rejection");
     if (!phases.includes(phase) && !isPromiseRejection) return;
     listeners.get("Runtime.exceptionThrown")?.({
       exceptionDetails: {
-        exceptionId: 101,
+        exceptionId: navigationNumber + 1,
+        executionContextId: contextId,
         text: isPromiseRejection ? "Uncaught (in promise)" : "Uncaught Error",
         exception: {
           description: isPromiseRejection
@@ -808,10 +812,33 @@ function fakeBrowserFactory({
               ? requestedUrl.searchParams.get("redirect_url") ??
                 requestedUrl.href
               : requestedUrl.href;
+            const pathname = new URL(currentUrl).pathname;
+            const contextId = ++executionContextId;
+            executionContextIdByPath.set(pathname, contextId);
+            listeners.get("Runtime.executionContextCreated")?.({
+              context: { id: contextId, auxData: { isDefault: true } },
+            });
             emitConfiguredRuntimeException(
-              new URL(currentUrl).pathname,
+              pathname,
               "navigation",
+              contextId,
             );
+            const delayedSourceRoute = delayedRuntimeExceptionByRoute[pathname];
+            const delayedSourceContextId =
+              executionContextIdByPath.get(delayedSourceRoute);
+            if (delayedSourceContextId !== undefined) {
+              listeners.get("Runtime.exceptionThrown")?.({
+                exceptionDetails: {
+                  exceptionId: navigationNumber + 1,
+                  executionContextId: delayedSourceContextId,
+                  text: "Uncaught (in promise)",
+                  exception: {
+                    description:
+                      "Error: private@example.com order=customer-private-value",
+                  },
+                },
+              });
+            }
             navigationNumber += 1;
             const requestId = String(navigationNumber);
             if (requestedUrl.origin === "https://accounts.visitecrm.com") {
@@ -1058,6 +1085,44 @@ test("fails a client route on an unhandled promise rejection without exposing it
   assert.doesNotMatch(
     JSON.stringify(results),
     /private@example\.com|customer-private-value|client-private-session|Uncaught \(in promise\)/,
+  );
+});
+
+test("keeps delayed browser exceptions attached to the route that created their execution context", async () => {
+  const browser = fakeBrowserFactory({
+    delayedRuntimeExceptionByRoute: {
+      "/vouchers": "/meu-painel",
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel", "/vouchers"],
+        headers: { Cookie: "seller-private-session" },
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [
+      { route: "/meu-painel", profile: "seller", ok: false },
+      { route: "/vouchers", profile: "seller", ok: true },
+    ],
+  );
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/meu-painel: vendedor route reported an uncaught JavaScript exception/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /private@example\.com|customer-private-value|seller-private-session/,
   );
 });
 

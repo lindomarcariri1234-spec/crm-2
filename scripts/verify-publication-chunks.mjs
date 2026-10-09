@@ -1056,6 +1056,7 @@ async function runBrowserSmoke({
   const failures = [];
   const assetsByRoute = new Map();
   const requests = new Map();
+  const routeByExecutionContextId = new Map();
   const signInOrigin = signInUrl ? new URL(signInUrl, baseUrl).origin : null;
   const signInResponseDiagnostics = [];
   const routesWithRuntimeExceptions = new Set();
@@ -1116,12 +1117,21 @@ async function runBrowserSmoke({
       `${requestInfo.route}: JavaScript asset ${requestInfo.url} request failed: ${errorText}`,
     );
   });
+  client.on("Runtime.executionContextCreated", ({ context }) => {
+    if (activeRoute && Number.isInteger(context?.id)) {
+      routeByExecutionContextId.set(context.id, activeRoute);
+    }
+  });
   // Chrome reports uncaught promise rejections through the same runtime event.
-  client.on("Runtime.exceptionThrown", () => {
-    if (!activeRoute || routesWithRuntimeExceptions.has(activeRoute)) return;
-    routesWithRuntimeExceptions.add(activeRoute);
+  client.on("Runtime.exceptionThrown", ({ exceptionDetails }) => {
+    const contextRoute = routeByExecutionContextId.get(
+      exceptionDetails?.executionContextId,
+    );
+    const route = contextRoute ?? activeRoute;
+    if (!route || routesWithRuntimeExceptions.has(route)) return;
+    routesWithRuntimeExceptions.add(route);
     failures.push(
-      `${activeRoute}: ${profileLabel ?? profileName} route reported an uncaught JavaScript exception.`,
+      `${route}: ${profileLabel ?? profileName} route reported an uncaught JavaScript exception.`,
     );
   });
   client.on("Fetch.requestPaused", ({ requestId, request }) => {
