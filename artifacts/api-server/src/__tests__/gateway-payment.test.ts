@@ -193,6 +193,7 @@ describe("applyGatewayPayment", () => {
   it.each([
     { label: "test", stripeLivemode: false, isTestMode: true },
     { label: "live", stripeLivemode: true, isTestMode: false },
+    { label: "unknown", stripeLivemode: undefined, isTestMode: null },
   ])("persists Stripe $label mode on the order and payment", async ({ stripeLivemode, isTestMode }) => {
     const tx = makeTx();
     selectResults = [[ORDER], [], []];
@@ -200,7 +201,11 @@ describe("applyGatewayPayment", () => {
     await applyGatewayPayment(tx as any, { ...BASE_ARGS, stripeLivemode } as any);
 
     expect(tx.insertedValues[0]).toMatchObject({ isTestMode });
-    expect(tx.updatedValues).toContainEqual(expect.objectContaining({ stripeLivemode }));
+    if (typeof stripeLivemode === "boolean") {
+      expect(tx.updatedValues).toContainEqual(expect.objectContaining({ stripeLivemode }));
+    } else {
+      expect(tx.updatedValues.some((value) => "stripeLivemode" in value)).toBe(false);
+    }
   });
 
   it("returns a non-null result with empty reservationIds for a PAID product-only order (regression guard)", async () => {

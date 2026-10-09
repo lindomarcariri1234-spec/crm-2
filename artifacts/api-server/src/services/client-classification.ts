@@ -156,6 +156,7 @@ export async function recomputeClientClassification(
         AND COALESCE(r.client_id, p.client_id) = ${input.clientId}
         AND p.type = 'receivable' AND p.amount::numeric > 0
         AND p.paid_at IS NOT NULL AND p.status = 'paid'
+        AND p.is_test_mode = false
         AND r.status NOT IN ('cancelled', 'refunded', 'expired')
         ${periodPredicate}
     ),
@@ -188,6 +189,7 @@ export async function recomputeClientClassification(
       AND COALESCE(r.client_id, p.client_id) = ${input.clientId}
       AND p.reservation_id IS NOT NULL
       AND p.type = 'receivable' AND p.amount::numeric > 0 AND p.paid_at IS NOT NULL
+      AND p.is_test_mode = false
   `);
   const firstPaidAtValue = (firstPaidQuery as unknown as {
     rows: Array<{ first_paid_at: Date | string | null }>;
@@ -245,6 +247,7 @@ export async function recomputeClientClassification(
         AND r.status NOT IN ('cancelled', 'refunded', 'expired')
         AND p.type = 'receivable' AND p.status = 'paid'
         AND p.paid_at IS NOT NULL AND p.amount::numeric > 0
+        AND p.is_test_mode = false
       GROUP BY r.id, r.trip_id, r.total_value
     )
     SELECT COUNT(DISTINCT rn.trip_id)::int AS count
@@ -263,6 +266,7 @@ export async function recomputeClientClassification(
       AND COALESCE(r.client_id, p.client_id) = ${input.clientId}
       AND p.type = 'receivable' AND p.status = 'paid'
       AND p.amount::numeric > 0 AND p.paid_at IS NOT NULL
+      AND p.is_test_mode = false
       AND r.status NOT IN ('cancelled', 'refunded', 'expired')
   `);
   const hasPaid = Number((lifetimePaidResult as unknown as { rows: Array<{ count: number }> }).rows[0]?.count ?? 0) > 0;

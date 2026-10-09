@@ -390,7 +390,7 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
             )}
             <div className="text-xs text-muted-foreground mt-2 space-y-0.5">
               <p>Pagamento: {PAYMENT_METHODS[order.paymentMethod ?? ""] ?? order.paymentMethod ?? "Não informado"}</p>
-              <StripeTestModeBadge paymentProvider={order.paymentProvider} stripeLivemode={order.stripeLivemode} />
+              <StripeModeBadge paymentProvider={order.paymentProvider} stripeLivemode={order.stripeLivemode} />
               {order.installments && order.installments > 1 && (
                 <p>{order.installments}x de R$ {order.installmentAmount ? parseFloat(order.installmentAmount).toFixed(2) : "—"}</p>
               )}
@@ -698,14 +698,22 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
   );
 }
 
-export function StripeTestModeBadge({
+export function StripeModeBadge({
   paymentProvider,
   stripeLivemode,
 }: {
   paymentProvider?: string | null;
   stripeLivemode?: boolean | null;
 }) {
-  if (paymentProvider !== "stripe" || stripeLivemode !== false) return null;
+  if (paymentProvider !== "stripe") return null;
+  if (stripeLivemode == null) {
+    return (
+      <Badge variant="outline" data-testid="stripe-mode-unknown-badge">
+        Stripe · modo não informado
+      </Badge>
+    );
+  }
+  if (stripeLivemode) return null;
   return (
     <Badge variant="destructive" data-testid="stripe-test-mode-badge">
       Stripe · TESTE
@@ -778,7 +786,8 @@ export default function LojaPedidos() {
       PAYMENT_METHODS[o.paymentMethod ?? ""] ?? o.paymentMethod ?? "",
       o.paymentProvider === "stripe" && o.stripeLivemode === false ? "Teste"
         : o.paymentProvider === "stripe" && o.stripeLivemode === true ? "Produção"
-          : "",
+          : o.paymentProvider === "stripe" ? "Não informado"
+            : "",
       paymentLabel(o.paymentStatus, o.paymentMethod),
       statusLabel(o.status),
       new Date(o.createdAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }),
@@ -945,7 +954,7 @@ export default function LojaPedidos() {
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${paymentColor(order.paymentStatus, order.paymentMethod)}`}>
                         {CANONICAL_PAYMENT_LABELS[order.financialSummary.states.payment] ?? paymentLabel(order.paymentStatus, order.paymentMethod)}
                       </span>
-                      <StripeTestModeBadge
+                      <StripeModeBadge
                         paymentProvider={order.paymentProvider}
                         stripeLivemode={order.stripeLivemode}
                       />

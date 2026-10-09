@@ -79,6 +79,7 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
         total: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric)), 0)`,
       }).from(paymentsTable).where(and(
         eq(paymentsTable.tenantId, tenantId),
+        eq(paymentsTable.isTestMode, false),
         eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
         eq(paymentsTable.status, PAYMENT_STATUS.PENDING),
         gte(paymentsTable.dueDate, startOfToday),
@@ -91,6 +92,7 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
         total: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric)), 0)`,
       }).from(paymentsTable).where(and(
         eq(paymentsTable.tenantId, tenantId),
+        eq(paymentsTable.isTestMode, false),
         eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
         eq(paymentsTable.status, PAYMENT_STATUS.PENDING),
         lt(paymentsTable.dueDate, startOfToday),
@@ -102,6 +104,7 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
         total: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric)), 0)`,
       }).from(paymentsTable).where(and(
         eq(paymentsTable.tenantId, tenantId),
+        eq(paymentsTable.isTestMode, false),
         eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
         eq(paymentsTable.status, PAYMENT_STATUS.PENDING),
         gte(paymentsTable.dueDate, startOfToday),

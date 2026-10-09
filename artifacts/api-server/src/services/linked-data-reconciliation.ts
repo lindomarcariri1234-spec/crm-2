@@ -144,7 +144,9 @@ export async function reconcileLinkedData(tenantId: string, repair = false): Pro
   // this reconciliation restricts to receivables as its stated source.
   for (const client of clients) {
     check("client-financial");
-    const clientPayments = payments.filter(p => p.clientId === client.id && p.type === PAYMENT_TYPE.RECEIVABLE);
+    const clientPayments = payments.filter(
+      p => p.clientId === client.id && p.type === PAYMENT_TYPE.RECEIVABLE && p.isTestMode === false,
+    );
     const totalSpent = clientPayments.filter(p => p.status === PAYMENT_STATUS.PAID)
       .reduce((sum, p) => sum + Number(p.amount), 0);
     const outstandingBalance = clientPayments

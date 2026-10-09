@@ -2,7 +2,7 @@ import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreOrder } from "@/lib/storeApi";
 import { cleanupRoots, renderComponent } from "../../__tests__/eventSourceHarness";
-import { OrderDetail, StripeTestModeBadge } from "./pedidos";
+import { OrderDetail, StripeModeBadge } from "./pedidos";
 
 const mocks = vi.hoisted(() => ({
   getOrder: vi.fn(),
@@ -92,24 +92,24 @@ function KeyedOrderDetail({ orderId }: { orderId: string }) {
 }
 
 describe("OrderDetail", () => {
-  it("clearly labels Stripe test-mode orders and leaves live or unknown mode unmarked", async () => {
-    const view = await renderComponent(createElement(StripeTestModeBadge, {
+  it("labels Stripe test and unknown modes while leaving live orders unmarked", async () => {
+    const view = await renderComponent(createElement(StripeModeBadge, {
       paymentProvider: "stripe",
       stripeLivemode: false,
     }));
     expect(view.container.textContent).toContain("Stripe · TESTE");
 
-    await view.rerender(createElement(StripeTestModeBadge, {
+    await view.rerender(createElement(StripeModeBadge, {
       paymentProvider: "stripe",
       stripeLivemode: true,
     }));
     expect(view.container.textContent).toBe("");
 
-    await view.rerender(createElement(StripeTestModeBadge, {
+    await view.rerender(createElement(StripeModeBadge, {
       paymentProvider: "stripe",
       stripeLivemode: null,
     }));
-    expect(view.container.textContent).toBe("");
+    expect(view.container.textContent).toContain("Stripe · modo não informado");
   });
 
   it("keeps a late response from a previously selected order out of the current details", async () => {

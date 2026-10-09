@@ -298,22 +298,23 @@ router.get("/trips/:tripId/financial-report", async (req, res, next: NextFunctio
     const tripExpenses = await db.select().from(expensesTable)
       .where(and(eq(expensesTable.tenantId, me.tenantId), eq(expensesTable.tripId, tripId)));
 
-    const testPaidByReservation = new Map<string, number>();
+    const unverifiedPaidByReservation = new Map<string, number>();
     for (const payment of tripPayments) {
-      if (payment.status === PAYMENT_STATUS.PAID && payment.isTestMode && payment.reservationId) {
-        testPaidByReservation.set(
+      const unverifiedStripeMode = payment.gateway === "stripe" && payment.isTestMode == null;
+      if (payment.status === PAYMENT_STATUS.PAID && (payment.isTestMode === true || unverifiedStripeMode) && payment.reservationId) {
+        unverifiedPaidByReservation.set(
           payment.reservationId,
-          (testPaidByReservation.get(payment.reservationId) ?? 0) + Number(payment.amount),
+          (unverifiedPaidByReservation.get(payment.reservationId) ?? 0) + Number(payment.amount),
         );
       }
     }
     const totalRevenue = tripReservations.reduce((s, r) => s + Number(r.totalValue), 0);
     const totalPaid = tripReservations.reduce(
-      (s, r) => s + Math.max(0, Number(r.paidValue) - (testPaidByReservation.get(r.id) ?? 0)),
+      (s, r) => s + Math.max(0, Number(r.paidValue) - (unverifiedPaidByReservation.get(r.id) ?? 0)),
       0,
     );
     const totalPending = tripReservations.reduce(
-      (s, r) => s + Math.max(0, Number(r.balance) + (testPaidByReservation.get(r.id) ?? 0)),
+      (s, r) => s + Math.max(0, Number(r.balance) + (unverifiedPaidByReservation.get(r.id) ?? 0)),
       0,
     );
     const totalExpenses = tripExpenses.reduce((s, e) => s + Number(e.amount), 0);
@@ -324,7 +325,7 @@ router.get("/trips/:tripId/financial-report", async (req, res, next: NextFunctio
     const cancelledCount = tripReservations.filter(r => r.status === RESERVATION_STATUS.CANCELLED).length;
 
     const revenueByMethod: Record<string, number> = {};
-    for (const p of tripPayments.filter(p => p.status === PAYMENT_STATUS.PAID && !p.isTestMode)) {
+    for (const p of tripPayments.filter(p => p.status === PAYMENT_STATUS.PAID && p.isTestMode === false)) {
       const m = p.paymentMethod ?? "other";
       revenueByMethod[m] = (revenueByMethod[m] ?? 0) + Number(p.amount);
     }
@@ -707,7 +708,7 @@ router.get("/payments/summary", async (req, res, next: NextFunction): Promise<vo
     let totalReceivable = 0, totalPayable = 0, overdueReceivable = 0, overduePayable = 0, collectedThisMonth = 0, paidThisMonth = 0;
 
     for (const p of payments) {
-      if (p.isTestMode) continue;
+      if (p.isTestMode !== false) continue;
       const amount = Number(p.amount);
       if (p.type === PAYMENT_TYPE.RECEIVABLE) {
         if (p.status === PAYMENT_STATUS.PENDING) {

@@ -28,7 +28,7 @@ export const paymentsTable = pgTable("payments", {
   receiptUrl: text("receipt_url"),
   gateway: text("gateway"),
   transactionId: text("transaction_id"),
-  isTestMode: boolean("is_test_mode").notNull().default(false),
+  isTestMode: boolean("is_test_mode").default(false),
   description: text("description"),
   notes: text("notes"),
   sourceExpenseId: text("source_expense_id").references(() => expensesTable.id, { onDelete: "set null" }),

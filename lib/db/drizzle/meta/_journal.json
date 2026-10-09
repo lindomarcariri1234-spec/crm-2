@@ -778,6 +778,20 @@
       "when": 1809960011000,
       "tag": "0111_stripe_payment_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1809960012000,
+      "tag": "0112_stripe_unknown_legacy_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1809960013000,
+      "tag": "0113_reconcile_client_totals_after_stripe_mode",
+      "breakpoints": true
     }
   ]
 }

@@ -395,7 +395,10 @@ export function calculateFinancialMetrics(
   }
   for (const row of sources.payments) {
     if (!unique("payment", row)) continue;
-    if (row.isTestMode === true) { diagnostics.excluded.payments++; continue; }
+    if (row.isTestMode === true || (row.gateway === "stripe" && row.isTestMode == null)) {
+      diagnostics.excluded.payments++;
+      continue;
+    }
     if (!eligibleRow(row)) { diagnostics.excluded.payments++; continue; }
     const type = String(row.type).toLowerCase();
     const status = String(row.status).toLowerCase();

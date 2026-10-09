@@ -844,7 +844,9 @@ interface ApplyResult {
 
 export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Promise<ApplyResult | null> {
   const { store, gateway, transactionId, paymentIntentId, amount, paidAt, stripeLivemode } = args;
-  const isTestMode = gateway === "stripe" && stripeLivemode === false;
+  const isTestMode = gateway === "stripe"
+    ? (typeof stripeLivemode === "boolean" ? !stripeLivemode : null)
+    : false;
   const stripeModeUpdate = gateway === "stripe" && typeof stripeLivemode === "boolean"
     ? { stripeLivemode }
     : {};

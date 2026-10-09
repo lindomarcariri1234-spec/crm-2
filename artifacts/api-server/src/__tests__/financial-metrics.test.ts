@@ -55,13 +55,14 @@ describe("canonical financial metrics", () => {
       }],
       payments: [
         { id: "live", reservationId: "reservation", type: "receivable", status: "paid", amount: "40", paidAt: date("2025-02-11T12:00:00Z"), isTestMode: false },
-        { id: "test", reservationId: "reservation", type: "receivable", status: "paid", amount: "60", paidAt: date("2025-02-11T12:00:00Z"), isTestMode: true },
+        { id: "test", reservationId: "reservation", type: "receivable", status: "paid", amount: "60", paidAt: date("2025-02-11T12:00:00Z"), isTestMode: true, gateway: "stripe" },
+        { id: "unknown-legacy-stripe", reservationId: "reservation", type: "receivable", status: "paid", amount: "70", paidAt: date("2025-02-11T12:00:00Z"), isTestMode: null, gateway: "stripe" },
       ],
     }), period);
 
     expect(result.totals.receivedRevenue).toBe(40);
     expect(result.byTrip).toEqual([expect.objectContaining({ tripId: "trip", receivedRevenue: 40 })]);
-    expect(result.diagnostics.excluded.payments).toBe(1);
+    expect(result.diagnostics.excluded.payments).toBe(2);
   });
 
   it("excludes cancelled/refunded rows and avoids reservation/order payment double count", () => {

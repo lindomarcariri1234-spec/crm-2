@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { recomputeClientClassification, resolveClassification, validateClientClassificationSettings } from "./client-classification";
 
 describe("client classification precedence", () => {
@@ -81,5 +82,9 @@ describe("client classification dry run", () => {
     expect(update).not.toHaveBeenCalled();
     expect(insert).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledTimes(5);
+    const paymentQueries = execute.mock.calls
+      .map(([query]) => new PgDialect().sqlToQuery(query as any).sql)
+      .join("\n");
+    expect(paymentQueries.split("p.is_test_mode = false").length - 1).toBe(4);
   });
 });
