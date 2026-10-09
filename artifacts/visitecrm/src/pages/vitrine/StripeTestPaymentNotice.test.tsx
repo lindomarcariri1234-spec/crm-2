@@ -17,6 +17,19 @@ describe("StripeTestPaymentNotice", () => {
     expect(markup).toContain("Nenhuma cobrança real foi realizada neste pedido.");
   });
 
+  it("uses reservation-specific wording in a customer's reservation history", () => {
+    const markup = renderToStaticMarkup(
+      createElement(StripeTestPaymentNotice, {
+        paymentProvider: "stripe",
+        stripeLivemode: false,
+        context: "reservation",
+      }),
+    );
+
+    expect(markup).toContain("Nenhuma cobrança real foi realizada nesta reserva.");
+    expect(markup).not.toContain("Nenhuma cobrança real foi realizada neste pedido.");
+  });
+
   it.each([
     ["live Stripe order", "stripe", true],
     ["unknown Stripe mode", "stripe", null],

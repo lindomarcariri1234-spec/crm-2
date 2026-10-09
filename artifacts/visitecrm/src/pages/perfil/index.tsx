@@ -76,6 +76,7 @@ import {
 } from "lucide-react";
 import { formatCurrencyBRL as fmtCurrency, formatDateShort } from "@/lib/utils";
 import { formatBRL, localToday } from "@workspace/shared";
+import { StripeTestPaymentNotice } from "../vitrine/StripeTestPaymentNotice";
 
 const STATUS_MAP: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   [RESERVATION_STATUS.PENDING]:   { label: "Aguardando",  variant: "secondary" },
@@ -304,6 +305,12 @@ function ReservationCard({
                 {downloading ? "Gerando..." : "Baixar comprovante"}
               </Button>
             </div>}
+            <StripeTestPaymentNotice
+              className="mt-3"
+              context="reservation"
+              paymentProvider={r.paymentProvider}
+              stripeLivemode={r.stripeLivemode}
+            />
           </div>
         </div>
       </CardContent>

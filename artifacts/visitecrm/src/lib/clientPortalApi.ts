@@ -13,6 +13,8 @@ export interface ClientPortalReservation {
   financialSummary: FinancialSummary;
   seatsCount: number;
   paymentMethod: string | null;
+  paymentProvider: string | null;
+  stripeLivemode: boolean | null;
   storeOrderId: string | null;
   createdAt: string;
   tripName: string;

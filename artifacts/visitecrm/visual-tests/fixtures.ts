@@ -171,6 +171,8 @@ export const visualProfile: ClientPortalProfile = {
       },
       seatsCount: 2,
       paymentMethod: "pix",
+      paymentProvider: null,
+      stripeLivemode: null,
       storeOrderId: "visual-order-fixture",
       createdAt: "2026-08-01T12:00:00.000Z",
       tripName: visualProduct.name,

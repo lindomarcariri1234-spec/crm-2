@@ -428,6 +428,28 @@ for (const viewport of widths) {
   }
 }
 
+test("customer reservation history labels only Stripe test-mode payments", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(
+    "/visual-tests/index.html?scenario=perfil&reservationModeFixtures=true",
+  );
+  const reservationsTab = page.getByTestId("tab-reservas");
+  await expect(reservationsTab).toBeVisible();
+  await reservationsTab.click();
+
+  await expect(page.getByText("Reserva Stripe em modo de teste", { exact: true })).toBeVisible();
+  await expect(page.getByText("Reserva Stripe em produção", { exact: true })).toBeVisible();
+  await expect(page.getByText("Reserva Stripe sem modo conhecido", { exact: true })).toBeVisible();
+  await expect(page.getByText("Reserva com pagamento manual", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("stripe-test-payment-warning")).toHaveCount(1);
+  await expect(
+    page.getByText("Nenhuma cobrança real foi realizada nesta reserva.", { exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByText("Nenhuma cobrança real foi realizada neste pedido.", { exact: true }),
+  ).toHaveCount(0);
+});
+
 for (const stripeMode of stripeThreeDSModes) {
   test(`3DS return and public tracking preserve the no-charge notice for ${stripeMode.label}`, async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });

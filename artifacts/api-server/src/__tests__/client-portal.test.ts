@@ -724,14 +724,39 @@ describe("GET /api/client/me", () => {
       voucherCode: "VCHR-0001",
       totalValue: "1200.00",
       paidValue: "600.00",
+      balance: "600.00",
+      depositAmount: null,
+      discountTotal: "0.00",
       paymentMethod: "pix",
-      storeOrderId: null,
+      storeOrderId: "ORD-001",
       createdAt: new Date("2025-01-10T08:00:00Z"),
       tripName: "Nordeste Express",
       tripDestination: "Fortaleza, CE",
       tripDepartureDate: new Date("2025-07-10T12:00:00Z"),
       tripReturnDate: new Date("2025-07-17T12:00:00Z"),
       tripType: "excursao",
+    };
+    const fakeStoreOrder = {
+      id: "store-order-001",
+      orderNumber: "ORD-001",
+      tenantId: "tenant-001",
+      status: "confirmed",
+      paymentStatus: "partial",
+      subtotal: "1200.00",
+      discountAmount: "0.00",
+      totalAmount: "1200.00",
+      depositAmount: null,
+      amountRemaining: "600.00",
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+    };
+    const fakePaymentRow = {
+      id: "payment-001",
+      orderId: "store-order-001",
+      reservationId: "res-001",
+      amount: "600.00",
+      status: "paid",
+      type: "receivable",
     };
 
     const fakeReferralRow = {
@@ -752,14 +777,8 @@ describe("GET /api/client/me", () => {
       .mockReturnValueOnce(buildWhereResult()) // #1 user
       .mockReturnValueOnce(buildWhereResult()) // #2 tenant
       .mockReturnValueOnce(buildWhereResult()) // #3 client
-      .mockReturnValueOnce(buildWhereResult([{
-        id: "payment-001",
-        orderId: null,
-        reservationId: "res-001",
-        amount: "600.00",
-        status: "paid",
-        type: "receivable",
-      }])); // #4 canonical reservation payment
+      .mockReturnValueOnce(buildWhereResult([fakeStoreOrder])) // #4 linked store order
+      .mockReturnValueOnce(buildWhereResult([fakePaymentRow])); // #5 canonical reservation payment
 
     // reservations: innerJoin(...).where(...).orderBy(...)
     mockOrderBy.mockResolvedValueOnce([fakeReservationRow]);
@@ -768,7 +787,7 @@ describe("GET /api/client/me", () => {
     mockWhere
       .mockReturnValueOnce(Object.assign(Promise.resolve([{
         id: "payment-001",
-        orderId: null,
+        orderId: "store-order-001",
         reservationId: "res-001",
         amount: "600.00",
         status: "paid",
@@ -780,7 +799,7 @@ describe("GET /api/client/me", () => {
       }))
       .mockReturnValueOnce(Object.assign(Promise.resolve([{
         id: "payment-001",
-        orderId: null,
+        orderId: "store-order-001",
         reservationId: "res-001",
         amount: "600.00",
         status: "paid",
@@ -792,7 +811,7 @@ describe("GET /api/client/me", () => {
       }))
       .mockReturnValueOnce(Object.assign(Promise.resolve([{
         id: "payment-001",
-        orderId: null,
+        orderId: "store-order-001",
         reservationId: "res-001",
         amount: "600.00",
         status: "paid",
@@ -824,6 +843,8 @@ describe("GET /api/client/me", () => {
     expect(res.body.reservations).toHaveLength(1);
     expect(res.body.reservations[0]).toMatchObject({
       id: "res-001",
+      paymentProvider: "stripe",
+      stripeLivemode: false,
       totalValue: 1200,
       paidValue: 600,
       tripName: "Nordeste Express",

@@ -82,8 +82,68 @@ function visualThreeDSOrder() {
   };
 }
 
+function visualProfileWithStripeModeReservations() {
+  const sampleReservation = visualProfile.reservations[0];
+  if (!sampleReservation) return visualProfile;
+
+  const modeCases = [
+    {
+      id: "visual-reservation-stripe-test",
+      tripName: "Reserva Stripe em modo de teste",
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+    },
+    {
+      id: "visual-reservation-stripe-live",
+      tripName: "Reserva Stripe em produção",
+      paymentProvider: "stripe",
+      stripeLivemode: true,
+    },
+    {
+      id: "visual-reservation-stripe-unknown",
+      tripName: "Reserva Stripe sem modo conhecido",
+      paymentProvider: "stripe",
+      stripeLivemode: null,
+    },
+    {
+      id: "visual-reservation-manual",
+      tripName: "Reserva com pagamento manual",
+      paymentProvider: "manual",
+      stripeLivemode: false,
+    },
+  ] as const;
+
+  return {
+    ...visualProfile,
+    reservations: modeCases.map((mode) => ({
+      ...sampleReservation,
+      id: mode.id,
+      reservationNumber: mode.id,
+      voucherCode: `VCH-${mode.id}`,
+      tripName: mode.tripName,
+      paymentMethod: mode.paymentProvider === "manual" ? "pix" : "credit_card",
+      paymentProvider: mode.paymentProvider,
+      stripeLivemode: mode.stripeLivemode,
+      totalValue: sampleReservation.financialSummary.totalAmount,
+      paidValue: sampleReservation.financialSummary.totalAmount,
+      balance: 0,
+      financialSummary: {
+        ...sampleReservation.financialSummary,
+        amountPaid: sampleReservation.financialSummary.totalAmount,
+        amountRemaining: 0,
+        reservationValid: true,
+      },
+      storeOrderId: mode.id,
+    })),
+  };
+}
+
 function payloadFor(pathname: string, method: string, requestBody?: unknown): unknown {
-  if (pathname === "/api/client/me") return visualProfile;
+  if (pathname === "/api/client/me") {
+    return new URLSearchParams(window.location.search).get("reservationModeFixtures") === "true"
+      ? visualProfileWithStripeModeReservations()
+      : visualProfile;
+  }
   if (pathname === "/api/client/me/referrals") return profileReferrals;
   if (pathname === "/api/client/me/referral-campaign") {
     return {

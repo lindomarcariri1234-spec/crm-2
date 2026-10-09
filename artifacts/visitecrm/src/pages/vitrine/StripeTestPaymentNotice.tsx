@@ -4,6 +4,7 @@ type StripeTestPaymentNoticeProps = {
   paymentProvider?: string | null;
   stripeLivemode?: boolean | null;
   className?: string;
+  context?: "order" | "reservation";
 };
 
 type StripePaymentMode = Pick<StripeTestPaymentNoticeProps, "paymentProvider" | "stripeLivemode">;
@@ -16,6 +17,7 @@ export function StripeTestPaymentNotice({
   paymentProvider,
   stripeLivemode,
   className,
+  context = "order",
 }: StripeTestPaymentNoticeProps) {
   if (!isStripeTestPayment({ paymentProvider, stripeLivemode })) return null;
 
@@ -28,7 +30,11 @@ export function StripeTestPaymentNotice({
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
       <div>
         <p className="font-semibold">Pagamento Stripe em modo de teste</p>
-        <p>Nenhuma cobrança real foi realizada neste pedido.</p>
+        <p>
+          {context === "reservation"
+            ? "Nenhuma cobrança real foi realizada nesta reserva."
+            : "Nenhuma cobrança real foi realizada neste pedido."}
+        </p>
       </div>
     </div>
   );
