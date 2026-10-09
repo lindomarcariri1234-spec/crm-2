@@ -79,6 +79,8 @@ import {
   dispatchTripRestorationNotification,
   dispatchReferralReversedEmail,
   enqueueReservationCancellationEmail,
+  buildReservationConfirmationEmailHtml,
+  buildWelcomeCredentialsEmailHtml,
 } from "../queues/email-helpers.js";
 
 function makeSelectQuery(row: Record<string, unknown>) {
@@ -248,6 +250,98 @@ describe("enqueueReservationCancellationEmail", () => {
 
     expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockDbInsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildReservationConfirmationEmailHtml", () => {
+  const baseProps = {
+    reservationNumber: "RES-2026-0042",
+    voucherCode: "VCHR-0042",
+    clientName: "João da Silva",
+    clientCpf: "",
+    clientEmail: "joao@example.com",
+    clientPhone: "",
+    tripTitle: "Rota das Falésias",
+    destination: "Canoa Quebrada",
+    departureDate: "01/08/2026",
+    duration: "",
+    seats: ["12"],
+    totalAmount: 1250.5,
+    amountPaid: 1250.5,
+    amountPending: 0,
+    paymentMethod: "credit_card",
+    paymentStatus: "paid" as const,
+    agencyName: "Cariri Turismo",
+    agencyLogo: "",
+    agencyPhone: "",
+    agencyEmail: "contato@cariri.example",
+    agencyWebsite: "https://cariri.example",
+    voucherUrl: "https://cariri.example/reserva/VCHR-0042",
+    consultUrl: "https://cariri.example/reservas",
+    whatsappUrl: "https://wa.me/5588999991234",
+  };
+
+  it("states that a Stripe test-mode reservation made no real charge", () => {
+    const html = buildReservationConfirmationEmailHtml({
+      ...baseProps,
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+    });
+
+    expect(html).toContain("Pagamento Stripe em modo de teste");
+    expect(html).toContain("Nenhuma cobrança real foi realizada nesta reserva.");
+    expect(html).toContain("<h2>Reserva Confirmada!");
+  });
+
+  it.each([
+    ["live mode", "stripe", true],
+    ["unknown Stripe mode", "stripe", null],
+    ["non-Stripe payment", "manual", false],
+  ])("does not label %s as a test payment", (_label, paymentProvider, stripeLivemode) => {
+    const html = buildReservationConfirmationEmailHtml({
+      ...baseProps,
+      paymentProvider,
+      stripeLivemode,
+    });
+
+    expect(html).not.toContain("Pagamento Stripe em modo de teste");
+    expect(html).not.toContain("Nenhuma cobrança real foi realizada nesta reserva.");
+  });
+});
+
+describe("buildWelcomeCredentialsEmailHtml", () => {
+  const baseProps = {
+    clientName: "João da Silva",
+    clientEmail: "joao@example.com",
+    setupUrl: "https://cariri.example/setup",
+    loginUrl: "https://cariri.example/login",
+    agencyName: "Cariri Turismo",
+  };
+
+  it("states that a Stripe test-mode order made no real charge", () => {
+    const html = buildWelcomeCredentialsEmailHtml({
+      ...baseProps,
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+    });
+
+    expect(html).toContain("Pagamento Stripe em modo de teste");
+    expect(html).toContain("Nenhuma cobrança real foi realizada neste pedido.");
+  });
+
+  it.each([
+    ["live mode", "stripe", true],
+    ["unknown Stripe mode", "stripe", null],
+    ["non-Stripe payment", "manual", false],
+  ])("does not label %s as a test payment", (_label, paymentProvider, stripeLivemode) => {
+    const html = buildWelcomeCredentialsEmailHtml({
+      ...baseProps,
+      paymentProvider,
+      stripeLivemode,
+    });
+
+    expect(html).not.toContain("Pagamento Stripe em modo de teste");
+    expect(html).not.toContain("Nenhuma cobrança real foi realizada neste pedido.");
   });
 });
 

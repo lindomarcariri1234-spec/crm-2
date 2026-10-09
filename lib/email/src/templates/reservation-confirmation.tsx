@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { isStripeTestPaymentMode } from './stripe-test-payment'
 import {
   Html,
   Head,
@@ -39,6 +40,8 @@ export interface ReservationConfirmationEmailProps {
   amountPending: number
   paymentMethod: string
   paymentStatus: 'pending' | 'partial' | 'paid'
+  paymentProvider?: string | null
+  stripeLivemode?: boolean | null
   /** Referral discount amount applied to this reservation (> 0 when present). */
   discountReferralAmount?: number
   /** Percentage value of the referral discount (e.g. 5 for 5%), only set when the discount type is "percentage". */
@@ -76,6 +79,8 @@ export function ReservationConfirmationEmail({
   amountPending,
   paymentMethod,
   paymentStatus,
+  paymentProvider,
+  stripeLivemode,
   discountReferralAmount,
   discountReferralPercent,
   discountCouponAmount,
@@ -242,6 +247,13 @@ export function ReservationConfirmationEmail({
               {paymentStatus === 'paid' && (
                 <div style={alertSuccess}>
                   ✓ Pagamento confirmado!
+                </div>
+              )}
+
+              {isStripeTestPaymentMode({ paymentProvider, stripeLivemode }) && (
+                <div role="status" style={stripeTestPaymentWarning}>
+                  <strong>Pagamento Stripe em modo de teste</strong>
+                  <p>Nenhuma cobrança real foi realizada nesta reserva.</p>
                 </div>
               )}
 
@@ -663,6 +675,17 @@ const alertSuccess: React.CSSProperties = {
   fontSize: '14px',
   color: '#065f46',
   marginTop: '12px',
+}
+
+const stripeTestPaymentWarning: React.CSSProperties = {
+  backgroundColor: '#fff7ed',
+  border: '1px solid #fdba74',
+  borderRadius: '8px',
+  color: '#9a3412',
+  fontSize: '14px',
+  lineHeight: '1.5',
+  marginTop: '12px',
+  padding: '12px 16px',
 }
 
 const stepsList: React.CSSProperties = {

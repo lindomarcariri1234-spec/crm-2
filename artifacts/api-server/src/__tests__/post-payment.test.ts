@@ -24,6 +24,8 @@ vi.mock("@workspace/db", () => ({
     clientId: "client_id",
     customerName: "customer_name",
     customerEmail: "customer_email",
+    paymentProvider: "payment_provider",
+    stripeLivemode: "stripe_livemode",
   },
   reservationsTable: {
     id: "id",
@@ -235,6 +237,26 @@ describe("runPostPaymentSideEffects", () => {
         name: "João Silva",
         tenantId: "tenant-1",
         agencyName: "Minha Loja",
+      }),
+    );
+  });
+
+  it("passes the saved Stripe test mode to the new portal welcome email", async () => {
+    installSelectQueue([
+      [{ ...ORDER, paymentProvider: "stripe", stripeLivemode: false }],
+      [ADMIN_USER],
+      [{ id: "res-1" }],
+      [ADMIN_USER],
+      [],
+      [STORE],
+    ]);
+
+    await runPostPaymentSideEffects("order-1");
+
+    expect(mockEnsurePortalAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentProvider: "stripe",
+        stripeLivemode: false,
       }),
     );
   });

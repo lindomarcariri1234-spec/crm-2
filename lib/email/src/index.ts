@@ -1,5 +1,7 @@
 export { ReservationConfirmationEmail } from './templates/reservation-confirmation';
 export type { ReservationConfirmationEmailProps } from './templates/reservation-confirmation';
+export { isStripeTestPaymentMode } from './templates/stripe-test-payment';
+export type { StripePaymentMode } from './templates/stripe-test-payment';
 export { ReservationCancellationEmail } from './templates/reservation-cancellation';
 export type { ReservationCancellationEmailProps } from './templates/reservation-cancellation';
 export { sendReservationConfirmationEmail, sendReservationCancellationEmail, sendBirthdayEmail, renderBirthdayEmail, sendLoyaltyTierUpgradeEmail, sendManifestEmail, sendWelcomeCredentialsEmail, sendReminderHtmlEmail, sendNewBookingNotificationEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendRedisAlertEmail, sendRedisRecoveryEmail, sendRedisDailyLimitAlertEmail, sendReferralWelcomeEmail, sendReferralTierUpgradeEmail, sendReferralReversedEmail, sendNpsSurveyEmail, renderNpsSurveyEmail, sendReferralLoyaltyPointsEmail, sendAbandonedReferralAlertEmail, renderFavoriteLowAvailabilityEmail } from './service';
