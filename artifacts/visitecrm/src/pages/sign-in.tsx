@@ -19,7 +19,8 @@ export default function SignInPage() {
     "redirect_url",
     defaultRedirect,
   );
-  const signUpUrl = `${basePath}/sign-up?redirect_url=${encodeURIComponent(redirectTarget)}`;
+  const signUpRoute = `/sign-up?redirect_url=${encodeURIComponent(redirectTarget)}`;
+  const signUpUrl = `${basePath}${signUpRoute}`;
 
   return (
     <div className="min-h-screen flex">
@@ -90,7 +91,7 @@ export default function SignInPage() {
             <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
               <p className="text-muted-foreground text-sm">Ainda não tem conta?</p>
               <Link
-                href={signUpUrl}
+                href={signUpRoute}
                 data-testid="auth-mode-link-sign-up"
                 className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >

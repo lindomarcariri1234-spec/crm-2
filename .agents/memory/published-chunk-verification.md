@@ -20,3 +20,9 @@ On GitHub-hosted Ubuntu runners, installing `chromium` through apt can select Ca
 **Why:** The Snap wrapper caused the published chunk check to time out before opening a page target; the runner's existing Chrome starts normally.
 
 **How to apply:** use the `GITHUB_ACTIONS` environment to order browser candidates for trusted CI, and keep Replit/local browser selection unchanged.
+
+The Replit workspace may have the Playwright package without the matching browser binary in its cache. The screenshot service uses a separate browser, so successful visual captures do not prove a script-spawned Chromium/CDP browser can start.
+
+**Why:** Local Playwright launch attempts can fail on a missing executable even when the app preview renders correctly.
+
+**How to apply:** use screenshots to verify static rendering; treat executable-browser smoke checks as locally unverified until a browser binary is available, and rely on CI for that check.

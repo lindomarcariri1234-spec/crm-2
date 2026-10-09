@@ -67,7 +67,7 @@ function ClerkSignUpPreview() {
           <div className="space-y-1.5">
             <label htmlFor="improved-password" className="text-xs font-medium">Senha</label>
             <div className="flex h-9 items-center rounded-md border bg-background px-3">
-              <input id="improved-password" readOnly type="password" value="senha12345" className="min-w-0 flex-1 bg-transparent text-xs outline-none" />
+              <input id="improved-password" readOnly type="password" placeholder="Sua senha" className="min-w-0 flex-1 bg-transparent text-xs outline-none" />
               <Eye className="h-4 w-4 text-muted-foreground" />
             </div>
           </div>
