@@ -1489,6 +1489,62 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
     });
   });
 
+  it("rejects unsupported card installment requests instead of silently charging in one payment", async () => {
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod: "credit_card",
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: null,
+      }]);
+
+    const response = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({
+        orderNumber: FAKE_ORDER.orderNumber,
+        paymentToken: "checkout-token",
+        installments: "2",
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("STRIPE_INSTALLMENTS_UNAVAILABLE");
+    expect(mockStripeCreate).not.toHaveBeenCalled();
+    expect(mockStripeRetrieve).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("allows a single payment but does not enable an installment plan on Stripe", async () => {
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod: "credit_card",
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: null,
+      }]);
+    mockStripeCreate.mockResolvedValueOnce({
+      id: "pi_card_single",
+      client_secret: "pi_card_single_secret",
+      payment_method_types: ["card"],
+      livemode: false,
+    });
+
+    const response = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({
+        orderNumber: FAKE_ORDER.orderNumber,
+        paymentToken: "checkout-token",
+        installmentCount: 1,
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockStripeCreate).toHaveBeenCalledWith(
+      expect.not.objectContaining({ payment_method_options: expect.anything() }),
+      expect.any(Object),
+    );
+  });
+
   it.each([
     ["pix", "pi_pix", "pi_pix_secret"],
     ["boleto", "pi_boleto", "pi_boleto_secret"],

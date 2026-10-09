@@ -3235,7 +3235,12 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
       next(new ValidationError("Chave pública do Stripe não configurada", "STRIPE_NOT_CONFIGURED")); return;
     }
 
-    const body = (req.body ?? {}) as { orderNumber?: unknown; paymentToken?: unknown };
+    const body = (req.body ?? {}) as {
+      orderNumber?: unknown;
+      paymentToken?: unknown;
+      installments?: unknown;
+      installmentCount?: unknown;
+    };
     const orderNumber = typeof body.orderNumber === "string" ? body.orderNumber.trim() : "";
     const paymentToken = typeof body.paymentToken === "string" ? body.paymentToken.trim() : "";
 
@@ -3286,6 +3291,31 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
     if (!stripePaymentMethod) {
       next(new ValidationError("Forma de pagamento não suportada pela Stripe", "STRIPE_PAYMENT_METHOD_UNSUPPORTED"));
       return;
+    }
+
+    // Stripe's documented installment products do not support Brazilian
+    // card installments. Never silently turn a requested multi-installment
+    // payment into a one-time charge; accept only an explicit 1x/no-installment
+    // value until Stripe confirms support for this account and card market.
+    const requestedInstallments = body.installmentCount ?? body.installments;
+    if (requestedInstallments !== undefined && requestedInstallments !== null && requestedInstallments !== "") {
+      const installmentCount =
+        typeof requestedInstallments === "number"
+          ? requestedInstallments
+          : typeof requestedInstallments === "string" && /^\d+$/.test(requestedInstallments.trim())
+            ? Number(requestedInstallments.trim())
+            : NaN;
+      if (!Number.isInteger(installmentCount) || installmentCount < 1) {
+        next(new ValidationError("Número de parcelas inválido", "INVALID_INSTALLMENT_COUNT"));
+        return;
+      }
+      if (installmentCount > 1) {
+        next(new ValidationError(
+          "Parcelamento no cartão não está habilitado para esta configuração Stripe",
+          "STRIPE_INSTALLMENTS_UNAVAILABLE",
+        ));
+        return;
+      }
     }
 
     const Stripe = (await import("stripe")).default;

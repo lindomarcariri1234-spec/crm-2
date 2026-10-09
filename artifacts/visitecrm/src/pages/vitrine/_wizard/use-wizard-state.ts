@@ -28,7 +28,6 @@ export type WizardForm = {
   cardName: string;
   cardExpiry: string;
   cardCvv: string;
-  installments: string;
   depositAmount: string;
   partnerSelectedDate: string;
   partnerSelectedTime: string;
@@ -241,7 +240,6 @@ export function useWizardState({
     cardName: "",
     cardExpiry: "",
     cardCvv: "",
-    installments: "1",
     depositAmount: "",
     partnerSelectedDate: "",
     partnerSelectedTime: "",

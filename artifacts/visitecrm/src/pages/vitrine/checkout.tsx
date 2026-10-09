@@ -327,7 +327,6 @@ function CardPayment({
     cardName: string;
     cardExpiry: string;
     cardCvv: string;
-    installments: string;
     depositAmount: string;
   };
   paymentMethod: string;
@@ -416,20 +415,6 @@ function CardPayment({
               maxLength={4}
             />
           </div>
-        </div>
-        <div className="space-y-1">
-          <Label>Parcelamento</Label>
-          <select
-            value={form.installments}
-            onChange={(e) => set("installments", e.target.value)}
-            className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            {[1, 2].map((n) => (
-              <option key={n} value={String(n)}>
-                {n}x sem juros
-              </option>
-            ))}
-          </select>
         </div>
       </div>
       <p className="text-xs text-muted-foreground text-center">
@@ -565,7 +550,6 @@ export default function VitrineCheckout({
       cardName: "",
       cardExpiry: "",
       cardCvv: "",
-      installments: "1",
       depositAmount: "",
     };
   });
@@ -1915,7 +1899,6 @@ export default function VitrineCheckout({
                             cardName: form.cardName,
                             cardExpiry: form.cardExpiry,
                             cardCvv: form.cardCvv,
-                            installments: form.installments,
                             depositAmount: form.depositAmount,
                           }}
                           set={set}

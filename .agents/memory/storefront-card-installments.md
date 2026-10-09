@@ -3,8 +3,8 @@ name: Storefront card installments
 description: Policy for offering credit-card installment plans in the public reservation wizard.
 ---
 
-Do not advertise a fixed Brazilian card-installment plan in the storefront until support for the configured Stripe account is verified. Prefer Stripe-controlled payment UI over a local selector that does not affect the charge.
+Do not advertise or enable Brazilian card installments unless Stripe's published support and the configured account both confirm eligibility. Stripe's published installment products currently cover Mexico, Japan, and selected Mastercard Installments markets, not Brazilian-issued cards; fail closed for BRL storefront card payments.
 
-**Why:** The old 1x/2x controls changed only local UI state and were never sent to the payment API; generic Stripe documentation did not establish installment eligibility for this account.
+**Why:** Stripe's official installments documentation does not list Brazil, and its Brazil payment-method support page does not establish Brazilian installment eligibility. The old 1x/2x controls also changed only local UI state and were never sent to the payment API.
 
-**How to apply:** Before adding installments, verify account and payment-method support, then carry the selected schedule through both the wizard and the server-created PaymentIntent. Until then, show only Stripe-supported payment options without promising installments.
+**How to apply:** Recheck Stripe's official country/product support and the actual account's eligible plans before adding installment UI. Until both confirm support, do not set `payment_method_options.card.installments.enabled`, and reject requests for more than one installment rather than silently charging once.
