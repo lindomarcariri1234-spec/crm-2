@@ -772,12 +772,17 @@ function fakeBrowserFactory({
   const contentChecks = [];
   function emitConfiguredRuntimeException(pathname, phase) {
     const phases = runtimeExceptionsByRoute[pathname] ?? [];
-    if (!phases.includes(phase)) return;
+    const isPromiseRejection =
+      phase === "navigation" && phases.includes("promise-rejection");
+    if (!phases.includes(phase) && !isPromiseRejection) return;
     listeners.get("Runtime.exceptionThrown")?.({
       exceptionDetails: {
-        text: "Uncaught Error",
+        exceptionId: 101,
+        text: isPromiseRejection ? "Uncaught (in promise)" : "Uncaught Error",
         exception: {
-          description: "private@example.com token=must-not-be-logged",
+          description: isPromiseRejection
+            ? "Error: private@example.com order=customer-private-value"
+            : "private@example.com token=must-not-be-logged",
         },
       },
     });
@@ -1021,6 +1026,38 @@ test("reports uncaught browser exceptions for the active profile and route witho
   assert.doesNotMatch(
     output,
     /private@example\.com|must-not-be-logged|seller-private-session|admin-private-session|client-private-session/,
+  );
+});
+
+test("fails a client route on an unhandled promise rejection without exposing its payload", async () => {
+  const browser = fakeBrowserFactory({
+    runtimeExceptionsByRoute: { "/perfil": ["promise-rejection"] },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "client",
+        label: "cliente",
+        paths: ["/perfil"],
+        headers: { Cookie: "client-private-session" },
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.equal(results[0].ok, false);
+  assert.equal(results[0].profile, "client");
+  assert.equal(results[0].route, "/perfil");
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/perfil: cliente route reported an uncaught JavaScript exception/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /private@example\.com|customer-private-value|client-private-session|Uncaught \(in promise\)/,
   );
 });
 

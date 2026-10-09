@@ -1116,6 +1116,7 @@ async function runBrowserSmoke({
       `${requestInfo.route}: JavaScript asset ${requestInfo.url} request failed: ${errorText}`,
     );
   });
+  // Chrome reports uncaught promise rejections through the same runtime event.
   client.on("Runtime.exceptionThrown", () => {
     if (!activeRoute || routesWithRuntimeExceptions.has(activeRoute)) return;
     routesWithRuntimeExceptions.add(activeRoute);
