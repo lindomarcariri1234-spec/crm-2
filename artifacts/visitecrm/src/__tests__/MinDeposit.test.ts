@@ -49,6 +49,13 @@ const createOrderSpy = vi.fn().mockResolvedValue({
   amountRemaining: null,
   paymentToken: null,
 });
+const createPaymentIntentSpy = vi.fn().mockResolvedValue({
+  clientSecret: "pi_test_intent_secret",
+  paymentIntentId: "pi_test_intent",
+  publishableKey: "pk_test_store",
+  stripeLivemode: false,
+});
+const getOrderSpy = vi.fn().mockImplementation(() => new Promise(() => {}));
 
 vi.mock("@/lib/storeApi", () => ({
   PublicApiError: class PublicApiError extends Error {
@@ -64,6 +71,8 @@ vi.mock("@/lib/storeApi", () => ({
     getPartnerInfo: () => new Promise(() => {}),
     getTripSeatMap: () => new Promise(() => {}),
     createOrder: (...args: unknown[]) => createOrderSpy(...args),
+    createPaymentIntent: (...args: unknown[]) => createPaymentIntentSpy(...args),
+    getOrder: (...args: unknown[]) => getOrderSpy(...args),
   },
 }));
 
@@ -281,5 +290,226 @@ describe("MinDeposit — depositAmount in createOrder payload", () => {
     const payload = createOrderSpy.mock.calls[0][1] as Record<string, unknown>;
     expect(typeof payload.depositAmount).toBe("number");
     expect(payload.depositAmount).toBe(150.5);
+  });
+});
+
+describe("reservation wizard Stripe card checkout", () => {
+  const sessionValues = new Map<string, string>();
+
+  beforeEach(() => {
+    getProductFn.mockResolvedValue(PRODUCT_FIXTURE);
+    createOrderSpy.mockReset().mockResolvedValue({
+      orderNumber: "ORD-STRIPE-001",
+      totalAmount: "500.00",
+      createdAt: new Date().toISOString(),
+      reservationExpiresAt: null,
+      depositAmount: "90.00",
+      amountRemaining: "410.00",
+      paymentToken: "checkout-token",
+      paymentMethod: "credit_card",
+      paymentStatus: "pending",
+      status: "pending",
+      financialSummary: {
+        totalAmount: 500,
+        paidAmount: 0,
+        amountRemaining: 500,
+        depositRequested: 90,
+        minimumRequired: 90,
+        states: { payment: "pending", reservation: "pending" },
+        reservationValid: false,
+      },
+    });
+    createPaymentIntentSpy.mockReset().mockResolvedValue({
+      clientSecret: "pi_test_intent_secret",
+      paymentIntentId: "pi_test_intent",
+      publishableKey: "pk_test_store",
+      stripeLivemode: false,
+    });
+    getOrderSpy.mockReset().mockImplementation(() => new Promise(() => {}));
+    sessionValues.clear();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => sessionValues.get(key) ?? null,
+      setItem: (key: string, value: string) => sessionValues.set(key, value),
+      removeItem: (key: string) => sessionValues.delete(key),
+    });
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("creates the Stripe intent after order setup and exposes only Stripe payment fields", async () => {
+    const store = {
+      ...makeStore("90.00"),
+      paymentMethods: ["credit_card"],
+      stripeEnabled: true,
+      stripePublicKey: "pk_test_store",
+    } as PublicStore;
+    const { result } = await renderHook(() =>
+      useWizardState({ slug: "loja-teste", productSlug: "produto-1", store }),
+    );
+
+    await flushAct(() => {
+      result.current.set("customerName", "João Silva");
+      result.current.set("customerEmail", "joao@exemplo.com");
+      result.current.set("customerPhone", "(11) 99999-9999");
+      result.current.set("customerCpf", "529.982.247-25");
+      result.current.set("paymentMethod", "credit_card");
+      result.current.set("depositAmount", "90.00");
+    });
+    await flushAct(async () => {
+      await result.current.submit();
+    });
+
+    expect(createOrderSpy).toHaveBeenCalledOnce();
+    expect((createOrderSpy.mock.calls[0][1] as Record<string, unknown>).paymentMethod)
+      .toBe("credit_card");
+    expect(createPaymentIntentSpy).toHaveBeenCalledWith(
+      "loja-teste",
+      "ORD-STRIPE-001",
+      "checkout-token",
+    );
+    expect(result.current.stripePaymentState).toMatchObject({
+      clientSecret: "pi_test_intent_secret",
+      paymentIntentId: "pi_test_intent",
+      publishableKey: "pk_test_store",
+    });
+  });
+
+  it("reuses the same checkout idempotency key when Stripe setup needs a retry", async () => {
+    createPaymentIntentSpy
+      .mockRejectedValueOnce(new Error("temporary Stripe failure"))
+      .mockResolvedValueOnce({
+        clientSecret: "pi_test_intent_secret",
+        paymentIntentId: "pi_test_intent",
+        publishableKey: "pk_test_store",
+        stripeLivemode: false,
+      });
+    const store = {
+      ...makeStore(),
+      paymentMethods: ["credit_card"],
+      stripeEnabled: true,
+      stripePublicKey: "pk_test_store",
+    } as PublicStore;
+    const { result } = await renderHook(() =>
+      useWizardState({ slug: "loja-teste", productSlug: "produto-1", store }),
+    );
+    await flushAct(() => {
+      result.current.set("customerName", "João Silva");
+      result.current.set("customerEmail", "joao@exemplo.com");
+      result.current.set("paymentMethod", "credit_card");
+    });
+
+    await flushAct(async () => {
+      await result.current.submit();
+    });
+    await flushAct(async () => {
+      await result.current.submit();
+    });
+
+    const firstPayload = createOrderSpy.mock.calls[0][1] as Record<string, unknown>;
+    const retryPayload = createOrderSpy.mock.calls[1][1] as Record<string, unknown>;
+    expect(retryPayload.idempotencyKey).toBe(firstPayload.idempotencyKey);
+    expect(createPaymentIntentSpy).toHaveBeenCalledTimes(2);
+    expect(result.current.stripePaymentState?.paymentIntentId).toBe("pi_test_intent");
+  });
+
+  it("recovers the matching 3DS return but keeps payment pending until the order API confirms it", async () => {
+    sessionValues.set("vitrine_reservation_stripe:loja-teste:produto-1", JSON.stringify({
+      storeSlug: "loja-teste",
+      productSlug: "produto-1",
+      orderNumber: "ORD-STRIPE-001",
+      paymentToken: "checkout-token",
+      paymentIntentId: "pi_test_intent",
+      referralCreditRequested: 10,
+      referralCreditApplied: 10,
+      referralCreditBalanceAfter: 0,
+      createdAt: Date.now(),
+    }));
+    window.history.replaceState(
+      null,
+      "",
+      "/?payment_intent=pi_test_intent&payment_intent_client_secret=pi_test_intent_secret&redirect_status=succeeded",
+    );
+    getOrderSpy.mockResolvedValue({
+      orderNumber: "ORD-STRIPE-001",
+      totalAmount: "500.00",
+      createdAt: new Date().toISOString(),
+      customerName: "João Silva",
+      customerEmail: "joao@exemplo.com",
+      customerPhone: "(11) 99999-9999",
+      paymentMethod: "credit_card",
+      paymentStatus: "pending",
+      status: "pending",
+      reservationExpiresAt: null,
+      depositAmount: "90.00",
+      paidAmount: 0,
+      amountRemaining: "410.00",
+      items: [{ quantity: 1 }],
+      reservations: [],
+      financialSummary: {
+        totalAmount: 500,
+        paidAmount: 0,
+        amountRemaining: 500,
+        depositRequested: 90,
+        minimumRequired: 90,
+        states: { payment: "pending", reservation: "pending" },
+        reservationValid: false,
+      },
+    });
+    const store = {
+      ...makeStore(),
+      paymentMethods: ["credit_card"],
+      stripeEnabled: true,
+      stripePublicKey: "pk_test_store",
+    } as PublicStore;
+    const { result } = await renderHook(() =>
+      useWizardState({ slug: "loja-teste", productSlug: "produto-1", store }),
+    );
+    await flushAct(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(result.current.recoveringStripeReturn).toBe(false);
+    expect(result.current.completedOrder?.orderNumber).toBe("ORD-STRIPE-001");
+    expect(result.current.completedOrder?.paymentStatus).toBe("pending");
+    expect(result.current.stripePaymentSubmitted).toBe(true);
+    expect(result.current.stripePaymentState).toBeNull();
+    expect(createPaymentIntentSpy).not.toHaveBeenCalled();
+    expect(window.location.search).toBe("");
+  });
+
+  it("does not recover an order when the Stripe return has a different intent id", async () => {
+    sessionValues.set("vitrine_reservation_stripe:loja-teste:produto-1", JSON.stringify({
+      storeSlug: "loja-teste",
+      productSlug: "produto-1",
+      orderNumber: "ORD-STRIPE-001",
+      paymentToken: "checkout-token",
+      paymentIntentId: "pi_expected",
+      referralCreditRequested: null,
+      referralCreditApplied: null,
+      referralCreditBalanceAfter: null,
+      createdAt: Date.now(),
+    }));
+    window.history.replaceState(
+      null,
+      "",
+      "/?payment_intent=pi_unrelated&redirect_status=succeeded",
+    );
+    const { result } = await renderHook(() =>
+      useWizardState({
+        slug: "loja-teste",
+        productSlug: "produto-1",
+        store: makeStore(),
+      }),
+    );
+
+    expect(result.current.recoveringStripeReturn).toBe(false);
+    expect(getOrderSpy).not.toHaveBeenCalled();
   });
 });

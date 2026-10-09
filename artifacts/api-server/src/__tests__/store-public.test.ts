@@ -428,6 +428,18 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(res.body.code).toBe("VALIDATION_ERROR");
   });
 
+  it("rejects card orders when Stripe is not configured for the store", async () => {
+    mockLimit.mockResolvedValueOnce([FAKE_STORE]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, paymentMethod: "credit_card" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("STRIPE_NOT_CONFIGURED");
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
   it("returns 400 when items array is empty", async () => {
     mockLimit.mockResolvedValueOnce([FAKE_STORE]);
 
@@ -1431,6 +1443,50 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
     mockStripeRetrieve.mockReset();
     mockUpdate.mockClear();
     mockUpdateSet.mockClear();
+  });
+
+  it("creates card PaymentIntents for the selected deposit amount", async () => {
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        depositAmount: "75.00",
+        paymentMethod: "credit_card",
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: null,
+      }]);
+    mockStripeCreate.mockResolvedValueOnce({
+      id: "pi_card_deposit",
+      client_secret: "pi_card_deposit_secret",
+      payment_method_types: ["card"],
+      livemode: false,
+    });
+
+    const response = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({ orderNumber: FAKE_ORDER.orderNumber, paymentToken: "checkout-token" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      clientSecret: "pi_card_deposit_secret",
+      paymentIntentId: "pi_card_deposit",
+      publishableKey: "pk_test_store",
+      stripeLivemode: false,
+    });
+    expect(mockStripeCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 7500,
+        currency: "brl",
+        payment_method_types: ["card"],
+        receipt_email: "maria@example.com",
+      }),
+      expect.objectContaining({ idempotencyKey: "store-order-store-001-gen-id" }),
+    );
+    expect(mockUpdateSet).toHaveBeenCalledWith({
+      paymentIntentId: "pi_card_deposit",
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+    });
   });
 
   it.each([

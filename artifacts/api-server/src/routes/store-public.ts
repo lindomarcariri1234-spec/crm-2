@@ -1643,6 +1643,27 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 }
 ;
 
+    const stripeCheckoutAvailable = Boolean(
+      store.stripeEnabled
+      && store.stripePublicKey
+      && decryptOrPassthrough(store.stripeSecretKey),
+    );
+    const isCardPayment = data.paymentMethod === "credit_card" || data.paymentMethod === "debit_card";
+    if (isCardPayment && !stripeCheckoutAvailable) {
+      next(new ValidationError(
+        "O pagamento com cartão exige uma conta Stripe configurada nesta loja.",
+        "STRIPE_NOT_CONFIGURED",
+      ));
+      return;
+    }
+    if (isCardPayment) {
+      // Card orders must never fall back to manual confirmation.
+      data.paymentProvider = "stripe";
+    }
+    if (data.paymentMethod === "pix") {
+      data.paymentProvider = stripeCheckoutAvailable ? "stripe" : "manual";
+    }
+
 
     // Idempotency: a browser retry / accidental double-submit of the same
     // checkout attempt carries the same client-generated key. Reuse the
@@ -1661,14 +1682,6 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     
 }
 
-    const stripeCheckoutAvailable = Boolean(
-      store.stripeEnabled
-      && store.stripePublicKey
-      && decryptOrPassthrough(store.stripeSecretKey),
-    );
-    if (data.paymentMethod === "pix") {
-      data.paymentProvider = stripeCheckoutAvailable ? "stripe" : "manual";
-    }
     if (
       data.paymentMethod === "pix"
       && !stripeCheckoutAvailable
@@ -2430,6 +2443,7 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
       orderNumber: storeOrdersTable.orderNumber,
       customerName: storeOrdersTable.customerName,
       customerEmail: storeOrdersTable.customerEmail,
+      customerPhone: storeOrdersTable.customerPhone,
       subtotal: storeOrdersTable.subtotal,
       discountAmount: storeOrdersTable.discountAmount,
       taxAmount: storeOrdersTable.taxAmount,
@@ -3237,6 +3251,7 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
         id: storeOrdersTable.id,
         orderNumber: storeOrdersTable.orderNumber,
         totalAmount: storeOrdersTable.totalAmount,
+      depositAmount: storeOrdersTable.depositAmount,
         paymentMethod: storeOrdersTable.paymentMethod,
         customerEmail: storeOrdersTable.customerEmail,
         storedPaymentToken: storeOrdersTable.paymentToken,
@@ -3300,7 +3315,12 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
       return;
     }
 
-    const amountInCents = Math.round(Number(order.totalAmount) * 100);
+    const amountToCharge = Number(order.depositAmount ?? order.totalAmount);
+    if (!Number.isFinite(amountToCharge) || amountToCharge <= 0) {
+      next(new ValidationError("O valor da cobrança Stripe é inválido", "INVALID_PAYMENT_AMOUNT"));
+      return;
+    }
+    const amountInCents = Math.round(amountToCharge * 100);
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInCents,
       currency: "brl",
@@ -3327,6 +3347,7 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
 
     res.json({
       clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
       publishableKey: store.stripePublicKey,
       stripeLivemode: paymentIntent.livemode,
     });

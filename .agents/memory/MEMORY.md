@@ -152,3 +152,4 @@
 - [CHECK constraint drift scope](check-constraint-drift-scope.md) — reconcile legacy CHECK definitions individually before broadening live drift comparisons.
 - [Instagram Direct scope](instagram-direct-scope.md) — agency-owned professional accounts only; replies are customer-initiated, text-only, and limited to Meta's 24-hour window.
 - [Stripe payment mode accounting](stripe-payment-mode-accounting.md) — Stripe livemode is authoritative; unverifiable historical Stripe payments stay unknown and out of real cash totals.
+- [Storefront card installments](storefront-card-installments.md) — do not advertise Brazilian card installments until the configured Stripe account's support is verified and the chosen schedule reaches the PaymentIntent.

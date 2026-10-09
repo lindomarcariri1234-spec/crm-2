@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useUser } from "@clerk/react";
-import { publicStoreApi, PublicStore, StoreProduct, CouponValidation, PartnerProductInfo, PublicApiError } from "@/lib/storeApi";
+import { publicStoreApi, PublicStore, StoreProduct, CouponValidation, PartnerProductInfo, PublicApiError, StoreOrderReservation } from "@/lib/storeApi";
 import { clientPortalApi } from "@/lib/clientPortalApi";
 import { validateCpf, validatePhone } from "@/lib/utils";
 import { useSeatStream } from "@/hooks/useSeatStream";
@@ -42,6 +42,10 @@ export type CompletedOrder = {
   orderNumber: string;
   totalAmount: string;
   createdAt: string;
+  customerName?: string;
+  customerEmail?: string;
+  customerPhone?: string | null;
+  paymentMethod?: string | null;
   paymentStatus?: string | null;
   status?: string | null;
   reservationExpiresAt?: string | null;
@@ -55,12 +59,129 @@ export type CompletedOrder = {
   referralCreditApplied?: number | null;
   referralCreditBalanceAfter?: number | null;
   referralCreditBalanceRefreshFailed?: boolean;
+  reservations?: StoreOrderReservation[];
   financialSummary: FinancialSummary;
 };
+
+export type StripeCardPaymentState = {
+  clientSecret: string;
+  publishableKey: string;
+  paymentIntentId: string;
+  stripeLivemode: boolean;
+};
+
+type PendingStripeWizardCheckout = {
+  storeSlug: string;
+  productSlug: string;
+  orderNumber: string;
+  paymentToken: string;
+  paymentIntentId: string;
+  referralCreditRequested: number | null;
+  referralCreditApplied: number | null;
+  referralCreditBalanceAfter: number | null;
+  returnHandled?: boolean;
+  redirectStatus?: string | null;
+  createdAt: number;
+};
+
+function pendingStripeCheckoutStorageKey(slug: string, productSlug: string): string {
+  return `vitrine_reservation_stripe:${slug}:${productSlug}`;
+}
+
+function readPendingStripeCheckout(
+  slug: string,
+  productSlug: string,
+): PendingStripeWizardCheckout | null {
+  try {
+    const raw = sessionStorage.getItem(pendingStripeCheckoutStorageKey(slug, productSlug));
+    if (!raw) return null;
+    const pending = JSON.parse(raw) as Partial<PendingStripeWizardCheckout>;
+    if (
+      pending.storeSlug !== slug ||
+      pending.productSlug !== productSlug ||
+      typeof pending.orderNumber !== "string" ||
+      typeof pending.paymentToken !== "string" ||
+      typeof pending.paymentIntentId !== "string" ||
+      typeof pending.createdAt !== "number" ||
+      Date.now() - pending.createdAt > 45 * 60 * 1000
+    ) {
+      return null;
+    }
+    return pending as PendingStripeWizardCheckout;
+  } catch {
+    return null;
+  }
+}
+
+function getRecoverableStripeCheckout(
+  slug: string,
+  productSlug: string,
+): PendingStripeWizardCheckout | null {
+  if (typeof window === "undefined") return null;
+  const pending = readPendingStripeCheckout(slug, productSlug);
+  if (!pending) return null;
+  const returnedPaymentIntent = new URLSearchParams(window.location.search).get("payment_intent");
+  if (returnedPaymentIntent) {
+    return returnedPaymentIntent === pending.paymentIntentId ? pending : null;
+  }
+  return pending.returnHandled ? pending : null;
+}
+
+function savePendingStripeCheckout(
+  slug: string,
+  productSlug: string,
+  pending: PendingStripeWizardCheckout,
+): void {
+  try {
+    sessionStorage.setItem(pendingStripeCheckoutStorageKey(slug, productSlug), JSON.stringify(pending));
+  } catch {
+    // Storage is optional; the in-memory Stripe flow still works without 3DS recovery.
+  }
+}
+
+function clearPendingStripeCheckout(slug: string, productSlug: string): void {
+  try {
+    sessionStorage.removeItem(pendingStripeCheckoutStorageKey(slug, productSlug));
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
+
+function paymentIntentIdFromClientSecret(clientSecret: string): string | null {
+  const separatorIndex = clientSecret.indexOf("_secret_");
+  if (separatorIndex <= 0) return null;
+  const paymentIntentId = clientSecret.slice(0, separatorIndex);
+  return paymentIntentId.startsWith("pi_") ? paymentIntentId : null;
+}
+
+function clearStripeReturnQuery(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("payment_intent");
+  url.searchParams.delete("payment_intent_client_secret");
+  url.searchParams.delete("redirect_status");
+  url.searchParams.delete("source_type");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
 
 function hasFinalCheckoutOutcome(order: CompletedOrder): boolean {
   const orderStatus = order.status?.toLowerCase();
   const paymentStatus = order.paymentStatus?.toLowerCase();
+  const isCardPayment =
+    order.paymentMethod === "credit_card" || order.paymentMethod === "debit_card";
+  const hasConfirmedCardPayment =
+    Number(order.paidAmount ?? order.financialSummary?.paidAmount ?? 0) > 0 ||
+    paymentStatus === "paid";
+
+  if (isCardPayment) {
+    return (
+      paymentStatus === "paid" ||
+      paymentStatus === "refunded" ||
+      ["cancelled", "canceled", "refunded"].includes(orderStatus ?? "") ||
+      (paymentStatus === "partially_paid" &&
+        hasConfirmedCardPayment &&
+        order.financialSummary?.reservationValid === true)
+    );
+  }
 
   return (
     order.financialSummary?.reservationValid === true ||
@@ -91,6 +212,12 @@ export function useWizardState({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [completedOrder, setCompletedOrder] = useState<CompletedOrder | null>(null);
+  const [stripePaymentState, setStripePaymentState] = useState<StripeCardPaymentState | null>(null);
+  const [stripePaymentSubmitted, setStripePaymentSubmitted] = useState(false);
+  const [recoveringStripeReturn, setRecoveringStripeReturn] = useState(
+    () => Boolean(getRecoverableStripeCheckout(slug, productSlug)),
+  );
+  const [stripeReturnRecoveryError, setStripeReturnRecoveryError] = useState<string | null>(null);
   const [refreshingReferralCreditBalance, setRefreshingReferralCreditBalance] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [expiryCountdown, setExpiryCountdown] = useState<string | null>(null);
@@ -539,6 +666,12 @@ export function useWizardState({
   }
 
   function canProceedFromPagamento() {
+    if (
+      (form.paymentMethod === "credit_card" || form.paymentMethod === "debit_card") &&
+      !store.stripeEnabled
+    ) {
+      return false;
+    }
     return !!form.paymentMethod;
   }
 
@@ -594,6 +727,7 @@ export function useWizardState({
       setSubmitError("Informe o nome de cada acompanhante antes de continuar.");
       return;
     }
+    setSubmitError(null);
     setSubmitting(true);
     try {
       const seatNotes =
@@ -696,10 +830,51 @@ export function useWizardState({
 
       const tok = typeof order.paymentToken === "string" ? order.paymentToken : null;
       paymentTokenRef.current = tok;
+      const isStripeCardPayment =
+        form.paymentMethod === "credit_card" || form.paymentMethod === "debit_card";
+      if (isStripeCardPayment) {
+        if (!tok) {
+          throw new Error("Não foi possível autenticar o pedido para iniciar o pagamento Stripe.");
+        }
+        const stripePayment = await publicStoreApi.createPaymentIntent(slug, order.orderNumber, tok);
+        const paymentIntentId =
+          stripePayment.paymentIntentId ??
+          (stripePayment.clientSecret
+            ? paymentIntentIdFromClientSecret(stripePayment.clientSecret)
+            : null);
+        if (!stripePayment.clientSecret || !paymentIntentId) {
+          throw new Error("Não foi possível preparar o pagamento com cartão pela Stripe.");
+        }
+        setStripePaymentState({
+          clientSecret: stripePayment.clientSecret,
+          publishableKey: stripePayment.publishableKey,
+          paymentIntentId,
+          stripeLivemode: stripePayment.stripeLivemode,
+        });
+        setStripePaymentSubmitted(false);
+        savePendingStripeCheckout(slug, productSlug, {
+          storeSlug: slug,
+          productSlug,
+          orderNumber: order.orderNumber,
+          paymentToken: tok,
+          paymentIntentId,
+          referralCreditRequested: requestedReferralCredit > 0 ? requestedReferralCredit : null,
+          referralCreditApplied: requestedReferralCredit > 0 ? appliedReferralCredit : null,
+          referralCreditBalanceAfter: refreshedReferralCreditBalance,
+          createdAt: Date.now(),
+        });
+      } else {
+        setStripePaymentState(null);
+        setStripePaymentSubmitted(false);
+      }
       setCompletedOrder({
         orderNumber: order.orderNumber,
         totalAmount: order.totalAmount,
         createdAt: order.createdAt,
+        customerName: form.customerName,
+        customerEmail: form.customerEmail,
+        customerPhone: form.customerPhone || null,
+        paymentMethod: form.paymentMethod,
         paymentStatus: order.paymentStatus ?? null,
         status: order.status ?? null,
         reservationExpiresAt: order.reservationExpiresAt,
@@ -712,6 +887,7 @@ export function useWizardState({
         referralCreditApplied: requestedReferralCredit > 0 ? appliedReferralCredit : null,
         referralCreditBalanceAfter: refreshedReferralCreditBalance,
         referralCreditBalanceRefreshFailed,
+        reservations: order.reservations,
         financialSummary: order.financialSummary,
       });
       clearCheckoutIdempotencyKey();
@@ -751,6 +927,10 @@ export function useWizardState({
           "A agência ainda não está pronta para receber reservas online. Entre em contato para concluir o atendimento.",
         RESERVATION_SYNC_FAILED:
           "Não foi possível criar a reserva agora. Nenhum pagamento foi confirmado; tente novamente.",
+        STRIPE_NOT_CONFIGURED:
+          "O pagamento com cartão está indisponível porque a Stripe ainda não foi configurada nesta loja.",
+        STRIPE_NOT_ENABLED:
+          "O pagamento com cartão está indisponível nesta loja no momento.",
       };
       setSubmitError(
         (code && messages[code]) ||
@@ -866,6 +1046,158 @@ export function useWizardState({
     }
   }, [currentOrderNumber, slug]);
 
+  const stripeReturnRecoveryStartedRef = useRef(false);
+  useEffect(() => {
+    const pending = getRecoverableStripeCheckout(slug, productSlug);
+    if (!pending || stripeReturnRecoveryStartedRef.current) return;
+    stripeReturnRecoveryStartedRef.current = true;
+
+    let cancelled = false;
+    const params = new URLSearchParams(window.location.search);
+    const redirectStatus = params.get("redirect_status") ?? pending.redirectStatus ?? null;
+    setRecoveringStripeReturn(true);
+    setStripeReturnRecoveryError(null);
+
+    void (async () => {
+      try {
+        const order = await publicStoreApi.getOrder(slug, pending.orderNumber, pending.paymentToken);
+        if (cancelled) return;
+
+        paymentTokenRef.current = pending.paymentToken;
+        const reservations = order.reservations ?? [];
+        const passengers = reservations.flatMap((reservation) => reservation.passengers ?? []);
+        const companionPassengers = passengers
+          .filter((passenger) => !passenger.isPrimary)
+          .map((passenger) => ({
+            name: passenger.name,
+            cpf: "",
+            phone: passenger.phone ?? "",
+          }));
+        const savedSeats = reservations.flatMap((reservation) => reservation.seats ?? []).map(String);
+        const itemPassengerCount = (order.items ?? []).reduce(
+          (sum, item) => sum + Math.max(0, Number(item.quantity) || 0),
+          0,
+        );
+        const shouldTreatAsSubmitted =
+          ["succeeded", "processing"].includes(redirectStatus ?? "") ||
+          ["paid", "processing"].includes((order.paymentStatus ?? "").toLowerCase());
+
+        setFormState((current) => ({
+          ...current,
+          customerName: order.customerName ?? "",
+          customerEmail: order.customerEmail ?? "",
+          customerPhone: order.customerPhone ?? "",
+          paymentMethod: order.paymentMethod ?? "credit_card",
+        }));
+        setQty(Math.max(1, itemPassengerCount || passengers.length));
+        setCoPassengers(companionPassengers);
+        setLayoutSeats(savedSeats);
+        setSelectedSeats(
+          savedSeats
+            .filter((seat) => /^\d+$/.test(seat))
+            .map(Number),
+        );
+        setSelectedBoardingPointId(reservations[0]?.boardingLocationId ?? "");
+        setCompletedOrder({
+          orderNumber: order.orderNumber,
+          totalAmount: order.totalAmount,
+          createdAt: order.createdAt,
+          customerName: order.customerName,
+          customerEmail: order.customerEmail,
+          customerPhone: order.customerPhone ?? null,
+          paymentMethod: order.paymentMethod ?? "credit_card",
+          paymentStatus: order.paymentStatus ?? null,
+          status: order.status ?? null,
+          reservationExpiresAt: order.reservationExpiresAt ?? null,
+          depositAmount: order.depositAmount ?? null,
+          paidAmount: order.paidAmount ?? null,
+          amountRemaining: order.amountRemaining ?? null,
+          pixQrCode: order.pixQrCode ?? null,
+          pixQrCodeUrl: order.pixQrCodeUrl ?? null,
+          pixCopyPaste: order.pixCopyPaste ?? null,
+          referralCreditRequested: pending.referralCreditRequested,
+          referralCreditApplied: pending.referralCreditApplied,
+          referralCreditBalanceAfter: pending.referralCreditBalanceAfter,
+          reservations,
+          financialSummary: order.financialSummary,
+        });
+        setStripePaymentSubmitted(shouldTreatAsSubmitted);
+        setStripePaymentState(null);
+
+        if (!shouldTreatAsSubmitted) {
+          const stripePayment = await publicStoreApi.createPaymentIntent(
+            slug,
+            order.orderNumber,
+            pending.paymentToken,
+          );
+          const paymentIntentId =
+            stripePayment.paymentIntentId ??
+            (stripePayment.clientSecret
+              ? paymentIntentIdFromClientSecret(stripePayment.clientSecret)
+              : null);
+          if (!stripePayment.clientSecret || paymentIntentId !== pending.paymentIntentId) {
+            throw new Error("Não foi possível recuperar o formulário de pagamento Stripe.");
+          }
+          if (cancelled) return;
+          setStripePaymentState({
+            clientSecret: stripePayment.clientSecret,
+            publishableKey: stripePayment.publishableKey,
+            paymentIntentId,
+            stripeLivemode: stripePayment.stripeLivemode,
+          });
+        }
+
+        savePendingStripeCheckout(slug, productSlug, {
+          ...pending,
+          returnHandled: true,
+          redirectStatus,
+        });
+        if (params.has("payment_intent")) clearStripeReturnQuery();
+        setStepState("confirmado");
+      } catch {
+        if (!cancelled) {
+          setStripeReturnRecoveryError(
+            "Não foi possível recuperar esta cobrança. Recarregue a página para tentar novamente; não crie outro pedido.",
+          );
+        }
+      } finally {
+        if (!cancelled) setRecoveringStripeReturn(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [slug, productSlug]);
+
+  const handleStripePaymentSubmitted = useCallback(() => {
+    setStripePaymentSubmitted(true);
+    const pending = readPendingStripeCheckout(slug, productSlug);
+    if (pending && pending.orderNumber === currentOrderNumber) {
+      savePendingStripeCheckout(slug, productSlug, {
+        ...pending,
+        returnHandled: true,
+        redirectStatus: "processing",
+      });
+    }
+    void refreshOrderStatus(true);
+  }, [currentOrderNumber, productSlug, refreshOrderStatus, slug]);
+
+  useEffect(() => {
+    if (!completedOrder || !hasFinalCheckoutOutcome(completedOrder)) return;
+    const pending = readPendingStripeCheckout(slug, productSlug);
+    if (pending?.orderNumber === completedOrder.orderNumber) {
+      clearPendingStripeCheckout(slug, productSlug);
+    }
+  }, [
+    completedOrder?.orderNumber,
+    completedOrder?.status,
+    completedOrder?.paymentStatus,
+    completedOrder?.financialSummary?.reservationValid,
+    productSlug,
+    slug,
+  ]);
+
   useEffect(() => {
     if (!completedOrder || !paymentTokenRef.current || hasFinalCheckoutOutcome(completedOrder)) return;
     const timer = window.setInterval(() => {
@@ -936,6 +1268,11 @@ export function useWizardState({
     refreshingOrderStatus,
     orderStatusRefreshFailed,
     refreshOrderStatus,
+    stripePaymentState,
+    stripePaymentSubmitted,
+    handleStripePaymentSubmitted,
+    recoveringStripeReturn,
+    stripeReturnRecoveryError,
     form,
     set,
     qty,
