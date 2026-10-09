@@ -30,6 +30,16 @@ const syntheticCoPassengers = [
   { name: "Acompanhante Três", cpf: "935.411.347-80", phone: "(88) 97777-2222" },
 ];
 
+const stripeThreeDSModes = [
+  { label: "test mode", mode: "test", showsNoChargeNotice: true },
+  { label: "live mode", mode: "live", showsNoChargeNotice: false },
+  { label: "unknown Stripe mode", mode: "unknown", showsNoChargeNotice: false },
+] as const;
+
+const recoveredOrderNumber = "VIS-3DS-001";
+const recoveredOrderToken = "visual-3ds-payment-token";
+const recoveredPaymentIntentId = "pi_visual_3ds";
+
 async function openFixture(page: Page, scenario: string, width: number, height: number) {
   await page.setViewportSize({ width, height });
   await page.goto(`/visual-tests/index.html?scenario=${scenario}`);
@@ -106,6 +116,28 @@ async function assertSyntheticOrderRequest(
 async function assertNoSyntheticOrderRequest(page: Page, stage: string) {
   const request = await page.evaluate(() => window.sessionStorage.getItem("visual-test:last-order-request"));
   expect(request, `no order POST should occur while ${stage}`).toBeNull();
+}
+
+async function readVisualSessionCounter(page: Page, key: string) {
+  return page.evaluate(
+    (storageKey) => Number(window.sessionStorage.getItem(storageKey) ?? "0"),
+    key,
+  );
+}
+
+async function assertStripeNoChargeNotice(page: Page, shouldBeVisible: boolean) {
+  const notice = page.getByTestId("stripe-test-payment-warning");
+  if (shouldBeVisible) {
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("Nenhuma cobrança real foi realizada neste pedido.");
+    return;
+  }
+
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByText("Pagamento Stripe em modo de teste", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByText("Nenhuma cobrança real foi realizada neste pedido.", { exact: true }),
+  ).toHaveCount(0);
 }
 
 async function assertNoDocumentOverflow(page: Page, scenario: string) {
@@ -358,7 +390,9 @@ for (const viewport of widths) {
     await assertNoDocumentOverflow(page, `checkout payment at ${viewport.label}`);
 
     await clickFlowButton(page, "Confirmar Pedido");
-    await expect(page.getByRole("heading", { name: /Pedido Confirmado!/ })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Pedido recebido — pagamento pendente" }),
+    ).toBeVisible();
     await expect(
       page.getByText(new RegExp(`Obrigado pela sua compra, ${syntheticCustomer.name}!`)),
     ).toBeVisible();
@@ -392,4 +426,62 @@ for (const viewport of widths) {
       }
     });
   }
+}
+
+for (const stripeMode of stripeThreeDSModes) {
+  test(`3DS return and public tracking preserve the no-charge notice for ${stripeMode.label}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.addInitScript((mode) => {
+      if (window.sessionStorage.getItem("visual-test:3ds-mode")) return;
+
+      window.sessionStorage.setItem("visual-test:3ds-mode", mode);
+      window.sessionStorage.setItem("visual-test:3ds-order-lookup-count", "0");
+      window.sessionStorage.setItem("visual-test:create-payment-intent-count", "0");
+      window.localStorage.setItem(
+        "pending_order_lookup",
+        JSON.stringify({
+          version: 1,
+          entries: [
+            {
+              orderNumber: "VIS-3DS-001",
+              token: "visual-3ds-payment-token",
+              storeSlug: "visual-fixture",
+              paymentIntentId: "pi_visual_3ds",
+            },
+          ],
+        }),
+      );
+    }, stripeMode.mode);
+
+    await page.goto(
+      `/visual-tests/index.html?scenario=checkout&payment_intent=${recoveredPaymentIntentId}&payment_intent_client_secret=cs_visual_3ds_secret&redirect_status=succeeded`,
+    );
+    await expect(page.getByRole("heading", { name: "Pedido Confirmado!" })).toBeVisible();
+    await expect(page.getByText(recoveredOrderNumber, { exact: true })).toBeVisible();
+    await assertStripeNoChargeNotice(page, stripeMode.showsNoChargeNotice);
+    await expect.poll(() => readVisualSessionCounter(page, "visual-test:3ds-order-lookup-count"))
+      .toBeGreaterThan(0);
+    const lookupCountAfterRecovery = await readVisualSessionCounter(
+      page,
+      "visual-test:3ds-order-lookup-count",
+    );
+    await assertNoSyntheticOrderRequest(page, "recovering a 3DS return");
+    expect(await readVisualSessionCounter(page, "visual-test:create-payment-intent-count")).toBe(0);
+
+    const checkoutUrl = new URL(page.url());
+    expect(checkoutUrl.searchParams.has("payment_intent")).toBe(false);
+    expect(checkoutUrl.searchParams.has("payment_intent_client_secret")).toBe(false);
+    expect(checkoutUrl.searchParams.has("redirect_status")).toBe(false);
+
+    await page.goto("/visual-tests/index.html?scenario=pedido");
+    await expect(page.getByRole("heading", { name: "Consultar Pedido" })).toBeVisible();
+    await expect(page.getByLabel("Número do Pedido")).toHaveValue(recoveredOrderNumber);
+    await expect(page.getByLabel("Código de Acesso")).toHaveValue(recoveredOrderToken);
+    await expect(page.getByText(recoveredOrderNumber, { exact: true })).toBeVisible();
+    await assertStripeNoChargeNotice(page, stripeMode.showsNoChargeNotice);
+    await expect.poll(() => readVisualSessionCounter(page, "visual-test:3ds-order-lookup-count"))
+      .toBeGreaterThan(lookupCountAfterRecovery);
+    await assertNoSyntheticOrderRequest(page, "looking up the recovered order on public tracking");
+    expect(await readVisualSessionCounter(page, "visual-test:create-payment-intent-count")).toBe(0);
+  });
 }

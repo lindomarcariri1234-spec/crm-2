@@ -50,6 +50,38 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
+function visualThreeDSOrder() {
+  const mode = window.sessionStorage.getItem("visual-test:3ds-mode");
+  if (!mode) return visualOrder;
+
+  return {
+    ...visualOrder,
+    id: "visual-3ds-order-fixture",
+    orderNumber: "VIS-3DS-001",
+    status: "confirmed",
+    paymentStatus: "paid",
+    paymentMethod: "credit_card",
+    paymentProvider: "stripe",
+    stripeLivemode: mode === "test" ? false : mode === "live" ? true : null,
+    depositAmount: null,
+    amountPaid: "2650.00",
+    amountRemaining: "0.00",
+    paymentToken: "visual-3ds-payment-token",
+    financialSummary: {
+      ...visualCreatedOrder.financialSummary,
+      paidAmount: 2650,
+      amountRemaining: 0,
+      reservationValid: true,
+      states: {
+        ...visualCreatedOrder.financialSummary.states,
+        order: "confirmed",
+        reservation: "confirmed",
+        payment: "paid",
+      },
+    },
+  };
+}
+
 function payloadFor(pathname: string, method: string, requestBody?: unknown): unknown {
   if (pathname === "/api/client/me") return visualProfile;
   if (pathname === "/api/client/me/referrals") return profileReferrals;
@@ -139,7 +171,9 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
     return { data: [] };
   }
   if (pathname === `${storePrefix}/reviews`) return [];
-  if (pathname.startsWith(`${storePrefix}/orders/`) && method === "GET") return visualOrder;
+  if (pathname.startsWith(`${storePrefix}/orders/`) && method === "GET") {
+    return visualThreeDSOrder();
+  }
   if (pathname === `${storePrefix}/orders` && method === "POST") {
     const orderRequest = requestBody as {
       items?: Array<{ quantity?: number; unitPrice?: number }>;
@@ -219,6 +253,22 @@ function installFixtureFetch() {
     if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
       const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
       let requestBody: unknown;
+      const orderLookupsKey = "visual-test:3ds-order-lookup-count";
+      if (
+        method === "GET" &&
+        url.pathname.startsWith(`/api/public/store/${visualStore.slug}/orders/`)
+      ) {
+        const count = Number(window.sessionStorage.getItem(orderLookupsKey) ?? "0");
+        window.sessionStorage.setItem(orderLookupsKey, String(count + 1));
+      }
+      if (
+        method === "POST" &&
+        url.pathname === `/api/public/store/${visualStore.slug}/create-payment-intent`
+      ) {
+        const attemptsKey = "visual-test:create-payment-intent-count";
+        const count = Number(window.sessionStorage.getItem(attemptsKey) ?? "0");
+        window.sessionStorage.setItem(attemptsKey, String(count + 1));
+      }
       if (url.pathname === `/api/public/store/${visualStore.slug}/orders` && method === "POST") {
         requestBody = await readJsonRequestBody(input, init);
         window.sessionStorage.setItem("visual-test:last-order-request", JSON.stringify(requestBody));
@@ -234,7 +284,17 @@ function scenarioElement(scenario: string) {
   if (scenario === "catalogo") return createElement(VitrineCatalog, { slug: visualStore.slug, store: visualStore });
   if (scenario === "calendario") return createElement(VitrineCalendar, { slug: visualStore.slug, store: visualStore });
   if (scenario === "produto") return createElement(VitrineProduct, { slug: visualStore.slug, productSlug: visualProduct.slug, store: visualStore });
-  if (scenario === "checkout") return createElement(VitrineCheckout, { slug: visualStore.slug, store: visualStore });
+  if (scenario === "checkout") {
+    const store = window.sessionStorage.getItem("visual-test:3ds-mode")
+      ? {
+          ...visualStore,
+          paymentMethods: ["credit_card"],
+          stripeEnabled: true,
+          stripePublicKey: "pk_test_visual_3ds",
+        }
+      : visualStore;
+    return createElement(VitrineCheckout, { slug: visualStore.slug, store });
+  }
   if (scenario === "pedido") return createElement(VitrineOrderTracking, { slug: visualStore.slug, store: visualStore });
   if (scenario === "reserva") return createElement(ReservationWizard, { slug: visualStore.slug, productSlug: visualProduct.slug, store: visualStore });
   if (scenario === "indicacao") return createElement(ReferralLanding, { slug: visualStore.slug, store: visualStore });
