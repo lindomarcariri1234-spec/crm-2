@@ -456,7 +456,7 @@ test("manual order lookup replaces a Stripe test warning and clears old details 
     window.sessionStorage.setItem("visual-test:create-payment-intent-count", "0");
     window.sessionStorage.removeItem("visual-test:last-order-request");
   });
-  await openFixture(page, "pedido", 1280, 900);
+  await openFixture(page, "pedido", 390, 844);
 
   const orderNumber = page.getByLabel("Número do Pedido");
   const accessCode = page.getByLabel("Código de Acesso");
@@ -466,6 +466,9 @@ test("manual order lookup replaces a Stripe test warning and clears old details 
   await expect(lookupAnnouncement).toHaveAttribute("role", "status");
   await expect(lookupAnnouncement).toHaveAttribute("aria-live", "polite");
   await expect(lookupAnnouncement).toHaveAttribute("aria-atomic", "true");
+  await assertReachable(orderNumber, page, "order number field on a phone");
+  await assertReachable(accessCode, page, "access code field on a phone");
+  await assertNoDocumentOverflow(page, "initial order tracking form on a phone");
 
   await page.evaluate(() => window.sessionStorage.setItem("visual-test:tracking-lookup-delay-ms", "250"));
   await orderNumber.fill("VIS-TRACK-TEST");
@@ -477,6 +480,7 @@ test("manual order lookup replaces a Stripe test warning and clears old details 
   await expect(page.getByText("Cliente Stripe Teste", { exact: true })).toBeVisible();
   await assertStripeNoChargeNotice(page, true);
   await expect(page.getByTestId("stripe-test-payment-warning")).toHaveAttribute("role", "status");
+  await assertNoDocumentOverflow(page, "test order details and Stripe warning on a phone");
   await expect(lookupAnnouncement).toHaveText("Pedido VIS-TRACK-TEST carregado.");
   await expect(trackingForm).toHaveAttribute("aria-busy", "false");
   await expect.poll(lookupCount).toBe(1);
@@ -488,9 +492,11 @@ test("manual order lookup replaces a Stripe test warning and clears old details 
   await expect(page.getByText("VIS-TRACK-TEST", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Cliente Stripe Teste", { exact: true })).toHaveCount(0);
   await assertStripeNoChargeNotice(page, false);
+  await assertNoDocumentOverflow(page, "pending test-to-live lookup on a phone");
   await expect(page.getByText("VIS-TRACK-LIVE", { exact: true })).toBeVisible();
   await expect(page.getByText("Cliente Stripe Produção", { exact: true })).toBeVisible();
   await assertStripeNoChargeNotice(page, false);
+  await assertNoDocumentOverflow(page, "live order details on a phone");
   await expect(lookupAnnouncement).toHaveText("Pedido VIS-TRACK-LIVE carregado.");
   await expect.poll(lookupCount).toBe(2);
 
@@ -509,6 +515,7 @@ test("manual order lookup replaces a Stripe test warning and clears old details 
   await expect(page.getByText("VIS-TRACK-TEST", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Cliente Stripe Teste", { exact: true })).toHaveCount(0);
   await assertStripeNoChargeNotice(page, false);
+  await assertNoDocumentOverflow(page, "pending test-to-failed lookup on a phone");
   const lookupAlert = page.getByRole("alert");
   await expect(lookupAlert).toContainText(
     "Pedido não encontrado. Verifique o número do pedido e o código de acesso.",
@@ -516,6 +523,13 @@ test("manual order lookup replaces a Stripe test warning and clears old details 
   await expect(lookupAlert).toHaveAttribute("aria-atomic", "true");
   await expect(lookupAnnouncement).toHaveText("");
   await expect.poll(lookupCount).toBe(4);
+  await assertReachable(orderNumber, page, "order number field after a failed lookup on a phone");
+  await assertReachable(accessCode, page, "access code field after a failed lookup on a phone");
+  const retryButton = page.getByRole("button", { name: "Consultar Pedido", exact: true });
+  await expect(retryButton).toBeEnabled();
+  await retryButton.scrollIntoViewIfNeeded();
+  await expect(retryButton).toBeInViewport();
+  await assertNoDocumentOverflow(page, "failed order lookup on a phone");
   await assertNoSyntheticOrderRequest(page, "looking up public orders");
   expect(await readVisualSessionCounter(page, "visual-test:create-payment-intent-count")).toBe(0);
 });
