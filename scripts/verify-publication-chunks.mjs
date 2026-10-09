@@ -1058,6 +1058,7 @@ async function runBrowserSmoke({
   const requests = new Map();
   const signInOrigin = signInUrl ? new URL(signInUrl, baseUrl).origin : null;
   const signInResponseDiagnostics = [];
+  const routesWithRuntimeExceptions = new Set();
   let activeRoute = null;
 
   function recordSignInResponse(type, response) {
@@ -1113,6 +1114,13 @@ async function runBrowserSmoke({
     if (!requestInfo?.route) return;
     failures.push(
       `${requestInfo.route}: JavaScript asset ${requestInfo.url} request failed: ${errorText}`,
+    );
+  });
+  client.on("Runtime.exceptionThrown", () => {
+    if (!activeRoute || routesWithRuntimeExceptions.has(activeRoute)) return;
+    routesWithRuntimeExceptions.add(activeRoute);
+    failures.push(
+      `${activeRoute}: ${profileLabel ?? profileName} route reported an uncaught JavaScript exception.`,
     );
   });
   client.on("Fetch.requestPaused", ({ requestId, request }) => {

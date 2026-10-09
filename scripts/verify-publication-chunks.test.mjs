@@ -763,11 +763,25 @@ function fakeBrowserFactory({
   followAccountPortalRedirect = true,
   mainHeadingVisibleByRoute = {},
   mainHeadingMatchesMarkerByRoute = {},
+  runtimeExceptionsByRoute = {},
+  interactionCountByRoute = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
   const calls = [];
   const contentChecks = [];
+  function emitConfiguredRuntimeException(pathname, phase) {
+    const phases = runtimeExceptionsByRoute[pathname] ?? [];
+    if (!phases.includes(phase)) return;
+    listeners.get("Runtime.exceptionThrown")?.({
+      exceptionDetails: {
+        text: "Uncaught Error",
+        exception: {
+          description: "private@example.com token=must-not-be-logged",
+        },
+      },
+    });
+  }
   return {
     calls,
     contentChecks,
@@ -789,6 +803,10 @@ function fakeBrowserFactory({
               ? requestedUrl.searchParams.get("redirect_url") ??
                 requestedUrl.href
               : requestedUrl.href;
+            emitConfiguredRuntimeException(
+              new URL(currentUrl).pathname,
+              "navigation",
+            );
             navigationNumber += 1;
             const requestId = String(navigationNumber);
             if (requestedUrl.origin === "https://accounts.visitecrm.com") {
@@ -840,6 +858,19 @@ function fakeBrowserFactory({
                     hasSession: Boolean(sessionId),
                   },
                 },
+              };
+            }
+            if (params.expression?.includes("element.click()")) {
+              emitConfiguredRuntimeException(
+                new URL(currentUrl).pathname,
+                "interaction",
+              );
+              return { result: { value: true } };
+            }
+            if (params.expression?.includes("document.querySelectorAll(")) {
+              const pathname = new URL(currentUrl).pathname;
+              return {
+                result: { value: interactionCountByRoute[pathname] ?? 0 },
               };
             }
             if (params.expression?.includes('document.querySelector("main h1")')) {
@@ -932,6 +963,64 @@ test("rejects blank and incorrectly blocked authenticated pages with profile and
   assert.doesNotMatch(
     JSON.stringify(results),
     /short-lived-test-session/,
+  );
+});
+
+test("reports uncaught browser exceptions for the active profile and route without exposing details", async () => {
+  const browser = fakeBrowserFactory({
+    runtimeExceptionsByRoute: {
+      "/meu-painel": ["navigation"],
+      "/admin": ["interaction"],
+    },
+    interactionCountByRoute: { "/admin": 1 },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel"],
+        headers: { Cookie: "seller-private-session" },
+      },
+      {
+        name: "superadmin",
+        label: "superadmin",
+        paths: ["/admin"],
+        headers: { Cookie: "admin-private-session" },
+      },
+      {
+        name: "client",
+        label: "cliente",
+        paths: ["/perfil"],
+        headers: { Cookie: "client-private-session" },
+      },
+    ],
+    interactionSelectors: ['button[aria-haspopup="menu"]'],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [
+      { route: "/meu-painel", profile: "seller", ok: false },
+      { route: "/admin", profile: "superadmin", ok: false },
+      { route: "/perfil", profile: "client", ok: true },
+    ],
+  );
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/meu-painel: vendedor route reported an uncaught JavaScript exception/,
+  );
+  assert.match(
+    results[1].failures.join("\n"),
+    /\/admin: superadmin route reported an uncaught JavaScript exception/,
+  );
+  const output = JSON.stringify(results);
+  assert.doesNotMatch(
+    output,
+    /private@example\.com|must-not-be-logged|seller-private-session|admin-private-session|client-private-session/,
   );
 });
 
