@@ -461,24 +461,37 @@ test("manual order lookup replaces a Stripe test warning and clears old details 
   const orderNumber = page.getByLabel("Número do Pedido");
   const accessCode = page.getByLabel("Código de Acesso");
   const lookupCount = () => readVisualSessionCounter(page, "visual-test:manual-order-lookup-count");
+  const lookupAnnouncement = page.getByTestId("order-lookup-announcement");
+  const trackingForm = page.locator("form");
+  await expect(lookupAnnouncement).toHaveAttribute("role", "status");
+  await expect(lookupAnnouncement).toHaveAttribute("aria-live", "polite");
+  await expect(lookupAnnouncement).toHaveAttribute("aria-atomic", "true");
 
+  await page.evaluate(() => window.sessionStorage.setItem("visual-test:tracking-lookup-delay-ms", "250"));
   await orderNumber.fill("VIS-TRACK-TEST");
   await accessCode.fill("visual-manual-lookup-token");
   await clickFlowButton(page, "Consultar Pedido");
+  await expect(lookupAnnouncement).toHaveText("Consultando pedido.");
+  await expect(trackingForm).toHaveAttribute("aria-busy", "true");
   await expect(page.getByText("VIS-TRACK-TEST", { exact: true })).toBeVisible();
   await expect(page.getByText("Cliente Stripe Teste", { exact: true })).toBeVisible();
   await assertStripeNoChargeNotice(page, true);
+  await expect(page.getByTestId("stripe-test-payment-warning")).toHaveAttribute("role", "status");
+  await expect(lookupAnnouncement).toHaveText("Pedido VIS-TRACK-TEST carregado.");
+  await expect(trackingForm).toHaveAttribute("aria-busy", "false");
   await expect.poll(lookupCount).toBe(1);
 
   await page.evaluate(() => window.sessionStorage.setItem("visual-test:tracking-lookup-delay-ms", "250"));
   await orderNumber.fill("VIS-TRACK-LIVE");
   await clickFlowButton(page, "Consultar Pedido");
+  await expect(lookupAnnouncement).toHaveText("Consultando pedido.");
   await expect(page.getByText("VIS-TRACK-TEST", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Cliente Stripe Teste", { exact: true })).toHaveCount(0);
   await assertStripeNoChargeNotice(page, false);
   await expect(page.getByText("VIS-TRACK-LIVE", { exact: true })).toBeVisible();
   await expect(page.getByText("Cliente Stripe Produção", { exact: true })).toBeVisible();
   await assertStripeNoChargeNotice(page, false);
+  await expect(lookupAnnouncement).toHaveText("Pedido VIS-TRACK-LIVE carregado.");
   await expect.poll(lookupCount).toBe(2);
 
   await page.evaluate(() => window.sessionStorage.removeItem("visual-test:tracking-lookup-delay-ms"));
@@ -492,13 +505,55 @@ test("manual order lookup replaces a Stripe test warning and clears old details 
   await page.evaluate(() => window.sessionStorage.setItem("visual-test:tracking-lookup-delay-ms", "250"));
   await orderNumber.fill("VIS-TRACK-FAILED");
   await clickFlowButton(page, "Consultar Pedido");
+  await expect(lookupAnnouncement).toHaveText("Consultando pedido.");
   await expect(page.getByText("VIS-TRACK-TEST", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Cliente Stripe Teste", { exact: true })).toHaveCount(0);
   await assertStripeNoChargeNotice(page, false);
-  await expect(
-    page.getByText("Pedido não encontrado. Verifique o número do pedido e o código de acesso."),
-  ).toBeVisible();
+  const lookupAlert = page.getByRole("alert");
+  await expect(lookupAlert).toContainText(
+    "Pedido não encontrado. Verifique o número do pedido e o código de acesso.",
+  );
+  await expect(lookupAlert).toHaveAttribute("aria-atomic", "true");
+  await expect(lookupAnnouncement).toHaveText("");
   await expect.poll(lookupCount).toBe(4);
+  await assertNoSyntheticOrderRequest(page, "looking up public orders");
+  expect(await readVisualSessionCounter(page, "visual-test:create-payment-intent-count")).toBe(0);
+});
+
+test("a late order lookup is not announced over the latest result", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("visual-test:manual-order-lookup-count", "0");
+    window.sessionStorage.setItem("visual-test:create-payment-intent-count", "0");
+    window.sessionStorage.removeItem("visual-test:last-order-request");
+  });
+  await openFixture(page, "pedido", 1280, 900);
+
+  const orderNumber = page.getByLabel("Número do Pedido");
+  const accessCode = page.getByLabel("Código de Acesso");
+  const lookupAnnouncement = page.getByTestId("order-lookup-announcement");
+  const slowOrderNumber = "VIS-TRACK-SLOW-TEST";
+  const latestOrderNumber = "VIS-TRACK-LIVE";
+
+  await accessCode.fill("visual-manual-lookup-token");
+  await page.evaluate(() => window.sessionStorage.setItem("visual-test:tracking-lookup-delay-ms", "350"));
+  await orderNumber.fill(slowOrderNumber);
+  await clickFlowButton(page, "Consultar Pedido");
+  await expect(lookupAnnouncement).toHaveText("Consultando pedido.");
+
+  await page.evaluate(() => window.sessionStorage.removeItem("visual-test:tracking-lookup-delay-ms"));
+  await orderNumber.fill(latestOrderNumber);
+  await page.locator("form").evaluate((form) =>
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+  await expect(lookupAnnouncement).toHaveText(`Pedido ${latestOrderNumber} carregado.`);
+  await expect(page.getByText("Cliente Stripe Produção", { exact: true })).toBeVisible();
+  await assertStripeNoChargeNotice(page, false);
+
+  await page.waitForTimeout(450);
+  await expect(lookupAnnouncement).toHaveText(`Pedido ${latestOrderNumber} carregado.`);
+  await expect(page.getByText("Cliente Stripe Teste Lento", { exact: true })).toHaveCount(0);
+  await assertStripeNoChargeNotice(page, false);
+  await expect.poll(() => readVisualSessionCounter(page, "visual-test:manual-order-lookup-count")).toBe(2);
   await assertNoSyntheticOrderRequest(page, "looking up public orders");
   expect(await readVisualSessionCounter(page, "visual-test:create-payment-intent-count")).toBe(0);
 });

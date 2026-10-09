@@ -496,6 +496,11 @@ export default function VitrineOrderTracking({
   }
 
   const storeData = store as PublicStore | undefined;
+  const lookupAnnouncement = loading
+    ? "Consultando pedido."
+    : order
+      ? `Pedido ${order.orderNumber} carregado.`
+      : "";
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-7 sm:py-10">
@@ -513,7 +518,21 @@ export default function VitrineOrderTracking({
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="mb-8 rounded-[1.5rem] border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="order-lookup-announcement"
+        className="sr-only"
+      >
+        {lookupAnnouncement}
+      </div>
+
+      <form
+        onSubmit={handleSubmit}
+        aria-busy={loading}
+        className="mb-8 rounded-[1.5rem] border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6"
+      >
         <div className="space-y-1.5">
           <Label htmlFor="orderNumber">Número do Pedido</Label>
           <Input
@@ -554,7 +573,11 @@ export default function VitrineOrderTracking({
       </form>
 
       {error && (
-        <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 mb-6">
+        <div
+          role="alert"
+          aria-atomic="true"
+          className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 mb-6"
+        >
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>

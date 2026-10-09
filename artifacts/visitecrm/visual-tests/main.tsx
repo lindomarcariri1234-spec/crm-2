@@ -83,7 +83,7 @@ function visualThreeDSOrder() {
 }
 
 function visualManualLookupOrder(orderNumber: string) {
-  const isTestMode = orderNumber === "VIS-TRACK-TEST";
+  const isTestMode = orderNumber === "VIS-TRACK-TEST" || orderNumber === "VIS-TRACK-SLOW-TEST";
 
   return {
     ...visualOrder,
@@ -91,7 +91,11 @@ function visualManualLookupOrder(orderNumber: string) {
     orderNumber,
     status: "confirmed",
     paymentStatus: "paid",
-    customerName: isTestMode ? "Cliente Stripe Teste" : "Cliente Stripe Produção",
+    customerName: orderNumber === "VIS-TRACK-SLOW-TEST"
+      ? "Cliente Stripe Teste Lento"
+      : isTestMode
+        ? "Cliente Stripe Teste"
+        : "Cliente Stripe Produção",
     paymentMethod: "credit_card",
     paymentProvider: "stripe",
     stripeLivemode: isTestMode ? false : true,
