@@ -82,6 +82,37 @@ function visualThreeDSOrder() {
   };
 }
 
+function visualManualLookupOrder(orderNumber: string) {
+  const isTestMode = orderNumber === "VIS-TRACK-TEST";
+
+  return {
+    ...visualOrder,
+    id: `visual-${orderNumber.toLowerCase()}`,
+    orderNumber,
+    status: "confirmed",
+    paymentStatus: "paid",
+    customerName: isTestMode ? "Cliente Stripe Teste" : "Cliente Stripe Produção",
+    paymentMethod: "credit_card",
+    paymentProvider: "stripe",
+    stripeLivemode: isTestMode ? false : true,
+    depositAmount: null,
+    amountPaid: "2650.00",
+    amountRemaining: "0.00",
+    financialSummary: {
+      ...visualCreatedOrder.financialSummary,
+      paidAmount: 2650,
+      amountRemaining: 0,
+      reservationValid: true,
+      states: {
+        ...visualCreatedOrder.financialSummary.states,
+        order: "confirmed",
+        reservation: "confirmed",
+        payment: "paid",
+      },
+    },
+  };
+}
+
 function visualProfileWithStripeModeReservations() {
   const sampleReservation = visualProfile.reservations[0];
   if (!sampleReservation) return visualProfile;
@@ -232,6 +263,8 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
   }
   if (pathname === `${storePrefix}/reviews`) return [];
   if (pathname.startsWith(`${storePrefix}/orders/`) && method === "GET") {
+    const orderNumber = decodeURIComponent(pathname.slice(`${storePrefix}/orders/`.length));
+    if (orderNumber.startsWith("VIS-TRACK-")) return visualManualLookupOrder(orderNumber);
     return visualThreeDSOrder();
   }
   if (pathname === `${storePrefix}/orders` && method === "POST") {
@@ -320,6 +353,25 @@ function installFixtureFetch() {
       ) {
         const count = Number(window.sessionStorage.getItem(orderLookupsKey) ?? "0");
         window.sessionStorage.setItem(orderLookupsKey, String(count + 1));
+      }
+      const manualTrackingPrefix = `/api/public/store/${visualStore.slug}/orders/VIS-TRACK-`;
+      if (method === "GET" && url.pathname.startsWith(manualTrackingPrefix)) {
+        const manualLookupKey = "visual-test:manual-order-lookup-count";
+        const count = Number(window.sessionStorage.getItem(manualLookupKey) ?? "0");
+        window.sessionStorage.setItem(manualLookupKey, String(count + 1));
+
+        const delayMs = Number(
+          window.sessionStorage.getItem("visual-test:tracking-lookup-delay-ms") ?? "0",
+        );
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        if (url.pathname === `${manualTrackingPrefix}FAILED`) {
+          return new Response(JSON.stringify({ error: "Pedido não encontrado." }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
       }
       if (
         method === "POST" &&

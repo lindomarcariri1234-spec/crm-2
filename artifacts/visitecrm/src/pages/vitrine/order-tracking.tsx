@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, useRef, FormEvent } from "react";
 import { useLocation } from "wouter";
 import { useGetMe } from "@workspace/api-client-react";
 import {
@@ -437,6 +437,7 @@ export default function VitrineOrderTracking({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoLoaded, setAutoLoaded] = useState(false);
+  const latestLookupId = useRef(0);
 
   useEffect(() => {
     if (me?.role && me.role !== ROLES.CLIENT) {
@@ -464,26 +465,33 @@ export default function VitrineOrderTracking({
   }, [autoLoaded]);
 
   async function doFetch(num: string, tok: string) {
-    if (!num.trim() || !tok.trim()) return;
-    setLoading(true);
+    const lookupId = ++latestLookupId.current;
+    setOrder(null);
     setError(null);
+    if (!num.trim() || !tok.trim()) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     try {
       const result = await publicStoreApi.getOrder(slug, num.trim(), tok.trim());
+      if (lookupId !== latestLookupId.current) return;
       setOrder(result);
     } catch (e) {
+      if (lookupId !== latestLookupId.current) return;
       if (e instanceof PublicApiError) {
         setError("Pedido não encontrado. Verifique o número do pedido e o código de acesso.");
       } else {
         setError("Não foi possível consultar o pedido. Tente novamente em instantes.");
       }
     } finally {
-      setLoading(false);
+      if (lookupId === latestLookupId.current) setLoading(false);
     }
   }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setOrder(null);
     void doFetch(orderNumber, token);
   }
 
