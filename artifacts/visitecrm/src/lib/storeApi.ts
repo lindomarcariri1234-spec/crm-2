@@ -274,6 +274,7 @@ export const publicStoreApi = {
       clientSecret: string | null;
       paymentIntentId?: string;
       publishableKey: string;
+      stripeLivemode: boolean;
       reused?: boolean;
     }>(
       "POST",

@@ -50,6 +50,7 @@ import {
 import { trackReferralCreditReduction } from "@/lib/analytics";
 import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "./referral-messages";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
+import { isStripeTestPayment, StripeTestPaymentNotice } from "./StripeTestPaymentNotice";
 
 type Step = "dados" | "revisao" | "pagamento" | "confirmado";
 
@@ -582,6 +583,7 @@ export default function VitrineCheckout({
   const [stripePaymentConfirmed, setStripePaymentConfirmed] = useState<StripePaymentState>(
     () => failedStripeReturn ? "failed" : null,
   );
+  const [stripeTestMode, setStripeTestMode] = useState(false);
 
   // Fetch referral credit balance for logged-in users
   useEffect(() => {
@@ -661,6 +663,7 @@ export default function VitrineCheckout({
       try {
         const order = await publicStoreApi.getOrder(slug, lookup.orderNumber, lookup.token);
         if (cancelled) return;
+        setStripeTestMode(isStripeTestPayment(order));
 
         const appliedFromOrder = Number(order.referralCreditApplied);
         const appliedReferralCredit = Number.isFinite(appliedFromOrder)
@@ -875,6 +878,7 @@ export default function VitrineCheckout({
   async function submit() {
     setLoading(true);
     setSubmitError(null);
+    setStripeTestMode(false);
     if (!idempotencyKeyRef.current) {
       idempotencyKeyRef.current = crypto.randomUUID();
     }
@@ -923,6 +927,7 @@ export default function VitrineCheckout({
       setOrderNumber(order.orderNumber);
       setConfirmedOrderTotal(order.totalAmount);
       setConfirmedDepositAmount(order.depositAmount ?? null);
+      setStripeTestMode(isStripeTestPayment(order));
       if (isManualPixPayment) {
         setStripePaymentInstructions({
           pixQrCodeUrl: order.pixQrCodeUrl,
@@ -965,6 +970,10 @@ export default function VitrineCheckout({
         if (!pi.clientSecret) {
           throw new Error("Não foi possível preparar o pagamento Stripe.");
         }
+        setStripeTestMode(isStripeTestPayment({
+          paymentProvider: "stripe",
+          stripeLivemode: pi.stripeLivemode,
+        }));
         setStripeState({ clientSecret: pi.clientSecret, publishableKey: pi.publishableKey });
         const paymentIntentId = getPaymentIntentIdFromClientSecret(pi.clientSecret);
         if (tok && paymentIntentId) {
@@ -1070,6 +1079,7 @@ export default function VitrineCheckout({
       try {
         const order = await publicStoreApi.getOrder(slug, orderNumber!, paymentToken!);
         if (stopped) return;
+        setStripeTestMode(isStripeTestPayment(order));
         setStripePaymentInstructions({
           pixQrCodeUrl: order.pixQrCodeUrl,
           pixCopyPaste: order.pixCopyPaste ?? order.pixQrCode,
@@ -1216,6 +1226,13 @@ export default function VitrineCheckout({
           Seu número de pedido é:{" "}
           <strong className="font-mono text-foreground">{orderNumber}</strong>
         </p>
+        {stripeTestMode && (
+          <StripeTestPaymentNotice
+            className="mx-auto mb-4 max-w-xl"
+            paymentProvider="stripe"
+            stripeLivemode={false}
+          />
+        )}
         {confirmedDepositAmount && Number(confirmedDepositAmount) > 0 && Number(confirmedDepositAmount) < Number(confirmedOrderTotal ?? 0) && (
           <div className={`inline-flex flex-col items-center gap-2 rounded-xl border px-5 py-3 mb-4 ${
             isManualPixPayment

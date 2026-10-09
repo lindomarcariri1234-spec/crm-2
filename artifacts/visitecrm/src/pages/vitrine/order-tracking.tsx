@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { PAYMENT_LABELS } from "@/pages/vitrine/_wizard/constants";
 import { getOrderLookupFromStorage } from "./utils/storage";
+import { StripeTestPaymentNotice } from "./StripeTestPaymentNotice";
 
 const PAYMENT_STATUS_LABELS: Record<string, string> = {
   pending: "Aguardando Pagamento",
@@ -552,27 +553,41 @@ export default function VitrineOrderTracking({
       )}
 
       {order && storeData && (
-        <OrderResult order={order} store={storeData} />
+        <>
+          <StripeTestPaymentNotice
+            className="mb-6"
+            paymentProvider={order.paymentProvider}
+            stripeLivemode={order.stripeLivemode}
+          />
+          <OrderResult order={order} store={storeData} />
+        </>
       )}
 
       {order && !storeData && (
-        <div className="space-y-4 text-sm">
-          <div className="rounded-[1.5rem] border border-slate-200/80 bg-white p-4 shadow-sm">
-            <p className="font-semibold text-base mb-1">{order.orderNumber}</p>
-            <p className="text-muted-foreground mb-3">Cliente: {order.customerName}</p>
-            <div className="space-y-1.5 border-t pt-3">
-              <div className="flex justify-between text-muted-foreground">
-                <span>Subtotal</span>
-                <span>R$ {parseFloat(order.subtotal).toFixed(2)}</span>
-              </div>
-              <DiscountBreakdown order={order} />
-              <div className="flex justify-between font-bold text-base border-t pt-2">
-                <span>Total líquido</span>
-                <span>R$ {parseFloat(order.totalAmount).toFixed(2)}</span>
+        <>
+          <StripeTestPaymentNotice
+            className="mb-6"
+            paymentProvider={order.paymentProvider}
+            stripeLivemode={order.stripeLivemode}
+          />
+          <div className="space-y-4 text-sm">
+            <div className="rounded-[1.5rem] border border-slate-200/80 bg-white p-4 shadow-sm">
+              <p className="font-semibold text-base mb-1">{order.orderNumber}</p>
+              <p className="text-muted-foreground mb-3">Cliente: {order.customerName}</p>
+              <div className="space-y-1.5 border-t pt-3">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span>R$ {parseFloat(order.subtotal).toFixed(2)}</span>
+                </div>
+                <DiscountBreakdown order={order} />
+                <div className="flex justify-between font-bold text-base border-t pt-2">
+                  <span>Total líquido</span>
+                  <span>R$ {parseFloat(order.totalAmount).toFixed(2)}</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

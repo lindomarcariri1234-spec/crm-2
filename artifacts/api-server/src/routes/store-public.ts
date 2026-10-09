@@ -2440,6 +2440,7 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
       couponCode: storeOrdersTable.couponCode,
       paymentMethod: storeOrdersTable.paymentMethod,
       paymentProvider: storeOrdersTable.paymentProvider,
+      stripeLivemode: storeOrdersTable.stripeLivemode,
       paymentStatus: storeOrdersTable.paymentStatus,
       installments: storeOrdersTable.installments,
       pixQrCode: storeOrdersTable.pixQrCode,
@@ -3286,13 +3287,14 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
         .set({
           paymentIntentId: order.existingPaymentIntentId,
           paymentProvider: "stripe",
-        stripeLivemode: existingIntent.livemode,
+          stripeLivemode: existingIntent.livemode,
         })
         .where(eq(storeOrdersTable.id, order.id));
       res.json({
         clientSecret: existingIntent.client_secret,
         paymentIntentId: existingIntent.id,
         publishableKey: store.stripePublicKey,
+        stripeLivemode: existingIntent.livemode,
         reused: true,
       });
       return;
@@ -3323,7 +3325,11 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
       })
       .where(eq(storeOrdersTable.id, order.id));
 
-    res.json({ clientSecret: paymentIntent.client_secret, publishableKey: store.stripePublicKey });
+    res.json({
+      clientSecret: paymentIntent.client_secret,
+      publishableKey: store.stripePublicKey,
+      stripeLivemode: paymentIntent.livemode,
+    });
   } catch (err) {
     next(err);
   }

@@ -1336,6 +1336,34 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
+  it("returns Stripe test mode on repeated token-protected order lookups", async () => {
+    const paymentToken = "stripe-test-customer-access-token";
+    const trackedOrder = {
+      ...FAKE_ORDER,
+      paymentMethod: "credit_card",
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+      storedPaymentToken: paymentToken,
+    };
+
+    for (let lookup = 0; lookup < 2; lookup++) {
+      mockLimit
+        .mockResolvedValueOnce([FAKE_STORE])
+        .mockResolvedValueOnce([trackedOrder]);
+
+      const res = await request(buildApp())
+        .get(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}`)
+        .query({ token: paymentToken });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        paymentMethod: "credit_card",
+        paymentProvider: "stripe",
+        stripeLivemode: false,
+      });
+    }
+  });
+
   it("does not expose Manual Pix instructions when order tracking receives the wrong token", async () => {
     const pixCopyPaste = "000201010212540575.005802BR5911MINHA LOJA6009FORTALEZA6304ABCD";
     mockLimit
@@ -1421,6 +1449,7 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
       id,
       client_secret: clientSecret,
       payment_method_types: [paymentMethod],
+      livemode: false,
     });
 
     const response = await request(buildApp())
@@ -1431,6 +1460,7 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
     expect(response.body).toMatchObject({
       clientSecret,
       publishableKey: "pk_test_store",
+      stripeLivemode: false,
     });
     expect(mockStripeCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1446,6 +1476,7 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
     expect(mockUpdateSet).toHaveBeenCalledWith({
       paymentIntentId: id,
       paymentProvider: "stripe",
+      stripeLivemode: false,
     });
   });
 
@@ -1454,6 +1485,7 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
       id: "pi_pix_existing",
       client_secret: "pi_pix_existing_secret",
       payment_method_types: ["pix"],
+      livemode: false,
     };
     mockLimit
       .mockResolvedValueOnce([STRIPE_STORE])
@@ -1488,11 +1520,13 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
     expect(retryResponse.body).toMatchObject({
       clientSecret: existingIntent.client_secret,
       paymentIntentId: existingIntent.id,
+      stripeLivemode: false,
       reused: true,
     });
     expect(mockUpdateSet).toHaveBeenCalledWith({
       paymentIntentId: existingIntent.id,
       paymentProvider: "stripe",
+      stripeLivemode: false,
     });
     expect(mockStripeCreate).toHaveBeenCalledTimes(1);
     expect(mockStripeRetrieve).toHaveBeenCalledWith(existingIntent.id);
