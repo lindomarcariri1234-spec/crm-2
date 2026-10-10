@@ -1445,7 +1445,6 @@ test("maps an exception to the restored route after browser back navigation reus
     /private@example\.com|customer-private-value|must-not-be-logged|seller-private-session|Uncaught Error/,
   );
 });
-
 test("redeems one-use Clerk tickets for isolated seller, superadmin, and client browser sessions", async () => {
   const browser = fakeBrowserFactory({
     authStateByProfile: {
