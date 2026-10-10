@@ -766,6 +766,7 @@ function fakeBrowserFactory({
   delayedRuntimeExceptionByRoute = {},
   delayedRouteSessionReadsByPath = {},
   inPageRouteChangesByPath = {},
+  inPageHistoryChangesByPath = {},
   inPageAssetRequestsByPath = {},
 } = {}) {
   const listeners = new Map();
@@ -969,6 +970,29 @@ function fakeBrowserFactory({
                 emitConfiguredRuntimeException(
                   nextPathname,
                   "after-in-page-navigation",
+                  contextId,
+                );
+              }
+              const historyPath = inPageHistoryChangesByPath[pathname];
+              if (historyPath) {
+                const contextId = executionContextIdByPath.get(pathname);
+                currentUrl = new URL(historyPath, currentUrl).href;
+                const restoredPathname = new URL(currentUrl).pathname;
+                executionContextIdByPath.set(restoredPathname, contextId);
+                navigationEvents.push({
+                  type: "history-navigation",
+                  from: pathname,
+                  to: restoredPathname,
+                  navigationType: "backForward",
+                  contextId,
+                });
+                listeners.get("Page.navigatedWithinDocument")?.({
+                  url: currentUrl,
+                  navigationType: "backForward",
+                });
+                emitConfiguredRuntimeException(
+                  restoredPathname,
+                  "after-history-navigation",
                   contextId,
                 );
               }
@@ -1365,6 +1389,61 @@ test("keeps script requests attributed to their route across in-page navigation"
   assert.ok(destinationResult.assets.includes(destinationAsset.url));
   assert.ok(!destinationResult.assets.includes(originAsset.url));
   assert.ok(!originResult.assets.includes(destinationAsset.url));
+});
+
+test("maps an exception to the restored route after browser back navigation reuses its context", async () => {
+  const session = "seller-private-session";
+  const browser = fakeBrowserFactory({
+    runtimeExceptionsByRoute: {
+      "/meu-painel": ["after-history-navigation"],
+    },
+    interactionCountByRoute: { "/vouchers": 1 },
+    inPageHistoryChangesByPath: {
+      "/vouchers": "/meu-painel",
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel", "/vouchers"],
+        headers: { Cookie: session },
+      },
+    ],
+    interactionSelectors: ['button[aria-haspopup="menu"]'],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  const historyNavigation = browser.navigationEvents.find(
+    (event) => event.type === "history-navigation",
+  );
+  const vouchersContext = browser.navigationEvents.find(
+    (event) => event.type === "context-created" && event.pathname === "/vouchers",
+  );
+  assert.ok(historyNavigation);
+  assert.equal(historyNavigation.navigationType, "backForward");
+  assert.equal(historyNavigation.from, "/vouchers");
+  assert.equal(historyNavigation.to, "/meu-painel");
+  assert.equal(historyNavigation.contextId, vouchersContext?.contextId);
+
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [
+      { route: "/meu-painel", profile: "seller", ok: false },
+      { route: "/vouchers", profile: "seller", ok: true },
+    ],
+  );
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/meu-painel: vendedor route reported an uncaught JavaScript exception/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /private@example\.com|customer-private-value|must-not-be-logged|seller-private-session|Uncaught Error/,
+  );
 });
 
 test("redeems one-use Clerk tickets for isolated seller, superadmin, and client browser sessions", async () => {
