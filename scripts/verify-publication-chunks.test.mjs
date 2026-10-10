@@ -763,6 +763,7 @@ function fakeBrowserFactory({
   runtimeExceptionsByRoute = {},
   interactionCountByRoute = {},
   delayedRuntimeExceptionByRoute = {},
+  delayedRouteSessionReadsByPath = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
@@ -770,6 +771,7 @@ function fakeBrowserFactory({
   const calls = [];
   const contentChecks = [];
   const executionContextIdByPath = new Map();
+  const sessionStateReadsByPath = new Map();
   function emitConfiguredRuntimeException(pathname, phase, contextId) {
     const phases = runtimeExceptionsByRoute[pathname] ?? [];
     const isPromiseRejection =
@@ -866,8 +868,18 @@ function fakeBrowserFactory({
             }
             if (params.expression?.includes("window.Clerk")) {
               const location = new URL(currentUrl);
-              const userId = browserAuthState?.userId ?? null;
-              const sessionId = browserAuthState?.sessionId ?? null;
+              const readCount =
+                (sessionStateReadsByPath.get(location.pathname) ?? 0) + 1;
+              sessionStateReadsByPath.set(location.pathname, readCount);
+              const isSessionLoading =
+                readCount <=
+                (delayedRouteSessionReadsByPath[location.pathname] ?? 0);
+              const userId = isSessionLoading
+                ? null
+                : (browserAuthState?.userId ?? null);
+              const sessionId = isSessionLoading
+                ? null
+                : (browserAuthState?.sessionId ?? null);
               return {
                 result: {
                   value: {
@@ -875,7 +887,7 @@ function fakeBrowserFactory({
                     pathname: location.pathname,
                     documentTitle: "VisiteCRM",
                     clerkPresent: true,
-                    clerkLoaded: true,
+                    clerkLoaded: !isSessionLoading,
                     userId,
                     sessionId,
                     hasUser: Boolean(userId),
@@ -988,6 +1000,24 @@ test("rejects blank and incorrectly blocked authenticated pages with profile and
     JSON.stringify(results),
     /short-lived-test-session/,
   );
+});
+
+test("accepts cached JavaScript assets reported as not modified by the browser", async () => {
+  const browser = fakeBrowserFactory({
+    responseStatus: 304,
+    contentType: "application/javascript",
+  });
+  const [result] = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedPaths: ["/dashboard"],
+    protectedHeaders: { Cookie: "clerk_test_session=short-lived" },
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.failures, []);
 });
 
 test("reports uncaught browser exceptions for the active profile and route without exposing details", async () => {
@@ -1211,6 +1241,37 @@ test("redeems one-use Clerk tickets for isolated seller, superadmin, and client 
       { firstNavigation: "https://visitecrm.com/", redeemsTicket: true },
       { firstNavigation: "https://visitecrm.com/", redeemsTicket: true },
     ],
+  );
+});
+
+test("waits for Clerk to restore its ticket session after a protected-route reload", async () => {
+  const browser = fakeBrowserFactory({
+    authStateByProfile: {
+      seller: { userId: "user_seller_test", sessionId: "sess_seller_test" },
+    },
+    delayedRouteSessionReadsByPath: {
+      "/meu-painel": 2,
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel"],
+        signInToken: "seller-token",
+        expectedUserId: "user_seller_test",
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [{ route: "/meu-painel", profile: "seller", ok: true }],
   );
 });
 
