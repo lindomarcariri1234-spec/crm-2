@@ -838,7 +838,10 @@ export function useWizardState({
 
       const tok = typeof order.paymentToken === "string" ? order.paymentToken : null;
       paymentTokenRef.current = tok;
-      if (form.paymentProvider === "infinitepay") {
+      if (
+        form.paymentProvider === "infinitepay"
+        && ["pix", "credit_card"].includes(form.paymentMethod)
+      ) {
         if (!tok) throw new Error("Não foi possível autenticar o pedido para iniciar o pagamento InfinitePay.");
         const link = await publicStoreApi.createInfinitePayCheckout(slug, {
           orderNumber: order.orderNumber,
@@ -1231,7 +1234,7 @@ export function useWizardState({
     setRecoveringStripeReturn(true);
     void (async () => {
       try {
-        await publicStoreApi.confirmInfinitePayPayment(slug, {
+        const confirmation = await publicStoreApi.confirmInfinitePayPayment(slug, {
           orderNumber,
           paymentToken: pending!.paymentToken!,
           transactionNsu,
@@ -1261,12 +1264,14 @@ export function useWizardState({
           financialSummary: order.financialSummary,
         });
         setStepState("confirmado");
-        sessionStorage.removeItem(`vitrine_reservation_infinitepay:${slug}:${productSlug}`);
-        const cleanUrl = new URL(window.location.href);
-        for (const key of ["order_nsu", "transaction_nsu", "slug", "capture_method", "receipt_url"]) {
-          cleanUrl.searchParams.delete(key);
+        if (confirmation.verified) {
+          sessionStorage.removeItem(`vitrine_reservation_infinitepay:${slug}:${productSlug}`);
+          const cleanUrl = new URL(window.location.href);
+          for (const key of ["order_nsu", "transaction_nsu", "slug", "capture_method", "receipt_url"]) {
+            cleanUrl.searchParams.delete(key);
+          }
+          window.history.replaceState(window.history.state, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
         }
-        window.history.replaceState(window.history.state, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
       } catch {
         if (!cancelled) setStripeReturnRecoveryError("Não foi possível confirmar o pagamento InfinitePay. O pedido continua aguardando confirmação oficial.");
       } finally {

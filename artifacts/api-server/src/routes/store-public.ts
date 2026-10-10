@@ -128,7 +128,7 @@ import
 
 import 
 {
- randomBytes, createHash 
+ randomBytes, createHash, timingSafeEqual 
 }
  from "crypto"
 ;
@@ -199,6 +199,7 @@ import
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
 import { runDeferredOrderAccounting } from "../services/checkout/post-booking";
 import { applyGatewayPayment } from "./webhooks";
+import { parseInfinitePayCheckResult } from "../lib/infinitepay";
 import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
 import {
   getReservationFailureDiagnostic,
@@ -1657,6 +1658,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     );
     const infinitePayCheckoutAvailable = Boolean(store.infinitePayEnabled && store.infinitePayHandle);
     const requestedProvider = data.paymentProvider;
+    const isCardPayment = data.paymentMethod === "credit_card" || data.paymentMethod === "debit_card";
     if (requestedProvider && !["stripe", "infinitepay", "manual"].includes(requestedProvider)) {
       next(new ValidationError("Provedor de pagamento inválido", "INVALID_PAYMENT_PROVIDER"));
       return;
@@ -1665,11 +1667,18 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       next(new ValidationError("InfinitePay não configurado nesta loja", "INFINITEPAY_NOT_CONFIGURED"));
       return;
     }
+    if (requestedProvider === "stripe" && !stripeCheckoutAvailable) {
+      next(new ValidationError("Stripe não configurado nesta loja", "STRIPE_NOT_CONFIGURED"));
+      return;
+    }
+    if (isCardPayment && requestedProvider === "manual") {
+      next(new ValidationError("Cartão exige um provedor de pagamento configurado", "PAYMENT_PROVIDER_REQUIRED"));
+      return;
+    }
     if (requestedProvider === "infinitepay" && !["pix", "credit_card"].includes(data.paymentMethod ?? "")) {
       next(new ValidationError("InfinitePay aceita Pix ou cartão de crédito neste checkout", "INFINITEPAY_METHOD_UNSUPPORTED"));
       return;
     }
-    const isCardPayment = data.paymentMethod === "credit_card" || data.paymentMethod === "debit_card";
     if (isCardPayment && requestedProvider !== "infinitepay" && !stripeCheckoutAvailable) {
       next(new ValidationError(
         "O pagamento com cartão exige uma conta Stripe configurada nesta loja.",
@@ -3272,7 +3281,7 @@ async function checkInfinitePayPayment(
   if (!order || order.paymentProvider !== "infinitepay") return false;
   const supplied = Buffer.from(input.paymentToken);
   const stored = Buffer.from(order.paymentToken ?? "");
-  if (!supplied.length || supplied.length !== stored.length || !crypto.timingSafeEqual(supplied, stored)) return false;
+  if (!supplied.length || supplied.length !== stored.length || !timingSafeEqual(supplied, stored)) return false;
   const marker = `infinitepay:${order.orderNumber}`;
   if (order.paymentIntentId !== marker) return false;
 
@@ -3288,22 +3297,12 @@ async function checkInfinitePayPayment(
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new AppError("InfinitePay status check failed", 503, "INFINITEPAY_UNAVAILABLE");
-  const result = await response.json() as {
-    success?: unknown; paid?: unknown; amount?: unknown; paid_amount?: unknown;
-    installments?: unknown; capture_method?: unknown;
-  };
   const expectedCents = Math.round(Number(order.depositAmount ?? order.totalAmount) * 100);
-  if (result.success !== true || result.paid !== true || Number(result.amount) !== expectedCents) return false;
-  const captureMethod = result.capture_method === "pix" || result.capture_method === "credit_card"
-    ? result.capture_method
-    : null;
-  if (!captureMethod) return false;
-  const paidAmountCents = Number(result.paid_amount);
-  const installments = Number(result.installments);
-  if (!Number.isSafeInteger(paidAmountCents) || paidAmountCents < expectedCents) return false;
+  const result = parseInfinitePayCheckResult(await response.json(), expectedCents);
+  if (!result) return false;
 
   const applied = await db.transaction(async (tx) => {
-    await tx.update(storeOrdersTable).set({ paymentMethod: captureMethod })
+    await tx.update(storeOrdersTable).set({ paymentMethod: result.captureMethod })
       .where(and(eq(storeOrdersTable.id, order.id), eq(storeOrdersTable.paymentIntentId, marker)));
     return applyGatewayPayment(tx as never, {
       store: {
@@ -3319,9 +3318,8 @@ async function checkInfinitePayPayment(
   });
   if (applied) {
     await db.update(paymentsTable).set({
-      notes: `InfinitePay: valor cobrado do comprador R$ ${(paidAmountCents / 100).toFixed(2)}; parcelas: ${
-        Number.isInteger(installments) && installments > 0 ? installments : "não informado"
-      }.`,
+      totalInstallments: result.installments,
+      notes: `InfinitePay: valor cobrado do comprador R$ ${(result.paidAmountCents / 100).toFixed(2)}; parcelas: ${result.installments}.`,
     }).where(and(
       eq(paymentsTable.gateway, "infinitepay"),
       eq(paymentsTable.transactionId, input.transactionNsu),
@@ -3363,7 +3361,7 @@ router.post("/public/store/:slug/infinitepay/checkout", async (req, res, next: N
     )).limit(1);
     const supplied = Buffer.from(paymentToken);
     const stored = Buffer.from(order?.paymentToken ?? "");
-    if (!order || !supplied.length || supplied.length !== stored.length || !crypto.timingSafeEqual(supplied, stored)) {
+    if (!order || !supplied.length || supplied.length !== stored.length || !timingSafeEqual(supplied, stored)) {
       next(new NotFoundError("Pedido não encontrado", "NOT_FOUND"));
       return;
     }

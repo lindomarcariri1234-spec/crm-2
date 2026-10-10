@@ -822,7 +822,7 @@ async function resolveOrderForMp(
 
 interface ApplyArgs {
   store: StoreScope;
-  gateway: "stripe" | "mercadopago";
+  gateway: "stripe" | "mercadopago" | "infinitepay";
   transactionId: string;
   paymentIntentId: string;
   amount: number;

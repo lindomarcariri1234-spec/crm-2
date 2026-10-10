@@ -1204,7 +1204,7 @@ export default function LojaConfiguracoes() {
             <CardHeader>
               <CardTitle>InfinitePay Checkout</CardTitle>
               <CardDescription>
-                Usa o checkout hospedado da InfinitePay para Pix e cartão. Parcelamento, tarifas e prazo de recebimento dependem das condições habilitadas na conta.
+                Usa o checkout hospedado da InfinitePay para Pix e cartão. Antes de ativar, confirme a elegibilidade da conta e configure no painel da InfinitePay o limite de até 6 parcelas: a API do checkout não aplica esse limite. Tarifas e prazo de recebimento dependem das condições da conta.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
