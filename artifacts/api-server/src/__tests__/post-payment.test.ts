@@ -96,6 +96,7 @@ vi.mock("../lib/trip-overlap-notify.js", () => ({
 const mockDispatchReferralConvertedEmail = vi.fn();
 const mockDispatchReferralTierUpgradeEmail = vi.fn();
 const mockDispatchReferralLoyaltyPointsEmail = vi.fn();
+const mockEnqueueConfirmedReservationEmail = vi.fn();
 vi.mock("../queues/email-helpers.js", () => ({
   dispatchReferralConvertedEmail: (...args: unknown[]) =>
     mockDispatchReferralConvertedEmail(...args),
@@ -103,6 +104,8 @@ vi.mock("../queues/email-helpers.js", () => ({
     mockDispatchReferralTierUpgradeEmail(...args),
   dispatchReferralLoyaltyPointsEmail: (...args: unknown[]) =>
     mockDispatchReferralLoyaltyPointsEmail(...args),
+  enqueueConfirmedReservationEmail: (...args: unknown[]) =>
+    mockEnqueueConfirmedReservationEmail(...args),
 }));
 
 const mockDispatchWhatsAppReferralConverted = vi.fn();
@@ -181,6 +184,7 @@ beforeEach(() => {
   mockDispatchReferralConvertedEmail.mockResolvedValue(undefined);
   mockDispatchReferralTierUpgradeEmail.mockResolvedValue(undefined);
   mockDispatchReferralLoyaltyPointsEmail.mockResolvedValue(undefined);
+  mockEnqueueConfirmedReservationEmail.mockResolvedValue(undefined);
   mockDispatchWhatsAppReferralConverted.mockResolvedValue(undefined);
   mockDispatchWhatsAppReservationConfirmed.mockResolvedValue(undefined);
   mockDispatchWhatsAppPaymentReceived.mockResolvedValue(undefined);
@@ -213,8 +217,8 @@ describe("runPostPaymentSideEffects", () => {
   it("mints a referral code AND provisions a portal account for a paid trip order", async () => {
     installSelectQueue([
       [ORDER], // order lookup
-      [ADMIN_USER], // admin user for writeClientActivity
       [{ id: "res-1" }], // reservations for order
+      [ADMIN_USER], // admin user for writeClientActivity
       [ADMIN_USER], // actor user for overlap-detection IIFE (fire-and-forget)
       [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
@@ -244,8 +248,8 @@ describe("runPostPaymentSideEffects", () => {
   it("passes the saved Stripe test mode to the new portal welcome email", async () => {
     installSelectQueue([
       [{ ...ORDER, paymentProvider: "stripe", stripeLivemode: false }],
-      [ADMIN_USER],
       [{ id: "res-1" }],
+      [ADMIN_USER],
       [ADMIN_USER],
       [],
       [STORE],
@@ -264,8 +268,8 @@ describe("runPostPaymentSideEffects", () => {
   it("mints a referral code but does NOT provision a portal account or send WhatsApps for a product-only order", async () => {
     installSelectQueue([
       [ORDER], // order lookup
-      [ADMIN_USER], // admin user for writeClientActivity
       [], // no reservations → product-only → early return before store lookup
+      [ADMIN_USER], // admin user for writeClientActivity
     ]);
 
     await runPostPaymentSideEffects("order-1");
@@ -279,8 +283,8 @@ describe("runPostPaymentSideEffects", () => {
   it("schedules reservation confirmation and dispatches payment received for a confirmed storefront reservation", async () => {
     installSelectQueue([
       [ORDER], // order lookup
+      [{ id: "res-1", clientId: "client-1", tripId: "trip-1", status: "confirmed" }], // reservations for order
       [ADMIN_USER], // admin user for writeClientActivity
-      [{ id: "res-1", clientId: "client-1", tripId: "trip-1" }], // reservations for order
       [ADMIN_USER], // actor user for overlap-detection IIFE
       [
         {
@@ -305,12 +309,27 @@ describe("runPostPaymentSideEffects", () => {
     // delivery: "direct"; this test verifies the post-payment handoff shared by
     // Mercado Pago, Stripe, and manual-payment paths.
     expect(mockScheduleReservationConfirmedWhatsApp).toHaveBeenCalledWith("res-1", "tenant-1");
+    expect(mockEnqueueConfirmedReservationEmail).toHaveBeenCalledWith("res-1", "tenant-1");
     expect(mockDispatchWhatsAppPaymentReceived).toHaveBeenCalledWith({
       reservationId: "res-1",
       tenantId: "tenant-1",
       amount: 125.5,
       remainingBalance: 374.5,
     });
+  });
+
+  it("emails a confirmed reservation after a deposit without running full-order effects", async () => {
+    installSelectQueue([
+      [{ ...ORDER, paymentStatus: "pending" }], // order lookup
+      [{ id: "res-1", clientId: "client-1", tripId: "trip-1", status: "confirmed" }],
+    ]);
+
+    await runPostPaymentSideEffects("order-1", { allowPartialPayment: true });
+
+    expect(mockEnqueueConfirmedReservationEmail).toHaveBeenCalledWith("res-1", "tenant-1");
+    expect(mockGenerateAndAssignReferralCode).not.toHaveBeenCalled();
+    expect(mockWriteClientActivity).not.toHaveBeenCalled();
+    expect(mockEnsurePortalAccount).not.toHaveBeenCalled();
   });
 
   it("uses each reservation's own paidValue when one order contains multiple reservations", async () => {
@@ -362,15 +381,15 @@ describe("runPostPaymentSideEffects", () => {
     installSelectQueue([
       // Deposit payment
       [ORDER],
-      [ADMIN_USER],
       [{ id: "res-1", clientId: "client-1", tripId: "trip-1" }],
+      [ADMIN_USER],
       [ADMIN_USER],
       [{ id: "res-1", status: "confirmed", paidValue: "100.00", balance: "400.00" }],
       [STORE],
       // Remaining-balance payment
       [ORDER],
-      [ADMIN_USER],
       [{ id: "res-1", clientId: "client-1", tripId: "trip-1" }],
+      [ADMIN_USER],
       [ADMIN_USER],
       [{ id: "res-1", status: "confirmed", paidValue: "500.00", balance: "0.00" }],
       [STORE],
@@ -427,8 +446,8 @@ describe("runPostPaymentSideEffects", () => {
     mockGenerateAndAssignReferralCode.mockRejectedValueOnce(new Error("boom"));
     installSelectQueue([
       [ORDER], // order lookup
-      [ADMIN_USER], // admin user for writeClientActivity
       [{ id: "res-1" }], // reservations
+      [ADMIN_USER], // admin user for writeClientActivity
       [ADMIN_USER], // actor user for overlap-detection IIFE (fire-and-forget)
       [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
@@ -443,8 +462,8 @@ describe("runPostPaymentSideEffects", () => {
   it("calls writeClientActivity with order_created after payment confirmation", async () => {
     installSelectQueue([
       [ORDER], // order lookup
-      [ADMIN_USER], // admin user for writeClientActivity
       [{ id: "res-1" }], // reservations
+      [ADMIN_USER], // admin user for writeClientActivity
       [ADMIN_USER], // actor user for overlap-detection IIFE (fire-and-forget)
       [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
@@ -468,8 +487,8 @@ describe("runPostPaymentSideEffects", () => {
   it("does NOT call writeClientActivity when no active agency user is found for the tenant", async () => {
     installSelectQueue([
       [ORDER], // order lookup
-      [], // admin user lookup → none found
       [{ id: "res-1" }], // reservations
+      [], // admin user lookup → none found
       [], // actor user for overlap-detection IIFE → none found → detectAndNotifyTripOverlap not called
       [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
@@ -485,8 +504,8 @@ describe("runPostPaymentSideEffects", () => {
     mockWriteClientActivity.mockRejectedValueOnce(new Error("db error"));
     installSelectQueue([
       [ORDER], // order lookup
-      [ADMIN_USER], // admin user for writeClientActivity
       [{ id: "res-1" }], // reservations
+      [ADMIN_USER], // admin user for writeClientActivity
       [ADMIN_USER], // actor user for overlap-detection IIFE (fire-and-forget)
       [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
