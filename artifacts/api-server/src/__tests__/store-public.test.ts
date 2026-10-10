@@ -225,6 +225,8 @@ import {
 } from "../lib/clerk-request.js";
 import { getTenantUser } from "../lib/tenant.js";
 import { generatePixQrCodeUrl } from "../lib/pix.js";
+import { AppError } from "../lib/errors.js";
+import { createReservationsForOrder } from "../services/checkout/create-reservations.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Express app
@@ -1425,6 +1427,60 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     // was enqueued during checkout — it is deferred to the payment-confirmation path.
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(mockEnqueueConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("returns the specific safe reservation error instead of hiding it as a sync failure", async () => {
+    const tripProduct = { ...FAKE_PRODUCT, tripId: "trip-001" };
+    vi.mocked(createReservationsForOrder).mockRejectedValueOnce(
+      new AppError("A vaga acabou de ser ocupada.", 409, "SEAT_CONFLICT", {
+        privateValue: "must not be exposed",
+      }),
+    );
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([tripProduct])
+      .mockResolvedValueOnce([{ availableSeats: 10 }])
+      .mockResolvedValueOnce([{ id: "admin-001" }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([FAKE_ORDER])
+      .mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send(VALID_BODY);
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("SEAT_CONFLICT");
+    expect(res.body.message).toBe("A vaga acabou de ser ocupada.");
+    expect(res.body).not.toHaveProperty("privateValue");
+  });
+
+  it("keeps unexpected reservation errors private and returns the support request id", async () => {
+    const tripProduct = { ...FAKE_PRODUCT, tripId: "trip-001" };
+    vi.mocked(createReservationsForOrder).mockRejectedValueOnce(
+      Object.assign(new Error("customer@example.com"), {
+        code: "23503",
+        constraint: "reservations_created_by_id_fkey",
+        table: "reservations",
+      }),
+    );
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([tripProduct])
+      .mockResolvedValueOnce([{ availableSeats: 10 }])
+      .mockResolvedValueOnce([{ id: "admin-001" }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([FAKE_ORDER])
+      .mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send(VALID_BODY);
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("RESERVATION_SYNC_FAILED");
+    expect(res.body.error).not.toContain("customer@example.com");
+    expect(res.body).not.toHaveProperty("constraint");
   });
 });
 
