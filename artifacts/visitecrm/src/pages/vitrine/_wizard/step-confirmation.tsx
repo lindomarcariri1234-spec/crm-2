@@ -580,18 +580,41 @@ export function StepConfirmation({
             </Button>
           )}
             {(!completedOrder.pixQrCode || !completedOrder.pixQrCodeUrl) && (
-              <p className="mt-1.5 flex items-center gap-1">
-                <Info className="w-3.5 h-3.5" />
-                {stripeCardMethod
-                  ? paidAmt > 0
-                    ? "A Stripe confirmou uma parte do pagamento. O saldo restante continua indicado acima."
-                    : stripePaymentFailed
-                      ? "A Stripe não confirmou a tentativa. Nenhum pagamento foi registrado; inicie um novo pedido para tentar novamente."
-                      : stripePaymentSubmitted
-                      ? "Solicitação recebida pela Stripe; aguardando confirmação do servidor. Não faça outra tentativa enquanto isso."
-                      : "Conclua o pagamento no formulário seguro da Stripe abaixo."
-                  : "Aguardando confirmação do pagamento. Você receberá um email assim que o pagamento for confirmado."}
-              </p>
+              <>
+                <p className="mt-1.5 flex items-center gap-1">
+                  <Info className="w-3.5 h-3.5" />
+                  {stripeCardMethod
+                    ? paidAmt > 0
+                      ? "A Stripe confirmou uma parte do pagamento. O saldo restante continua indicado acima."
+                      : stripePaymentFailed
+                        ? "A Stripe não confirmou a tentativa. Nenhum pagamento foi registrado; inicie um novo pedido para tentar novamente."
+                        : stripePaymentSubmitted
+                          ? "A solicitação foi enviada à Stripe. A confirmação depende da atualização segura do servidor; não pague novamente enquanto isso."
+                          : "Conclua o pagamento no formulário seguro da Stripe abaixo."
+                    : "Aguardando confirmação do pagamento. Você receberá um email assim que o pagamento for confirmado."}
+                </p>
+                {stripeCardMethod && stripePaymentPending && (
+                  <div className="mt-3 flex flex-col items-start gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void refreshOrderStatus(true)}
+                      disabled={refreshingOrderStatus}
+                    >
+                      {refreshingOrderStatus
+                        ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        : <RefreshCw className="mr-2 h-4 w-4" />}
+                      {refreshingOrderStatus ? "Consultando confirmação..." : "Consultar confirmação"}
+                    </Button>
+                    {orderStatusRefreshFailed && (
+                      <p role="alert" className="text-xs text-red-700">
+                        Não foi possível consultar agora. A verificação automática continuará; não faça outro pagamento.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
           {completedOrder.pixQrCode && completedOrder.pixQrCodeUrl && (
@@ -625,7 +648,7 @@ export function StepConfirmation({
                   "Apresente o voucher e documento com foto no dia do embarque.",
                 ]
               : [
-                  "Você receberá um email de confirmação com todos os detalhes da sua reserva e o voucher em anexo.",
+                  "Depois que o servidor confirmar o pagamento, você receberá um email com os detalhes da reserva e o voucher.",
                   "Também enviaremos uma mensagem no WhatsApp com as informações de embarque.",
                   "Apresente o voucher e documento com foto no dia do embarque.",
                   "Chegue ao ponto de embarque com 30 minutos de antecedência.",

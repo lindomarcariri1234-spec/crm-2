@@ -208,6 +208,8 @@ const StoreSettingsBody = z.object({
   stripePublicKey: z.string().nullish(),
   stripeSecretKey: z.string().nullish(),
   stripeWebhookSecret: z.string().nullish(),
+  infinitePayEnabled: z.boolean().optional(),
+  infinitePayHandle: z.string().trim().max(80).nullish(),
   mpEnabled: z.boolean().optional(),
   mpPublicKey: z.string().nullish(),
   mpAccessToken: z.string().nullish(),

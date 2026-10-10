@@ -792,6 +792,13 @@
       "when": 1809960013000,
       "tag": "0113_reconcile_client_totals_after_stripe_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1809960014000,
+      "tag": "0114_infinitepay_checkout",
+      "breakpoints": true
     }
   ]
 }

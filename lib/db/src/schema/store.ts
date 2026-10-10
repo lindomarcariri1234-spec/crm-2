@@ -66,6 +66,8 @@ export const storesTable = pgTable("stores", {
   stripePublicKey: text("stripe_public_key"),
   stripeSecretKey: text("stripe_secret_key"),
   stripeWebhookSecret: text("stripe_webhook_secret"),
+  infinitePayEnabled: boolean("infinitepay_enabled").notNull().default(false),
+  infinitePayHandle: text("infinitepay_handle"),
 
   mpEnabled: boolean("mp_enabled").notNull().default(false),
   mpPublicKey: text("mp_public_key"),
@@ -268,6 +270,7 @@ export const storeOrdersTable = pgTable("store_orders", {
 
   paymentMethod: text("payment_method").notNull(),
   paymentProvider: text("payment_provider").notNull(),
+  infinitePayCheckoutUrl: text("infinitepay_checkout_url"),
   stripeLivemode: boolean("stripe_livemode"),
   paymentStatus: text("payment_status").notNull().default("pending"),
 

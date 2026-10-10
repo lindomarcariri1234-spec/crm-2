@@ -114,6 +114,7 @@ interface EnqueueEmailOpts {
   reservationId?: string;
   subject: string;
   props: ReservationConfirmationEmailProps;
+  includeWhatsApp?: boolean;
 }
 
 export function buildReservationConfirmationEmailHtml(props: ReservationConfirmationEmailProps): string {
@@ -156,19 +157,45 @@ export function buildWelcomeCredentialsEmailHtml(props: WelcomeCredentialsEmailP
  * Always inserts an email_log record before returning.
  */
 export async function enqueueReservationConfirmationEmail(opts: EnqueueEmailOpts): Promise<void> {
-  const { tenantId, reservationId, subject, props } = opts;
+  const { tenantId, reservationId, subject, props, includeWhatsApp = true } = opts;
   const html = buildReservationConfirmationEmailHtml(props);
   const outbound = await dispatchOutboundMessage({
     tenantId, eventType: "reservation_confirmation",
     idempotencyKey: `reservation:${reservationId ?? props.reservationNumber}:confirmation`,
     recipient: { type: "direct", name: props.clientName, email: props.clientEmail, whatsapp: props.clientPhone },
     email: { subject, html, senderName: props.agencyName },
-    whatsapp: { text: `Olá, ${props.clientName}! Sua reserva ${props.reservationNumber} foi confirmada. Viagem: ${props.tripTitle}, destino: ${props.destination}, saída: ${props.departureDate}. Voucher: ${props.voucherUrl}` },
+    ...(includeWhatsApp ? {
+      whatsapp: { text: `Olá, ${props.clientName}! Sua reserva ${props.reservationNumber} foi confirmada. Viagem: ${props.tripTitle}, destino: ${props.destination}, saída: ${props.departureDate}. Voucher: ${props.voucherUrl}` },
+    } : {}),
     origin: "reservation-confirmation",
     metadata: { reservationId },
   });
   await projectOutboundEmailLog(tenantId, reservationId ?? null, props.clientEmail, subject, outbound);
   logger.info({ reservationId, success: outbound.message.status === "accepted" }, "[outbound] Confirmation dispatched");
+}
+
+/**
+ * Sends the existing customer confirmation template after a storefront payment
+ * confirms a reservation. WhatsApp is handled by the reservation outbox in this
+ * flow, so only the email channel is dispatched here.
+ */
+export async function enqueueConfirmedReservationEmail(
+  reservationId: string,
+  tenantId: string,
+): Promise<void> {
+  const props = await buildEmailPropsFromReservation(reservationId, tenantId);
+  if (!props) {
+    logger.warn({ reservationId, tenantId }, "[email-queue] Could not build reservation confirmation — skipping");
+    return;
+  }
+
+  await enqueueReservationConfirmationEmail({
+    tenantId,
+    reservationId,
+    subject: `Reserva Confirmada — ${props.reservationNumber}`,
+    props,
+    includeWhatsApp: false,
+  });
 }
 
 // ── Enqueue / send a cancellation email ───────────────────────────────────────

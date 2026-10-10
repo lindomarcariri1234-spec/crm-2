@@ -1483,7 +1483,6 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     );
     expect(JSON.stringify(res.body)).not.toContain("private customer details");
   });
-
   it("keeps unexpected reservation errors private and returns the support request id", async () => {
     const tripProduct = { ...FAKE_PRODUCT, tripId: "trip-001" };
     vi.mocked(createReservationsForOrder).mockRejectedValueOnce(

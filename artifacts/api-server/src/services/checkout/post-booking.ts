@@ -10,7 +10,12 @@ import { generateAndAssignReferralCode } from "../../lib/referral-code";
 import { generateReferralCode } from "../../lib/id";
 import { applyDeferredOrderCredits } from "./deferred-referral-effects";
 import { scheduleReservationConfirmedWhatsApp } from "./reservation-confirmation-outbox";
-import { dispatchReferralConvertedEmail, dispatchReferralTierUpgradeEmail, dispatchReferralLoyaltyPointsEmail } from "../../queues/email-helpers";
+import {
+  dispatchReferralConvertedEmail,
+  dispatchReferralTierUpgradeEmail,
+  dispatchReferralLoyaltyPointsEmail,
+  enqueueConfirmedReservationEmail,
+} from "../../queues/email-helpers";
 import { dispatchWhatsAppReferralConverted, dispatchWhatsAppReservationConfirmed, dispatchWhatsAppPaymentReceived } from "../../queues/whatsapp-helpers";
 import { RESERVATION_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 
@@ -33,9 +38,9 @@ import { RESERVATION_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions
  * generateAndAssignReferralCode no-ops when the client already has a code, so it
  * is safe on webhook/payment retries.
  *
- * Note: the customer reservation-confirmation email is intentionally NOT sent
- * here (it is a pre-existing gap tracked separately) and the agency new-booking
- * notification is dispatched by the webhook handler, so it is not duplicated.
+ * Customer confirmation emails are dispatched for confirmed reservations below.
+ * The agency new-booking notification is dispatched by the webhook handler only
+ * when this call created the reservation, so it is not duplicated here.
  *
  * @param orderId - The store_orders.id whose payment was just confirmed.
  * @param options.allowPartialPayment - Run only referral/credit effects when a
@@ -131,6 +136,37 @@ export async function runPostPaymentSideEffects(
 
   if (!order) return;
 
+  const reservationRows = await db
+    .select({
+      id: reservationsTable.id,
+      clientId: reservationsTable.clientId,
+      tripId: reservationsTable.tripId,
+      status: reservationsTable.status,
+    })
+    .from(reservationsTable)
+    .where(
+      and(
+        eq(reservationsTable.tenantId, order.tenantId),
+        eq(reservationsTable.storeOrderId, order.orderNumber),
+      ),
+    );
+
+  // A deposit can confirm a reservation while the overall order still has a
+  // balance. Send the confirmation at the reservation transition, not only
+  // after the entire order is paid. The outbound helper is idempotent per
+  // reservation and logs/skips missing client email addresses.
+  for (const reservation of reservationRows) {
+    if (reservation.status !== RESERVATION_STATUS.CONFIRMED) continue;
+    try {
+      await enqueueConfirmedReservationEmail(reservation.id, order.tenantId);
+    } catch (err) {
+      logger.error(
+        { err, reservationId: reservation.id, orderId: order.id },
+        "[checkout/post-payment] Failed to enqueue reservation confirmation email",
+      );
+    }
+  }
+
   // A reservation deposit/partial payment must not be presented as a fully
   // confirmed storefront order. Referral conversion above is intentionally
   // already complete; code minting, order activity, portal/payment messaging,
@@ -176,20 +212,6 @@ export async function runPostPaymentSideEffects(
   // Provision the customer's portal account only when the paid order produced
   // trip reservations. Product-only orders do not get a portal account (matches
   // the prior trip-linked gating), and provisioning is now gated behind payment.
-  const reservationRows = await db
-    .select({
-      id: reservationsTable.id,
-      clientId: reservationsTable.clientId,
-      tripId: reservationsTable.tripId,
-    })
-    .from(reservationsTable)
-    .where(
-      and(
-        eq(reservationsTable.tenantId, order.tenantId),
-        eq(reservationsTable.storeOrderId, order.orderNumber),
-      ),
-    );
-
   if (reservationRows.length === 0) return;
 
   // Fire-and-forget: check each new reservation for cross-trip date conflicts.

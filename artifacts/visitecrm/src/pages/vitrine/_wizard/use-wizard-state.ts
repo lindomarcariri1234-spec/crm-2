@@ -24,6 +24,7 @@ export type WizardForm = {
   customerBirthdate: string;
   notes: string;
   paymentMethod: string;
+  paymentProvider: "stripe" | "infinitepay" | "manual";
   couponCode: string;
   cardNumber: string;
   cardName: string;
@@ -240,6 +241,7 @@ export function useWizardState({
     customerBirthdate: "",
     notes: "",
     paymentMethod: (store.paymentMethods ?? [])[0] ?? "pix",
+    paymentProvider: store.stripeEnabled ? "stripe" : store.infinitePayEnabled ? "infinitepay" : "manual",
     couponCode: "",
     cardNumber: "",
     cardName: "",
@@ -798,6 +800,9 @@ export function useWizardState({
           : undefined,
         referralCreditUsed: referralCreditApplied > 0 ? referralCreditApplied : undefined,
         paymentMethod: form.paymentMethod,
+        paymentProvider: ["pix", "credit_card"].includes(form.paymentMethod)
+          ? form.paymentProvider
+          : "manual",
         notes: extraNotes || undefined,
         seats: effectiveSeats.length > 0 ? effectiveSeats : undefined,
         boardingLocationId: selectedBoardingPointId || undefined,
@@ -833,9 +838,28 @@ export function useWizardState({
 
       const tok = typeof order.paymentToken === "string" ? order.paymentToken : null;
       paymentTokenRef.current = tok;
-      const isStripeCardPayment =
-        form.paymentMethod === "credit_card" || form.paymentMethod === "debit_card";
-      if (isStripeCardPayment) {
+      if (
+        form.paymentProvider === "infinitepay"
+        && ["pix", "credit_card"].includes(form.paymentMethod)
+      ) {
+        if (!tok) throw new Error("Não foi possível autenticar o pedido para iniciar o pagamento InfinitePay.");
+        const link = await publicStoreApi.createInfinitePayCheckout(slug, {
+          orderNumber: order.orderNumber,
+          paymentToken: tok,
+          returnPath: window.location.pathname,
+        });
+        sessionStorage.setItem(`vitrine_reservation_infinitepay:${slug}:${productSlug}`, JSON.stringify({
+          orderNumber: order.orderNumber,
+          paymentToken: tok,
+          createdAt: Date.now(),
+        }));
+        window.location.assign(link.checkoutUrl);
+        return;
+      }
+      const isStripeOnlinePayment =
+        form.paymentProvider === "stripe"
+        && ["pix", "credit_card", "debit_card"].includes(form.paymentMethod);
+      if (isStripeOnlinePayment) {
         if (!tok) {
           throw new Error("Não foi possível autenticar o pedido para iniciar o pagamento Stripe.");
         }
@@ -1184,6 +1208,77 @@ export function useWizardState({
     return () => {
       cancelled = true;
     };
+  }, [slug, productSlug]);
+
+  const infinitePayReturnStartedRef = useRef(false);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const orderNumber = params.get("order_nsu");
+    const transactionNsu = params.get("transaction_nsu");
+    const invoiceSlug = params.get("slug");
+    if (!orderNumber || !transactionNsu || !invoiceSlug || infinitePayReturnStartedRef.current) return;
+    let pending: { orderNumber?: string; paymentToken?: string; createdAt?: number } | null = null;
+    try {
+      pending = JSON.parse(sessionStorage.getItem(`vitrine_reservation_infinitepay:${slug}:${productSlug}`) ?? "null");
+    } catch {
+      pending = null;
+    }
+    if (
+      pending?.orderNumber !== orderNumber
+      || typeof pending.paymentToken !== "string"
+      || typeof pending.createdAt !== "number"
+      || Date.now() - pending.createdAt > 45 * 60 * 1000
+    ) return;
+    infinitePayReturnStartedRef.current = true;
+    let cancelled = false;
+    setRecoveringStripeReturn(true);
+    void (async () => {
+      try {
+        const confirmation = await publicStoreApi.confirmInfinitePayPayment(slug, {
+          orderNumber,
+          paymentToken: pending!.paymentToken!,
+          transactionNsu,
+          invoiceSlug,
+        });
+        const order = await publicStoreApi.getOrder(slug, orderNumber, pending!.paymentToken!);
+        if (cancelled) return;
+        paymentTokenRef.current = pending!.paymentToken!;
+        setCompletedOrder({
+          orderNumber: order.orderNumber,
+          totalAmount: String(order.totalAmount),
+          createdAt: order.createdAt,
+          customerName: order.customerName,
+          customerEmail: order.customerEmail,
+          customerPhone: order.customerPhone ?? null,
+          paymentMethod: order.paymentMethod ?? null,
+          paymentStatus: order.paymentStatus ?? null,
+          status: order.status ?? null,
+          reservationExpiresAt: order.reservationExpiresAt ?? null,
+          depositAmount: order.depositAmount ?? null,
+          paidAmount: order.paidAmount ?? null,
+          amountRemaining: order.amountRemaining ?? null,
+          pixQrCode: order.pixQrCode ?? null,
+          pixQrCodeUrl: order.pixQrCodeUrl ?? null,
+          pixCopyPaste: order.pixCopyPaste ?? null,
+          reservations: order.reservations,
+          financialSummary: order.financialSummary,
+        });
+        setStepState("confirmado");
+        if (confirmation.verified) {
+          sessionStorage.removeItem(`vitrine_reservation_infinitepay:${slug}:${productSlug}`);
+          const cleanUrl = new URL(window.location.href);
+          for (const key of ["order_nsu", "transaction_nsu", "slug", "capture_method", "receipt_url"]) {
+            cleanUrl.searchParams.delete(key);
+          }
+          window.history.replaceState(window.history.state, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+        }
+      } catch {
+        if (!cancelled) setStripeReturnRecoveryError("Não foi possível confirmar o pagamento InfinitePay. O pedido continua aguardando confirmação oficial.");
+      } finally {
+        if (!cancelled) setRecoveringStripeReturn(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, [slug, productSlug]);
 
   const handleStripePaymentSubmitted = useCallback(() => {

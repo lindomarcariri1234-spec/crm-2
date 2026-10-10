@@ -128,7 +128,7 @@ import
 
 import 
 {
- randomBytes, createHash 
+ randomBytes, createHash, timingSafeEqual 
 }
  from "crypto"
 ;
@@ -197,6 +197,9 @@ import
  from "../services/checkout/create-reservations"
 ;
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
+import { runDeferredOrderAccounting } from "../services/checkout/post-booking";
+import { applyGatewayPayment } from "./webhooks";
+import { parseInfinitePayCheckResult } from "../lib/infinitepay";
 import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
 import {
   getReservationFailureDiagnostic,
@@ -539,6 +542,7 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
         && decryptOrPassthrough(store.stripeSecretKey),
       ),
       stripePublicKey: store.stripePublicKey,
+      infinitePayEnabled: Boolean(store.infinitePayEnabled && store.infinitePayHandle),
       mpEnabled: store.mpEnabled,
       termsOfService: store.termsOfService,
       privacyPolicy: store.privacyPolicy,
@@ -1652,19 +1656,41 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       && store.stripePublicKey
       && decryptOrPassthrough(store.stripeSecretKey),
     );
+    const infinitePayCheckoutAvailable = Boolean(store.infinitePayEnabled && store.infinitePayHandle);
+    const requestedProvider = data.paymentProvider;
     const isCardPayment = data.paymentMethod === "credit_card" || data.paymentMethod === "debit_card";
-    if (isCardPayment && !stripeCheckoutAvailable) {
+    if (requestedProvider && !["stripe", "infinitepay", "manual"].includes(requestedProvider)) {
+      next(new ValidationError("Provedor de pagamento inválido", "INVALID_PAYMENT_PROVIDER"));
+      return;
+    }
+    if (requestedProvider === "infinitepay" && !infinitePayCheckoutAvailable) {
+      next(new ValidationError("InfinitePay não configurado nesta loja", "INFINITEPAY_NOT_CONFIGURED"));
+      return;
+    }
+    if (requestedProvider === "stripe" && !stripeCheckoutAvailable) {
+      next(new ValidationError("Stripe não configurado nesta loja", "STRIPE_NOT_CONFIGURED"));
+      return;
+    }
+    if (isCardPayment && requestedProvider === "manual") {
+      next(new ValidationError("Cartão exige um provedor de pagamento configurado", "PAYMENT_PROVIDER_REQUIRED"));
+      return;
+    }
+    if (requestedProvider === "infinitepay" && !["pix", "credit_card"].includes(data.paymentMethod ?? "")) {
+      next(new ValidationError("InfinitePay aceita Pix ou cartão de crédito neste checkout", "INFINITEPAY_METHOD_UNSUPPORTED"));
+      return;
+    }
+    if (isCardPayment && requestedProvider !== "infinitepay" && !stripeCheckoutAvailable) {
       next(new ValidationError(
         "O pagamento com cartão exige uma conta Stripe configurada nesta loja.",
         "STRIPE_NOT_CONFIGURED",
       ));
       return;
     }
-    if (isCardPayment) {
+    if (isCardPayment && !requestedProvider) {
       // Card orders must never fall back to manual confirmation.
       data.paymentProvider = "stripe";
     }
-    if (data.paymentMethod === "pix") {
+    if (data.paymentMethod === "pix" && !requestedProvider) {
       data.paymentProvider = stripeCheckoutAvailable ? "stripe" : "manual";
     }
 
@@ -3232,6 +3258,229 @@ router.post("/public/store/:slug/coupons/validate", async (req, res, next: NextF
   } catch (err) {
     next(err);
   }
+});
+
+async function checkInfinitePayPayment(
+  store: Awaited<ReturnType<typeof getActiveStore>>,
+  input: { orderNumber: string; paymentToken: string; transactionNsu: string; invoiceSlug: string },
+): Promise<boolean> {
+  if (!store?.infinitePayEnabled || !store.infinitePayHandle) return false;
+  const [order] = await db.select({
+    id: storeOrdersTable.id,
+    orderNumber: storeOrdersTable.orderNumber,
+    totalAmount: storeOrdersTable.totalAmount,
+    depositAmount: storeOrdersTable.depositAmount,
+    paymentToken: storeOrdersTable.paymentToken,
+    paymentIntentId: storeOrdersTable.paymentIntentId,
+    paymentProvider: storeOrdersTable.paymentProvider,
+  }).from(storeOrdersTable).where(and(
+    eq(storeOrdersTable.storeId, store.id),
+    eq(storeOrdersTable.tenantId, store.tenantId),
+    eq(storeOrdersTable.orderNumber, input.orderNumber),
+  )).limit(1);
+  if (!order || order.paymentProvider !== "infinitepay") return false;
+  const supplied = Buffer.from(input.paymentToken);
+  const stored = Buffer.from(order.paymentToken ?? "");
+  if (!supplied.length || supplied.length !== stored.length || !timingSafeEqual(supplied, stored)) return false;
+  const marker = `infinitepay:${order.orderNumber}`;
+  if (order.paymentIntentId !== marker) return false;
+
+  const response = await fetch("https://api.checkout.infinitepay.io/payment_check", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      handle: store.infinitePayHandle,
+      order_nsu: order.orderNumber,
+      transaction_nsu: input.transactionNsu,
+      slug: input.invoiceSlug,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new AppError("InfinitePay status check failed", 503, "INFINITEPAY_UNAVAILABLE");
+  const expectedCents = Math.round(Number(order.depositAmount ?? order.totalAmount) * 100);
+  const result = parseInfinitePayCheckResult(await response.json(), expectedCents);
+  if (!result) return false;
+
+  const applied = await db.transaction(async (tx) => {
+    await tx.update(storeOrdersTable).set({ paymentMethod: result.captureMethod })
+      .where(and(eq(storeOrdersTable.id, order.id), eq(storeOrdersTable.paymentIntentId, marker)));
+    return applyGatewayPayment(tx as never, {
+      store: {
+        storeId: store.id, tenantId: store.tenantId, slug: store.slug,
+        mpAccessToken: null, stripeWebhookSecret: null,
+      },
+      gateway: "infinitepay",
+      transactionId: input.transactionNsu,
+      paymentIntentId: marker,
+      amount: Number(order.depositAmount ?? order.totalAmount),
+      paidAt: new Date(),
+    });
+  });
+  if (applied) {
+    await db.update(paymentsTable).set({
+      totalInstallments: result.installments,
+      notes: `InfinitePay: valor cobrado do comprador R$ ${(result.paidAmountCents / 100).toFixed(2)}; parcelas: ${result.installments}.`,
+    }).where(and(
+      eq(paymentsTable.gateway, "infinitepay"),
+      eq(paymentsTable.transactionId, input.transactionNsu),
+      eq(paymentsTable.tenantId, store.tenantId),
+    ));
+    const options = { allowPartialPayment: applied.partialPayment === true, throwOnDeferredError: true };
+    if (applied.retryDeferredOnly) await runDeferredOrderAccounting(applied.orderId, options);
+    else await runPostPaymentSideEffects(applied.orderId, options);
+  }
+  return true;
+}
+
+router.post("/public/store/:slug/infinitepay/checkout", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const store = await getActiveStore(req.params.slug);
+    if (!store?.infinitePayEnabled || !store.infinitePayHandle) {
+      next(new ValidationError("InfinitePay não está configurado para esta loja", "INFINITEPAY_NOT_CONFIGURED"));
+      return;
+    }
+    const body = req.body as Record<string, unknown>;
+    const orderNumber = typeof body.orderNumber === "string" ? body.orderNumber.trim() : "";
+    const paymentToken = typeof body.paymentToken === "string" ? body.paymentToken.trim() : "";
+    const returnPath = typeof body.returnPath === "string" ? body.returnPath : "";
+    if (!orderNumber || !paymentToken || !/^\/(?!\/)[^\\\r\n]*$/.test(returnPath)) {
+      next(new ValidationError("Dados do checkout InfinitePay inválidos", "VALIDATION_ERROR"));
+      return;
+    }
+    const [order] = await db.select({
+      id: storeOrdersTable.id, orderNumber: storeOrdersTable.orderNumber,
+      totalAmount: storeOrdersTable.totalAmount, depositAmount: storeOrdersTable.depositAmount,
+      paymentToken: storeOrdersTable.paymentToken, paymentProvider: storeOrdersTable.paymentProvider,
+      paymentIntentId: storeOrdersTable.paymentIntentId, checkoutUrl: storeOrdersTable.infinitePayCheckoutUrl,
+      customerName: storeOrdersTable.customerName, customerEmail: storeOrdersTable.customerEmail,
+      customerPhone: storeOrdersTable.customerPhone,
+    }).from(storeOrdersTable).where(and(
+      eq(storeOrdersTable.storeId, store.id),
+      eq(storeOrdersTable.tenantId, store.tenantId),
+      eq(storeOrdersTable.orderNumber, orderNumber),
+    )).limit(1);
+    const supplied = Buffer.from(paymentToken);
+    const stored = Buffer.from(order?.paymentToken ?? "");
+    if (!order || !supplied.length || supplied.length !== stored.length || !timingSafeEqual(supplied, stored)) {
+      next(new NotFoundError("Pedido não encontrado", "NOT_FOUND"));
+      return;
+    }
+    if (order.paymentProvider !== "infinitepay") {
+      next(new ValidationError("Este pedido não foi iniciado pela InfinitePay", "PAYMENT_PROVIDER_MISMATCH"));
+      return;
+    }
+    if (order.checkoutUrl && order.paymentIntentId === `infinitepay:${orderNumber}`) {
+      res.json({ checkoutUrl: order.checkoutUrl });
+      return;
+    }
+    const amountCents = Math.round(Number(order.depositAmount ?? order.totalAmount) * 100);
+    if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+      next(new ValidationError("Valor inválido para criar o checkout", "INVALID_PAYMENT_AMOUNT"));
+      return;
+    }
+    const marker = `infinitepay:${orderNumber}`;
+    const creatingMarker = `infinitepay:creating:${orderNumber}`;
+    const [claim] = await db.update(storeOrdersTable).set({ paymentIntentId: creatingMarker })
+      .where(and(
+        eq(storeOrdersTable.id, order.id),
+        eq(storeOrdersTable.paymentProvider, "infinitepay"),
+        sql`${storeOrdersTable.paymentIntentId} IS NULL`,
+      ))
+      .returning({ id: storeOrdersTable.id });
+    if (!claim) {
+      next(new ConflictError("A criação do checkout InfinitePay já está em andamento para este pedido.", "INFINITEPAY_CHECKOUT_IN_PROGRESS"));
+      return;
+    }
+    const publicBase = (process.env["STORE_PUBLIC_URL"] ?? "https://visitecrm.com").replace(/\/$/, "");
+    const origin = store.customDomain ? `https://${store.customDomain}` : publicBase;
+    const redirectUrl = new URL(returnPath, origin).toString();
+    const webhookUrl = `${publicBase}/api/public/store/${encodeURIComponent(store.slug)}/infinitepay/webhook`;
+    const apiResponse = await fetch("https://api.checkout.infinitepay.io/links", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        handle: store.infinitePayHandle,
+        order_nsu: orderNumber,
+        items: [{ quantity: 1, price: amountCents, description: `Pedido ${orderNumber}` }],
+        customer: {
+          name: order.customerName,
+          email: order.customerEmail,
+          ...(order.customerPhone ? { phone_number: order.customerPhone } : {}),
+        },
+        redirect_url: redirectUrl,
+        webhook_url: webhookUrl,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!apiResponse.ok) {
+      await db.update(storeOrdersTable).set({ paymentIntentId: null })
+        .where(and(eq(storeOrdersTable.id, order.id), eq(storeOrdersTable.paymentIntentId, creatingMarker)));
+      throw new AppError("InfinitePay checkout creation failed", 502, "INFINITEPAY_CHECKOUT_FAILED");
+    }
+    const responseBody = await apiResponse.json() as { url?: unknown };
+    if (typeof responseBody.url !== "string" || !responseBody.url.startsWith("https://")) {
+      throw new AppError("InfinitePay returned an invalid checkout URL", 502, "INFINITEPAY_INVALID_RESPONSE");
+    }
+    await db.update(storeOrdersTable).set({
+      paymentIntentId: marker,
+      infinitePayCheckoutUrl: responseBody.url,
+    }).where(and(
+      eq(storeOrdersTable.id, order.id),
+      eq(storeOrdersTable.paymentProvider, "infinitepay"),
+    ));
+    res.json({ checkoutUrl: responseBody.url });
+  } catch (err) { next(err); }
+});
+
+router.post("/public/store/:slug/infinitepay/confirm", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const input = {
+      orderNumber: typeof body.orderNumber === "string" ? body.orderNumber.trim() : "",
+      paymentToken: typeof body.paymentToken === "string" ? body.paymentToken.trim() : "",
+      transactionNsu: typeof body.transactionNsu === "string" ? body.transactionNsu.trim() : "",
+      invoiceSlug: typeof body.invoiceSlug === "string" ? body.invoiceSlug.trim() : "",
+    };
+    if (!Object.values(input).every(Boolean)) {
+      next(new ValidationError("Dados de retorno InfinitePay inválidos", "VALIDATION_ERROR"));
+      return;
+    }
+    const store = await getActiveStore(req.params.slug);
+    const verified = await checkInfinitePayPayment(store, input);
+    res.json({ verified });
+  } catch (err) { next(err); }
+});
+
+router.post("/public/store/:slug/infinitepay/webhook", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const orderNumber = typeof body.order_nsu === "string" ? body.order_nsu.trim() : "";
+    const transactionNsu = typeof body.transaction_nsu === "string" ? body.transaction_nsu.trim() : "";
+    const invoiceSlug = typeof body.invoice_slug === "string" ? body.invoice_slug.trim() : "";
+    if (!orderNumber || !transactionNsu || !invoiceSlug) {
+      res.status(400).json({ received: false });
+      return;
+    }
+    const store = await getActiveStore(req.params.slug);
+    const [order] = await db.select({ paymentToken: storeOrdersTable.paymentToken })
+      .from(storeOrdersTable).where(and(
+        eq(storeOrdersTable.storeId, store?.id ?? ""),
+        eq(storeOrdersTable.tenantId, store?.tenantId ?? ""),
+        eq(storeOrdersTable.orderNumber, orderNumber),
+      )).limit(1);
+    if (!store || !order?.paymentToken) {
+      res.status(400).json({ received: false });
+      return;
+    }
+    const verified = await checkInfinitePayPayment(store, {
+      orderNumber, paymentToken: order.paymentToken, transactionNsu, invoiceSlug,
+    });
+    if (!verified) {
+      res.status(400).json({ received: false });
+      return;
+    }
+    res.status(200).json({ received: true });
+  } catch (err) { next(err); }
 });
 
 router.post("/public/store/:slug/create-payment-intent", async (req, res, next: NextFunction): Promise<void> => {
