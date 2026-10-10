@@ -198,6 +198,10 @@ import
 ;
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
 import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
+import {
+  getReservationFailureDiagnostic,
+  toCustomerSafeReservationError,
+} from "../services/checkout/reservation-checkout-error";
 
 import { calculateReceivedAmount, orderFinancialSummary } from "../lib/linked-data";
 
@@ -2220,24 +2224,34 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         
 }
 
+        const diagnostic = getReservationFailureDiagnostic(reservationErr);
+        const logContext = {
+          ...diagnostic,
+          orderId,
+          orderNumber,
+          requestId: req.id ?? "unknown",
+        };
+        const customerSafeError = toCustomerSafeReservationError(reservationErr);
+
+        if (customerSafeError) {
+          logger.warn(
+            logContext,
+            "[store/orders] Reservation creation rejected checkout",
+          );
+          next(customerSafeError);
+          return;
+        }
+
         logger.error(
-{
- err: reservationErr, orderId, orderNumber 
-}
-, "[store/orders] Failed to create reservations at checkout — surfacing error instead of a false-success response")
-;
+          logContext,
+          "[store/orders] Failed to create reservations at checkout — surfacing error instead of a false-success response",
+        );
 
         next(new AppError(
-          "Não foi possível confirmar sua reserva. Por favor, tente novamente ou contate a agência.",
+          "Não foi possível criar a reserva por uma falha interna. Nenhum pagamento foi iniciado. Tente novamente; se persistir, informe o protocolo exibido à agência.",
           502,
           "RESERVATION_SYNC_FAILED",
-          
-{
- orderId, orderNumber 
-}
-,
-        ))
-;
+        ));
 
         return
 ;
