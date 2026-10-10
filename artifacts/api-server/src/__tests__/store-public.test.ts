@@ -1455,6 +1455,34 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(res.body).not.toHaveProperty("privateValue");
   });
 
+  it("maps an existing active client-trip reservation to a safe conflict", async () => {
+    const tripProduct = { ...FAKE_PRODUCT, tripId: "trip-001" };
+    vi.mocked(createReservationsForOrder).mockRejectedValueOnce(
+      Object.assign(new Error("duplicate key with private customer details"), {
+        code: "23505",
+        constraint: "reservations_active_client_trip_unique",
+      }),
+    );
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([tripProduct])
+      .mockResolvedValueOnce([{ availableSeats: 10 }])
+      .mockResolvedValueOnce([{ id: "admin-001" }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([FAKE_ORDER])
+      .mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send(VALID_BODY);
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("DUPLICATE_RESERVATION");
+    expect(res.body.message).toBe(
+      "Esta viagem já possui uma reserva ativa para este cliente. Por favor, entre em contato com a agência.",
+    );
+    expect(JSON.stringify(res.body)).not.toContain("private customer details");
+  });
   it("keeps unexpected reservation errors private and returns the support request id", async () => {
     const tripProduct = { ...FAKE_PRODUCT, tripId: "trip-001" };
     vi.mocked(createReservationsForOrder).mockRejectedValueOnce(
