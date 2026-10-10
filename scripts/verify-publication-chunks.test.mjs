@@ -647,6 +647,7 @@ test("creates one-use short-lived Clerk tokens for all three protected profiles"
         status: 200,
         json: async () => ({
           id: `sit_${body.user_id}`,
+          token: `one-use-${body.user_id}`,
           url: `https://accounts.visitecrm.com/sign-in?__clerk_ticket=one-use-${body.user_id}`,
         }),
       };
@@ -684,11 +685,9 @@ test("creates one-use short-lived Clerk tokens for all three protected profiles"
     assert.equal(request.headers.Cookie, undefined);
     assert.equal(request.body.expires_in_seconds, 300);
     assert.equal(
-      new URL(
-        profiles.find((profile) => profile.expectedUserId === request.body.user_id)
-          .signInUrl,
-      ).searchParams.get("redirect_url"),
-      "https://visitecrm.com/",
+      profiles.find((profile) => profile.expectedUserId === request.body.user_id)
+        .signInToken,
+      `one-use-${request.body.user_id}`,
     );
   }
 });
@@ -758,9 +757,7 @@ function fakeBrowserFactory({
   responseUrl = "https://visitecrm.com/assets/interaction.js",
   authState,
   authStateByProfile,
-  signInResponseStatus = 200,
-  signInTitle = "Sign in to VisiteCRM",
-  followAccountPortalRedirect = true,
+  ticketRedemptionFails = false,
   mainHeadingVisibleByRoute = {},
   mainHeadingMatchesMarkerByRoute = {},
   runtimeExceptionsByRoute = {},
@@ -808,10 +805,7 @@ function fakeBrowserFactory({
           if (method === "Page.navigate") {
             browserCall.navigations.push(params.url);
             const requestedUrl = new URL(params.url);
-            currentUrl = followAccountPortalRedirect
-              ? requestedUrl.searchParams.get("redirect_url") ??
-                requestedUrl.href
-              : requestedUrl.href;
+            currentUrl = requestedUrl.href;
             const pathname = new URL(currentUrl).pathname;
             const contextId = ++executionContextId;
             executionContextIdByPath.set(pathname, contextId);
@@ -841,17 +835,6 @@ function fakeBrowserFactory({
             }
             navigationNumber += 1;
             const requestId = String(navigationNumber);
-            if (requestedUrl.origin === "https://accounts.visitecrm.com") {
-              listeners.get("Network.responseReceived")?.({
-                requestId: `portal-${requestId}`,
-                type: "Document",
-                response: {
-                  url: `${requestedUrl.origin}${requestedUrl.pathname}`,
-                  status: signInResponseStatus,
-                  mimeType: "text/html",
-                },
-              });
-            }
             listeners.get("Network.requestWillBeSent")?.({
               requestId,
               request: { url: requestUrl },
@@ -868,10 +851,21 @@ function fakeBrowserFactory({
             });
           }
           if (method === "Runtime.evaluate") {
+            if (params.expression?.includes("clerk.client.signIn.create")) {
+              browserCall.ticketRedemptionExpression = params.expression;
+              return ticketRedemptionFails
+                ? { exceptionDetails: { text: "ticket redemption failed" } }
+                : {
+                    result: {
+                      value: {
+                        sessionId: browserAuthState?.sessionId,
+                        active: true,
+                      },
+                    },
+                  };
+            }
             if (params.expression?.includes("window.Clerk")) {
               const location = new URL(currentUrl);
-              const isAccountPortal =
-                location.origin === "https://accounts.visitecrm.com";
               const userId = browserAuthState?.userId ?? null;
               const sessionId = browserAuthState?.sessionId ?? null;
               return {
@@ -879,11 +873,9 @@ function fakeBrowserFactory({
                   value: {
                     origin: location.origin,
                     pathname: location.pathname,
-                    documentTitle: isAccountPortal
-                      ? signInTitle
-                      : "VisiteCRM",
-                    clerkPresent: !isAccountPortal || Boolean(browserAuthState),
-                    clerkLoaded: !isAccountPortal || Boolean(browserAuthState),
+                    documentTitle: "VisiteCRM",
+                    clerkPresent: true,
+                    clerkLoaded: true,
                     userId,
                     sessionId,
                     hasUser: Boolean(userId),
@@ -1126,7 +1118,7 @@ test("keeps delayed browser exceptions attached to the route that created their 
   );
 });
 
-test("uses one-time Clerk links for isolated seller, superadmin, and client browser sessions", async () => {
+test("redeems one-use Clerk tickets for isolated seller, superadmin, and client browser sessions", async () => {
   const browser = fakeBrowserFactory({
     authStateByProfile: {
       seller: { userId: "user_seller_test", sessionId: "sess_seller_test" },
@@ -1145,24 +1137,21 @@ test("uses one-time Clerk links for isolated seller, superadmin, and client brow
         name: "seller",
         label: "vendedor",
         paths: ["/meu-painel", "/vouchers"],
-        signInUrl:
-          "https://accounts.visitecrm.com/sign-in?ticket=seller-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
+        signInToken: "seller-token",
         expectedUserId: "user_seller_test",
       },
       {
         name: "superadmin",
         label: "superadmin",
         paths: ["/admin", "/admin/tenants"],
-        signInUrl:
-          "https://accounts.visitecrm.com/sign-in?ticket=admin-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
+        signInToken: "admin-token",
         expectedUserId: "user_superadmin_test",
       },
       {
         name: "client",
         label: "cliente",
         paths: ["/perfil"],
-        signInUrl:
-          "https://accounts.visitecrm.com/sign-in?ticket=client-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
+        signInToken: "client-token",
         expectedUserId: "user_client_test",
       },
     ],
@@ -1210,21 +1199,24 @@ test("uses one-time Clerk links for isolated seller, superadmin, and client brow
       { profileName: "client", sessionId: "sess_client_test" },
     ],
   );
-  for (const browserCall of browser.calls) {
-    const signInUrl = new URL(browserCall.navigations[0]);
-    assert.equal(signInUrl.origin, "https://accounts.visitecrm.com");
-    assert.equal(
-      signInUrl.searchParams.get("redirect_url"),
-      "https://visitecrm.com/",
-    );
-  }
+  assert.deepEqual(
+    browser.calls.map(({ navigations, ticketRedemptionExpression }) => ({
+      firstNavigation: navigations[0],
+      redeemsTicket: ticketRedemptionExpression?.includes(
+        "strategy: \"ticket\"",
+      ),
+    })),
+    [
+      { firstNavigation: "https://visitecrm.com/", redeemsTicket: true },
+      { firstNavigation: "https://visitecrm.com/", redeemsTicket: true },
+      { firstNavigation: "https://visitecrm.com/", redeemsTicket: true },
+    ],
+  );
 });
 
-test("reports privacy-safe Account Portal diagnostics when sign-in is blocked", async () => {
+test("reports privacy-safe diagnostics when Clerk rejects a one-use ticket", async () => {
   const browser = fakeBrowserFactory({
-    signInResponseStatus: 403,
-    signInTitle: "Just a moment... test.user@example.com",
-    followAccountPortalRedirect: false,
+    ticketRedemptionFails: true,
   });
 
   await assert.rejects(
@@ -1235,8 +1227,7 @@ test("reports privacy-safe Account Portal diagnostics when sign-in is blocked", 
           name: "seller",
           label: "vendedor",
           paths: ["/meu-painel"],
-          signInUrl:
-            "https://accounts.visitecrm.com/sign-in?ticket=private-ticket-value&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
+          signInToken: "private-ticket-value",
           expectedUserId: "user_private_test_id",
         },
       ],
@@ -1247,16 +1238,7 @@ test("reports privacy-safe Account Portal diagnostics when sign-in is blocked", 
     (error) => {
       assert.match(
         error.message,
-        /last page: https:\/\/accounts\.visitecrm\.com\/sign-in/,
-      );
-      assert.match(error.message, /title="Just a moment\.\.\. \[redacted email\]"/);
-      assert.match(
-        error.message,
-        /Clerk=absent, user=absent, session=absent/,
-      );
-      assert.match(
-        error.message,
-        /Account Portal responses: HTTP 403 Document https:\/\/accounts\.visitecrm\.com\/sign-in/,
+        /Clerk could not redeem the one-use vendedor CI sign-in token/,
       );
       assert.doesNotMatch(
         error.message,
