@@ -2,10 +2,11 @@ import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreOrder } from "@/lib/storeApi";
 import { cleanupRoots, renderComponent } from "../../__tests__/eventSourceHarness";
-import { OrderDetail } from "./pedidos";
+import { OrderDetail, StripeModeBadge } from "./pedidos";
 
 const mocks = vi.hoisted(() => ({
   getOrder: vi.fn(),
+  recordManualPixDeposit: vi.fn(),
   updateOrderStatus: vi.fn(),
   toast: vi.fn(),
 }));
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/storeApi", () => ({
   storeApi: {
     getOrder: mocks.getOrder,
+    recordManualPixDeposit: mocks.recordManualPixDeposit,
     updateOrderStatus: mocks.updateOrderStatus,
   },
 }));
@@ -25,8 +27,10 @@ afterEach(cleanupRoots);
 
 beforeEach(() => {
   mocks.getOrder.mockReset();
+  mocks.recordManualPixDeposit.mockReset();
   mocks.updateOrderStatus.mockReset();
   mocks.toast.mockReset();
+  sessionStorage.clear();
 });
 
 function deferred<T>() {
@@ -88,6 +92,26 @@ function KeyedOrderDetail({ orderId }: { orderId: string }) {
 }
 
 describe("OrderDetail", () => {
+  it("labels Stripe test and unknown modes while leaving live orders unmarked", async () => {
+    const view = await renderComponent(createElement(StripeModeBadge, {
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+    }));
+    expect(view.container.textContent).toContain("Stripe · TESTE");
+
+    await view.rerender(createElement(StripeModeBadge, {
+      paymentProvider: "stripe",
+      stripeLivemode: true,
+    }));
+    expect(view.container.textContent).toBe("");
+
+    await view.rerender(createElement(StripeModeBadge, {
+      paymentProvider: "stripe",
+      stripeLivemode: null,
+    }));
+    expect(view.container.textContent).toContain("Stripe · modo não informado");
+  });
+
   it("keeps a late response from a previously selected order out of the current details", async () => {
     const oldOrderRequest = deferred<StoreOrder>();
     const currentOrderRequest = deferred<StoreOrder>();
@@ -138,5 +162,95 @@ describe("OrderDetail", () => {
 
     expect(view.container.textContent).toContain("Pix Manual exige conferência bancária");
     expect(view.container.textContent).toContain("Confira o crédito no extrato");
+  });
+
+  it("records only the entered Pix amount and refreshes the outstanding balance", async () => {
+    const order = {
+      ...makeOrder("order-pix-deposit", "Cliente Pix"),
+      storeId: "store-001",
+      tenantId: "tenant-001",
+      orderNumber: "ORD-PIX-1",
+      subtotal: "200.00",
+      discountAmount: "0.00",
+      totalAmount: "200.00",
+      depositAmount: "50.00",
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      financialSummary: {
+        subtotal: 200,
+        discountAmount: 0,
+        totalAmount: 200,
+        depositRequested: 50,
+        paidAmount: 0,
+        amountRemaining: 200,
+        minimumRequired: 50,
+        reservationValid: true,
+        states: {
+          order: "pending",
+          reservation: "pending",
+          payment: "pending",
+        },
+        diagnostics: {
+          hasLegacyDivergence: false,
+          issues: [],
+          legacy: null,
+        },
+      },
+    } as StoreOrder;
+    const refreshedOrder = {
+      ...order,
+      paidAmount: 25,
+      amountRemaining: "175.00",
+      financialSummary: {
+        ...order.financialSummary,
+        paidAmount: 25,
+        amountRemaining: 175,
+        states: {
+          ...order.financialSummary.states,
+          payment: "partially_paid",
+        },
+      },
+    };
+    mocks.getOrder
+      .mockResolvedValueOnce(order)
+      .mockResolvedValueOnce(refreshedOrder);
+    mocks.recordManualPixDeposit.mockResolvedValue({
+      success: true,
+      replayed: false,
+      status: "pending",
+      paymentStatus: "pending",
+      paidAmount: "25.00",
+      amountRemaining: "175.00",
+    });
+
+    const view = await renderComponent(createElement(KeyedOrderDetail, { orderId: order.id }));
+    const input = view.container.querySelector("#manual-pix-deposit-amount") as HTMLInputElement;
+    expect(input).not.toBeNull();
+
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setValue?.call(input, "25");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    const button = Array.from(view.container.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent?.includes("Registrar entrada"));
+    expect(button).toBeDefined();
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.recordManualPixDeposit).toHaveBeenCalledWith(
+      order.id,
+      25,
+      expect.stringMatching(/^[0-9a-f-]{36}$/i),
+    );
+    expect(mocks.getOrder).toHaveBeenCalledTimes(2);
+    expect(view.container.textContent).toContain("R$ 25.00");
+    expect(view.container.textContent).toContain("R$ 175.00");
+    expect(view.container.textContent).toContain("Parcialmente pago");
   });
 });

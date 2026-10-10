@@ -148,6 +148,7 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
   const [fulfillmentStatus, setFulfillmentStatus] = useState("");
   const [internalNotes, setInternalNotes] = useState("");
   const [manualPixBankConfirmed, setManualPixBankConfirmed] = useState(false);
+  const [manualPixDepositAmount, setManualPixDepositAmount] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -210,6 +211,104 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
     isManualPixOrder
     && paymentStatus === STORE_PAYMENT_STATUS.PAID
     && order.paymentStatus !== STORE_PAYMENT_STATUS.PAID;
+  const canRecordManualPixDeposit =
+    isManualPixOrder
+    && summary.depositRequested > 0
+    && summary.depositRequested < summary.totalAmount
+    && summary.amountRemaining > 0
+    && order.status !== STORE_ORDER_STATUS.CANCELLED
+    && order.paymentStatus !== STORE_PAYMENT_STATUS.PAID
+    && order.paymentStatus !== STORE_PAYMENT_STATUS.REFUNDED;
+  const manualPixDepositAmountValue = Number(manualPixDepositAmount);
+
+  async function recordManualPixDeposit() {
+    if (!order || !canRecordManualPixDeposit) return;
+    if (
+      !Number.isFinite(manualPixDepositAmountValue)
+      || manualPixDepositAmountValue <= 0
+      || manualPixDepositAmountValue > summary.amountRemaining + 0.001
+    ) {
+      toast({
+        title: "Informe um valor válido",
+        description: `O valor deve ser maior que zero e não pode ultrapassar o saldo de ${money(summary.amountRemaining)}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSaving(true);
+    const storageKey = `store-order-manual-pix-deposit:${order.id}`;
+    try {
+      let idempotencyKey = sessionStorage.getItem(storageKey);
+      if (!idempotencyKey) {
+        idempotencyKey = crypto.randomUUID();
+        sessionStorage.setItem(storageKey, idempotencyKey);
+      }
+
+      const result = await storeApi.recordManualPixDeposit(
+        order.id,
+        Math.round(manualPixDepositAmountValue * 100) / 100,
+        idempotencyKey,
+      );
+      sessionStorage.removeItem(storageKey);
+      setManualPixDepositAmount("");
+      setManualPixBankConfirmed(false);
+
+      try {
+        const refreshedOrder = await storeApi.getOrder(order.id);
+        setOrder(refreshedOrder);
+        setStatus(refreshedOrder.status);
+        setPaymentStatus(refreshedOrder.paymentStatus);
+        setFulfillmentStatus(refreshedOrder.fulfillmentStatus ?? "unfulfilled");
+        onUpdated(refreshedOrder);
+      } catch {
+        const paidAmount = Number(result.paidAmount);
+        const amountRemaining = Number(result.amountRemaining);
+        const updatedOrder: StoreOrder = {
+          ...order,
+          status: result.status,
+          paymentStatus: result.paymentStatus,
+          paidAmount,
+          amountRemaining: result.amountRemaining,
+          financialSummary: {
+            ...summary,
+            paidAmount,
+            amountRemaining,
+            states: {
+              ...summary.states,
+              payment: amountRemaining <= 0
+                ? "paid"
+                : paidAmount > 0
+                  ? "partially_paid"
+                  : "pending",
+            },
+          },
+        };
+        setOrder(updatedOrder);
+        setStatus(updatedOrder.status);
+        setPaymentStatus(updatedOrder.paymentStatus);
+        onUpdated(updatedOrder);
+        toast({
+          title: "Entrada Pix registrada",
+          description: "O recebimento foi salvo, mas não foi possível atualizar os detalhes. Reabra o pedido para conferir o saldo.",
+        });
+        return;
+      }
+
+      toast({
+        title: result.replayed ? "Entrada Pix confirmada" : "Entrada Pix registrada",
+        description: "O saldo do pedido foi atualizado; ele só será marcado como pago quando estiver quitado.",
+      });
+    } catch (err: unknown) {
+      toast({
+        title: "Erro ao registrar entrada Pix",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="space-y-5 max-h-[75vh] overflow-y-auto pr-1">
@@ -291,6 +390,7 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
             )}
             <div className="text-xs text-muted-foreground mt-2 space-y-0.5">
               <p>Pagamento: {PAYMENT_METHODS[order.paymentMethod ?? ""] ?? order.paymentMethod ?? "Não informado"}</p>
+              <StripeModeBadge paymentProvider={order.paymentProvider} stripeLivemode={order.stripeLivemode} />
               {order.installments && order.installments > 1 && (
                 <p>{order.installments}x de R$ {order.installmentAmount ? parseFloat(order.installmentAmount).toFixed(2) : "—"}</p>
               )}
@@ -412,6 +512,52 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
                 <ExternalLink className="w-3.5 h-3.5" /> Ver Boleto
               </a>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {canRecordManualPixDeposit && (
+        <Card data-testid={`card-manual-pix-deposit-${order.id}`}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Registrar entrada Pix Manual</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Informe somente o valor efetivamente creditado e conferido no extrato. Uma entrada parcial atualiza o recebido e o saldo sem quitar o pedido.
+            </p>
+            <div className="space-y-1">
+              <label htmlFor="manual-pix-deposit-amount" className="text-xs text-muted-foreground">
+                Valor efetivamente recebido (R$)
+              </label>
+              <Input
+                id="manual-pix-deposit-amount"
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                max={summary.amountRemaining}
+                step="0.01"
+                value={manualPixDepositAmount}
+                onChange={(event) => setManualPixDepositAmount(event.target.value)}
+                disabled={saving}
+              />
+              <p className="text-xs text-muted-foreground">
+                Saldo atual: {money(summary.amountRemaining)}. Entrada solicitada: {money(summary.depositRequested)}.
+              </p>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                onClick={recordManualPixDeposit}
+                disabled={
+                  saving
+                  || !Number.isFinite(manualPixDepositAmountValue)
+                  || manualPixDepositAmountValue <= 0
+                  || manualPixDepositAmountValue > summary.amountRemaining + 0.001
+                }
+              >
+                {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Registrar entrada
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -552,6 +698,29 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
   );
 }
 
+export function StripeModeBadge({
+  paymentProvider,
+  stripeLivemode,
+}: {
+  paymentProvider?: string | null;
+  stripeLivemode?: boolean | null;
+}) {
+  if (paymentProvider !== "stripe") return null;
+  if (stripeLivemode == null) {
+    return (
+      <Badge variant="outline" data-testid="stripe-mode-unknown-badge">
+        Stripe · modo não informado
+      </Badge>
+    );
+  }
+  if (stripeLivemode) return null;
+  return (
+    <Badge variant="destructive" data-testid="stripe-test-mode-badge">
+      Stripe · TESTE
+    </Badge>
+  );
+}
+
 const LIMIT = 50;
 
 export default function LojaPedidos() {
@@ -603,7 +772,7 @@ export default function LojaPedidos() {
   useEffect(() => { setPage(1); }, [search, statusFilter, paymentFilter, dateFrom, dateTo]);
 
   function exportCSV() {
-    const headers = ["Pedido", "Cliente", "E-mail", "Telefone", "CPF", "Itens", "Subtotal", "Desconto", "Total", "Método", "Status Pagamento", "Status Pedido", "Data"];
+    const headers = ["Pedido", "Cliente", "E-mail", "Telefone", "CPF", "Itens", "Subtotal", "Desconto", "Total", "Método", "Ambiente Stripe", "Status Pagamento", "Status Pedido", "Data"];
     const rows = orders.map((o) => [
       o.orderNumber,
       o.customerName,
@@ -615,6 +784,10 @@ export default function LojaPedidos() {
       parseFloat(o.discountAmount).toFixed(2),
       parseFloat(o.totalAmount).toFixed(2),
       PAYMENT_METHODS[o.paymentMethod ?? ""] ?? o.paymentMethod ?? "",
+      o.paymentProvider === "stripe" && o.stripeLivemode === false ? "Teste"
+        : o.paymentProvider === "stripe" && o.stripeLivemode === true ? "Produção"
+          : o.paymentProvider === "stripe" ? "Não informado"
+            : "",
       paymentLabel(o.paymentStatus, o.paymentMethod),
       statusLabel(o.status),
       new Date(o.createdAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }),
@@ -781,6 +954,10 @@ export default function LojaPedidos() {
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${paymentColor(order.paymentStatus, order.paymentMethod)}`}>
                         {CANONICAL_PAYMENT_LABELS[order.financialSummary.states.payment] ?? paymentLabel(order.paymentStatus, order.paymentMethod)}
                       </span>
+                      <StripeModeBadge
+                        paymentProvider={order.paymentProvider}
+                        stripeLivemode={order.stripeLivemode}
+                      />
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {new Date(order.createdAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}

@@ -1282,6 +1282,7 @@ router.get("/clients/:clientId/recommendations", async (req, res, next: NextFunc
             eq(paymentsTable.clientId, client.id),
             eq(paymentsTable.tenantId, me.tenantId),
             eq(paymentsTable.status, "paid"),
+            eq(paymentsTable.isTestMode, false),
           ))
           .limit(20);
 

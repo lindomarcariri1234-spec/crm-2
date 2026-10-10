@@ -1719,6 +1719,31 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         const clientEmail = client?.email;
         if (!clientEmail) return;
 
+        let paymentProvider: string | null = null;
+        let stripeLivemode: boolean | null = null;
+        if (reservation.storeOrderId) {
+          try {
+            const [linkedOrder] = await db
+              .select({
+                paymentProvider: storeOrdersTable.paymentProvider,
+                stripeLivemode: storeOrdersTable.stripeLivemode,
+              })
+              .from(storeOrdersTable)
+              .where(and(
+                eq(storeOrdersTable.tenantId, me.tenantId),
+                eq(storeOrdersTable.orderNumber, reservation.storeOrderId),
+              ))
+              .limit(1);
+            paymentProvider = linkedOrder?.paymentProvider ?? null;
+            stripeLivemode = linkedOrder?.stripeLivemode ?? null;
+          } catch (modeLookupError) {
+            req.log.warn(
+              { err: modeLookupError, reservationId: reservation.id },
+              "Could not load Stripe mode for reservation email; sending without a test-mode label",
+            );
+          }
+        }
+
         const totalVal = Number(reservation.totalValue);
         const paidVal = Number(reservation.paidValue);
         const balanceVal = Number(reservation.balance);
@@ -1761,6 +1786,8 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
             amountPending: balanceVal,
             paymentMethod: reservation.paymentMethod ?? "pix",
             paymentStatus,
+            paymentProvider,
+            stripeLivemode,
             agencyName: tenant.name,
             agencyLogo: tenant.logoUrl ?? "",
             agencyPhone,

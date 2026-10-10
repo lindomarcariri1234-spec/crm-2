@@ -10,7 +10,8 @@
 - [Store product vs trip favorites](store-favorites-join.md) — Trip favorites store tripId; join via storeProductsTable.tripId to get slug. Product favorites store storeProductsTable.id; join with storesTable for tenantId filter.
 - [Expo Metro version pins](expo-metro-version-pins.md) — metro-* must be at 0.83.7 EXCEPT metro-file-map (keep 0.83.3) for guide-app Expo artifact to start without crashing.
 - [SSRF for tenant base URLs](ssrf-tenant-base-url.md) — connect-time IP enforcement (not just a pre-check); canonicalize IPv4-in-IPv6 literals; guard empty custom baseURL to avoid leaking keys to OpenAI.
-- [AI config Test vs Save status](ai-config-test-vs-save.md) — "Testar Conexão" must test unsaved form values & never persist status (acceptance criterion); only Save persists status via its own server-side auto-test. Don't recouple.
+- [Connection tests vs saved status](ai-config-test-vs-save.md) — keep credential tests transient; test unsaved values, persist only on Save, and never expose write-only secrets.
+- [Published Stripe test mode](stripe-test-key-production-warning.md) — warn on published test keys without blocking activation; keep test credentials usable in development checkout.
 - [Redis alert email DB override](redis-alert-email.md) — redis.ts reads alert recipient from platformSettingsTable key=redis_alert_email first, falls back to SUPERADMIN_EMAIL env; recovery email (sendRedisRecoveryEmail) fires on resetTransientRedisErrors when _hadActiveAlert=true.
 - [Referral conversion returns tier result](referral-tier-upgrade-pattern.md) — recordReferralConversion returns ReferralConversionResult{tierUpgraded,…}; caller in persist-order.ts dispatches tier-upgrade email when tierUpgraded=true. Tier badge in indicacoes.tsx uses referrerSuccessfulReferrals from API (not per-row conversions).
 - [Referral reservationId invariant](referral-reservation-id.md) — CRM path always sets reservationId (assertion in reservations.ts); store checkout sets it only when a trip reservation was created (null OK for product-only orders); admin POST creates pending invites with no reservationId.
@@ -150,3 +151,5 @@
 - [API Vitest integration selection](api-vitest-integration-selection.md) — register new integration files explicitly and invoke Vitest directly when targeting one file.
 - [CHECK constraint drift scope](check-constraint-drift-scope.md) — reconcile legacy CHECK definitions individually before broadening live drift comparisons.
 - [Instagram Direct scope](instagram-direct-scope.md) — agency-owned professional accounts only; replies are customer-initiated, text-only, and limited to Meta's 24-hour window.
+- [Stripe payment mode accounting](stripe-payment-mode-accounting.md) — Stripe livemode is authoritative; unverifiable historical Stripe payments stay unknown and out of real cash totals.
+- [Storefront card installments](storefront-card-installments.md) — do not advertise Brazilian card installments until the configured Stripe account's support is verified and the chosen schedule reaches the PaymentIntent.

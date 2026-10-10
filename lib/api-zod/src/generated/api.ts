@@ -8754,6 +8754,30 @@ export const UpdateCommissionResponse = zod.object({
 });
 
 /**
+ * Authenticated store administrators can verify a new secret key before
+ * saving it. If secretKey is omitted, the store's saved write-only key is
+ * used. The submitted credential is never persisted, returned, or logged.
+ * @summary Test a store's Stripe connection
+ */
+export const TestStoreStripeConnectionBody = zod
+  .object({
+    secretKey: zod
+      .string()
+      .optional()
+      .describe(
+        "Used only for this connection check and never persisted, returned, or logged.",
+      ),
+  })
+  .describe(
+    "An optional unsaved credential; omitted or empty means test the saved write-only key.",
+  );
+
+export const TestStoreStripeConnectionResponse = zod.object({
+  connected: zod.literal(true),
+  livemode: zod.boolean(),
+});
+
+/**
  * @summary Get public referral info by code
  */
 export const GetPublicReferralInfoParams = zod.object({

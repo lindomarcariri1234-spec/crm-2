@@ -47,6 +47,13 @@ const PROFILE_ENVIRONMENTS = [
     defaultPath: "/perfil",
   },
 ];
+const PUBLICATION_CONTENT_MARKERS = {
+  "/meu-painel": { selector: "main h1", text: "Meu Painel" },
+  "/vouchers": { selector: "main h1", text: "Vouchers e Check-in" },
+  "/admin": { selector: "main h1", text: "Visão Geral da Plataforma" },
+  "/admin/tenants": { selector: "main h1", text: "Tenants" },
+  "/perfil": { selector: "main h1", text: "Tem mundo te esperando." },
+};
 const USER_AGENT = "VisiteCRM-publication-chunk-smoke-test";
 const ROUTER_SOURCE_PATH = "artifacts/visitecrm/src/App.tsx";
 const NAVIGATION_SOURCE_PATH = "artifacts/visitecrm/src/components/layout.tsx";
@@ -1049,8 +1056,10 @@ async function runBrowserSmoke({
   const failures = [];
   const assetsByRoute = new Map();
   const requests = new Map();
+  const routeByExecutionContextId = new Map();
   const signInOrigin = signInUrl ? new URL(signInUrl, baseUrl).origin : null;
   const signInResponseDiagnostics = [];
+  const routesWithRuntimeExceptions = new Set();
   let activeRoute = null;
 
   function recordSignInResponse(type, response) {
@@ -1106,6 +1115,23 @@ async function runBrowserSmoke({
     if (!requestInfo?.route) return;
     failures.push(
       `${requestInfo.route}: JavaScript asset ${requestInfo.url} request failed: ${errorText}`,
+    );
+  });
+  client.on("Runtime.executionContextCreated", ({ context }) => {
+    if (activeRoute && Number.isInteger(context?.id)) {
+      routeByExecutionContextId.set(context.id, activeRoute);
+    }
+  });
+  // Chrome reports uncaught promise rejections through the same runtime event.
+  client.on("Runtime.exceptionThrown", ({ exceptionDetails }) => {
+    const contextRoute = routeByExecutionContextId.get(
+      exceptionDetails?.executionContextId,
+    );
+    const route = contextRoute ?? activeRoute;
+    if (!route || routesWithRuntimeExceptions.has(route)) return;
+    routesWithRuntimeExceptions.add(route);
+    failures.push(
+      `${route}: ${profileLabel ?? profileName} route reported an uncaught JavaScript exception.`,
     );
   });
   client.on("Fetch.requestPaused", ({ requestId, request }) => {
@@ -1265,6 +1291,47 @@ async function runBrowserSmoke({
     );
   }
 
+  async function validateRouteContent(route) {
+    const marker = PUBLICATION_CONTENT_MARKERS[new URL(route, baseUrl).pathname];
+    const selector = marker?.selector ?? "main h1";
+    const expectedText = marker?.text;
+    const deadline = Date.now() + timeoutMs;
+    let hasVisibleMainHeading = false;
+    while (Date.now() < deadline) {
+      try {
+        const result = await client.send("Runtime.evaluate", {
+          expression: `(() => {
+            const heading = document.querySelector(${JSON.stringify(selector)});
+            const text = heading?.textContent?.trim();
+            if (!text) return false;
+            if (${JSON.stringify(expectedText ?? null)} !== null &&
+                !text.includes(${JSON.stringify(expectedText ?? "")})) return false;
+            const style = window.getComputedStyle(heading);
+            const bounds = heading.getBoundingClientRect();
+            return style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              style.opacity !== "0" &&
+              !heading.closest('[aria-hidden="true"]') &&
+              bounds.width > 0 &&
+              bounds.height > 0;
+          })()`,
+          returnByValue: true,
+        });
+        hasVisibleMainHeading = result.result?.value === true;
+        if (hasVisibleMainHeading) return;
+      } catch {
+        // Report a missing main-content marker without exposing browser internals.
+      }
+      await wait(Math.min(100, Math.max(0, deadline - Date.now())));
+    }
+
+    if (!hasVisibleMainHeading) {
+      failures.push(
+        `${route}: ${profileLabel ?? profileName} page is missing its visible main-content marker${expectedText ? ` (${selector} must contain the configured page title)` : ` (${selector} must be non-empty)`}.`,
+      );
+    }
+  }
+
   async function clickInteractions(path) {
     for (const selector of interactionSelectors) {
       let count;
@@ -1315,6 +1382,7 @@ async function runBrowserSmoke({
     for (const path of protectedPaths) {
       await navigate(path);
       await validateRouteSession(path, authenticatedSession);
+      await validateRouteContent(path);
       await clickInteractions(path);
     }
   } finally {
@@ -1336,10 +1404,12 @@ async function runBrowserSmoke({
       profile: profileName,
       ok: routeFailures.length === 0 && assets.length > 0,
       assets: assets.map((asset) => asset.url),
-      failures:
-        assets.length > 0
-          ? routeFailures
-          : [`${route}: browser did not observe any JavaScript assets`],
+      failures: [
+        ...routeFailures,
+        ...(assets.length > 0
+          ? []
+          : [`${route}: browser did not observe any JavaScript assets`]),
+      ],
     };
   });
 }
@@ -1590,7 +1660,7 @@ async function main() {
     throw new Error(
       cleanupFailures.length > 0
         ? "Published chunk verification failed or a temporary Clerk sign-in resource could not be revoked."
-        : "Published JavaScript chunk verification failed. Each route must load every same-origin JavaScript asset with a successful JavaScript content type.",
+        : "Published route verification failed. Each authenticated page must keep its profile session, show visible main content, and load its same-origin JavaScript assets.",
     );
   }
 }

@@ -22,6 +22,7 @@ export async function recalculateClientFinancials(
     WHERE client_id = ${clientId}
       AND tenant_id = ${tenantId}
       AND type = 'receivable'
+      AND is_test_mode = false
   `);
   const row = (result as unknown as { rows: Array<{ total_spent: string; outstanding_balance: string }> }).rows[0];
   if (!row) return;

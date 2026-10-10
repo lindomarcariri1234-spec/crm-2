@@ -761,12 +761,39 @@ function fakeBrowserFactory({
   signInResponseStatus = 200,
   signInTitle = "Sign in to VisiteCRM",
   followAccountPortalRedirect = true,
+  mainHeadingVisibleByRoute = {},
+  mainHeadingMatchesMarkerByRoute = {},
+  runtimeExceptionsByRoute = {},
+  interactionCountByRoute = {},
+  delayedRuntimeExceptionByRoute = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
+  let executionContextId = 0;
   const calls = [];
+  const contentChecks = [];
+  const executionContextIdByPath = new Map();
+  function emitConfiguredRuntimeException(pathname, phase, contextId) {
+    const phases = runtimeExceptionsByRoute[pathname] ?? [];
+    const isPromiseRejection =
+      phase === "navigation" && phases.includes("promise-rejection");
+    if (!phases.includes(phase) && !isPromiseRejection) return;
+    listeners.get("Runtime.exceptionThrown")?.({
+      exceptionDetails: {
+        exceptionId: navigationNumber + 1,
+        executionContextId: contextId,
+        text: isPromiseRejection ? "Uncaught (in promise)" : "Uncaught Error",
+        exception: {
+          description: isPromiseRejection
+            ? "Error: private@example.com order=customer-private-value"
+            : "private@example.com token=must-not-be-logged",
+        },
+      },
+    });
+  }
   return {
     calls,
+    contentChecks,
     factory: async ({ headers, profileName }) => {
       const browserCall = { headers, navigations: [] };
       calls.push(browserCall);
@@ -785,6 +812,33 @@ function fakeBrowserFactory({
               ? requestedUrl.searchParams.get("redirect_url") ??
                 requestedUrl.href
               : requestedUrl.href;
+            const pathname = new URL(currentUrl).pathname;
+            const contextId = ++executionContextId;
+            executionContextIdByPath.set(pathname, contextId);
+            listeners.get("Runtime.executionContextCreated")?.({
+              context: { id: contextId, auxData: { isDefault: true } },
+            });
+            emitConfiguredRuntimeException(
+              pathname,
+              "navigation",
+              contextId,
+            );
+            const delayedSourceRoute = delayedRuntimeExceptionByRoute[pathname];
+            const delayedSourceContextId =
+              executionContextIdByPath.get(delayedSourceRoute);
+            if (delayedSourceContextId !== undefined) {
+              listeners.get("Runtime.exceptionThrown")?.({
+                exceptionDetails: {
+                  exceptionId: navigationNumber + 1,
+                  executionContextId: delayedSourceContextId,
+                  text: "Uncaught (in promise)",
+                  exception: {
+                    description:
+                      "Error: private@example.com order=customer-private-value",
+                  },
+                },
+              });
+            }
             navigationNumber += 1;
             const requestId = String(navigationNumber);
             if (requestedUrl.origin === "https://accounts.visitecrm.com") {
@@ -838,6 +892,30 @@ function fakeBrowserFactory({
                 },
               };
             }
+            if (params.expression?.includes("element.click()")) {
+              emitConfiguredRuntimeException(
+                new URL(currentUrl).pathname,
+                "interaction",
+              );
+              return { result: { value: true } };
+            }
+            if (params.expression?.includes("document.querySelectorAll(")) {
+              const pathname = new URL(currentUrl).pathname;
+              return {
+                result: { value: interactionCountByRoute[pathname] ?? 0 },
+              };
+            }
+            if (params.expression?.includes('document.querySelector("main h1")')) {
+              const pathname = new URL(currentUrl).pathname;
+              contentChecks.push({ pathname, expression: params.expression });
+              return {
+                result: {
+                  value:
+                    (mainHeadingVisibleByRoute[pathname] ?? true) &&
+                    (mainHeadingMatchesMarkerByRoute[pathname] ?? true),
+                },
+              };
+            }
             return { result: { value: 0 } };
           }
           return {};
@@ -882,6 +960,172 @@ test("navigates every configured protected route and validates browser-observed 
   assert.equal(browser.calls[0].headers.Cookie, "clerk_test_session=short-lived");
 });
 
+test("rejects blank and incorrectly blocked authenticated pages with profile and route", async () => {
+  const browser = fakeBrowserFactory({
+    mainHeadingVisibleByRoute: { "/admin/tenants": false },
+    mainHeadingMatchesMarkerByRoute: { "/admin": false },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "superadmin",
+        label: "superadmin",
+        paths: ["/admin", "/admin/tenants"],
+        headers: { Cookie: "short-lived-test-session" },
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.deepEqual(results.map(({ route, ok }) => ({ route, ok })), [
+    { route: "/admin", ok: false },
+    { route: "/admin/tenants", ok: false },
+  ]);
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/admin: superadmin page is missing its visible main-content marker \(main h1 must contain the configured page title\)/,
+  );
+  assert.match(
+    results[1].failures.join("\n"),
+    /\/admin\/tenants: superadmin page is missing its visible main-content marker \(main h1 must contain the configured page title\)/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /short-lived-test-session/,
+  );
+});
+
+test("reports uncaught browser exceptions for the active profile and route without exposing details", async () => {
+  const browser = fakeBrowserFactory({
+    runtimeExceptionsByRoute: {
+      "/meu-painel": ["navigation"],
+      "/admin": ["interaction"],
+    },
+    interactionCountByRoute: { "/admin": 1 },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel"],
+        headers: { Cookie: "seller-private-session" },
+      },
+      {
+        name: "superadmin",
+        label: "superadmin",
+        paths: ["/admin"],
+        headers: { Cookie: "admin-private-session" },
+      },
+      {
+        name: "client",
+        label: "cliente",
+        paths: ["/perfil"],
+        headers: { Cookie: "client-private-session" },
+      },
+    ],
+    interactionSelectors: ['button[aria-haspopup="menu"]'],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [
+      { route: "/meu-painel", profile: "seller", ok: false },
+      { route: "/admin", profile: "superadmin", ok: false },
+      { route: "/perfil", profile: "client", ok: true },
+    ],
+  );
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/meu-painel: vendedor route reported an uncaught JavaScript exception/,
+  );
+  assert.match(
+    results[1].failures.join("\n"),
+    /\/admin: superadmin route reported an uncaught JavaScript exception/,
+  );
+  const output = JSON.stringify(results);
+  assert.doesNotMatch(
+    output,
+    /private@example\.com|must-not-be-logged|seller-private-session|admin-private-session|client-private-session/,
+  );
+});
+
+test("fails a client route on an unhandled promise rejection without exposing its payload", async () => {
+  const browser = fakeBrowserFactory({
+    runtimeExceptionsByRoute: { "/perfil": ["promise-rejection"] },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "client",
+        label: "cliente",
+        paths: ["/perfil"],
+        headers: { Cookie: "client-private-session" },
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.equal(results[0].ok, false);
+  assert.equal(results[0].profile, "client");
+  assert.equal(results[0].route, "/perfil");
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/perfil: cliente route reported an uncaught JavaScript exception/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /private@example\.com|customer-private-value|client-private-session|Uncaught \(in promise\)/,
+  );
+});
+
+test("keeps delayed browser exceptions attached to the route that created their execution context", async () => {
+  const browser = fakeBrowserFactory({
+    delayedRuntimeExceptionByRoute: {
+      "/vouchers": "/meu-painel",
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel", "/vouchers"],
+        headers: { Cookie: "seller-private-session" },
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [
+      { route: "/meu-painel", profile: "seller", ok: false },
+      { route: "/vouchers", profile: "seller", ok: true },
+    ],
+  );
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/meu-painel: vendedor route reported an uncaught JavaScript exception/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /private@example\.com|customer-private-value|seller-private-session/,
+  );
+});
+
 test("uses one-time Clerk links for isolated seller, superadmin, and client browser sessions", async () => {
   const browser = fakeBrowserFactory({
     authStateByProfile: {
@@ -900,7 +1144,7 @@ test("uses one-time Clerk links for isolated seller, superadmin, and client brow
       {
         name: "seller",
         label: "vendedor",
-        paths: ["/meu-painel"],
+        paths: ["/meu-painel", "/vouchers"],
         signInUrl:
           "https://accounts.visitecrm.com/sign-in?ticket=seller-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
         expectedUserId: "user_seller_test",
@@ -908,7 +1152,7 @@ test("uses one-time Clerk links for isolated seller, superadmin, and client brow
       {
         name: "superadmin",
         label: "superadmin",
-        paths: ["/admin"],
+        paths: ["/admin", "/admin/tenants"],
         signInUrl:
           "https://accounts.visitecrm.com/sign-in?ticket=admin-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
         expectedUserId: "user_superadmin_test",
@@ -932,10 +1176,21 @@ test("uses one-time Clerk links for isolated seller, superadmin, and client brow
     results.map(({ route, profile, ok }) => ({ route, profile, ok })),
     [
       { route: "/meu-painel", profile: "seller", ok: true },
+      { route: "/vouchers", profile: "seller", ok: true },
       { route: "/admin", profile: "superadmin", ok: true },
+      { route: "/admin/tenants", profile: "superadmin", ok: true },
       { route: "/perfil", profile: "client", ok: true },
     ],
   );
+  const contentMarkersByPath = Object.fromEntries(
+    browser.contentChecks.map(({ pathname, expression }) => [pathname, expression]),
+  );
+  assert.match(contentMarkersByPath["/meu-painel"], /Meu Painel/);
+  assert.match(contentMarkersByPath["/vouchers"], /Vouchers e Check-in/);
+  assert.match(contentMarkersByPath["/admin"], /Visão Geral da Plataforma/);
+  assert.match(contentMarkersByPath["/admin/tenants"], /Tenants/);
+  assert.match(contentMarkersByPath["/perfil"], /Tem mundo te esperando\./);
+  assert.doesNotMatch(contentMarkersByPath["/perfil"], /Oi,/);
   assert.deepEqual(
     browser.calls.map(({ headers }) => ({
       Cookie: headers.Cookie,

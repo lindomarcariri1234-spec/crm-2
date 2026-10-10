@@ -44,8 +44,3 @@ forms.
 
 **How to apply:** In a focused test, return `Object.assign(Promise.resolve(rows), { limit: mockLimit })`
 from the orderBy mock and keep limit responses in the normal FIFO queue.
-
-## Pre-existing failures (do not fix)
-
-- `"does not apply discount when referral code is expired"` → 500 from `buildTxMock().insert` lacking `.returning()`
-- `"calls enqueueReservationConfirmationEmail ..."` → same root cause

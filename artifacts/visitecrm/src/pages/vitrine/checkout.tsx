@@ -31,8 +31,10 @@ import {
   Check,
   Gift,
   XCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { PAYMENT_METHOD_LABELS as PAYMENT_LABELS } from "@/lib/labels";
+import { shouldWarnAboutPublishedStripeTestKey } from "@/lib/stripe-store-config";
 import {
   clearStorefrontReferralCode,
   getStorefrontReferralCode,
@@ -48,6 +50,7 @@ import {
 import { trackReferralCreditReduction } from "@/lib/analytics";
 import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "./referral-messages";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
+import { isStripeTestPayment, StripeTestPaymentNotice } from "./StripeTestPaymentNotice";
 
 type Step = "dados" | "revisao" | "pagamento" | "confirmado";
 
@@ -324,7 +327,6 @@ function CardPayment({
     cardName: string;
     cardExpiry: string;
     cardCvv: string;
-    installments: string;
     depositAmount: string;
   };
   paymentMethod: string;
@@ -413,20 +415,6 @@ function CardPayment({
               maxLength={4}
             />
           </div>
-        </div>
-        <div className="space-y-1">
-          <Label>Parcelamento</Label>
-          <select
-            value={form.installments}
-            onChange={(e) => set("installments", e.target.value)}
-            className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            {[1, 2].map((n) => (
-              <option key={n} value={String(n)}>
-                {n}x sem juros
-              </option>
-            ))}
-          </select>
         </div>
       </div>
       <p className="text-xs text-muted-foreground text-center">
@@ -562,7 +550,6 @@ export default function VitrineCheckout({
       cardName: "",
       cardExpiry: "",
       cardCvv: "",
-      installments: "1",
       depositAmount: "",
     };
   });
@@ -580,6 +567,7 @@ export default function VitrineCheckout({
   const [stripePaymentConfirmed, setStripePaymentConfirmed] = useState<StripePaymentState>(
     () => failedStripeReturn ? "failed" : null,
   );
+  const [stripeTestMode, setStripeTestMode] = useState(false);
 
   // Fetch referral credit balance for logged-in users
   useEffect(() => {
@@ -659,6 +647,7 @@ export default function VitrineCheckout({
       try {
         const order = await publicStoreApi.getOrder(slug, lookup.orderNumber, lookup.token);
         if (cancelled) return;
+        setStripeTestMode(isStripeTestPayment(order));
 
         const appliedFromOrder = Number(order.referralCreditApplied);
         const appliedReferralCredit = Number.isFinite(appliedFromOrder)
@@ -865,11 +854,15 @@ export default function VitrineCheckout({
       || form.paymentMethod === "boleto") &&
     store.stripeEnabled &&
     !!store.stripePublicKey;
+  const showPublishedStripeTestKeyWarning =
+    isStripePayment
+    && shouldWarnAboutPublishedStripeTestKey(import.meta.env.PROD, store.stripePublicKey);
   const isManualPixPayment = form.paymentMethod === "pix" && !isStripePayment;
 
   async function submit() {
     setLoading(true);
     setSubmitError(null);
+    setStripeTestMode(false);
     if (!idempotencyKeyRef.current) {
       idempotencyKeyRef.current = crypto.randomUUID();
     }
@@ -918,6 +911,7 @@ export default function VitrineCheckout({
       setOrderNumber(order.orderNumber);
       setConfirmedOrderTotal(order.totalAmount);
       setConfirmedDepositAmount(order.depositAmount ?? null);
+      setStripeTestMode(isStripeTestPayment(order));
       if (isManualPixPayment) {
         setStripePaymentInstructions({
           pixQrCodeUrl: order.pixQrCodeUrl,
@@ -960,6 +954,10 @@ export default function VitrineCheckout({
         if (!pi.clientSecret) {
           throw new Error("Não foi possível preparar o pagamento Stripe.");
         }
+        setStripeTestMode(isStripeTestPayment({
+          paymentProvider: "stripe",
+          stripeLivemode: pi.stripeLivemode,
+        }));
         setStripeState({ clientSecret: pi.clientSecret, publishableKey: pi.publishableKey });
         const paymentIntentId = getPaymentIntentIdFromClientSecret(pi.clientSecret);
         if (tok && paymentIntentId) {
@@ -1065,6 +1063,7 @@ export default function VitrineCheckout({
       try {
         const order = await publicStoreApi.getOrder(slug, orderNumber!, paymentToken!);
         if (stopped) return;
+        setStripeTestMode(isStripeTestPayment(order));
         setStripePaymentInstructions({
           pixQrCodeUrl: order.pixQrCodeUrl,
           pixCopyPaste: order.pixCopyPaste ?? order.pixQrCode,
@@ -1211,6 +1210,13 @@ export default function VitrineCheckout({
           Seu número de pedido é:{" "}
           <strong className="font-mono text-foreground">{orderNumber}</strong>
         </p>
+        {stripeTestMode && (
+          <StripeTestPaymentNotice
+            className="mx-auto mb-4 max-w-xl"
+            paymentProvider="stripe"
+            stripeLivemode={false}
+          />
+        )}
         {confirmedDepositAmount && Number(confirmedDepositAmount) > 0 && Number(confirmedDepositAmount) < Number(confirmedOrderTotal ?? 0) && (
           <div className={`inline-flex flex-col items-center gap-2 rounded-xl border px-5 py-3 mb-4 ${
             isManualPixPayment
@@ -1821,6 +1827,19 @@ export default function VitrineCheckout({
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    {showPublishedStripeTestKeyWarning && (
+                      <div
+                        role="status"
+                        data-testid="published-stripe-test-checkout-warning"
+                        className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                      >
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+                        <div>
+                          <p className="font-semibold">Pagamento em ambiente de teste</p>
+                          <p>Este pedido não gerará uma cobrança real.</p>
+                        </div>
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       {effectivePaymentMethods.map((m) => (
                         <button
@@ -1880,7 +1899,6 @@ export default function VitrineCheckout({
                             cardName: form.cardName,
                             cardExpiry: form.cardExpiry,
                             cardCvv: form.cardCvv,
-                            installments: form.installments,
                             depositAmount: form.depositAmount,
                           }}
                           set={set}

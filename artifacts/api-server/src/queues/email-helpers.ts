@@ -1,9 +1,9 @@
-import { db, emailLogsTable, reservationsTable, tripsTable, clientsTable, referralSettingsTable, tenantsTable, storesTable, usersTable } from "@workspace/db";
+import { db, emailLogsTable, reservationsTable, tripsTable, clientsTable, referralSettingsTable, tenantsTable, storesTable, storeOrdersTable, usersTable } from "@workspace/db";
 import { eq, and, inArray, isNull } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { getReferralEmailQueue } from "./index";
 import type { ReferralBonusPaidEmailJobData, ReferralConvertedEmailJobData, ReferralExpiredEmailJobData, ReferralExpiringSoonEmailJobData, ReferralBonusReleasedEmailJobData, ReferralLoyaltyPointsEmailJobData } from "./index";
-import { sendWelcomeCredentialsEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendReferralWelcomeEmail, sendReferralTierUpgradeEmail, sendReferralReversedEmail, sendReferralCodeSuspendedEmail, sendAgencySuspendedEmail, sendAgencyReactivatedEmail, sendReferralLoyaltyPointsEmail } from "@workspace/email";
+import { sendWelcomeCredentialsEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendReferralWelcomeEmail, sendReferralTierUpgradeEmail, sendReferralReversedEmail, sendReferralCodeSuspendedEmail, sendAgencySuspendedEmail, sendAgencyReactivatedEmail, sendReferralLoyaltyPointsEmail, isStripeTestPaymentMode } from "@workspace/email";
 import { ROLES } from "@workspace/permissions";
 import { formatBRL } from "@workspace/shared";
 import { logger } from "../lib/logger";
@@ -116,6 +116,39 @@ interface EnqueueEmailOpts {
   props: ReservationConfirmationEmailProps;
 }
 
+export function buildReservationConfirmationEmailHtml(props: ReservationConfirmationEmailProps): string {
+  const stripeTestNotice = isStripeTestPaymentMode(props)
+    ? `<div role="status" style="border:1px solid #fdba74;background:#fff7ed;color:#9a3412;padding:12px 16px;margin:16px 0;border-radius:8px;"><strong>Pagamento Stripe em modo de teste</strong><p>Nenhuma cobrança real foi realizada nesta reserva.</p></div>`
+    : "";
+
+  return `<h2>Reserva Confirmada! 🎉</h2><p>Olá, ${escapeHtmlEmail(props.clientName)}!</p>${stripeTestNotice}<p><strong>Reserva:</strong> ${escapeHtmlEmail(props.reservationNumber)}</p><p><strong>Viagem:</strong> ${escapeHtmlEmail(props.tripTitle)}<br><strong>Destino:</strong> ${escapeHtmlEmail(props.destination)}<br><strong>Saída:</strong> ${escapeHtmlEmail(props.departureDate)}<br><strong>Valor total:</strong> ${formatBRL(props.totalAmount)}</p><p><a href="${props.voucherUrl}">Baixar voucher</a></p>`;
+}
+
+export function buildWelcomeCredentialsEmailHtml(props: WelcomeCredentialsEmailProps): string {
+  const stripeTestNotice = isStripeTestPaymentMode(props)
+    ? `<div role="status" style="border:1px solid #fdba74;background:#fff7ed;color:#9a3412;padding:12px 16px;margin:16px 0;border-radius:8px;"><strong>Pagamento Stripe em modo de teste</strong><p>Nenhuma cobrança real foi realizada neste pedido.</p></div>`
+    : "";
+  const temporaryPassword = props.plainTextPassword
+    ? `<p style="margin:4px 0;"><strong>Senha temporária:</strong> ${escapeHtmlEmail(props.plainTextPassword)}</p>
+       <p style="font-size:12px;color:#4b5563;margin:8px 0 0;">Troque a senha assim que entrar no portal.</p>`
+    : "";
+
+  return `<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;padding:24px;">
+      <h2 style="color:#2563eb;">Bem-vindo(a), ${escapeHtmlEmail(props.clientName)}!</h2>
+      <p>Sua Área do Cliente da <strong>${escapeHtmlEmail(props.agencyName)}</strong> foi criada.</p>
+      ${stripeTestNotice}
+      <p>Use o botão abaixo para acessar suas viagens, vouchers e pagamentos em um navegador novo:</p>
+      <p><a href="${escapeHtmlEmail(props.setupUrl)}" style="display:inline-block;background:#2563eb;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold;">Acessar Minha Área</a></p>
+      <div style="background:#f3f4f6;border-radius:8px;padding:14px;margin:20px 0;">
+        <p style="margin:4px 0;"><strong>E-mail:</strong> ${escapeHtmlEmail(props.clientEmail)}</p>
+        ${temporaryPassword}
+      </div>
+      <p>Se o botão não funcionar, acesse a página de login diretamente:
+        <a href="${escapeHtmlEmail(props.loginUrl)}">${escapeHtmlEmail(props.loginUrl)}</a>
+      </p>
+    </div>`;
+}
+
 /**
  * Enqueues a reservation confirmation email when Redis is available,
  * otherwise falls back to sending it directly (existing behaviour).
@@ -124,7 +157,7 @@ interface EnqueueEmailOpts {
  */
 export async function enqueueReservationConfirmationEmail(opts: EnqueueEmailOpts): Promise<void> {
   const { tenantId, reservationId, subject, props } = opts;
-  const html = `<h2>Reserva Confirmada! 🎉</h2><p>Olá, ${escapeHtmlEmail(props.clientName)}!</p><p><strong>Reserva:</strong> ${escapeHtmlEmail(props.reservationNumber)}</p><p><strong>Viagem:</strong> ${escapeHtmlEmail(props.tripTitle)}<br><strong>Destino:</strong> ${escapeHtmlEmail(props.destination)}<br><strong>Saída:</strong> ${escapeHtmlEmail(props.departureDate)}<br><strong>Valor total:</strong> ${formatBRL(props.totalAmount)}</p><p><a href="${props.voucherUrl}">Baixar voucher</a></p>`;
+  const html = buildReservationConfirmationEmailHtml(props);
   const outbound = await dispatchOutboundMessage({
     tenantId, eventType: "reservation_confirmation",
     idempotencyKey: `reservation:${reservationId ?? props.reservationNumber}:confirmation`,
@@ -527,11 +560,17 @@ export async function buildEmailPropsFromReservation(
       tenantSlug: tenantsTable.slug,
       referralDiscountType: referralSettingsTable.discountType,
       referralDiscountValue: referralSettingsTable.discountValue,
+      paymentProvider: storeOrdersTable.paymentProvider,
+      stripeLivemode: storeOrdersTable.stripeLivemode,
     })
     .from(reservationsTable)
     .innerJoin(clientsTable, eq(reservationsTable.clientId, clientsTable.id))
     .innerJoin(tripsTable, eq(reservationsTable.tripId, tripsTable.id))
     .innerJoin(tenantsTable, eq(reservationsTable.tenantId, tenantsTable.id))
+    .leftJoin(storeOrdersTable, and(
+      eq(storeOrdersTable.tenantId, reservationsTable.tenantId),
+      eq(storeOrdersTable.orderNumber, reservationsTable.storeOrderId),
+    ))
     .leftJoin(referralSettingsTable, eq(referralSettingsTable.tenantId, tenantsTable.id))
     .where(and(eq(reservationsTable.id, reservationId), eq(reservationsTable.tenantId, tenantId)))
     .limit(1);
@@ -590,6 +629,8 @@ export async function buildEmailPropsFromReservation(
     amountPending: balanceVal,
     paymentMethod: row.paymentMethod ?? "pix",
     paymentStatus,
+    paymentProvider: row.paymentProvider ?? null,
+    stripeLivemode: row.stripeLivemode ?? null,
     discountReferralAmount: discountReferralAmt > 0 ? discountReferralAmt : undefined,
     discountReferralPercent,
     discountCouponAmount: discountCouponAmt > 0 ? discountCouponAmt : undefined,
@@ -619,22 +660,7 @@ export async function sendWelcomeEmail(
   await dispatchReferralOutbound(tenantId, "welcome_credentials", props.clientEmail, {
     name: props.clientName, email: props.clientEmail,
   }, subject,
-    `<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;padding:24px;">
-      <h2 style="color:#2563eb;">Bem-vindo(a), ${escapeHtmlEmail(props.clientName)}!</h2>
-      <p>Sua Área do Cliente da <strong>${escapeHtmlEmail(props.agencyName)}</strong> foi criada.</p>
-      <p>Use o botão abaixo para acessar suas viagens, vouchers e pagamentos em um navegador novo:</p>
-      <p><a href="${escapeHtmlEmail(props.setupUrl)}" style="display:inline-block;background:#2563eb;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold;">Acessar Minha Área</a></p>
-      <div style="background:#f3f4f6;border-radius:8px;padding:14px;margin:20px 0;">
-        <p style="margin:4px 0;"><strong>E-mail:</strong> ${escapeHtmlEmail(props.clientEmail)}</p>
-        ${props.plainTextPassword
-          ? `<p style="margin:4px 0;"><strong>Senha temporária:</strong> ${escapeHtmlEmail(props.plainTextPassword)}</p>
-             <p style="font-size:12px;color:#4b5563;margin:8px 0 0;">Troque a senha assim que entrar no portal.</p>`
-          : ""}
-      </div>
-      <p>Se o botão não funcionar, acesse a página de login diretamente:
-        <a href="${escapeHtmlEmail(props.loginUrl)}">${escapeHtmlEmail(props.loginUrl)}</a>
-      </p>
-    </div>`,
+    buildWelcomeCredentialsEmailHtml(props),
     `Olá, ${props.clientName}! Sua Área do Cliente da ${props.agencyName} foi criada. Acesse: ${props.setupUrl}. E-mail: ${props.clientEmail}${props.plainTextPassword ? `; senha temporária: ${props.plainTextPassword}` : ""}.`);
 
   logger.info(

@@ -21,16 +21,50 @@ import request from "supertest";
 // vi.hoisted: shared mocks that must exist before any vi.mock() factory
 // ---------------------------------------------------------------------------
 
-const { mockReverseProductOnly, mockReverseTripOrder, mockExpirePendingReferral, mockCancelPartnerItems, mockReverseOrderSettlement, selectQueue, mockUpdateReturning } = vi.hoisted(() => {
+const {
+  mockReverseProductOnly,
+  mockReverseTripOrder,
+  mockExpirePendingReferral,
+  mockCancelPartnerItems,
+  mockReverseOrderSettlement,
+  mockCreateReservationsForOrder,
+  mockConfirmReservationsForOrder,
+  mockSyncStoreOrderFromOrderPayment,
+  mockRecalculateClientFinancials,
+  mockInsertValues,
+  selectQueue,
+  mockUpdateReturning,
+  lockTargets,
+} = vi.hoisted(() => {
   const selectQueue: Array<unknown[]> = [];
+  const lockTargets: string[] = [];
   // Default returns true / [] to avoid mock noise
   const mockReverseProductOnly = vi.fn().mockResolvedValue(true);
   const mockReverseTripOrder = vi.fn().mockResolvedValue([]);
   const mockExpirePendingReferral = vi.fn().mockResolvedValue(true);
   const mockCancelPartnerItems = vi.fn().mockResolvedValue(undefined);
   const mockReverseOrderSettlement = vi.fn().mockResolvedValue(undefined);
+  const mockCreateReservationsForOrder = vi.fn().mockResolvedValue({ tripIds: [], reservationIds: [] });
+  const mockConfirmReservationsForOrder = vi.fn().mockResolvedValue({ reservationIds: [], allocatedAmount: 0 });
+  const mockSyncStoreOrderFromOrderPayment = vi.fn().mockResolvedValue({ orderId: "order-004", transitionedToPaid: false });
+  const mockRecalculateClientFinancials = vi.fn().mockResolvedValue(undefined);
+  const mockInsertValues = vi.fn().mockResolvedValue(undefined);
   const mockUpdateReturning = vi.fn();
-  return { mockReverseProductOnly, mockReverseTripOrder, mockExpirePendingReferral, mockCancelPartnerItems, mockReverseOrderSettlement, selectQueue, mockUpdateReturning };
+  return {
+    mockReverseProductOnly,
+    mockReverseTripOrder,
+    mockExpirePendingReferral,
+    mockCancelPartnerItems,
+    mockReverseOrderSettlement,
+    mockCreateReservationsForOrder,
+    mockConfirmReservationsForOrder,
+    mockSyncStoreOrderFromOrderPayment,
+    mockRecalculateClientFinancials,
+    mockInsertValues,
+    selectQueue,
+    mockUpdateReturning,
+    lockTargets,
+  };
 });
 
 // ---------------------------------------------------------------------------
@@ -38,14 +72,20 @@ const { mockReverseProductOnly, mockReverseTripOrder, mockExpirePendingReferral,
 // ---------------------------------------------------------------------------
 
 vi.mock("@workspace/db", () => {
+  const storesTable = { __mockTable: "stores" };
+  const storeOrdersTable = { __mockTable: "store_orders" };
+  const reservationsTable = { __mockTable: "reservations" };
   // Build a select mock that pops from the shared selectQueue.
   // Each call returns a chainable object whose .where() is also directly
   // thenable (for the reservations select which has no .limit()) as well as
   // having a .limit() for the store/order selects.
-  const makeWhereResult = (rows: unknown[]) => {
+  const makeWhereResult = (rows: unknown[], source?: { __mockTable?: string }) => {
     const result = {
       limit: vi.fn((_n: number) => Promise.resolve(rows)),
-      for: vi.fn(() => result),
+      for: vi.fn(() => {
+        if (source?.__mockTable) lockTargets.push(source.__mockTable);
+        return result;
+      }),
       then: (resolve: (v: unknown[]) => unknown, reject?: (e: unknown) => unknown) =>
         Promise.resolve(rows).then(resolve, reject),
       catch: (reject: (e: unknown) => unknown) => Promise.resolve(rows).catch(reject),
@@ -55,9 +95,13 @@ vi.mock("@workspace/db", () => {
 
   const mockSelect = vi.fn(() => {
     const rows = selectQueue.shift() ?? [];
+    let source: { __mockTable?: string } | undefined;
     const chain = {
-      from: vi.fn(() => chain),
-      where: vi.fn(() => makeWhereResult(rows)),
+      from: vi.fn((table: { __mockTable?: string }) => {
+        source = table;
+        return chain;
+      }),
+      where: vi.fn(() => makeWhereResult(rows, source)),
       limit: vi.fn(() => Promise.resolve(rows)),
     };
     return chain;
@@ -71,24 +115,27 @@ vi.mock("@workspace/db", () => {
     })),
   }));
 
+  const mockInsert = vi.fn(() => ({ values: mockInsertValues }));
   const dbMock = {
     select: mockSelect,
     update: mockUpdate,
+    insert: mockInsert,
     transaction: vi.fn(),
   };
   dbMock.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback(dbMock));
 
   return {
     db: dbMock,
-    storesTable: {},
-    storeOrdersTable: {},
+    storesTable,
+    storeOrdersTable,
     storeOrderItemsTable: {},
     storeProductsTable: {},
     storeProductVariantsTable: {},
     storeCategoriesTable: {},
     storeCouponsTable: {},
     storeReviewsTable: {},
-    reservationsTable: {},
+    reservationsTable,
+    paymentsTable: {},
     dealsTable: {},
     pipelineStagesTable: {},
     partnerProductsTable: {},
@@ -122,6 +169,9 @@ vi.mock("@clerk/express", () => ({
 }));
 
 vi.mock("@workspace/permissions", () => ({
+  PAYMENT_STATUS: { PAID: "paid", PENDING: "pending" },
+  PAYMENT_TYPE: { RECEIVABLE: "receivable", PAYABLE: "payable" },
+  RESERVATION_STATUS: { PENDING: "pending", CANCELLED: "cancelled", REFUNDED: "refunded", FAILED: "failed" },
   STORE_ORDER_STATUS: {
     CANCELLED: "cancelled",
     COMPLETED: "completed",
@@ -162,12 +212,21 @@ vi.mock("../services/checkout/cancel-partner-items.js", () => ({
 
 // Stub every other service that the route imports
 vi.mock("../services/checkout/create-reservations.js", () => ({
-  createReservationsForOrder: vi.fn().mockResolvedValue({ tripIds: [], reservationIds: [] }),
-  confirmReservationsForOrder: vi.fn().mockResolvedValue(undefined),
+  createReservationsForOrder: mockCreateReservationsForOrder,
+  confirmReservationsForOrder: mockConfirmReservationsForOrder,
+}));
+
+vi.mock("../services/reservation-order-payment-sync", () => ({
+  syncStoreOrderFromOrderPayment: mockSyncStoreOrderFromOrderPayment,
+}));
+
+vi.mock("../services/client-financials", () => ({
+  recalculateClientFinancials: mockRecalculateClientFinancials,
 }));
 
 vi.mock("../services/checkout/post-booking.js", () => ({
   runPostPaymentSideEffects: vi.fn().mockResolvedValue(undefined),
+  runDeferredOrderAccounting: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../services/checkout/deferred-referral-effects.js", () => ({
@@ -282,12 +341,18 @@ const FAKE_UNPAID_ORDER = {
 
 beforeEach(() => {
   selectQueue.length = 0;
+  lockTargets.length = 0;
   vi.clearAllMocks();
   // Reset default return values after clearAllMocks()
   mockReverseProductOnly.mockResolvedValue(true);
   mockReverseTripOrder.mockResolvedValue([]);
   mockExpirePendingReferral.mockResolvedValue(true);
     mockCancelPartnerItems.mockResolvedValue(undefined);
+  mockCreateReservationsForOrder.mockResolvedValue({ tripIds: [], reservationIds: [] });
+  mockConfirmReservationsForOrder.mockResolvedValue({ reservationIds: [], allocatedAmount: 0 });
+  mockSyncStoreOrderFromOrderPayment.mockResolvedValue({ orderId: "order-004", transitionedToPaid: false });
+  mockRecalculateClientFinancials.mockResolvedValue(undefined);
+  mockInsertValues.mockResolvedValue(undefined);
   // Default update returns [{id}] (1 row updated)
   mockUpdateReturning.mockResolvedValue([{ id: "order-001" }]);
 });
@@ -461,5 +526,176 @@ describe("PUT /api/store/orders/:id/status — admin manual-cancel referral reve
     );
     expect(mockReverseProductOnly).not.toHaveBeenCalled();
     expect(mockReverseTripOrder).not.toHaveBeenCalled();
+  });
+});
+
+const FAKE_MANUAL_PIX_ORDER = {
+  id: "order-004",
+  storeId: "store-001",
+  tenantId: "tenant-001",
+  orderNumber: "ORD-0004",
+  clientId: null,
+  totalAmount: "100.00",
+  depositAmount: "20.00",
+  paymentMethod: "pix",
+  paymentProvider: "manual",
+  paymentStatus: "pending",
+  status: "pending",
+};
+
+describe("POST /api/store/orders/:id/manual-pix-deposit", () => {
+  it("records the credited amount against reservation balances and syncs the order as partial", async () => {
+    selectQueue.push([FAKE_STORE]); // tenant store
+    selectQueue.push([FAKE_MANUAL_PIX_ORDER]); // locked order
+    selectQueue.push([]); // no payment using this idempotency key
+    selectQueue.push([{ id: "reservation-004", status: "pending", expiresAt: null }]); // locked reservations
+    selectQueue.push([]); // current paid receivables
+    selectQueue.push([{
+      status: "pending",
+      paymentStatus: "pending",
+      amountRemaining: "85.00",
+      totalAmount: "100.00",
+    }]); // synchronized order
+    mockCreateReservationsForOrder.mockResolvedValue({ tripIds: [], reservationIds: ["reservation-004"] });
+    mockConfirmReservationsForOrder.mockResolvedValue({
+      reservationIds: ["reservation-004"],
+      allocatedAmount: 10,
+    });
+
+    const res = await request(buildApp())
+      .post("/api/store/orders/order-004/manual-pix-deposit")
+      .send({ amount: 15, idempotencyKey: "8f5b7775-8de2-43b9-859e-c6fa44a4f23d" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      replayed: false,
+      paymentStatus: "pending",
+      amountRemaining: "85.00",
+      paidAmount: "15.00",
+    });
+    expect(lockTargets.slice(0, 2)).toEqual(["store_orders", "reservations"]);
+    expect(mockConfirmReservationsForOrder).toHaveBeenCalledWith(
+      "order-004",
+      15,
+      expect.anything(),
+      "8f5b7775-8de2-43b9-859e-c6fa44a4f23d",
+      expect.objectContaining({
+        promoteDealStage: false,
+        description: "Entrada Pix Manual registrada pela agência",
+      }),
+    );
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      orderId: "order-004",
+      reservationId: null,
+      amount: "5.00",
+      paymentMethod: "pix",
+      status: "paid",
+      gateway: "manual",
+      transactionId: "8f5b7775-8de2-43b9-859e-c6fa44a4f23d",
+    }));
+    expect(mockSyncStoreOrderFromOrderPayment).toHaveBeenCalledWith(
+      "order-004",
+      "tenant-001",
+      expect.objectContaining({
+        received: expect.objectContaining({
+          gateway: "manual",
+          transactionId: "8f5b7775-8de2-43b9-859e-c6fa44a4f23d",
+          amount: 15,
+        }),
+      }),
+    );
+  });
+
+  it("replays a recorded idempotency key without inserting another payment", async () => {
+    selectQueue.push([FAKE_STORE]);
+    selectQueue.push([FAKE_MANUAL_PIX_ORDER]);
+    selectQueue.push([{ amount: "15.00" }]);
+    selectQueue.push([{
+      status: "pending",
+      paymentStatus: "pending",
+      amountRemaining: "85.00",
+      totalAmount: "100.00",
+    }]);
+
+    const res = await request(buildApp())
+      .post("/api/store/orders/order-004/manual-pix-deposit")
+      .send({ amount: 15, idempotencyKey: "8f5b7775-8de2-43b9-859e-c6fa44a4f23d" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      replayed: true,
+      paymentStatus: "pending",
+      amountRemaining: "85.00",
+      paidAmount: "15.00",
+    });
+    expect(mockCreateReservationsForOrder).not.toHaveBeenCalled();
+    expect(mockConfirmReservationsForOrder).not.toHaveBeenCalled();
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockSyncStoreOrderFromOrderPayment).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a deposit larger than the outstanding balance", async () => {
+    selectQueue.push([FAKE_STORE]);
+    selectQueue.push([FAKE_MANUAL_PIX_ORDER]);
+    selectQueue.push([]);
+    selectQueue.push([{ id: "reservation-004", status: "pending", expiresAt: null }]);
+    selectQueue.push([{
+      orderId: "order-004",
+      reservationId: "reservation-004",
+      amount: "95.00",
+      status: "paid",
+      type: "receivable",
+    }]);
+
+    const res = await request(buildApp())
+      .post("/api/store/orders/order-004/manual-pix-deposit")
+      .send({ amount: 10, idempotencyKey: "8f5b7775-8de2-43b9-859e-c6fa44a4f23d" });
+
+    expect(res.status).toBe(409);
+    expect(mockConfirmReservationsForOrder).not.toHaveBeenCalled();
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockSyncStoreOrderFromOrderPayment).not.toHaveBeenCalled();
+  });
+});
+
+describe("PUT /api/store/orders/:id/status — deliberate Manual Pix confirmation", () => {
+  it("confirms payment only on the staff action and does not record a second payment on retry", async () => {
+    const pendingPixOrder = {
+      ...FAKE_MANUAL_PIX_ORDER,
+      status: "pending",
+      paymentStatus: "pending",
+    };
+    const paidPixOrder = {
+      ...pendingPixOrder,
+      paymentStatus: "paid",
+      paidAt: new Date("2026-10-08T12:00:00.000Z"),
+    };
+    selectQueue.push(
+      [FAKE_STORE], // first request: tenant store
+      [pendingPixOrder], // locked unpaid order
+      [], // no linked reservations
+      [], // no prior payments
+      [FAKE_STORE], // retry: tenant store
+      [paidPixOrder], // locked order is already paid
+    );
+
+    const firstResponse = await request(buildApp())
+      .put("/api/store/orders/order-004/status")
+      .send({ paymentStatus: "paid" });
+    const retryResponse = await request(buildApp())
+      .put("/api/store/orders/order-004/status")
+      .send({ paymentStatus: "paid" });
+
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.body).toMatchObject({
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "paid",
+    });
+    expect(retryResponse.status).toBe(200);
+    expect(retryResponse.body.paymentStatus).toBe("paid");
+    expect(mockConfirmReservationsForOrder).toHaveBeenCalledTimes(1);
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
   });
 });

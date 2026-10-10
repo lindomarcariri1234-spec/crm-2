@@ -376,6 +376,8 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
           : null;
         return {
           ...r,
+          paymentProvider: order?.paymentProvider ?? null,
+          stripeLivemode: order?.stripeLivemode ?? null,
           totalValue: summary.totalAmount,
           paidValue: summary.paidAmount,
           balance: summary.amountRemaining,

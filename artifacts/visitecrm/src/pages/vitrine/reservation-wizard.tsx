@@ -48,6 +48,27 @@ export default function ReservationWizard({
     navigate,
   } = state;
 
+  if (state.recoveringStripeReturn) {
+    return (
+      <div role="status" className="flex min-h-[28rem] items-center justify-center gap-3 rounded-[2rem] bg-slate-50/80 px-4 text-center text-sm text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" style={{ color: colors.primary }} />
+        Recuperando o pedido e o retorno seguro da Stripe…
+      </div>
+    );
+  }
+
+  if (state.stripeReturnRecoveryError) {
+    return (
+      <div role="alert" className="mx-auto max-w-xl px-4 py-20 text-center">
+        <h2 className="mb-2 text-xl font-bold">Não foi possível recuperar o pagamento</h2>
+        <p className="mb-6 text-sm text-muted-foreground">{state.stripeReturnRecoveryError}</p>
+        <Button variant="outline" onClick={() => window.location.reload()}>
+          Tentar recuperar novamente
+        </Button>
+      </div>
+    );
+  }
+
   if (loadingProduct) {
     return (
       <div className="flex min-h-[28rem] items-center justify-center rounded-[2rem] bg-slate-50/80">

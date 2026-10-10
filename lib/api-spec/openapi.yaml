@@ -4528,6 +4528,60 @@ paths:
               schema:
                 $ref: "#/components/schemas/Commission"
 
+  # ─── STORE PAYMENT SETTINGS ─────────────────────────────────────
+  /store/settings/stripe/test:
+    post:
+      operationId: testStoreStripeConnection
+      summary: Test a store's Stripe connection
+      description: |
+        Authenticated store administrators can verify a new secret key before
+        saving it. If secretKey is omitted, the store's saved write-only key is
+        used. The submitted credential is never persisted, returned, or logged.
+      tags: [payments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestStoreStripeConnectionBody"
+      responses:
+        "200":
+          description: Stripe connection verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestStoreStripeConnectionResponse"
+        "400":
+          description: Missing key or Stripe rejected the credential
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StripeStoreConnectionError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StripeStoreConnectionError"
+        "403":
+          description: Insufficient store or Stripe permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StripeStoreConnectionError"
+        "404":
+          description: Store not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StripeStoreConnectionError"
+        "502":
+          description: Stripe could not be reached or returned an unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StripeStoreConnectionError"
+
   # ─── PUBLIC REFERRAL ROUTES (no auth) ───────────────────────────
   /public/store/{slug}/referral/info:
     get:
@@ -13907,4 +13961,35 @@ components:
         reservationUnitId: { type: string }
         unitId: { type: [string, "null"] }
       required: [reservationUnitId, unitId]
+
+    TestStoreStripeConnectionBody:
+      type: object
+      description: An optional unsaved credential; omitted or empty means test the saved write-only key.
+      properties:
+        secretKey:
+          type: string
+          writeOnly: true
+          description: Used only for this connection check and never persisted, returned, or logged.
+      additionalProperties: false
+
+    TestStoreStripeConnectionResponse:
+      type: object
+      properties:
+        connected: { type: boolean, const: true }
+        livemode: { type: boolean }
+      required: [connected, livemode]
+
+    StripeStoreConnectionError:
+      type: object
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - STRIPE_KEY_MISSING
+            - STRIPE_AUTHENTICATION_FAILED
+            - STRIPE_PERMISSION_DENIED
+            - STRIPE_CONNECTION_FAILED
+      required: [error, code]
 

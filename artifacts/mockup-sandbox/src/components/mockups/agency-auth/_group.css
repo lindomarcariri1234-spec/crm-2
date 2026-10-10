@@ -1,0 +1,58 @@
+.agency-auth-preview {
+  --button-outline: rgba(0, 0, 0, .10);
+  --badge-outline: rgba(0, 0, 0, .05);
+  --opaque-button-border-intensity: -8;
+  --elevate-1: rgba(0, 0, 0, .03);
+  --elevate-2: rgba(0, 0, 0, .08);
+  --background: 216 33.33% 97.06%;
+  --foreground: 202.5 24.49% 19.22%;
+  --border: 200 18.75% 87.45%;
+  --input: 200 20.93% 83.14%;
+  --ring: 206.73 64.71% 33.33%;
+  --card: 0 0% 100%;
+  --card-foreground: 202.5 24.49% 19.22%;
+  --card-border: 200 18.75% 87.45%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 202.5 24.49% 19.22%;
+  --popover-border: 200 18.75% 87.45%;
+  --primary: 206.73 64.71% 33.33%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 201.43 43.75% 93.73%;
+  --secondary-foreground: 206.21 65.41% 26.08%;
+  --muted: 200 20% 94.12%;
+  --muted-foreground: 200.87 11.11% 40.59%;
+  --accent: 42.5 80% 88.24%;
+  --accent-foreground: 23.53 37.78% 26.47%;
+  --destructive: 4.07 46.83% 49.41%;
+  --destructive-foreground: 0 0% 100%;
+  --app-font-sans: "Inter", sans-serif;
+  --font-sans: "Inter", sans-serif;
+  --font-serif: Georgia, serif;
+  --font-mono: Menlo, monospace;
+  --radius: .5rem;
+  font-family: "Inter", sans-serif;
+}
+
+.agency-auth-preview.dark {
+  --background: 202.86 30.43% 13.53%;
+  --foreground: 42 31.25% 93.73%;
+  --border: 198.86 23.81% 28.82%;
+  --input: 198.33 20% 35.29%;
+  --ring: 203.51 49.74% 61.76%;
+  --card: 200.77 27.66% 18.43%;
+  --card-foreground: 42 31.25% 93.73%;
+  --card-border: 198.86 23.81% 28.82%;
+  --popover: 200.77 27.66% 18.43%;
+  --popover-foreground: 42 31.25% 93.73%;
+  --popover-border: 198.86 23.81% 28.82%;
+  --primary: 203.51 49.74% 61.76%;
+  --primary-foreground: 205.45 50.77% 12.75%;
+  --secondary: 199.02 33.33% 24.12%;
+  --secondary-foreground: 201 55.56% 85.88%;
+  --muted: 200 22.64% 20.78%;
+  --muted-foreground: 197.14 13.73% 70%;
+  --accent: 40.43 34.33% 26.27%;
+  --accent-foreground: 43.09 87.3% 75.29%;
+  --destructive: 4.82 65.88% 66.67%;
+  --destructive-foreground: 3.33 33.33% 10.59%;
+}

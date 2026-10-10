@@ -931,10 +931,9 @@ export interface ConfirmReservationsResult {
  * non-reservation items), and lets `syncReservationPaymentStatus` promote
  * `status` to `"confirmed"` once `paidValue >= totalValue`.
  *
- * Idempotent: each reservation's payment is tagged with
- * `gateway = "manual"` + `transactionId = <reservationId>`, so calling this
- * twice for the same order (e.g. a duplicate manual-payment PUT) never
- * inserts a second payment row for the same reservation.
+ * Callers must serialize and deduplicate the payment event before calling this
+ * helper. It appends rows tagged with the caller's event ID; the order lock and
+ * payment lookup in the manual Pix endpoint make retries safe.
  *
  * Note: Stripe/Mercado Pago webhook confirmations do NOT call this function —
  * they already insert their own gateway-tagged payment rows and call
@@ -951,6 +950,11 @@ export async function confirmReservationsForOrder(
   amount: number,
   tx: DbExecutor,
   eventId = generateId(),
+  options: {
+    description?: string;
+    promoteDealStage?: boolean;
+    occurredAt?: Date;
+  } = {},
 ): Promise<ConfirmReservationsResult> {
   const [order] = await tx
     .select({
@@ -989,6 +993,7 @@ export async function confirmReservationsForOrder(
   const allocatable = Math.min(amount, totalReservationOutstanding);
 
   let allocated = 0;
+  const occurredAt = options.occurredAt ?? new Date();
   for (let i = 0; i < reservations.length; i++) {
     const r = reservations[i]!;
     const isLast = i === reservations.length - 1;
@@ -1013,23 +1018,25 @@ export async function confirmReservationsForOrder(
       paymentMethod: order.paymentMethod ?? "manual",
       installmentNumber: i + 1,
       totalInstallments: reservations.length,
-      dueDate: new Date(),
-      paidAt: new Date(),
+      dueDate: occurredAt,
+      paidAt: occurredAt,
       status: PAYMENT_STATUS.PAID,
       gateway: "manual",
       transactionId: eventId,
-      description: "Pagamento confirmado manualmente pela agência",
+      description: options.description ?? "Pagamento confirmado manualmente pela agência",
     });
 
     await syncReservationPaymentStatus(r.id, order.tenantId, tx);
-    await moveDealToStage({
-      tenantId: order.tenantId,
-      clientId: r.clientId,
-      reservationId: r.id,
-      targetStageName: "Pagamento Confirmado",
-      forwardOnly: true,
-      executor: tx,
-    });
+    if (options.promoteDealStage !== false) {
+      await moveDealToStage({
+        tenantId: order.tenantId,
+        clientId: r.clientId,
+        reservationId: r.id,
+        targetStageName: "Pagamento Confirmado",
+        forwardOnly: true,
+        executor: tx,
+      });
+    }
   }
 
   if (order.clientId) {

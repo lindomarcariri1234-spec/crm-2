@@ -22,11 +22,15 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
               const config = PAYMENT_METHODS_CONFIG.find((m) => m.id === methodId);
               if (!config) return null;
               const { Icon } = config;
+              const isCardMethod = methodId === "credit_card" || methodId === "debit_card";
+              const cardUnavailable = isCardMethod && !store.stripeEnabled;
               const isSelected = form.paymentMethod === methodId;
               return (
                 <label
                   key={methodId}
-                  className={`flex items-center gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                  className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
+                    cardUnavailable ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+                  } ${
                     isSelected
                       ? "border-orange-500 bg-orange-50"
                       : "border-border hover:border-gray-300 bg-white"
@@ -38,6 +42,7 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
                     value={methodId}
                     checked={isSelected}
                     onChange={() => set("paymentMethod", methodId)}
+                    disabled={cardUnavailable}
                     className="accent-orange-500"
                   />
                   <div className={`p-2.5 rounded-lg ${config.bg}`}>
@@ -53,6 +58,14 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
             },
           )}
         </div>
+        {(store.paymentMethods ?? []).some(
+          (method) => (method === "credit_card" || method === "debit_card") && !store.stripeEnabled,
+        ) && (
+          <div role="status" className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>Pagamento com cartão temporariamente indisponível: a loja precisa concluir a configuração da Stripe.</p>
+          </div>
+        )}
 
         {store.minDepositAmount && minDeposit > 0 && (
           <div className="mt-2 p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-4">
@@ -152,23 +165,9 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
 
         {form.paymentMethod === "credit_card" && (
           <div className="mt-2 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-            <p className="text-sm text-blue-900 mb-3 font-medium">Parcelamento disponível:</p>
-            <div className="grid grid-cols-3 gap-2">
-              {[1, 2].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => set("installments", String(n))}
-                  className={`p-2 rounded-lg border text-xs font-medium transition-colors ${
-                    form.installments === String(n)
-                      ? "border-blue-500 bg-blue-100 text-blue-700"
-                      : "border-blue-200 bg-white hover:bg-blue-50"
-                  }`}
-                >
-                  <span className="block font-bold">{n}x</span>
-                  <span className="text-blue-600">R$ {(finalTotal / n).toFixed(2)}</span>
-                </button>
-              ))}
-            </div>
+            <p className="text-sm text-blue-900">
+              O pagamento será processado pela Stripe. Após revisar o pedido, você informará o cartão no formulário seguro do provedor.
+            </p>
           </div>
         )}
 
@@ -176,7 +175,7 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
           <div className="mt-2 p-4 bg-purple-50 border border-purple-200 rounded-xl text-sm text-purple-900">
             <p className="flex items-start gap-1.5">
               <Info className="w-4 h-4 mt-0.5 shrink-0" />
-              Pagamento à vista no débito. Será processado após a confirmação da reserva.
+              Pagamento no débito processado com segurança pela Stripe.
             </p>
           </div>
         )}

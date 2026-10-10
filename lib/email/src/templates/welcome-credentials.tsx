@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { isStripeTestPaymentMode } from './stripe-test-payment'
 import {
   Html,
   Head,
@@ -22,6 +23,8 @@ export interface WelcomeCredentialsEmailProps {
   agencyLogo?: string | null
   isMagicLink?: boolean
   plainTextPassword?: string
+  paymentProvider?: string | null
+  stripeLivemode?: boolean | null
 }
 
 export function WelcomeCredentialsEmail({
@@ -33,6 +36,8 @@ export function WelcomeCredentialsEmail({
   agencyLogo,
   isMagicLink = false,
   plainTextPassword,
+  paymentProvider,
+  stripeLivemode,
 }: WelcomeCredentialsEmailProps) {
   const firstName = clientName.split(' ')[0]
 
@@ -61,6 +66,13 @@ export function WelcomeCredentialsEmail({
               vouchers e verificar pagamentos diretamente na sua Área do Cliente.
             </Text>
           </Section>
+
+          {isStripeTestPaymentMode({ paymentProvider, stripeLivemode }) && (
+            <Section role="status" style={stripeTestPaymentWarning}>
+              <Text style={stripeTestPaymentTitle}>Pagamento Stripe em modo de teste</Text>
+              <Text style={stripeTestPaymentText}>Nenhuma cobrança real foi realizada neste pedido.</Text>
+            </Section>
+          )}
 
           <Hr style={divider} />
 
@@ -255,6 +267,28 @@ const alertInfo: React.CSSProperties = {
   padding: '12px 16px',
   fontSize: '13px',
   color: '#1e40af',
+}
+
+const stripeTestPaymentWarning: React.CSSProperties = {
+  backgroundColor: '#fff7ed',
+  border: '1px solid #fdba74',
+  borderRadius: '8px',
+  margin: '0 24px',
+  padding: '12px 16px',
+}
+
+const stripeTestPaymentTitle: React.CSSProperties = {
+  color: '#9a3412',
+  fontSize: '14px',
+  fontWeight: '700',
+  margin: '0 0 4px',
+}
+
+const stripeTestPaymentText: React.CSSProperties = {
+  color: '#9a3412',
+  fontSize: '14px',
+  lineHeight: '1.5',
+  margin: '0',
 }
 
 const featuresList: React.CSSProperties = {

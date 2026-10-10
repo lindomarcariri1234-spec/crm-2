@@ -45,6 +45,13 @@ import {
   validatePixManualConfig,
   type PixKeyType,
 } from "@/lib/pix-manual-config";
+import {
+  getStripeCredentialMode,
+  isStripeSupportedPaymentMethod,
+  shouldWarnAboutPublishedStripeTestKey,
+  STRIPE_STORE_PAYMENT_METHODS,
+  validateStripeStoreConfig,
+} from "@/lib/stripe-store-config";
 
 const PIX_KEY_GUIDANCE: Record<string, { placeholder: string; hint: string }> = {
   cpf: {
@@ -325,6 +332,11 @@ export default function LojaConfiguracoes() {
     setUploadingCount((prev) => (uploading ? prev + 1 : Math.max(0, prev - 1)));
   const [store, setStore] = useState<StoreSettings | null>(null);
   const [form, setForm] = useState<Partial<StoreSettings>>({});
+  const [testingStripeConnection, setTestingStripeConnection] = useState(false);
+  const [stripeConnectionResult, setStripeConnectionResult] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
   const [showPixKey, setShowPixKey] = useState(false);
@@ -359,6 +371,9 @@ export default function LojaConfiguracoes() {
 
   function set(field: string, value: unknown) {
     setForm((p) => ({ ...p, [field]: value }));
+    if (field === "stripePublicKey" || field === "stripeSecretKey") {
+      setStripeConnectionResult(null);
+    }
   }
 
   async function save() {
@@ -384,6 +399,34 @@ export default function LojaConfiguracoes() {
       return;
     }
 
+    const paymentMethods = (form.paymentMethods as string[] | undefined) ?? [];
+    const storedPaymentMethods = store?.paymentMethods ?? [];
+    const stripeSettingsChanged =
+      (form.stripeEnabled ?? false) !== (store?.stripeEnabled ?? false)
+      || (form.stripePublicKey ?? "") !== (store?.stripePublicKey ?? "")
+      || Boolean(typeof form.stripeSecretKey === "string" && form.stripeSecretKey.trim())
+      || Boolean(typeof form.stripeWebhookSecret === "string" && form.stripeWebhookSecret.trim())
+      || STRIPE_STORE_PAYMENT_METHODS.some(
+        (method) => paymentMethods.includes(method) !== storedPaymentMethods.includes(method),
+      );
+    const stripeIssues = validateStripeStoreConfig({
+      enabled: form.stripeEnabled ?? false,
+      paymentMethods,
+      publishableKey: form.stripePublicKey,
+      secretKey: form.stripeSecretKey,
+      secretKeyConfigured: form.stripeSecretKeyConfigured ?? false,
+      webhookSecret: form.stripeWebhookSecret,
+      previousPublishableKey: store?.stripePublicKey,
+    });
+    if (stripeSettingsChanged && stripeIssues.length > 0) {
+      toast({
+        title: "Revise a configuração do Stripe",
+        description: stripeIssues[0]?.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
     setSaving(true);
     try {
       const updatePayload: Partial<StoreSettings> = { ...form };
@@ -393,6 +436,20 @@ export default function LojaConfiguracoes() {
       } else {
         // A blank value means "keep the encrypted key already stored".
         delete updatePayload.pixKey;
+      }
+      if (typeof form.stripePublicKey === "string") {
+        updatePayload.stripePublicKey = form.stripePublicKey.trim();
+      }
+      if (typeof form.stripeSecretKey === "string" && form.stripeSecretKey.trim()) {
+        updatePayload.stripeSecretKey = form.stripeSecretKey.trim();
+      } else {
+        // Stripe secrets are write-only; an empty field must not replace the saved credential.
+        delete updatePayload.stripeSecretKey;
+      }
+      if (typeof form.stripeWebhookSecret === "string" && form.stripeWebhookSecret.trim()) {
+        updatePayload.stripeWebhookSecret = form.stripeWebhookSecret.trim();
+      } else {
+        delete updatePayload.stripeWebhookSecret;
       }
       await storeApi.updateSettings(updatePayload);
       // Re-read the row without browser/intermediary cache so the form always
@@ -410,6 +467,42 @@ export default function LojaConfiguracoes() {
       });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function testStripeConnection() {
+    const secretKey = typeof form.stripeSecretKey === "string"
+      ? form.stripeSecretKey.trim()
+      : "";
+    const secretMode = getStripeCredentialMode(secretKey);
+    const publishableMode = getStripeCredentialMode(form.stripePublicKey);
+    if (secretMode && publishableMode && secretMode !== publishableMode) {
+      setStripeConnectionResult({
+        kind: "error",
+        message: "A chave pública e a chave secreta precisam ser do mesmo ambiente (teste ou produção).",
+      });
+      return;
+    }
+
+    setTestingStripeConnection(true);
+    setStripeConnectionResult(null);
+    try {
+      const result = await storeApi.testStripeConnection(
+        secretKey ? { secretKey } : {},
+      );
+      setStripeConnectionResult({
+        kind: "success",
+        message: `Conexão verificada no ambiente de ${result.livemode ? "produção" : "teste"}.`,
+      });
+    } catch (err: unknown) {
+      setStripeConnectionResult({
+        kind: "error",
+        message: err instanceof Error
+          ? err.message
+          : "Não foi possível validar a conexão com o Stripe. Tente novamente.",
+      });
+    } finally {
+      setTestingStripeConnection(false);
     }
   }
 
@@ -450,6 +543,41 @@ export default function LojaConfiguracoes() {
     : encodeURIComponent(store.updatedAt);
   const shareUrl = `${window.location.origin}${storeUrl}?v=${shareVersion}`;
   const paymentMethodsSelected = (form.paymentMethods as string[]) ?? [];
+  const stripePaymentMethodsSelected = paymentMethodsSelected.filter(isStripeSupportedPaymentMethod);
+  const stripeCredentialIssues = validateStripeStoreConfig({
+    enabled: form.stripeEnabled ?? false,
+    paymentMethods: paymentMethodsSelected,
+    publishableKey: form.stripePublicKey,
+    secretKey: form.stripeSecretKey,
+    secretKeyConfigured: form.stripeSecretKeyConfigured ?? false,
+    webhookSecret: form.stripeWebhookSecret,
+    previousPublishableKey: store?.stripePublicKey,
+  });
+  const stripePublicKeyMode = getStripeCredentialMode(form.stripePublicKey);
+  const publishedStripeTestKeyWarning = shouldWarnAboutPublishedStripeTestKey(
+    import.meta.env.PROD,
+    form.stripePublicKey,
+  );
+  const stripeWebhookUrl = store?.slug
+    ? `${window.location.origin}${BASE_URL}/api/webhooks/stripe/${encodeURIComponent(store.slug)}`
+    : "";
+  const stripePublicKeyIssue = stripeCredentialIssues.find((issue) => issue.field === "publishableKey");
+  const stripeSecretKeyIssue = stripeCredentialIssues.find((issue) => issue.field === "secretKey");
+  const stripeWebhookSecretIssue = stripeCredentialIssues.find((issue) => issue.field === "webhookSecret");
+
+  async function copyStripeWebhookUrl() {
+    if (!stripeWebhookUrl) return;
+    try {
+      await navigator.clipboard.writeText(stripeWebhookUrl);
+      toast({ title: "URL do webhook copiada" });
+    } catch {
+      toast({
+        title: "Não foi possível copiar a URL",
+        description: "Selecione e copie o endereço exibido abaixo.",
+        variant: "destructive",
+      });
+    }
+  }
   const pixKeyValue = typeof form.pixKey === "string" ? form.pixKey : "";
   const pixKeyType = typeof form.pixKeyType === "string" ? form.pixKeyType : "";
   const pixKeyValidationError = validatePixManualConfig({
@@ -1072,69 +1200,260 @@ export default function LojaConfiguracoes() {
           </Card>
 
           {/* Stripe */}
-          {paymentMethodsSelected.includes("credit_card") && (
-            <Card>
+          <Card>
               <CardHeader>
-                <CardTitle>Stripe</CardTitle>
-                <CardDescription>Credenciais para processar cartão de crédito via Stripe.</CardDescription>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle>Stripe</CardTitle>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={
+                      !(form.stripeEnabled ?? false)
+                        ? "secondary"
+                        : stripePaymentMethodsSelected.length === 0 || stripeCredentialIssues.length > 0
+                          ? "destructive"
+                          : "default"
+                    }>
+                      {!(form.stripeEnabled ?? false)
+                        ? "Desativado"
+                        : stripePaymentMethodsSelected.length === 0
+                          ? "Nenhum método Stripe selecionado"
+                          : stripeCredentialIssues.length > 0
+                            ? "Configuração incompleta"
+                            : "Stripe ativo"}
+                    </Badge>
+                    {stripePublicKeyMode && (
+                      <Badge variant="outline">
+                        {stripePublicKeyMode === "test" ? "Ambiente de teste" : "Ambiente de produção"}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+                <CardDescription>
+                  Configure e teste as credenciais antes de ativar cobranças. A conexão pode ser verificada sem salvar uma chave nova.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <Label>Ativar Stripe</Label>
-                  <Switch
-                    checked={form.stripeEnabled ?? false}
-                    onCheckedChange={(v) => set("stripeEnabled", v)}
-                  />
-                </div>
-                {form.stripeEnabled && (
-                  <div className="grid gap-3">
-                    <div className="space-y-2">
-                      <Label>Chave Pública (Publishable Key)</Label>
-                      <Input
-                        value={form.stripePublicKey ?? ""}
-                        onChange={(e) => set("stripePublicKey", e.target.value)}
-                        placeholder="pk_live_..."
-                        className="font-mono text-sm"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Chave Secreta (Secret Key)</Label>
-                      <Input
-                        type="password"
-                        value={form.stripeSecretKey ?? ""}
-                        onChange={(e) => set("stripeSecretKey", e.target.value)}
-                        placeholder={form.stripeSecretKeyConfigured ? "•••••• (deixe em branco para manter)" : "sk_live_..."}
-                        className="font-mono text-sm"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Webhook Secret</Label>
-                      <Input
-                        type="password"
-                        value={form.stripeWebhookSecret ?? ""}
-                        onChange={(e) => set("stripeWebhookSecret", e.target.value)}
-                        placeholder={form.stripeWebhookSecretConfigured ? "•••••• (deixe em branco para manter)" : "whsec_..."}
-                        className="font-mono text-sm"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Encontre o Webhook Secret no{" "}
-                        <a
-                          href="https://dashboard.stripe.com/webhooks"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="underline underline-offset-2 hover:text-foreground"
-                        >
-                          painel do Stripe → Webhooks
-                        </a>
-                        {" "}ao criar ou editar um endpoint. O valor começa com{" "}
-                        <span className="font-mono">whsec_</span>.
+                {publishedStripeTestKeyWarning && (
+                  <div
+                    role="status"
+                    data-testid="published-stripe-test-key-warning"
+                    className="flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm"
+                  >
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+                    <div className="space-y-1">
+                      <p className="font-medium">Esta versão publicada está configurada para testes do Stripe.</p>
+                      <p className="text-muted-foreground">
+                        Se o Stripe estiver ativado, os pagamentos no checkout usarão o ambiente de teste e não gerarão cobranças reais.
+                        A ativação continua permitida; para cobrar clientes, configure as chaves de produção.
                       </p>
                     </div>
                   </div>
                 )}
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="stripe-enabled">Ativar Stripe</Label>
+                  <Switch
+                    id="stripe-enabled"
+                    data-testid="stripe-enabled"
+                    checked={form.stripeEnabled ?? false}
+                    onCheckedChange={(v) => set("stripeEnabled", v)}
+                  />
+                </div>
+                {form.stripeEnabled && stripePaymentMethodsSelected.length === 0 && (
+                  <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-muted-foreground">
+                    Selecione cartão, Pix ou boleto em “Métodos Aceitos” para oferecer pagamentos processados pelo Stripe.
+                  </div>
+                )}
+                  <div className="grid gap-4">
+                    {stripeCredentialIssues.length > 0 && (
+                      <div
+                        role="alert"
+                        className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"
+                      >
+                        <p className="mb-1 font-medium">Revise as credenciais antes de salvar:</p>
+                        <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+                          {stripeCredentialIssues.map((issue) => (
+                            <li key={issue.field}>{issue.message}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="stripe-public-key">Chave pública</Label>
+                        <Input
+                          id="stripe-public-key"
+                          data-testid="stripe-public-key"
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={form.stripePublicKey ?? ""}
+                          onChange={(e) => set("stripePublicKey", e.target.value)}
+                          placeholder="pk_test_... ou pk_live_..."
+                          className="font-mono text-sm"
+                          aria-invalid={Boolean(stripePublicKeyIssue)}
+                          aria-describedby={stripePublicKeyIssue ? "stripe-public-key-error" : undefined}
+                        />
+                        {stripePublicKeyIssue ? (
+                          <p id="stripe-public-key-error" className="text-xs text-destructive">
+                            {stripePublicKeyIssue.message}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            A chave pública é exibida no checkout. Use o mesmo ambiente da chave secreta.
+                          </p>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <Label htmlFor="stripe-secret-key">Chave secreta</Label>
+                          <Badge variant={form.stripeSecretKeyConfigured || form.stripeSecretKey ? "secondary" : "outline"}>
+                            {form.stripeSecretKey?.trim()
+                              ? "Nova chave informada"
+                              : form.stripeSecretKeyConfigured
+                                ? "Chave salva"
+                                : "Não configurada"}
+                          </Badge>
+                        </div>
+                        <Input
+                          id="stripe-secret-key"
+                          data-testid="stripe-secret-key"
+                          type="password"
+                          autoComplete="new-password"
+                          spellCheck={false}
+                          value={form.stripeSecretKey ?? ""}
+                          onChange={(e) => set("stripeSecretKey", e.target.value)}
+                          placeholder={form.stripeSecretKeyConfigured
+                            ? "Deixe vazio para manter a chave salva"
+                            : "sk_test_... ou sk_live_..."}
+                          className="font-mono text-sm"
+                          aria-invalid={Boolean(stripeSecretKeyIssue)}
+                          aria-describedby={stripeSecretKeyIssue ? "stripe-secret-key-error" : "stripe-secret-key-hint"}
+                        />
+                        {stripeSecretKeyIssue ? (
+                          <p id="stripe-secret-key-error" className="text-xs text-destructive">
+                            {stripeSecretKeyIssue.message}
+                          </p>
+                        ) : (
+                          <p id="stripe-secret-key-hint" className="text-xs text-muted-foreground">
+                            A chave salva nunca é exibida. Deixe o campo vazio para mantê-la; uma chave nova substitui a atual.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={testStripeConnection}
+                        disabled={testingStripeConnection}
+                        data-testid="test-stripe-connection"
+                      >
+                        {testingStripeConnection
+                          ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          : <CreditCard className="mr-2 h-4 w-4" />}
+                        {testingStripeConnection ? "Testando conexão..." : "Testar conexão"}
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        Usa a nova chave digitada; deixe o campo vazio para testar a chave salva. O teste não altera as configurações.
+                      </p>
+                      {stripeConnectionResult && (
+                        <p
+                          role={stripeConnectionResult.kind === "error" ? "alert" : "status"}
+                          aria-live="polite"
+                          data-testid="stripe-connection-result"
+                          className={`text-sm ${stripeConnectionResult.kind === "error" ? "text-destructive" : "text-emerald-700 dark:text-emerald-400"}`}
+                        >
+                          {stripeConnectionResult.message}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Label htmlFor="stripe-webhook-secret">Segredo do webhook</Label>
+                        <Badge variant={form.stripeWebhookSecretConfigured || form.stripeWebhookSecret ? "secondary" : "outline"}>
+                          {form.stripeWebhookSecret?.trim()
+                            ? "Novo segredo informado"
+                            : form.stripeWebhookSecretConfigured
+                              ? "Segredo salvo"
+                              : "Não configurado"}
+                        </Badge>
+                      </div>
+                      <Input
+                        id="stripe-webhook-secret"
+                        data-testid="stripe-webhook-secret"
+                        type="password"
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        value={form.stripeWebhookSecret ?? ""}
+                        onChange={(e) => set("stripeWebhookSecret", e.target.value)}
+                        placeholder={form.stripeWebhookSecretConfigured
+                          ? "Deixe vazio para manter o segredo salvo"
+                          : "whsec_..."}
+                        className="font-mono text-sm"
+                        aria-invalid={Boolean(stripeWebhookSecretIssue)}
+                        aria-describedby={stripeWebhookSecretIssue ? "stripe-webhook-secret-error" : undefined}
+                      />
+                      {stripeWebhookSecretIssue ? (
+                        <p id="stripe-webhook-secret-error" className="text-xs text-destructive">
+                          {stripeWebhookSecretIssue.message}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Configure o segredo de assinatura deste endpoint para confirmar pagamentos e processar reembolsos automaticamente.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium">Endpoint para cadastrar no Stripe</p>
+                          <p className="text-xs text-muted-foreground">
+                            Use a URL abaixo no painel do Stripe → Webhooks e selecione os eventos listados.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={copyStripeWebhookUrl}
+                          disabled={!stripeWebhookUrl}
+                          data-testid="copy-stripe-webhook-url"
+                        >
+                          <Copy className="mr-2 h-4 w-4" />
+                          Copiar URL
+                        </Button>
+                      </div>
+                      <code
+                        data-testid="stripe-webhook-url"
+                        className="block break-all rounded bg-background px-3 py-2 text-xs"
+                      >
+                        {stripeWebhookUrl}
+                      </code>
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium">Eventos necessários</p>
+                        <p className="break-words font-mono text-xs leading-relaxed text-muted-foreground">
+                          payment_intent.succeeded, payment_intent.processing, payment_intent.requires_action,
+                          payment_intent.payment_failed, charge.refunded, charge.dispute.created
+                        </p>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        O segredo por loja é recomendado. Sem ele, a confirmação depende de existir um segredo global configurado pela plataforma.
+                      </p>
+                      <a
+                        href="https://dashboard.stripe.com/webhooks"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs underline underline-offset-2 hover:text-foreground"
+                      >
+                        Abrir Webhooks no painel Stripe
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  </div>
               </CardContent>
             </Card>
-          )}
 
           {/* MercadoPago */}
           <Card>

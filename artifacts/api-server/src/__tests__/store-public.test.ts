@@ -85,6 +85,7 @@ vi.mock("@workspace/db", () => ({
   storeReviewsTable: {},
   storeCategoriesTable: {},
   reservationsTable: {},
+  paymentsTable: {},
   tripsTable: {},
   clientsTable: {},
   usersTable: {},
@@ -106,6 +107,8 @@ vi.mock("@workspace/db", () => ({
   partnerAvailabilityTable: {},
   priceAlertSubscriptionsTable: {},
   referralAttemptLogsTable: {},
+  passengersTable: {},
+  boardingLocationsTable: {},
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -152,6 +155,9 @@ vi.mock("../lib/tenant.js", () => ({
 vi.mock("../queues/email-helpers.js", () => ({
   enqueueReservationConfirmationEmail: mockEnqueueConfirmation,
   enqueueReservationCancellationEmail: vi.fn().mockResolvedValue(undefined),
+  sendPriceAlertConfirmationEmail: vi.fn().mockResolvedValue(undefined),
+  enqueuePixOrderAlertEmail: vi.fn().mockResolvedValue(undefined),
+  enqueuePixOrderQr: vi.fn().mockResolvedValue(undefined),
   enqueueNewBookingNotificationEmail: vi.fn().mockResolvedValue(undefined),
   dispatchReferralConvertedEmail: vi.fn().mockResolvedValue(undefined),
   dispatchReferralExpiredEmail: vi.fn().mockResolvedValue(undefined),
@@ -218,6 +224,7 @@ import {
   shouldBypassClerkForPath,
 } from "../lib/clerk-request.js";
 import { getTenantUser } from "../lib/tenant.js";
+import { generatePixQrCodeUrl } from "../lib/pix.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Express app
@@ -366,7 +373,14 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     });
     whereResult.for.mockReturnValue(whereResult);
     mockWhere.mockReturnValue(whereResult);
-    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy } as unknown as { where: typeof mockWhere; limit: typeof mockLimit });
+    const fromResult = {
+      where: mockWhere,
+      limit: mockLimit,
+      orderBy: mockOrderBy,
+      leftJoin: vi.fn(),
+    };
+    fromResult.leftJoin.mockReturnValue(fromResult);
+    mockFrom.mockReturnValue(fromResult as unknown as { where: typeof mockWhere; limit: typeof mockLimit; orderBy: typeof mockOrderBy });
     mockSelect.mockReturnValue({ from: mockFrom });
 
     // Reset once-queues so leaked mockImplementationOnce / mockResolvedValueOnce
@@ -412,6 +426,18 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("rejects card orders when Stripe is not configured for the store", async () => {
+    mockLimit.mockResolvedValueOnce([FAKE_STORE]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, paymentMethod: "credit_card" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("STRIPE_NOT_CONFIGURED");
+    expect(mockTransaction).not.toHaveBeenCalled();
   });
 
   it("returns 400 when items array is empty", async () => {
@@ -1228,6 +1254,152 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(res.body).toHaveProperty("totalAmount");
   });
 
+  it("returns the configured Manual Pix QR for the requested deposit and leaves payment pending", async () => {
+    const manualPixStore = {
+      ...FAKE_STORE,
+      stripeEnabled: false,
+      stripePublicKey: null,
+      stripeSecretKey: null,
+      pixEnabled: true,
+      pixKey: "pix@minha-loja.example",
+      city: "Fortaleza",
+      minDepositAmount: "50.00",
+    };
+    const pendingPixOrder = {
+      ...FAKE_ORDER,
+      status: "pending",
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      depositAmount: "75.00",
+    };
+    mockLimit
+      .mockResolvedValueOnce([manualPixStore])
+      .mockResolvedValueOnce([FAKE_PRODUCT])
+      .mockResolvedValueOnce([pendingPixOrder])
+      .mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({
+        ...VALID_BODY,
+        paymentMethod: "pix",
+        depositAmount: 75,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      depositAmount: "75.00",
+      paidAmount: 0,
+      amountRemaining: "150.00",
+    });
+    expect(res.body.pixQrCode).toBe(res.body.pixCopyPaste);
+    expect(res.body.pixCopyPaste).toContain("540575.00");
+    expect(res.body.pixQrCodeUrl).toBe(
+      generatePixQrCodeUrl(res.body.pixCopyPaste),
+    );
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      pixQrCode: res.body.pixCopyPaste,
+      pixQrCodeUrl: res.body.pixQrCodeUrl,
+      pixCopyPaste: res.body.pixCopyPaste,
+    }));
+  });
+
+  it("returns the saved Manual Pix instructions through token-protected order tracking", async () => {
+    const paymentToken = "manual-pix-customer-access-token";
+    const pixCopyPaste = "000201010212540575.005802BR5911MINHA LOJA6009FORTALEZA6304ABCD";
+    const trackedOrder = {
+      ...FAKE_ORDER,
+      status: "pending",
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      depositAmount: "75.00",
+      pixQrCode: pixCopyPaste,
+      pixQrCodeUrl: generatePixQrCodeUrl(pixCopyPaste),
+      pixCopyPaste,
+      storedPaymentToken: paymentToken,
+    };
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([trackedOrder]);
+
+    const res = await request(buildApp())
+      .get(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}`)
+      .query({ token: paymentToken });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      orderNumber: FAKE_ORDER.orderNumber,
+      paymentMethod: "pix",
+      paymentProvider: "manual",
+      paymentStatus: "pending",
+      depositAmount: "75.00",
+      pixQrCode: pixCopyPaste,
+      pixQrCodeUrl: trackedOrder.pixQrCodeUrl,
+      pixCopyPaste,
+      paidAmount: 0,
+      amountRemaining: "150.00",
+    });
+    expect(res.body).not.toHaveProperty("storedPaymentToken");
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("returns Stripe test mode on repeated token-protected order lookups", async () => {
+    const paymentToken = "stripe-test-customer-access-token";
+    const trackedOrder = {
+      ...FAKE_ORDER,
+      paymentMethod: "credit_card",
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+      storedPaymentToken: paymentToken,
+    };
+
+    for (let lookup = 0; lookup < 2; lookup++) {
+      mockLimit
+        .mockResolvedValueOnce([FAKE_STORE])
+        .mockResolvedValueOnce([trackedOrder]);
+
+      const res = await request(buildApp())
+        .get(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}`)
+        .query({ token: paymentToken });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        paymentMethod: "credit_card",
+        paymentProvider: "stripe",
+        stripeLivemode: false,
+      });
+    }
+  });
+
+  it("does not expose Manual Pix instructions when order tracking receives the wrong token", async () => {
+    const pixCopyPaste = "000201010212540575.005802BR5911MINHA LOJA6009FORTALEZA6304ABCD";
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod: "pix",
+        paymentProvider: "manual",
+        paymentStatus: "pending",
+        pixQrCode: pixCopyPaste,
+        pixQrCodeUrl: generatePixQrCodeUrl(pixCopyPaste),
+        pixCopyPaste,
+        storedPaymentToken: "correct-order-access-token",
+      }]);
+
+    const res = await request(buildApp())
+      .get(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}`)
+      .query({ token: "wrong-order-access-token" });
+
+    expect(res.status).toBe(404);
+    expect(res.body).not.toHaveProperty("pixQrCode");
+    expect(res.body).not.toHaveProperty("pixCopyPaste");
+  });
+
   // ── 9. Post-booking side effects are deferred to payment (task #17 hardening) ──
 
   it("does not enqueue the reservation confirmation email at checkout (deferred to payment)", async () => {
@@ -1273,6 +1445,106 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
     mockUpdateSet.mockClear();
   });
 
+  it("creates card PaymentIntents for the selected deposit amount", async () => {
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        depositAmount: "75.00",
+        paymentMethod: "credit_card",
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: null,
+      }]);
+    mockStripeCreate.mockResolvedValueOnce({
+      id: "pi_card_deposit",
+      client_secret: "pi_card_deposit_secret",
+      payment_method_types: ["card"],
+      livemode: false,
+    });
+
+    const response = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({ orderNumber: FAKE_ORDER.orderNumber, paymentToken: "checkout-token" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      clientSecret: "pi_card_deposit_secret",
+      paymentIntentId: "pi_card_deposit",
+      publishableKey: "pk_test_store",
+      stripeLivemode: false,
+    });
+    expect(mockStripeCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 7500,
+        currency: "brl",
+        payment_method_types: ["card"],
+        receipt_email: "maria@example.com",
+      }),
+      expect.objectContaining({ idempotencyKey: "store-order-store-001-gen-id" }),
+    );
+    expect(mockUpdateSet).toHaveBeenCalledWith({
+      paymentIntentId: "pi_card_deposit",
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+    });
+  });
+
+  it("rejects unsupported card installment requests instead of silently charging in one payment", async () => {
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod: "credit_card",
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: null,
+      }]);
+
+    const response = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({
+        orderNumber: FAKE_ORDER.orderNumber,
+        paymentToken: "checkout-token",
+        installments: "2",
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("STRIPE_INSTALLMENTS_UNAVAILABLE");
+    expect(mockStripeCreate).not.toHaveBeenCalled();
+    expect(mockStripeRetrieve).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("allows a single payment but does not enable an installment plan on Stripe", async () => {
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod: "credit_card",
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: null,
+      }]);
+    mockStripeCreate.mockResolvedValueOnce({
+      id: "pi_card_single",
+      client_secret: "pi_card_single_secret",
+      payment_method_types: ["card"],
+      livemode: false,
+    });
+
+    const response = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({
+        orderNumber: FAKE_ORDER.orderNumber,
+        paymentToken: "checkout-token",
+        installmentCount: 1,
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockStripeCreate).toHaveBeenCalledWith(
+      expect.not.objectContaining({ payment_method_options: expect.anything() }),
+      expect.any(Object),
+    );
+  });
+
   it.each([
     ["pix", "pi_pix", "pi_pix_secret"],
     ["boleto", "pi_boleto", "pi_boleto_secret"],
@@ -1289,6 +1561,7 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
       id,
       client_secret: clientSecret,
       payment_method_types: [paymentMethod],
+      livemode: false,
     });
 
     const response = await request(buildApp())
@@ -1299,6 +1572,7 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
     expect(response.body).toMatchObject({
       clientSecret,
       publishableKey: "pk_test_store",
+      stripeLivemode: false,
     });
     expect(mockStripeCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1314,6 +1588,7 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
     expect(mockUpdateSet).toHaveBeenCalledWith({
       paymentIntentId: id,
       paymentProvider: "stripe",
+      stripeLivemode: false,
     });
   });
 
@@ -1322,6 +1597,7 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
       id: "pi_pix_existing",
       client_secret: "pi_pix_existing_secret",
       payment_method_types: ["pix"],
+      livemode: false,
     };
     mockLimit
       .mockResolvedValueOnce([STRIPE_STORE])
@@ -1356,11 +1632,13 @@ describe("POST /api/public/store/:slug/create-payment-intent — alternative Str
     expect(retryResponse.body).toMatchObject({
       clientSecret: existingIntent.client_secret,
       paymentIntentId: existingIntent.id,
+      stripeLivemode: false,
       reused: true,
     });
     expect(mockUpdateSet).toHaveBeenCalledWith({
       paymentIntentId: existingIntent.id,
       paymentProvider: "stripe",
+      stripeLivemode: false,
     });
     expect(mockStripeCreate).toHaveBeenCalledTimes(1);
     expect(mockStripeRetrieve).toHaveBeenCalledWith(existingIntent.id);

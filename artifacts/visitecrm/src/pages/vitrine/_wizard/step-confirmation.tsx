@@ -24,6 +24,7 @@ import { calculateTripDuration } from "@/lib/tripDuration";
 import { StepIndicator } from "./step-indicator";
 import { ConfettiAnimation } from "./confetti";
 import { Voucher } from "./voucher";
+import { StripeCardPayment } from "./stripe-card-payment";
 import { fmtDateLong, PAYMENT_LABELS } from "./constants";
 import type { WizardState } from "./use-wizard-state";
 import { trackReferralCreditReduction } from "@/lib/analytics";
@@ -105,6 +106,9 @@ export function StepConfirmation({
     refreshingOrderStatus,
     orderStatusRefreshFailed,
     refreshOrderStatus,
+    stripePaymentState,
+    stripePaymentSubmitted,
+    handleStripePaymentSubmitted,
     qty,
     coPassengers,
     effectiveSeats,
@@ -143,9 +147,13 @@ export function StepConfirmation({
   const totalAmt = summary.totalAmount;
   const depositAmt = summary.depositRequested > 0 ? summary.depositRequested : null;
   const paidAmt = summary.paidAmount;
+  const stripeCardMethod =
+    (form.paymentMethod || completedOrder.paymentMethod) === "credit_card" ||
+    (form.paymentMethod || completedOrder.paymentMethod) === "debit_card";
   const isFullyPaid = summary.states.payment === "paid";
   const isPartiallyPaid = summary.states.payment === "partially_paid";
-  const reservationValid = summary.reservationValid;
+  const reservationValid =
+    summary.reservationValid && (!stripeCardMethod || paidAmt > 0 || isFullyPaid);
   const orderCancelled = ["cancelled", "canceled"].includes(
     completedOrder.status?.toLowerCase() ?? "",
   );
@@ -165,6 +173,13 @@ export function StepConfirmation({
     boardingPoints.length === 1
       ? boardingPoints[0]
       : boardingPoints.find((bp) => bp.id === selectedBoardingPointId) ?? null;
+  const customerName = form.customerName || completedOrder.customerName || "";
+  const customerEmail = form.customerEmail || completedOrder.customerEmail || "";
+  const customerPhone = form.customerPhone || completedOrder.customerPhone || "";
+  const confirmationSeats =
+    effectiveSeats.length > 0
+      ? effectiveSeats
+      : completedOrder.reservations?.flatMap((reservation) => reservation.seats ?? []) ?? [];
 
   function handlePrint() {
     window.print();
@@ -172,7 +187,7 @@ export function StepConfirmation({
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10 pb-20">
-      {showConfetti && !orderCancelled && <ConfettiAnimation />}
+      {showConfetti && !orderCancelled && (!stripeCardMethod || reservationValid) && <ConfettiAnimation />}
 
       <StepIndicator current="confirmado" />
 
@@ -213,6 +228,8 @@ export function StepConfirmation({
                   ? "Seu pedido foi criado! Complete o pagamento via PIX para confirmar sua reserva."
                   : form.paymentMethod === "cash"
                     ? "Seu pedido ficará reservado por 30 minutos. Pague em dinheiro na agência dentro desse prazo para confirmar a reserva."
+                  : stripeCardMethod && !stripePaymentSubmitted
+                    ? "Seu pedido foi criado. Conclua o pagamento com cartão pelo formulário seguro da Stripe."
                   : "Seu pedido foi criado. Confirme o pagamento para validar a reserva."}
           </p>
           <div className="inline-flex items-center gap-2 bg-white px-6 py-3 rounded-xl shadow-sm border border-green-200">
@@ -322,11 +339,11 @@ export function StepConfirmation({
                   {qty} passageiro{qty !== 1 ? "s" : ""}
                 </p>
               </div>
-              {effectiveSeats.length > 0 && (
+              {confirmationSeats.length > 0 && (
                 <div>
                   <p className="text-muted-foreground text-xs mb-1">Assentos</p>
                   <div className="flex flex-wrap gap-1.5">
-                    {effectiveSeats.map((s) => (
+                    {confirmationSeats.map((s) => (
                       <span
                         key={s}
                         className="px-2.5 py-1 rounded-full text-white text-xs font-semibold"
@@ -363,7 +380,7 @@ export function StepConfirmation({
             <div className="space-y-3 text-sm">
               <div>
                 <p className="text-muted-foreground text-xs">Nome</p>
-                <p className="font-semibold">{form.customerName}</p>
+                <p className="font-semibold">{customerName}</p>
               </div>
               {form.customerCpf && (
                 <div>
@@ -373,11 +390,11 @@ export function StepConfirmation({
               )}
               <div>
                 <p className="text-muted-foreground text-xs">Email</p>
-                <p className="font-semibold">{form.customerEmail}</p>
+                <p className="font-semibold">{customerEmail}</p>
               </div>
               <div>
                 <p className="text-muted-foreground text-xs">Telefone</p>
-                <p className="font-semibold">{form.customerPhone}</p>
+                <p className="font-semibold">{customerPhone || "—"}</p>
               </div>
               {coPassengers.slice(0, Math.max(0, qty - 1)).length > 0 && (
                 <div>
@@ -504,8 +521,13 @@ export function StepConfirmation({
             {(!completedOrder.pixQrCode || !completedOrder.pixQrCodeUrl) && (
               <p className="mt-1.5 flex items-center gap-1">
                 <Info className="w-3.5 h-3.5" />
-                Aguardando confirmação do pagamento. Você receberá um email assim que o pagamento for
-                confirmado.
+                {stripeCardMethod
+                  ? paidAmt > 0
+                    ? "A Stripe confirmou uma parte do pagamento. O saldo restante continua indicado acima."
+                    : stripePaymentSubmitted
+                      ? "Pagamento enviado à Stripe; aguardando a confirmação do servidor."
+                      : "Conclua o pagamento no formulário seguro da Stripe abaixo."
+                  : "Aguardando confirmação do pagamento. Você receberá um email assim que o pagamento for confirmado."}
               </p>
             )}
           </div>
@@ -515,6 +537,16 @@ export function StepConfirmation({
               pixCopyPaste={completedOrder.pixCopyPaste ?? completedOrder.pixQrCode}
               primaryColor={store.primaryColor}
             />
+          )}
+          {stripeCardMethod && stripePaymentState && !isFullyPaid && (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+              <h4 className="mb-3 font-semibold text-slate-900">Pagamento com cartão</h4>
+              <StripeCardPayment
+                payment={stripePaymentState}
+                submitted={stripePaymentSubmitted}
+                onSubmitted={handleStripePaymentSubmitted}
+              />
+            </div>
           )}
         </div>
 
@@ -552,9 +584,9 @@ export function StepConfirmation({
           order={completedOrder}
           product={product}
           store={store}
-          customerName={form.customerName}
-          seats={effectiveSeats}
-          paymentMethod={form.paymentMethod}
+          customerName={customerName}
+          seats={confirmationSeats}
+          paymentMethod={form.paymentMethod || completedOrder.paymentMethod || ""}
           referralDiscount={referralApplied ? referralDiscount : 0}
           referralDiscountType={referralDiscountType}
           referralDiscountPct={referralDiscountPct}
@@ -587,7 +619,7 @@ export function StepConfirmation({
             Acessar Meu Perfil
           </Button>
           <p className="text-xs text-muted-foreground mt-3">
-            Use o e-mail e a senha enviados para <strong>{form.customerEmail}</strong>
+             Use o e-mail e a senha enviados para <strong>{customerEmail}</strong>
           </p>
         </div>
 

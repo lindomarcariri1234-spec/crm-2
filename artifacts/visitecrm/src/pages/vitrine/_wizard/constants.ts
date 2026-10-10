@@ -46,7 +46,7 @@ export const PAYMENT_METHODS_CONFIG = [
   {
     id: "credit_card",
     label: "Cartão de Crédito",
-    description: "Parcelamento em até 12x",
+    description: "Pagamento processado com segurança pela Stripe",
     Icon: CreditCard,
     color: "text-blue-600",
     bg: "bg-blue-50",

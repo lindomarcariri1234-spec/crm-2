@@ -131,6 +131,7 @@ router.get("/dashboard/summary", async (req, res, next: NextFunction): Promise<v
           ))
           .where(and(
             eq(paymentsTable.tenantId, tenantId),
+            eq(paymentsTable.isTestMode, false),
             eq(clientsTable.tenantId, tenantId),
             clientSellerScopeCondition(me),
           ))
@@ -221,7 +222,10 @@ router.get("/dashboard/summary", async (req, res, next: NextFunction): Promise<v
 
     const [paymentSummary] = await db.select(
       dashboardPaymentMetricSelection(startOfMonth, startOfToday, next3Days, now),
-    ).from(paymentsTable).where(eq(paymentsTable.tenantId, tenantId));
+    ).from(paymentsTable).where(and(
+      eq(paymentsTable.tenantId, tenantId),
+      eq(paymentsTable.isTestMode, false),
+    ));
 
     const [totalExpensesRow] = await db.select({ total: sql<number>`sum(cast(amount as numeric))` })
       .from(expensesTable).where(eq(expensesTable.tenantId, tenantId));
@@ -246,6 +250,7 @@ router.get("/dashboard/summary", async (req, res, next: NextFunction): Promise<v
       ))
       .where(and(
         eq(paymentsTable.tenantId, tenantId),
+        eq(paymentsTable.isTestMode, false),
         eq(reservationsTable.tenantId, tenantId),
         eq(tripsTable.tenantId, tenantId),
         eq(tripsTable.status, TRIP_STATUS.ACTIVE),
@@ -522,6 +527,7 @@ router.get("/dashboard/charts", async (req, res, next: NextFunction): Promise<vo
       }).from(paymentsTable)
         .where(and(
           eq(paymentsTable.tenantId, tenantId),
+          eq(paymentsTable.isTestMode, false),
           sql`${paymentsTable.paidAt} IS NOT NULL`,
           gte(paymentsTable.paidAt, since),
         ))
@@ -666,7 +672,12 @@ router.get("/dashboard/funnel", async (req, res, next: NextFunction): Promise<vo
 
     const clientPaidPayments = await db.select({ clientId: paymentsTable.clientId, amount: paymentsTable.amount })
       .from(paymentsTable)
-      .where(and(eq(paymentsTable.tenantId, tenantId), eq(paymentsTable.status, PAYMENT_STATUS.PAID), eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE)));
+      .where(and(
+        eq(paymentsTable.tenantId, tenantId),
+        eq(paymentsTable.isTestMode, false),
+        eq(paymentsTable.status, PAYMENT_STATUS.PAID),
+        eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+      ));
 
     const paidClientIds = new Set(clientPaidPayments.map(p => p.clientId).filter(Boolean) as string[]);
     const clientPaidAmount: Record<string, number> = {};
@@ -848,7 +859,12 @@ router.get("/dashboard/comparative", async (req, res, next: NextFunction): Promi
       revenue: sql<string>`sum(case when ${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE} and ${paymentsTable.status} = ${PAYMENT_STATUS.PAID} then cast(${paymentsTable.amount} as numeric) else 0 end)`,
       expenses: sql<string>`sum(case when ${paymentsTable.type} = ${PAYMENT_TYPE.PAYABLE} and ${paymentsTable.status} = ${PAYMENT_STATUS.PAID} then cast(${paymentsTable.amount} as numeric) else 0 end)`,
     }).from(paymentsTable)
-      .where(and(eq(paymentsTable.tenantId, tenantId), sql`${paymentsTable.paidAt} IS NOT NULL`, gte(paymentsTable.paidAt, since)))
+      .where(and(
+        eq(paymentsTable.tenantId, tenantId),
+        eq(paymentsTable.isTestMode, false),
+        sql`${paymentsTable.paidAt} IS NOT NULL`,
+        gte(paymentsTable.paidAt, since),
+      ))
       .groupBy(sql`to_char(${paymentsTable.paidAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`);
 
     const resByMonthRaw = await db.select({

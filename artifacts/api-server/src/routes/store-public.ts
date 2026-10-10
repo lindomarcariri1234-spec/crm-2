@@ -1643,6 +1643,27 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 }
 ;
 
+    const stripeCheckoutAvailable = Boolean(
+      store.stripeEnabled
+      && store.stripePublicKey
+      && decryptOrPassthrough(store.stripeSecretKey),
+    );
+    const isCardPayment = data.paymentMethod === "credit_card" || data.paymentMethod === "debit_card";
+    if (isCardPayment && !stripeCheckoutAvailable) {
+      next(new ValidationError(
+        "O pagamento com cartão exige uma conta Stripe configurada nesta loja.",
+        "STRIPE_NOT_CONFIGURED",
+      ));
+      return;
+    }
+    if (isCardPayment) {
+      // Card orders must never fall back to manual confirmation.
+      data.paymentProvider = "stripe";
+    }
+    if (data.paymentMethod === "pix") {
+      data.paymentProvider = stripeCheckoutAvailable ? "stripe" : "manual";
+    }
+
 
     // Idempotency: a browser retry / accidental double-submit of the same
     // checkout attempt carries the same client-generated key. Reuse the
@@ -1661,14 +1682,6 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     
 }
 
-    const stripeCheckoutAvailable = Boolean(
-      store.stripeEnabled
-      && store.stripePublicKey
-      && decryptOrPassthrough(store.stripeSecretKey),
-    );
-    if (data.paymentMethod === "pix") {
-      data.paymentProvider = stripeCheckoutAvailable ? "stripe" : "manual";
-    }
     if (
       data.paymentMethod === "pix"
       && !stripeCheckoutAvailable
@@ -2430,6 +2443,7 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
       orderNumber: storeOrdersTable.orderNumber,
       customerName: storeOrdersTable.customerName,
       customerEmail: storeOrdersTable.customerEmail,
+      customerPhone: storeOrdersTable.customerPhone,
       subtotal: storeOrdersTable.subtotal,
       discountAmount: storeOrdersTable.discountAmount,
       taxAmount: storeOrdersTable.taxAmount,
@@ -2440,6 +2454,7 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
       couponCode: storeOrdersTable.couponCode,
       paymentMethod: storeOrdersTable.paymentMethod,
       paymentProvider: storeOrdersTable.paymentProvider,
+      stripeLivemode: storeOrdersTable.stripeLivemode,
       paymentStatus: storeOrdersTable.paymentStatus,
       installments: storeOrdersTable.installments,
       pixQrCode: storeOrdersTable.pixQrCode,
@@ -3220,7 +3235,12 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
       next(new ValidationError("Chave pública do Stripe não configurada", "STRIPE_NOT_CONFIGURED")); return;
     }
 
-    const body = (req.body ?? {}) as { orderNumber?: unknown; paymentToken?: unknown };
+    const body = (req.body ?? {}) as {
+      orderNumber?: unknown;
+      paymentToken?: unknown;
+      installments?: unknown;
+      installmentCount?: unknown;
+    };
     const orderNumber = typeof body.orderNumber === "string" ? body.orderNumber.trim() : "";
     const paymentToken = typeof body.paymentToken === "string" ? body.paymentToken.trim() : "";
 
@@ -3236,6 +3256,7 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
         id: storeOrdersTable.id,
         orderNumber: storeOrdersTable.orderNumber,
         totalAmount: storeOrdersTable.totalAmount,
+      depositAmount: storeOrdersTable.depositAmount,
         paymentMethod: storeOrdersTable.paymentMethod,
         customerEmail: storeOrdersTable.customerEmail,
         storedPaymentToken: storeOrdersTable.paymentToken,
@@ -3272,6 +3293,31 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
       return;
     }
 
+    // Stripe's documented installment products do not support Brazilian
+    // card installments. Never silently turn a requested multi-installment
+    // payment into a one-time charge; accept only an explicit 1x/no-installment
+    // value until Stripe confirms support for this account and card market.
+    const requestedInstallments = body.installmentCount ?? body.installments;
+    if (requestedInstallments !== undefined && requestedInstallments !== null && requestedInstallments !== "") {
+      const installmentCount =
+        typeof requestedInstallments === "number"
+          ? requestedInstallments
+          : typeof requestedInstallments === "string" && /^\d+$/.test(requestedInstallments.trim())
+            ? Number(requestedInstallments.trim())
+            : NaN;
+      if (!Number.isInteger(installmentCount) || installmentCount < 1) {
+        next(new ValidationError("Número de parcelas inválido", "INVALID_INSTALLMENT_COUNT"));
+        return;
+      }
+      if (installmentCount > 1) {
+        next(new ValidationError(
+          "Parcelamento no cartão não está habilitado para esta configuração Stripe",
+          "STRIPE_INSTALLMENTS_UNAVAILABLE",
+        ));
+        return;
+      }
+    }
+
     const Stripe = (await import("stripe")).default;
     const stripe = new Stripe(stripeSecretKey);
 
@@ -3286,18 +3332,25 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
         .set({
           paymentIntentId: order.existingPaymentIntentId,
           paymentProvider: "stripe",
+          stripeLivemode: existingIntent.livemode,
         })
         .where(eq(storeOrdersTable.id, order.id));
       res.json({
         clientSecret: existingIntent.client_secret,
         paymentIntentId: existingIntent.id,
         publishableKey: store.stripePublicKey,
+        stripeLivemode: existingIntent.livemode,
         reused: true,
       });
       return;
     }
 
-    const amountInCents = Math.round(Number(order.totalAmount) * 100);
+    const amountToCharge = Number(order.depositAmount ?? order.totalAmount);
+    if (!Number.isFinite(amountToCharge) || amountToCharge <= 0) {
+      next(new ValidationError("O valor da cobrança Stripe é inválido", "INVALID_PAYMENT_AMOUNT"));
+      return;
+    }
+    const amountInCents = Math.round(amountToCharge * 100);
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInCents,
       currency: "brl",
@@ -3318,10 +3371,16 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
       .set({
         paymentIntentId: paymentIntent.id,
         paymentProvider: "stripe",
+        stripeLivemode: paymentIntent.livemode,
       })
       .where(eq(storeOrdersTable.id, order.id));
 
-    res.json({ clientSecret: paymentIntent.client_secret, publishableKey: store.stripePublicKey });
+    res.json({
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+      publishableKey: store.stripePublicKey,
+      stripeLivemode: paymentIntent.livemode,
+    });
   } catch (err) {
     next(err);
   }

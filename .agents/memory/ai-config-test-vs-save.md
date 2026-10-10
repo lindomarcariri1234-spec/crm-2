@@ -1,6 +1,6 @@
 ---
-name: AI integration Test vs Save status model
-description: Why "Testar Conexão" is transient and only Save persists connection status in the per-tenant AI config.
+name: Connection tests vs saved status
+description: Keep AI and store Stripe credential tests transient; configuration writes remain separate and secrets stay write-only.
 ---
 
 For the per-tenant AI provider config (Configurações → Integrações), "Testar
@@ -20,3 +20,16 @@ test-pre-save works, AND the stored status can never diverge from the saved conf
 on a clean/saved state), you are re-introducing the rejected coupling. Keep test
 transient; let Save own status. The masked-key sentinel ("••••••••") / empty key
 means "use the saved key" on both test and save paths.
+
+The store Stripe connection check follows the same separation: a non-empty
+candidate key is used only for that check; an omitted or blank key selects the
+saved write-only credential. A check returns only success and environment, never
+persists connection status, and never logs raw Stripe errors or credentials.
+
+**Why:** Testing a draft credential must not overwrite the configured key or
+make an unsaved connection appear persisted; staff need to verify credentials
+without weakening the write-only secret boundary.
+
+**How to apply:** Keep the probe separate from the settings save path. Do not
+return saved key material or raw provider errors, and keep the empty-value
+fallback explicit in both the API contract and the UI.

@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, useRef, FormEvent } from "react";
 import { useLocation } from "wouter";
 import { useGetMe } from "@workspace/api-client-react";
 import {
@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { PAYMENT_LABELS } from "@/pages/vitrine/_wizard/constants";
 import { getOrderLookupFromStorage } from "./utils/storage";
+import { StripeTestPaymentNotice } from "./StripeTestPaymentNotice";
 
 const PAYMENT_STATUS_LABELS: Record<string, string> = {
   pending: "Aguardando Pagamento",
@@ -436,6 +437,7 @@ export default function VitrineOrderTracking({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoLoaded, setAutoLoaded] = useState(false);
+  const latestLookupId = useRef(0);
 
   useEffect(() => {
     if (me?.role && me.role !== ROLES.CLIENT) {
@@ -463,30 +465,42 @@ export default function VitrineOrderTracking({
   }, [autoLoaded]);
 
   async function doFetch(num: string, tok: string) {
-    if (!num.trim() || !tok.trim()) return;
-    setLoading(true);
+    const lookupId = ++latestLookupId.current;
+    setOrder(null);
     setError(null);
+    if (!num.trim() || !tok.trim()) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     try {
       const result = await publicStoreApi.getOrder(slug, num.trim(), tok.trim());
+      if (lookupId !== latestLookupId.current) return;
       setOrder(result);
     } catch (e) {
+      if (lookupId !== latestLookupId.current) return;
       if (e instanceof PublicApiError) {
         setError("Pedido não encontrado. Verifique o número do pedido e o código de acesso.");
       } else {
         setError("Não foi possível consultar o pedido. Tente novamente em instantes.");
       }
     } finally {
-      setLoading(false);
+      if (lookupId === latestLookupId.current) setLoading(false);
     }
   }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setOrder(null);
     void doFetch(orderNumber, token);
   }
 
   const storeData = store as PublicStore | undefined;
+  const lookupAnnouncement = loading
+    ? "Consultando pedido."
+    : order
+      ? `Pedido ${order.orderNumber} carregado.`
+      : "";
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-7 sm:py-10">
@@ -504,7 +518,21 @@ export default function VitrineOrderTracking({
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="mb-8 rounded-[1.5rem] border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="order-lookup-announcement"
+        className="sr-only"
+      >
+        {lookupAnnouncement}
+      </div>
+
+      <form
+        onSubmit={handleSubmit}
+        aria-busy={loading}
+        className="mb-8 rounded-[1.5rem] border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6"
+      >
         <div className="space-y-1.5">
           <Label htmlFor="orderNumber">Número do Pedido</Label>
           <Input
@@ -545,34 +573,52 @@ export default function VitrineOrderTracking({
       </form>
 
       {error && (
-        <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 mb-6">
+        <div
+          role="alert"
+          aria-atomic="true"
+          className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 mb-6"
+        >
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
       )}
 
       {order && storeData && (
-        <OrderResult order={order} store={storeData} />
+        <>
+          <StripeTestPaymentNotice
+            className="mb-6"
+            paymentProvider={order.paymentProvider}
+            stripeLivemode={order.stripeLivemode}
+          />
+          <OrderResult order={order} store={storeData} />
+        </>
       )}
 
       {order && !storeData && (
-        <div className="space-y-4 text-sm">
-          <div className="rounded-[1.5rem] border border-slate-200/80 bg-white p-4 shadow-sm">
-            <p className="font-semibold text-base mb-1">{order.orderNumber}</p>
-            <p className="text-muted-foreground mb-3">Cliente: {order.customerName}</p>
-            <div className="space-y-1.5 border-t pt-3">
-              <div className="flex justify-between text-muted-foreground">
-                <span>Subtotal</span>
-                <span>R$ {parseFloat(order.subtotal).toFixed(2)}</span>
-              </div>
-              <DiscountBreakdown order={order} />
-              <div className="flex justify-between font-bold text-base border-t pt-2">
-                <span>Total líquido</span>
-                <span>R$ {parseFloat(order.totalAmount).toFixed(2)}</span>
+        <>
+          <StripeTestPaymentNotice
+            className="mb-6"
+            paymentProvider={order.paymentProvider}
+            stripeLivemode={order.stripeLivemode}
+          />
+          <div className="space-y-4 text-sm">
+            <div className="rounded-[1.5rem] border border-slate-200/80 bg-white p-4 shadow-sm">
+              <p className="font-semibold text-base mb-1">{order.orderNumber}</p>
+              <p className="text-muted-foreground mb-3">Cliente: {order.customerName}</p>
+              <div className="space-y-1.5 border-t pt-3">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span>R$ {parseFloat(order.subtotal).toFixed(2)}</span>
+                </div>
+                <DiscountBreakdown order={order} />
+                <div className="flex justify-between font-bold text-base border-t pt-2">
+                  <span>Total líquido</span>
+                  <span>R$ {parseFloat(order.totalAmount).toFixed(2)}</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

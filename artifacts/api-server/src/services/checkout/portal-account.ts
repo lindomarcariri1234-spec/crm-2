@@ -29,6 +29,8 @@ export interface EnsurePortalAccountArgs {
   loginUrl: string;
   agencyName: string;
   agencyLogo: string;
+  paymentProvider?: string | null;
+  stripeLivemode?: boolean | null;
 }
 
 function generateTemporaryPassword(): string {
@@ -159,6 +161,8 @@ export async function ensurePortalAccount(
       agencyLogo: agencyLogo || null,
       isMagicLink: setupUrl !== loginUrl,
       plainTextPassword: bootstrapPassword,
+      paymentProvider: args.paymentProvider,
+      stripeLivemode: args.stripeLivemode,
     },
     tenantId,
   ).catch((welcomeErr) => {

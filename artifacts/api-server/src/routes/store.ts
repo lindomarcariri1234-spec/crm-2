@@ -1,4 +1,5 @@
 import { Router, type NextFunction } from "express";
+import Stripe from "stripe";
 import { db } from "@workspace/db";
 import {
   storesTable,
@@ -36,11 +37,12 @@ import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-ite
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { deleteOrphanedFile, deleteOrphanedImages } from "../lib/uploadthing";
 import { ADMIN_ROLES } from '../lib/tenant';
-import { PAYMENT_STATUS, PAYMENT_TYPE, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
+import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
-import { encryptCredential } from "../lib/crypto";
+import { decryptOrPassthrough, encryptCredential } from "../lib/crypto";
 import { sendPriceDropAlertEmail } from "../queues/email-helpers";
 import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
+import { recalculateClientFinancials } from "../services/client-financials";
 import {
   calculateReceivedAmount,
   allocateOrderReceiptToReservation,
@@ -51,6 +53,7 @@ import {
   reservationFinancialSummary,
 } from "../lib/linked-data";
 import { syncPaidProductOrderDeal } from "../services/pipeline-deal-sync";
+import { syncStoreOrderFromOrderPayment } from "../services/reservation-order-payment-sync";
 import { roundMoney } from "../lib/pricing";
 
 // Storefront public base for links inside price-drop alert e-mails. Product
@@ -225,6 +228,10 @@ const StoreSettingsBody = z.object({
   maintenanceMessage: z.string().nullish(),
 });
 
+const TestStoreStripeConnectionBody = z.object({
+  secretKey: z.string().optional(),
+}).strict();
+
 const PIX_QR_DELIVERY_MODES = ["screen", "email", "whatsapp", "all"] as const;
 type PixQrDeliveryMode = typeof PIX_QR_DELIVERY_MODES[number];
 
@@ -332,6 +339,14 @@ const InitStoreBody = z.object({
   paymentMethods: z.array(z.string()).optional(),
 });
 
+const ManualPixDepositBody = z.object({
+  amount: z.number().refine(
+    (value) => Number.isFinite(value) && Math.abs(value * 100 - Math.round(value * 100)) < 1e-7,
+    "O valor deve ter no máximo duas casas decimais",
+  ),
+  idempotencyKey: z.string().uuid(),
+});
+
 router.post("/store/init", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -375,6 +390,81 @@ router.get("/store/settings", async (req, res, next: NextFunction): Promise<void
       ...redactStore(store as unknown as Record<string, unknown>),
       pixQrDeliveryMode: await getPixQrDeliveryMode(me.tenantId),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/store/settings/stripe/test", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    res.setHeader("Cache-Control", "no-store, max-age=0");
+    const parsed = TestStoreStripeConnectionBody.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "O corpo da solicitação não é válido.",
+        code: "VALIDATION_ERROR",
+      });
+      return;
+    }
+
+    const store = await getStoreForTenant(me.tenantId);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+
+    // A non-empty form value is tested without saving it. An omitted or blank
+    // value checks the write-only credential already stored for this store.
+    const secretKey = parsed.data.secretKey?.trim()
+      || decryptOrPassthrough(store.stripeSecretKey);
+    if (!secretKey) {
+      res.status(400).json({
+        error: "Informe uma chave secreta Stripe ou configure uma chave salva.",
+        code: "STRIPE_KEY_MISSING",
+      });
+      return;
+    }
+
+    try {
+      const stripe = new Stripe(secretKey, {
+        apiVersion: "2025-08-27.basil" as Stripe.LatestApiVersion,
+        maxNetworkRetries: 0,
+        timeout: 10_000,
+      });
+      await stripe.accounts.retrieve();
+      // Stripe's Account response has no `livemode` property. Once Stripe has
+      // accepted the credential, its secret/restricted-key prefix identifies
+      // which environment that credential belongs to.
+      const livemode = /^(?:sk|rk)_live_/.test(secretKey);
+      res.json({ connected: true, livemode });
+    } catch (err) {
+      const stripeError = err as { type?: unknown; code?: unknown; statusCode?: unknown };
+      if (
+        stripeError.type === "StripeAuthenticationError"
+        || stripeError.code === "api_key_expired"
+        || stripeError.statusCode === 401
+      ) {
+        res.status(400).json({
+          error: "A Stripe rejeitou a chave secreta. Verifique se ela continua ativa e pertence ao ambiente correto.",
+          code: "STRIPE_AUTHENTICATION_FAILED",
+        });
+        return;
+      }
+      if (stripeError.type === "StripePermissionError" || stripeError.statusCode === 403) {
+        res.status(403).json({
+          error: "A chave foi reconhecida, mas não tem permissão para consultar a conta Stripe.",
+          code: "STRIPE_PERMISSION_DENIED",
+        });
+        return;
+      }
+      // Stripe SDK errors can contain request details. Return only a stable,
+      // credential-free message and never pass the error to request logging.
+      res.status(502).json({
+        error: "Não foi possível validar a conexão com o Stripe. Tente novamente.",
+        code: "STRIPE_CONNECTION_FAILED",
+      });
+    }
   } catch (err) {
     next(err);
   }
@@ -800,6 +890,7 @@ router.get("/store/orders", async (req, res, next: NextFunction): Promise<void> 
         couponCode: storeOrdersTable.couponCode,
         paymentMethod: storeOrdersTable.paymentMethod,
         paymentProvider: storeOrdersTable.paymentProvider,
+        stripeLivemode: storeOrdersTable.stripeLivemode,
         paymentStatus: storeOrdersTable.paymentStatus,
         installments: storeOrdersTable.installments,
         installmentAmount: storeOrdersTable.installmentAmount,
@@ -1007,6 +1098,239 @@ router.get("/store/orders/:id", async (req, res, next: NextFunction): Promise<vo
       )),
       linkedReferral: linkedReferral(referrals[0]),
       linkedDeals: linkedDeals.map(d => ({ id: d.id, tripId: d.tripId, reservationId: d.reservationId, stageId: d.stageId, status: d.status, source: d.source ?? "manual", value: Number(d.value) })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/store/orders/:id/manual-pix-deposit", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const store = await getStoreForTenant(me.tenantId);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    const parsed = ManualPixDepositBody.safeParse(req.body);
+    if (!parsed.success || parsed.data.amount <= 0) {
+      next(new ValidationError(
+        parsed.success ? "Informe um valor positivo" : String(parsed.error.message),
+        "VALIDATION_ERROR",
+      ));
+      return;
+    }
+
+    const amountCents = Math.round(parsed.data.amount * 100);
+    const amount = amountCents / 100;
+    const { idempotencyKey } = parsed.data;
+    const occurredAt = new Date();
+    let replayed = false;
+    const createdReservationsRef: {
+      current: Awaited<ReturnType<typeof createReservationsForOrder>> | null;
+    } = { current: null };
+
+    await db.transaction(async (tx) => {
+      const [lockedOrder] = await tx.select().from(storeOrdersTable)
+        .where(and(
+          eq(storeOrdersTable.id, req.params.id),
+          eq(storeOrdersTable.storeId, store.id),
+          eq(storeOrdersTable.tenantId, me.tenantId),
+        ))
+        .for("update")
+        .limit(1);
+      if (!lockedOrder) throw new NotFoundError("Order not found", "NOT_FOUND");
+
+      if (
+        lockedOrder.paymentMethod !== "pix"
+        || (lockedOrder.paymentProvider != null && lockedOrder.paymentProvider !== "manual")
+      ) {
+        throw new ConflictError("O recebimento manual de entrada está disponível apenas para pedidos com Pix Manual", "MANUAL_PIX_REQUIRED");
+      }
+
+      const existingEventPayments = await tx.select({
+        amount: paymentsTable.amount,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.tenantId, me.tenantId),
+        eq(paymentsTable.orderId, lockedOrder.id),
+        eq(paymentsTable.gateway, "manual"),
+        eq(paymentsTable.transactionId, idempotencyKey),
+      ));
+      if (existingEventPayments.length > 0) {
+        const existingCents = existingEventPayments.reduce(
+          (sum, row) => sum + Math.round(Number(row.amount ?? 0) * 100),
+          0,
+        );
+        if (existingCents !== amountCents) {
+          throw new ConflictError(
+            "Esta tentativa já foi registrada com outro valor. Atualize o pedido antes de registrar uma nova entrada.",
+            "IDEMPOTENCY_KEY_REUSED",
+          );
+        }
+        replayed = true;
+        return;
+      }
+
+      if (lockedOrder.status === STORE_ORDER_STATUS.CANCELLED) {
+        throw new ConflictError("Não é possível receber pagamento de um pedido cancelado", "ORDER_CANCELLED");
+      }
+      if (lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED) {
+        throw new ConflictError("Não é possível registrar entrada em um pedido reembolsado", "ORDER_REFUNDED");
+      }
+      const totalCents = Math.round(Number(lockedOrder.totalAmount) * 100);
+      const depositCents = Math.round(Number(lockedOrder.depositAmount ?? 0) * 100);
+      if (depositCents <= 0 || depositCents >= totalCents) {
+        throw new ConflictError("O pedido não possui uma entrada Pix parcial configurada", "PARTIAL_DEPOSIT_NOT_CONFIGURED");
+      }
+
+      createdReservationsRef.current = await createReservationsForOrder(
+        lockedOrder.id,
+        tx as unknown as Parameters<typeof createReservationsForOrder>[1],
+      );
+      const linkedReservations = await tx.select({
+        id: reservationsTable.id,
+        status: reservationsTable.status,
+        expiresAt: reservationsTable.expiresAt,
+      }).from(reservationsTable).where(and(
+        eq(reservationsTable.tenantId, me.tenantId),
+        eq(reservationsTable.storeOrderId, lockedOrder.orderNumber),
+      )).for("update");
+
+      const now = new Date();
+      const terminalReservationStatuses = new Set<string>([
+        RESERVATION_STATUS.CANCELLED,
+        RESERVATION_STATUS.REFUNDED,
+        RESERVATION_STATUS.FAILED,
+      ]);
+      const invalidReservation = linkedReservations.find((reservation) =>
+        terminalReservationStatuses.has(reservation.status)
+        || (
+          reservation.status === RESERVATION_STATUS.PENDING
+          && reservation.expiresAt != null
+          && reservation.expiresAt <= now
+        ),
+      );
+      if (invalidReservation) {
+        throw new ConflictError("Uma reserva deste pedido foi cancelada ou expirou; atualize o pedido antes de registrar o Pix", "RESERVATION_NOT_PAYABLE");
+      }
+
+      const linkedReservationIds = linkedReservations.map((reservation) => reservation.id);
+      const paymentScope = linkedReservationIds.length > 0
+        ? or(
+          eq(paymentsTable.orderId, lockedOrder.id),
+          inArray(paymentsTable.reservationId, linkedReservationIds),
+        )
+        : eq(paymentsTable.orderId, lockedOrder.id);
+      const paymentRows = await tx.select({
+        orderId: paymentsTable.orderId,
+        reservationId: paymentsTable.reservationId,
+        amount: paymentsTable.amount,
+        status: paymentsTable.status,
+        type: paymentsTable.type,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.tenantId, me.tenantId),
+        paymentScope,
+      ));
+      const alreadyReceived = calculateReceivedAmount(
+        lockedOrder.id,
+        linkedReservationIds,
+        paymentRows,
+      );
+      const remainingCents = Math.max(
+        0,
+        totalCents - Math.round(alreadyReceived * 100),
+      );
+      if (remainingCents <= 0) {
+        throw new ConflictError("O pedido já está totalmente pago", "ORDER_ALREADY_PAID");
+      }
+      if (amountCents > remainingCents) {
+        throw new ConflictError(
+          `O valor excede o saldo restante de R$ ${(remainingCents / 100).toFixed(2)}`,
+          "DEPOSIT_EXCEEDS_BALANCE",
+        );
+      }
+
+      const confirmation = await confirmReservationsForOrder(
+        lockedOrder.id,
+        amount,
+        tx as unknown as Parameters<typeof confirmReservationsForOrder>[2],
+        idempotencyKey,
+        {
+          description: "Entrada Pix Manual registrada pela agência",
+          promoteDealStage: false,
+          occurredAt,
+        },
+      );
+      const orderOnlyAmount = Math.max(0, roundMoney(amount - confirmation.allocatedAmount));
+      if (orderOnlyAmount > 0) {
+        await tx.insert(paymentsTable).values({
+          id: generateId(),
+          tenantId: me.tenantId,
+          reservationId: null,
+          clientId: lockedOrder.clientId ?? null,
+          orderId: lockedOrder.id,
+          type: PAYMENT_TYPE.RECEIVABLE,
+          category: "store_order",
+          amount: orderOnlyAmount.toFixed(2),
+          paymentMethod: "pix",
+          installmentNumber: 1,
+          totalInstallments: 1,
+          dueDate: occurredAt,
+          paidAt: occurredAt,
+          status: PAYMENT_STATUS.PAID,
+          gateway: "manual",
+          transactionId: idempotencyKey,
+          description: "Entrada Pix Manual registrada pela agência",
+        });
+      }
+      if (orderOnlyAmount > 0 && lockedOrder.clientId) {
+        await recalculateClientFinancials(lockedOrder.clientId, me.tenantId, tx);
+      }
+    });
+
+    await syncStoreOrderFromOrderPayment(req.params.id, me.tenantId, {
+      received: {
+        gateway: "manual",
+        transactionId: idempotencyKey,
+        amount,
+        occurredAt,
+      },
+    });
+
+    const createdReservations = createdReservationsRef.current;
+    if (createdReservations?.tripIds.length) {
+      for (const tripId of createdReservations.tripIds) {
+        broadcastSeatUpdate(tripId, me.tenantId).catch((err) => {
+          req.log.warn({ err, tripId }, "[store/orders] Failed to broadcast seat update after manual Pix deposit");
+        });
+      }
+      for (const reservationId of createdReservations.reservationIds) {
+        enqueueNewBookingNotificationEmail(reservationId, me.tenantId).catch((err) => {
+          req.log.warn({ err, reservationId }, "[store/orders] Failed to enqueue booking notification after manual Pix deposit");
+        });
+      }
+    }
+
+    const [updatedOrder] = await db.select({
+      status: storeOrdersTable.status,
+      paymentStatus: storeOrdersTable.paymentStatus,
+      amountRemaining: storeOrdersTable.amountRemaining,
+      totalAmount: storeOrdersTable.totalAmount,
+    }).from(storeOrdersTable).where(and(
+      eq(storeOrdersTable.id, req.params.id),
+      eq(storeOrdersTable.storeId, store.id),
+      eq(storeOrdersTable.tenantId, me.tenantId),
+    )).limit(1);
+    const amountRemaining = Math.max(
+      0,
+      Number(updatedOrder?.amountRemaining ?? updatedOrder?.totalAmount ?? 0),
+    );
+    res.json({
+      success: true,
+      replayed,
+      status: updatedOrder?.status ?? STORE_ORDER_STATUS.PENDING,
+      paymentStatus: updatedOrder?.paymentStatus ?? STORE_PAYMENT_STATUS.PENDING,
+      amountRemaining: amountRemaining.toFixed(2),
+      paidAmount: Math.max(0, Number(updatedOrder?.totalAmount ?? 0) - amountRemaining).toFixed(2),
     });
   } catch (err) {
     next(err);

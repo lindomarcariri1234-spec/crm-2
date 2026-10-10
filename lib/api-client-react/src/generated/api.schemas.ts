@@ -5673,6 +5673,35 @@ export interface PmsUnitAssignment {
   unitId: string | null;
 }
 
+/**
+ * An optional unsaved credential; omitted or empty means test the saved write-only key.
+ */
+export interface TestStoreStripeConnectionBody {
+  /** Used only for this connection check and never persisted, returned, or logged. */
+  secretKey?: string;
+}
+
+export interface TestStoreStripeConnectionResponse {
+  connected: true;
+  livemode: boolean;
+}
+
+export type StripeStoreConnectionErrorCode =
+  (typeof StripeStoreConnectionErrorCode)[keyof typeof StripeStoreConnectionErrorCode];
+
+export const StripeStoreConnectionErrorCode = {
+  VALIDATION_ERROR: "VALIDATION_ERROR",
+  STRIPE_KEY_MISSING: "STRIPE_KEY_MISSING",
+  STRIPE_AUTHENTICATION_FAILED: "STRIPE_AUTHENTICATION_FAILED",
+  STRIPE_PERMISSION_DENIED: "STRIPE_PERMISSION_DENIED",
+  STRIPE_CONNECTION_FAILED: "STRIPE_CONNECTION_FAILED",
+} as const;
+
+export interface StripeStoreConnectionError {
+  error: string;
+  code: StripeStoreConnectionErrorCode;
+}
+
 export type GetPmsAvailabilityParams = {
   propertyId: string;
   checkIn: string;

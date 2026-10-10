@@ -50,8 +50,135 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
+function visualThreeDSOrder() {
+  const mode = window.sessionStorage.getItem("visual-test:3ds-mode");
+  if (!mode) return visualOrder;
+
+  return {
+    ...visualOrder,
+    id: "visual-3ds-order-fixture",
+    orderNumber: "VIS-3DS-001",
+    status: "confirmed",
+    paymentStatus: "paid",
+    paymentMethod: "credit_card",
+    paymentProvider: "stripe",
+    stripeLivemode: mode === "test" ? false : mode === "live" ? true : null,
+    depositAmount: null,
+    amountPaid: "2650.00",
+    amountRemaining: "0.00",
+    paymentToken: "visual-3ds-payment-token",
+    financialSummary: {
+      ...visualCreatedOrder.financialSummary,
+      paidAmount: 2650,
+      amountRemaining: 0,
+      reservationValid: true,
+      states: {
+        ...visualCreatedOrder.financialSummary.states,
+        order: "confirmed",
+        reservation: "confirmed",
+        payment: "paid",
+      },
+    },
+  };
+}
+
+function visualManualLookupOrder(orderNumber: string) {
+  const isTestMode = orderNumber === "VIS-TRACK-TEST" || orderNumber === "VIS-TRACK-SLOW-TEST";
+
+  return {
+    ...visualOrder,
+    id: `visual-${orderNumber.toLowerCase()}`,
+    orderNumber,
+    status: "confirmed",
+    paymentStatus: "paid",
+    customerName: orderNumber === "VIS-TRACK-SLOW-TEST"
+      ? "Cliente Stripe Teste Lento"
+      : isTestMode
+        ? "Cliente Stripe Teste"
+        : "Cliente Stripe Produção",
+    paymentMethod: "credit_card",
+    paymentProvider: "stripe",
+    stripeLivemode: isTestMode ? false : true,
+    depositAmount: null,
+    amountPaid: "2650.00",
+    amountRemaining: "0.00",
+    financialSummary: {
+      ...visualCreatedOrder.financialSummary,
+      paidAmount: 2650,
+      amountRemaining: 0,
+      reservationValid: true,
+      states: {
+        ...visualCreatedOrder.financialSummary.states,
+        order: "confirmed",
+        reservation: "confirmed",
+        payment: "paid",
+      },
+    },
+  };
+}
+
+function visualProfileWithStripeModeReservations() {
+  const sampleReservation = visualProfile.reservations[0];
+  if (!sampleReservation) return visualProfile;
+
+  const modeCases = [
+    {
+      id: "visual-reservation-stripe-test",
+      tripName: "Reserva Stripe em modo de teste",
+      paymentProvider: "stripe",
+      stripeLivemode: false,
+    },
+    {
+      id: "visual-reservation-stripe-live",
+      tripName: "Reserva Stripe em produção",
+      paymentProvider: "stripe",
+      stripeLivemode: true,
+    },
+    {
+      id: "visual-reservation-stripe-unknown",
+      tripName: "Reserva Stripe sem modo conhecido",
+      paymentProvider: "stripe",
+      stripeLivemode: null,
+    },
+    {
+      id: "visual-reservation-manual",
+      tripName: "Reserva com pagamento manual",
+      paymentProvider: "manual",
+      stripeLivemode: false,
+    },
+  ] as const;
+
+  return {
+    ...visualProfile,
+    reservations: modeCases.map((mode) => ({
+      ...sampleReservation,
+      id: mode.id,
+      reservationNumber: mode.id,
+      voucherCode: `VCH-${mode.id}`,
+      tripName: mode.tripName,
+      paymentMethod: mode.paymentProvider === "manual" ? "pix" : "credit_card",
+      paymentProvider: mode.paymentProvider,
+      stripeLivemode: mode.stripeLivemode,
+      totalValue: sampleReservation.financialSummary.totalAmount,
+      paidValue: sampleReservation.financialSummary.totalAmount,
+      balance: 0,
+      financialSummary: {
+        ...sampleReservation.financialSummary,
+        amountPaid: sampleReservation.financialSummary.totalAmount,
+        amountRemaining: 0,
+        reservationValid: true,
+      },
+      storeOrderId: mode.id,
+    })),
+  };
+}
+
 function payloadFor(pathname: string, method: string, requestBody?: unknown): unknown {
-  if (pathname === "/api/client/me") return visualProfile;
+  if (pathname === "/api/client/me") {
+    return new URLSearchParams(window.location.search).get("reservationModeFixtures") === "true"
+      ? visualProfileWithStripeModeReservations()
+      : visualProfile;
+  }
   if (pathname === "/api/client/me/referrals") return profileReferrals;
   if (pathname === "/api/client/me/referral-campaign") {
     return {
@@ -139,7 +266,11 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
     return { data: [] };
   }
   if (pathname === `${storePrefix}/reviews`) return [];
-  if (pathname.startsWith(`${storePrefix}/orders/`) && method === "GET") return visualOrder;
+  if (pathname.startsWith(`${storePrefix}/orders/`) && method === "GET") {
+    const orderNumber = decodeURIComponent(pathname.slice(`${storePrefix}/orders/`.length));
+    if (orderNumber.startsWith("VIS-TRACK-")) return visualManualLookupOrder(orderNumber);
+    return visualThreeDSOrder();
+  }
   if (pathname === `${storePrefix}/orders` && method === "POST") {
     const orderRequest = requestBody as {
       items?: Array<{ quantity?: number; unitPrice?: number }>;
@@ -219,6 +350,41 @@ function installFixtureFetch() {
     if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
       const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
       let requestBody: unknown;
+      const orderLookupsKey = "visual-test:3ds-order-lookup-count";
+      if (
+        method === "GET" &&
+        url.pathname.startsWith(`/api/public/store/${visualStore.slug}/orders/`)
+      ) {
+        const count = Number(window.sessionStorage.getItem(orderLookupsKey) ?? "0");
+        window.sessionStorage.setItem(orderLookupsKey, String(count + 1));
+      }
+      const manualTrackingPrefix = `/api/public/store/${visualStore.slug}/orders/VIS-TRACK-`;
+      if (method === "GET" && url.pathname.startsWith(manualTrackingPrefix)) {
+        const manualLookupKey = "visual-test:manual-order-lookup-count";
+        const count = Number(window.sessionStorage.getItem(manualLookupKey) ?? "0");
+        window.sessionStorage.setItem(manualLookupKey, String(count + 1));
+
+        const delayMs = Number(
+          window.sessionStorage.getItem("visual-test:tracking-lookup-delay-ms") ?? "0",
+        );
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        if (url.pathname === `${manualTrackingPrefix}FAILED`) {
+          return new Response(JSON.stringify({ error: "Pedido não encontrado." }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+      if (
+        method === "POST" &&
+        url.pathname === `/api/public/store/${visualStore.slug}/create-payment-intent`
+      ) {
+        const attemptsKey = "visual-test:create-payment-intent-count";
+        const count = Number(window.sessionStorage.getItem(attemptsKey) ?? "0");
+        window.sessionStorage.setItem(attemptsKey, String(count + 1));
+      }
       if (url.pathname === `/api/public/store/${visualStore.slug}/orders` && method === "POST") {
         requestBody = await readJsonRequestBody(input, init);
         window.sessionStorage.setItem("visual-test:last-order-request", JSON.stringify(requestBody));
@@ -234,7 +400,17 @@ function scenarioElement(scenario: string) {
   if (scenario === "catalogo") return createElement(VitrineCatalog, { slug: visualStore.slug, store: visualStore });
   if (scenario === "calendario") return createElement(VitrineCalendar, { slug: visualStore.slug, store: visualStore });
   if (scenario === "produto") return createElement(VitrineProduct, { slug: visualStore.slug, productSlug: visualProduct.slug, store: visualStore });
-  if (scenario === "checkout") return createElement(VitrineCheckout, { slug: visualStore.slug, store: visualStore });
+  if (scenario === "checkout") {
+    const store = window.sessionStorage.getItem("visual-test:3ds-mode")
+      ? {
+          ...visualStore,
+          paymentMethods: ["credit_card"],
+          stripeEnabled: true,
+          stripePublicKey: "pk_test_visual_3ds",
+        }
+      : visualStore;
+    return createElement(VitrineCheckout, { slug: visualStore.slug, store });
+  }
   if (scenario === "pedido") return createElement(VitrineOrderTracking, { slug: visualStore.slug, store: visualStore });
   if (scenario === "reserva") return createElement(ReservationWizard, { slug: visualStore.slug, productSlug: visualProduct.slug, store: visualStore });
   if (scenario === "indicacao") return createElement(ReferralLanding, { slug: visualStore.slug, store: visualStore });

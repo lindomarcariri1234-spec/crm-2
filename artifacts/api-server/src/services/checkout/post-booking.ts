@@ -122,6 +122,8 @@ export async function runPostPaymentSideEffects(
       customerCpf: storeOrdersTable.customerCpf,
       totalAmount: storeOrdersTable.totalAmount,
       paymentStatus: storeOrdersTable.paymentStatus,
+      paymentProvider: storeOrdersTable.paymentProvider,
+      stripeLivemode: storeOrdersTable.stripeLivemode,
     })
     .from(storeOrdersTable)
     .where(eq(storeOrdersTable.id, orderId))
@@ -305,6 +307,8 @@ export async function runPostPaymentSideEffects(
       loginUrl,
       agencyName: store.name,
       agencyLogo: store.logo ?? "",
+      paymentProvider: order.paymentProvider ?? null,
+      stripeLivemode: order.stripeLivemode ?? null,
     });
   } catch (err) {
     logger.error({ err }, "[checkout/post-payment] Failed to provision portal account");
