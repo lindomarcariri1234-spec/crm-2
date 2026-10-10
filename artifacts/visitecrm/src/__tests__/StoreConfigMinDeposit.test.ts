@@ -374,7 +374,9 @@ describe("LojaConfiguracoes — Valor M\u00ednimo de Reserva", () => {
     const { container } = await renderComponent(createElement(LojaConfiguracoes));
     await flushAct(() => {});
 
-    expect(container.textContent).toContain("Configure e teste as credenciais antes de ativar cobranças.");
+    expect(container.textContent).toContain("Configure as credenciais usadas no checkout desta loja");
+    expect(container.textContent).toContain("Conta Stripe da agência");
+    expect(container.textContent).toContain("São independentes das credenciais da loja");
     expect(container.querySelector('[data-testid="stripe-public-key"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="stripe-webhook-url"]')?.textContent).toContain(
       "/api/webhooks/stripe/minha-loja",

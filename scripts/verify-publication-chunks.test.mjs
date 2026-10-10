@@ -761,10 +761,13 @@ function fakeBrowserFactory({
   mainHeadingVisibleByRoute = {},
   mainHeadingMatchesMarkerByRoute = {},
   runtimeExceptionsByRoute = {},
+  runtimeExceptionsWithoutExecutionContextByRoute = {},
   interactionCountByRoute = {},
   delayedRuntimeExceptionByRoute = {},
   delayedRouteSessionReadsByPath = {},
   inPageRouteChangesByPath = {},
+  inPageHistoryChangesByPath = {},
+  inPageAssetRequestsByPath = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
@@ -772,30 +775,55 @@ function fakeBrowserFactory({
   const calls = [];
   const contentChecks = [];
   const navigationEvents = [];
+  const runtimeExceptionEvents = [];
   const executionContextIdByPath = new Map();
   const sessionStateReadsByPath = new Map();
+  function emitScriptRequest({ requestId, url }) {
+    listeners.get("Network.requestWillBeSent")?.({
+      requestId,
+      request: { url },
+      type: "Script",
+    });
+  }
+  function emitScriptResponse({
+    requestId,
+    url,
+    status = 200,
+    mimeType = "application/javascript",
+  }) {
+    listeners.get("Network.responseReceived")?.({
+      requestId,
+      type: "Script",
+      response: { url, status, mimeType },
+    });
+  }
   function emitConfiguredRuntimeException(pathname, phase, contextId) {
     const phases = runtimeExceptionsByRoute[pathname] ?? [];
+    const omitExecutionContextId = (
+      runtimeExceptionsWithoutExecutionContextByRoute[pathname] ?? []
+    ).includes(phase);
     const isPromiseRejection =
       phase === "navigation" && phases.includes("promise-rejection");
-    if (!phases.includes(phase) && !isPromiseRejection) return;
-    listeners.get("Runtime.exceptionThrown")?.({
-      exceptionDetails: {
-        exceptionId: navigationNumber + 1,
-        executionContextId: contextId,
-        text: isPromiseRejection ? "Uncaught (in promise)" : "Uncaught Error",
-        exception: {
-          description: isPromiseRejection
-            ? "Error: private@example.com order=customer-private-value"
-            : "private@example.com token=must-not-be-logged",
-        },
+    if (!phases.includes(phase) && !isPromiseRejection && !omitExecutionContextId) return;
+    const exceptionDetails = {
+      exceptionId: navigationNumber + 1,
+      text: isPromiseRejection ? "Uncaught (in promise)" : "Uncaught Error",
+      exception: {
+        description: isPromiseRejection
+          ? "Error: private@example.com order=customer-private-value"
+          : "private@example.com token=must-not-be-logged",
       },
-    });
+      ...(!omitExecutionContextId ? { executionContextId: contextId } : {}),
+    };
+    const event = { exceptionDetails };
+    runtimeExceptionEvents.push(event);
+    listeners.get("Runtime.exceptionThrown")?.(event);
   }
   return {
     calls,
     contentChecks,
     navigationEvents,
+    runtimeExceptionEvents,
     factory: async ({ headers, profileName }) => {
       const browserCall = { headers, navigations: [] };
       calls.push(browserCall);
@@ -909,6 +937,10 @@ function fakeBrowserFactory({
               emitConfiguredRuntimeException(pathname, "interaction");
               const nextPath = inPageRouteChangesByPath[pathname];
               if (nextPath) {
+                const assetRequests = inPageAssetRequestsByPath[pathname] ?? {};
+                if (assetRequests.beforeNavigation) {
+                  emitScriptRequest(assetRequests.beforeNavigation);
+                }
                 const contextId = executionContextIdByPath.get(pathname);
                 emitConfiguredRuntimeException(
                   pathname,
@@ -928,9 +960,39 @@ function fakeBrowserFactory({
                   url: currentUrl,
                   navigationType: "historyApi",
                 });
+                if (assetRequests.beforeNavigation) {
+                  emitScriptResponse(assetRequests.beforeNavigation);
+                }
+                if (assetRequests.afterNavigation) {
+                  emitScriptRequest(assetRequests.afterNavigation);
+                  emitScriptResponse(assetRequests.afterNavigation);
+                }
                 emitConfiguredRuntimeException(
                   nextPathname,
                   "after-in-page-navigation",
+                  contextId,
+                );
+              }
+              const historyPath = inPageHistoryChangesByPath[pathname];
+              if (historyPath) {
+                const contextId = executionContextIdByPath.get(pathname);
+                currentUrl = new URL(historyPath, currentUrl).href;
+                const restoredPathname = new URL(currentUrl).pathname;
+                executionContextIdByPath.set(restoredPathname, contextId);
+                navigationEvents.push({
+                  type: "history-navigation",
+                  from: pathname,
+                  to: restoredPathname,
+                  navigationType: "backForward",
+                  contextId,
+                });
+                listeners.get("Page.navigatedWithinDocument")?.({
+                  url: currentUrl,
+                  navigationType: "backForward",
+                });
+                emitConfiguredRuntimeException(
+                  restoredPathname,
+                  "after-history-navigation",
                   contextId,
                 );
               }
@@ -1111,6 +1173,50 @@ test("reports uncaught browser exceptions for the active profile and route witho
   );
 });
 
+test("uses the active protected route when Chrome omits the exception execution context", async () => {
+  const session = "superadmin-private-session";
+  const browser = fakeBrowserFactory({
+    runtimeExceptionsWithoutExecutionContextByRoute: {
+      "/admin": ["navigation"],
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "superadmin",
+        label: "superadmin",
+        paths: ["/admin"],
+        headers: { Cookie: session },
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.equal(browser.runtimeExceptionEvents.length, 1);
+  assert.equal(
+    Object.hasOwn(
+      browser.runtimeExceptionEvents[0].exceptionDetails,
+      "executionContextId",
+    ),
+    false,
+  );
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [{ route: "/admin", profile: "superadmin", ok: false }],
+  );
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/admin: superadmin route reported an uncaught JavaScript exception/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /private@example\.com|must-not-be-logged|Uncaught Error|superadmin-private-session/,
+  );
+});
+
 test("fails a client route on an unhandled promise rejection without exposing its payload", async () => {
   const browser = fakeBrowserFactory({
     runtimeExceptionsByRoute: { "/perfil": ["promise-rejection"] },
@@ -1241,6 +1347,104 @@ test("maps exceptions to the correct routes when in-page navigation reuses its e
   );
 });
 
+test("keeps script requests attributed to their route across in-page navigation", async () => {
+  const originAsset = {
+    requestId: "origin-route-request",
+    url: "https://visitecrm.com/assets/origin-route.js",
+  };
+  const destinationAsset = {
+    requestId: "destination-route-request",
+    url: "https://visitecrm.com/assets/destination-route.js",
+  };
+  const browser = fakeBrowserFactory({
+    interactionCountByRoute: { "/meu-painel": 1 },
+    inPageRouteChangesByPath: { "/meu-painel": "/vouchers" },
+    inPageAssetRequestsByPath: {
+      "/meu-painel": {
+        beforeNavigation: originAsset,
+        afterNavigation: destinationAsset,
+      },
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel", "/vouchers"],
+        headers: { Cookie: "seller-private-session" },
+      },
+    ],
+    interactionSelectors: ['button[aria-haspopup="menu"]'],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  const originResult = results.find((result) => result.route === "/meu-painel");
+  const destinationResult = results.find((result) => result.route === "/vouchers");
+  assert.ok(originResult);
+  assert.ok(destinationResult);
+  assert.ok(originResult.assets.includes(originAsset.url));
+  assert.ok(destinationResult.assets.includes(destinationAsset.url));
+  assert.ok(!destinationResult.assets.includes(originAsset.url));
+  assert.ok(!originResult.assets.includes(destinationAsset.url));
+});
+
+test("maps an exception to the restored route after browser back navigation reuses its context", async () => {
+  const session = "seller-private-session";
+  const browser = fakeBrowserFactory({
+    runtimeExceptionsByRoute: {
+      "/meu-painel": ["after-history-navigation"],
+    },
+    interactionCountByRoute: { "/vouchers": 1 },
+    inPageHistoryChangesByPath: {
+      "/vouchers": "/meu-painel",
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel", "/vouchers"],
+        headers: { Cookie: session },
+      },
+    ],
+    interactionSelectors: ['button[aria-haspopup="menu"]'],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  const historyNavigation = browser.navigationEvents.find(
+    (event) => event.type === "history-navigation",
+  );
+  const vouchersContext = browser.navigationEvents.find(
+    (event) => event.type === "context-created" && event.pathname === "/vouchers",
+  );
+  assert.ok(historyNavigation);
+  assert.equal(historyNavigation.navigationType, "backForward");
+  assert.equal(historyNavigation.from, "/vouchers");
+  assert.equal(historyNavigation.to, "/meu-painel");
+  assert.equal(historyNavigation.contextId, vouchersContext?.contextId);
+
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [
+      { route: "/meu-painel", profile: "seller", ok: false },
+      { route: "/vouchers", profile: "seller", ok: true },
+    ],
+  );
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/meu-painel: vendedor route reported an uncaught JavaScript exception/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /private@example\.com|customer-private-value|must-not-be-logged|seller-private-session|Uncaught Error/,
+  );
+});
 test("redeems one-use Clerk tickets for isolated seller, superadmin, and client browser sessions", async () => {
   const browser = fakeBrowserFactory({
     authStateByProfile: {

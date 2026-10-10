@@ -71,10 +71,12 @@ function StripeCardPaymentForm({ onSubmitted }: { onSubmitted: () => void }) {
 export function StripeCardPayment({
   payment,
   submitted,
+  failed,
   onSubmitted,
 }: {
   payment: StripeCardPaymentState;
   submitted: boolean;
+  failed: boolean;
   onSubmitted: () => void;
 }) {
   const stripePromise = useMemo(
@@ -82,11 +84,22 @@ export function StripeCardPayment({
     [payment.publishableKey],
   );
 
+  if (failed) {
+    return (
+      <div role="status" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+        <p className="font-semibold">Esta tentativa foi encerrada.</p>
+        <p className="mt-1">
+          A reserva anterior foi liberada. Para tentar novamente, volte à viagem e faça um novo pedido.
+        </p>
+      </div>
+    );
+  }
+
   if (submitted) {
     return (
-      <div role="status" className="flex items-start gap-2 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-        <Info className="mt-0.5 h-4 w-4 shrink-0" />
-        <p>Pagamento enviado à Stripe. A confirmação será atualizada aqui após o retorno seguro do provedor.</p>
+      <div role="status" aria-live="polite" className="flex items-start gap-2 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+        <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+        <p>Solicitação recebida pela Stripe. Estamos aguardando a confirmação segura do servidor; não tente pagar novamente enquanto isso.</p>
       </div>
     );
   }

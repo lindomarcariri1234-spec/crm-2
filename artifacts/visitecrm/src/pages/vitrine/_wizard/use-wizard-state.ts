@@ -14,6 +14,7 @@ import {
 import type { LayoutSeatMap, Step } from "./constants";
 import { CLICKABLE_SEAT_TYPES, STEP_ORDER } from "./constants";
 import type { FinancialSummary } from "@/lib/linked-data";
+import { isUnpaidStripeFailure } from "./stripe-payment-status";
 
 export type WizardForm = {
   customerName: string;
@@ -175,6 +176,10 @@ function hasFinalCheckoutOutcome(order: CompletedOrder): boolean {
     return (
       paymentStatus === "paid" ||
       paymentStatus === "refunded" ||
+      isUnpaidStripeFailure(
+        paymentStatus,
+        order.paidAmount ?? order.financialSummary?.paidAmount,
+      ) ||
       ["cancelled", "canceled", "refunded"].includes(orderStatus ?? "") ||
       (paymentStatus === "partially_paid" &&
         hasConfirmedCardPayment &&
@@ -1076,9 +1081,16 @@ export function useWizardState({
           (sum, item) => sum + Math.max(0, Number(item.quantity) || 0),
           0,
         );
+        const failedWithoutReceipt = isUnpaidStripeFailure(
+          order.paymentStatus,
+          order.paidAmount ?? order.financialSummary?.paidAmount,
+        );
         const shouldTreatAsSubmitted =
-          ["succeeded", "processing"].includes(redirectStatus ?? "") ||
-          ["paid", "processing"].includes((order.paymentStatus ?? "").toLowerCase());
+          !failedWithoutReceipt &&
+          (
+            ["succeeded", "processing"].includes(redirectStatus ?? "") ||
+            ["paid", "processing"].includes((order.paymentStatus ?? "").toLowerCase())
+          );
 
         setFormState((current) => ({
           ...current,
@@ -1122,7 +1134,7 @@ export function useWizardState({
         setStripePaymentSubmitted(shouldTreatAsSubmitted);
         setStripePaymentState(null);
 
-        if (!shouldTreatAsSubmitted) {
+        if (!shouldTreatAsSubmitted && !failedWithoutReceipt) {
           const stripePayment = await publicStoreApi.createPaymentIntent(
             slug,
             order.orderNumber,
