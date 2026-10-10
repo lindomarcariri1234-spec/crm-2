@@ -761,6 +761,7 @@ function fakeBrowserFactory({
   mainHeadingVisibleByRoute = {},
   mainHeadingMatchesMarkerByRoute = {},
   runtimeExceptionsByRoute = {},
+  runtimeExceptionsWithoutExecutionContextByRoute = {},
   interactionCountByRoute = {},
   delayedRuntimeExceptionByRoute = {},
   delayedRouteSessionReadsByPath = {},
@@ -772,30 +773,36 @@ function fakeBrowserFactory({
   const calls = [];
   const contentChecks = [];
   const navigationEvents = [];
+  const runtimeExceptionEvents = [];
   const executionContextIdByPath = new Map();
   const sessionStateReadsByPath = new Map();
   function emitConfiguredRuntimeException(pathname, phase, contextId) {
     const phases = runtimeExceptionsByRoute[pathname] ?? [];
+    const omitExecutionContextId = (
+      runtimeExceptionsWithoutExecutionContextByRoute[pathname] ?? []
+    ).includes(phase);
     const isPromiseRejection =
       phase === "navigation" && phases.includes("promise-rejection");
-    if (!phases.includes(phase) && !isPromiseRejection) return;
-    listeners.get("Runtime.exceptionThrown")?.({
-      exceptionDetails: {
-        exceptionId: navigationNumber + 1,
-        executionContextId: contextId,
-        text: isPromiseRejection ? "Uncaught (in promise)" : "Uncaught Error",
-        exception: {
-          description: isPromiseRejection
-            ? "Error: private@example.com order=customer-private-value"
-            : "private@example.com token=must-not-be-logged",
-        },
+    if (!phases.includes(phase) && !isPromiseRejection && !omitExecutionContextId) return;
+    const exceptionDetails = {
+      exceptionId: navigationNumber + 1,
+      text: isPromiseRejection ? "Uncaught (in promise)" : "Uncaught Error",
+      exception: {
+        description: isPromiseRejection
+          ? "Error: private@example.com order=customer-private-value"
+          : "private@example.com token=must-not-be-logged",
       },
-    });
+      ...(!omitExecutionContextId ? { executionContextId: contextId } : {}),
+    };
+    const event = { exceptionDetails };
+    runtimeExceptionEvents.push(event);
+    listeners.get("Runtime.exceptionThrown")?.(event);
   }
   return {
     calls,
     contentChecks,
     navigationEvents,
+    runtimeExceptionEvents,
     factory: async ({ headers, profileName }) => {
       const browserCall = { headers, navigations: [] };
       calls.push(browserCall);
@@ -1108,6 +1115,50 @@ test("reports uncaught browser exceptions for the active profile and route witho
   assert.doesNotMatch(
     output,
     /private@example\.com|must-not-be-logged|seller-private-session|admin-private-session|client-private-session/,
+  );
+});
+
+test("uses the active protected route when Chrome omits the exception execution context", async () => {
+  const session = "superadmin-private-session";
+  const browser = fakeBrowserFactory({
+    runtimeExceptionsWithoutExecutionContextByRoute: {
+      "/admin": ["navigation"],
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "superadmin",
+        label: "superadmin",
+        paths: ["/admin"],
+        headers: { Cookie: session },
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.equal(browser.runtimeExceptionEvents.length, 1);
+  assert.equal(
+    Object.hasOwn(
+      browser.runtimeExceptionEvents[0].exceptionDetails,
+      "executionContextId",
+    ),
+    false,
+  );
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [{ route: "/admin", profile: "superadmin", ok: false }],
+  );
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/admin: superadmin route reported an uncaught JavaScript exception/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /private@example\.com|must-not-be-logged|Uncaught Error|superadmin-private-session/,
   );
 });
 
