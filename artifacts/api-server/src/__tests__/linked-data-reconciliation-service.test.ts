@@ -119,7 +119,7 @@ describe("reconcileLinkedData integrity report", () => {
 
   it("is dry-run by default and returns metadata, summaries and category arrays", async () => {
     const client = { id: "c1", tenantId: "t1", email: "client@example.com", userId: null, totalSpent: "0", outstandingBalance: "0" };
-    const payment = { id: "p1", tenantId: "t1", clientId: "c1", type: "receivable", status: "paid", amount: "25" };
+    const payment = { id: "p1", tenantId: "t1", clientId: "c1", type: "receivable", status: "paid", amount: "25", isTestMode: false };
     queueSelect([[], [], [], [], [client], [payment], [], []]);
 
     const result = await reconcileLinkedData("t1");
@@ -152,10 +152,10 @@ describe("reconcileLinkedData integrity report", () => {
   it("repairs tenant receivable totals using paid, pending and overdue semantics", async () => {
     const client = { id: "c1", tenantId: "t1", email: null, userId: null, totalSpent: "1", outstandingBalance: "1" };
     queueSelect([[], [], [], [], [client], [
-      { tenantId: "t1", clientId: "c1", type: "receivable", status: "paid", amount: "12.5" },
-      { tenantId: "t1", clientId: "c1", type: "receivable", status: "pending", amount: "3" },
-      { tenantId: "t1", clientId: "c1", type: "receivable", status: "overdue", amount: "2" },
-      { tenantId: "t1", clientId: "c1", type: "payable", status: "paid", amount: "999" },
+      { tenantId: "t1", clientId: "c1", type: "receivable", status: "paid", amount: "12.5", isTestMode: false },
+      { tenantId: "t1", clientId: "c1", type: "receivable", status: "pending", amount: "3", isTestMode: false },
+      { tenantId: "t1", clientId: "c1", type: "receivable", status: "overdue", amount: "2", isTestMode: false },
+      { tenantId: "t1", clientId: "c1", type: "payable", status: "paid", amount: "999", isTestMode: false },
     ], [], []]);
     const result = await reconcileLinkedData("t1", true);
     expect(result.repaired).toContain("client-financial:c1");
@@ -215,7 +215,7 @@ describe("reconcileLinkedData integrity report", () => {
     // First pass observes drift. The replay receives the persisted post-repair
     // values, which is how the database behaves after a successful update.
     const staleClient = { id: "c1", tenantId: "t1", email: null, userId: null, totalSpent: "0", outstandingBalance: "0" };
-    const paidPayment = { id: "p1", tenantId: "t1", clientId: "c1", type: "receivable", status: "paid", amount: "10" };
+    const paidPayment = { id: "p1", tenantId: "t1", clientId: "c1", type: "receivable", status: "paid", amount: "10", isTestMode: false };
     queueSelect([[], [], [], [], [staleClient], [paidPayment], [], []]);
     const first = await reconcileLinkedData("t1", true);
     expect(first.repaired).toContain("client-financial:c1");
