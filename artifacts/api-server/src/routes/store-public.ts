@@ -1606,6 +1606,7 @@ async function handleIdempotentOrderReplay(
 router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): Promise<void> => 
 {
 
+  let checkoutFailureStage = "load_store";
   try 
 {
 
@@ -1633,6 +1634,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     
 }
 
+    checkoutFailureStage = "validate_request";
     const parsed = CreateOrderBody.safeParse(req.body)
 ;
 
@@ -1651,6 +1653,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 }
 ;
 
+    checkoutFailureStage = "validate_payment";
     const stripeCheckoutAvailable = Boolean(
       store.stripeEnabled
       && store.stripePublicKey
@@ -1703,6 +1706,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     if (data.idempotencyKey) 
 {
 
+      checkoutFailureStage = "idempotency_replay";
       const existing = await handleIdempotentOrderReplay(store, data.idempotencyKey, res, next)
 ;
 
@@ -1724,6 +1728,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       return;
     }
 
+    checkoutFailureStage = "prepare_items";
     const 
 {
  subtotal, orderItemsData, fetchedProducts, quantityByProductId, tripLinkedProducts 
@@ -1736,6 +1741,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 )
 ;
 
+    checkoutFailureStage = "resolve_discounts";
     const discounts = await resolveCheckoutDiscounts(
 {
 
@@ -1770,6 +1776,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 {
 
       // Must have a valid Clerk session AND that user's email must match the order's customerEmail
+      checkoutFailureStage = "resolve_referral_credit";
       const authedUser = await getTenantUser(req)
 ;
 
@@ -1932,6 +1939,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       throw validationErr;
     }
 
+    checkoutFailureStage = "persist_order";
     try {
       const persistedOrder = await persistCheckoutOrder({
         store, data, orderId, orderNumber, orderPaymentToken,
@@ -2189,6 +2197,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       try 
 {
 
+        checkoutFailureStage = "create_reservations";
         const createResult = await createReservationsForOrder(orderId)
 ;
 
@@ -2315,6 +2324,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     // been created successfully. This prevents a failed seat/capacity claim
     // from sending a payment request for a reservation that does not exist.
     if (generatedPixQrCodeUrl && generatedPixCopyPaste && generatedPixAmount !== null) {
+      checkoutFailureStage = "queue_pix_delivery";
       const pixQrDeliveryMode = await getPixQrDeliveryMode(store.tenantId);
       if (pixQrDeliveryMode !== "screen") {
         enqueuePixOrderQr({
@@ -2395,6 +2405,33 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       });
     }
   } catch (err) {
+    if (!(err instanceof AppError && err.isOperational)) {
+      const errorFields = err !== null && typeof err === "object"
+        ? err as Record<string, unknown>
+        : undefined;
+      const rawErrorCode = errorFields?.["code"];
+      const rawConstraint = errorFields?.["constraint"];
+      const errorCode = typeof rawErrorCode === "string"
+        && (/^\d{5}$/.test(rawErrorCode) || /^[A-Z0-9_]{1,64}$/i.test(rawErrorCode))
+        ? rawErrorCode
+        : undefined;
+      const constraint = typeof rawConstraint === "string" && /^[A-Z0-9_]{1,63}$/i.test(rawConstraint)
+        ? rawConstraint
+        : undefined;
+      const errorType = err instanceof Error && /^[A-Z0-9_]{1,64}$/i.test(err.name)
+        ? err.name
+        : typeof err;
+      req.log?.error(
+        {
+          requestId: req.id ?? "unknown",
+          stage: checkoutFailureStage,
+          errorType,
+          ...(errorCode ? { errorCode } : {}),
+          ...(constraint ? { constraint } : {}),
+        },
+        "[store/orders] Unexpected checkout failure",
+      );
+    }
     next(err);
   }
 });
