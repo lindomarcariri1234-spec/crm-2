@@ -16,6 +16,37 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
           Forma de Pagamento
         </h2>
 
+        {store.stripeEnabled && store.infinitePayEnabled && (
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">Escolha o provedor</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {([
+                ["stripe", "Stripe", "Pagamento no checkout seguro da Stripe."],
+                ["infinitepay", "InfinitePay", "Checkout hospedado com Pix e cartão; as condições são as habilitadas na sua conta."],
+              ] as const).map(([provider, label, description]) => (
+                <label key={provider} className={`cursor-pointer rounded-xl border-2 p-3 ${
+                  form.paymentProvider === provider ? "border-orange-500 bg-orange-50" : "border-border bg-white"
+                }`}>
+                  <input
+                    className="mr-2 accent-orange-500"
+                    type="radio"
+                    name="payment_provider"
+                    checked={form.paymentProvider === provider}
+                    onChange={() => {
+                      set("paymentProvider", provider);
+                      if (provider === "infinitepay" && !["pix", "credit_card"].includes(form.paymentMethod)) {
+                        set("paymentMethod", "pix");
+                      }
+                    }}
+                  />
+                  <span className="font-semibold text-sm">{label}</span>
+                  <p className="ml-6 text-xs text-muted-foreground">{description}</p>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
+
         <div className="space-y-3">
           {((store.paymentMethods ?? []).length > 0 ? (store.paymentMethods ?? []) : ["pix"]).map(
             (methodId) => {
@@ -23,7 +54,14 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
               if (!config) return null;
               const { Icon } = config;
               const isCardMethod = methodId === "credit_card" || methodId === "debit_card";
-              const cardUnavailable = isCardMethod && !store.stripeEnabled;
+              const cardUnavailable = isCardMethod && (
+                methodId === "debit_card"
+                  ? form.paymentProvider !== "stripe" || !store.stripeEnabled
+                  : !(
+                      (form.paymentProvider === "stripe" && store.stripeEnabled)
+                      || (form.paymentProvider === "infinitepay" && store.infinitePayEnabled)
+                    )
+              );
               const isSelected = form.paymentMethod === methodId;
               return (
                 <label
@@ -59,11 +97,12 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
           )}
         </div>
         {(store.paymentMethods ?? []).some(
-          (method) => (method === "credit_card" || method === "debit_card") && !store.stripeEnabled,
+          (method) => (method === "credit_card" || method === "debit_card")
+            && !store.stripeEnabled && !store.infinitePayEnabled,
         ) && (
           <div role="status" className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>Pagamento com cartão temporariamente indisponível: a loja precisa concluir a configuração da Stripe.</p>
+            <p>Pagamento com cartão temporariamente indisponível: a loja precisa configurar Stripe ou InfinitePay.</p>
           </div>
         )}
 
@@ -157,8 +196,9 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
           <div className="mt-2 p-4 bg-teal-50 border border-teal-200 rounded-xl text-sm text-teal-900">
             <p className="flex items-start gap-1.5">
               <Info className="w-4 h-4 mt-0.5 shrink-0" />
-               O QR Code do PIX aparecerá na confirmação do pedido para você efetuar o pagamento.
-               Depois, a agência atualizará a confirmação assim que o recebível for identificado.
+               {form.paymentProvider === "infinitepay"
+                 ? "Você será direcionado ao checkout seguro da InfinitePay para pagar por Pix."
+                 : "O QR Code do PIX aparecerá na confirmação do pedido para você efetuar o pagamento. Depois, a agência atualizará a confirmação assim que o recebível for identificado."}
             </p>
           </div>
         )}
@@ -166,7 +206,9 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
         {form.paymentMethod === "credit_card" && (
           <div className="mt-2 p-4 bg-blue-50 border border-blue-200 rounded-xl">
             <p className="text-sm text-blue-900">
-              O pagamento será processado pela Stripe. Após revisar o pedido, você informará o cartão no formulário seguro do provedor.
+              {form.paymentProvider === "infinitepay"
+                ? "Você será direcionado ao checkout seguro da InfinitePay para concluir o pagamento."
+                : "O pagamento será processado pela Stripe. Após revisar o pedido, você informará o cartão no formulário seguro do provedor."}
             </p>
           </div>
         )}

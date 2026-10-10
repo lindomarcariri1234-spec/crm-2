@@ -1200,6 +1200,40 @@ export default function LojaConfiguracoes() {
             </CardContent>
           </Card>
 
+          <Card>
+            <CardHeader>
+              <CardTitle>InfinitePay Checkout</CardTitle>
+              <CardDescription>
+                Usa o checkout hospedado da InfinitePay para Pix e cartão. Parcelamento, tarifas e prazo de recebimento dependem das condições habilitadas na conta.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="infinitepay-enabled">Ativar InfinitePay</Label>
+                <Switch
+                  id="infinitepay-enabled"
+                  data-testid="infinitepay-enabled"
+                  checked={form.infinitePayEnabled ?? false}
+                  onCheckedChange={(value) => set("infinitePayEnabled", value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="infinitepay-handle">InfiniteTag (sem $)</Label>
+                <Input
+                  id="infinitepay-handle"
+                  data-testid="infinitepay-handle"
+                  autoComplete="off"
+                  value={form.infinitePayHandle ?? ""}
+                  onChange={(event) => set("infinitePayHandle", event.target.value)}
+                  placeholder="sua-infinitetag"
+                />
+                <p className="text-xs text-muted-foreground">
+                  A loja só oferecerá este provedor quando estiver ativado e a InfiniteTag estiver preenchida.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Stripe */}
           <Card>
               <CardHeader>

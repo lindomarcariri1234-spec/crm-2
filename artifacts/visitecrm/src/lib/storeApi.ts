@@ -287,6 +287,27 @@ export const publicStoreApi = {
       `/public/store/${slug}/create-payment-intent`,
       { orderNumber, paymentToken }
     ),
+  createInfinitePayCheckout: (slug: string, data: {
+    orderNumber: string;
+    paymentToken: string;
+    returnPath: string;
+  }) =>
+    publicReq<{ checkoutUrl: string }>(
+      "POST",
+      `/public/store/${slug}/infinitepay/checkout`,
+      data,
+    ),
+  confirmInfinitePayPayment: (slug: string, data: {
+    orderNumber: string;
+    paymentToken: string;
+    transactionNsu: string;
+    invoiceSlug: string;
+  }) =>
+    publicReq<{ verified: boolean }>(
+      "POST",
+      `/public/store/${slug}/infinitepay/confirm`,
+      data,
+    ),
   validateReferral: (slug: string, code: string) =>
     publicReq<ReferralValidation>("POST", `/public/store/${slug}/referral/validate`, { code }),
   getReferralInfo: (slug: string, code: string) =>
@@ -351,6 +372,8 @@ export interface StoreSettings {
 
   paymentMethods: string[];
   stripeEnabled: boolean;
+  infinitePayEnabled: boolean;
+  infinitePayHandle?: string | null;
   stripePublicKey?: string | null;
   // Sensitive credentials are write-only: PUT accepts a non-empty string to
   // update; GET never returns the stored value. The *Configured flags let
@@ -419,6 +442,7 @@ export interface PublicStore {
   seoKeywords?: string | null;
   paymentMethods: string[];
   stripeEnabled: boolean;
+  infinitePayEnabled: boolean;
   stripePublicKey?: string | null;
   shippingPolicy?: string | null;
   returnPolicy?: string | null;
@@ -815,6 +839,7 @@ export interface CreateOrderInput {
   referralCreditUsed?: number;
 
   paymentMethod?: string;
+  paymentProvider?: "stripe" | "infinitepay" | "manual";
 
   notes?: string;
 
