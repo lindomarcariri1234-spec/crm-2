@@ -929,15 +929,21 @@ export function useWizardState({
         RESERVATION_NO_AGENCY_USER:
           "A agência ainda não está pronta para receber reservas online. Entre em contato para concluir o atendimento.",
         RESERVATION_SYNC_FAILED:
-          "Não foi possível criar a reserva agora. Nenhum pagamento foi confirmado; tente novamente.",
+          "Não foi possível criar a reserva por uma falha interna. Nenhum pagamento foi iniciado. Tente novamente.",
         STRIPE_NOT_CONFIGURED:
           "O pagamento com cartão está indisponível porque a Stripe ainda não foi configurada nesta loja.",
         STRIPE_NOT_ENABLED:
           "O pagamento com cartão está indisponível nesta loja no momento.",
       };
-      setSubmitError(
+      const message =
         (code && messages[code]) ||
-        (err instanceof Error ? err.message : "Erro ao finalizar reserva. Tente novamente."),
+        (err instanceof Error ? err.message : "Erro ao finalizar reserva. Tente novamente.");
+      const requestId =
+        err instanceof PublicApiError ? err.requestId : undefined;
+      setSubmitError(
+        code === "RESERVATION_SYNC_FAILED" && requestId
+          ? `${message} Protocolo: ${requestId}.`
+          : message,
       );
     } finally {
       setSubmitting(false);

@@ -130,10 +130,12 @@ export const storeApi = {
 
 export class PublicApiError extends Error {
   code?: string;
-  constructor(message: string, code?: string) {
+  requestId?: string;
+  constructor(message: string, code?: string, requestId?: string) {
     super(message);
     this.name = "PublicApiError";
     this.code = code;
+    this.requestId = requestId;
   }
 }
 
@@ -153,7 +155,11 @@ async function publicReq<T>(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new PublicApiError(err.error ?? "Request failed", err.code);
+    throw new PublicApiError(
+      err.error ?? "Request failed",
+      err.code,
+      typeof err.requestId === "string" ? err.requestId : undefined,
+    );
   }
   return res.json();
 }
