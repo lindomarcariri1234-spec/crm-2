@@ -347,7 +347,10 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
               {payments.length === 0 ? (
                 <div className="text-center py-10 text-muted-foreground">
                   <DollarSign className="w-10 h-10 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">Nenhum pagamento registrado.</p>
+                  <p className="text-sm">Nenhum pagamento confirmado ainda.</p>
+                  <p className="mt-1 text-xs">
+                    Esta lista exibe apenas valores confirmados; tentativas pendentes não são lançamentos financeiros.
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-2">

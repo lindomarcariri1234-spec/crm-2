@@ -28,6 +28,7 @@ import { StripeCardPayment } from "./stripe-card-payment";
 import { fmtDateLong, PAYMENT_LABELS } from "./constants";
 import type { WizardState } from "./use-wizard-state";
 import { trackReferralCreditReduction } from "@/lib/analytics";
+import { isUnpaidStripeFailure } from "./stripe-payment-status";
 
 function PixPaymentBlock({
   pixQrCodeUrl,
@@ -152,6 +153,14 @@ export function StepConfirmation({
     (form.paymentMethod || completedOrder.paymentMethod) === "debit_card";
   const isFullyPaid = summary.states.payment === "paid";
   const isPartiallyPaid = summary.states.payment === "partially_paid";
+  const stripePaymentFailed =
+    stripeCardMethod && isUnpaidStripeFailure(completedOrder.paymentStatus, paidAmt);
+  const stripePaymentPending =
+    stripeCardMethod &&
+    stripePaymentSubmitted &&
+    paidAmt <= 0 &&
+    !isFullyPaid &&
+    !stripePaymentFailed;
   const reservationValid =
     summary.reservationValid && (!stripeCardMethod || paidAmt > 0 || isFullyPaid);
   const orderCancelled = ["cancelled", "canceled"].includes(
@@ -176,6 +185,40 @@ export function StepConfirmation({
   const customerName = form.customerName || completedOrder.customerName || "";
   const customerEmail = form.customerEmail || completedOrder.customerEmail || "";
   const customerPhone = form.customerPhone || completedOrder.customerPhone || "";
+  const confirmationTone = orderCancelled || stripePaymentFailed
+    ? "red"
+    : stripePaymentPending
+      ? "amber"
+      : "green";
+  const toneStyles = {
+    red: {
+      background: "linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)",
+      border: "#fecaca",
+      icon: "bg-red-500",
+      heading: "text-red-900",
+      body: "text-red-800",
+      ticket: "text-red-600",
+      ticketBorder: "border-red-200",
+    },
+    amber: {
+      background: "linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)",
+      border: "#fde68a",
+      icon: "bg-amber-500",
+      heading: "text-amber-950",
+      body: "text-amber-900",
+      ticket: "text-amber-700",
+      ticketBorder: "border-amber-200",
+    },
+    green: {
+      background: "linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)",
+      border: "#bbf7d0",
+      icon: "bg-green-500",
+      heading: "text-green-900",
+      body: "text-green-800",
+      ticket: "text-green-600",
+      ticketBorder: "border-green-200",
+    },
+  }[confirmationTone];
   const confirmationSeats =
     effectiveSeats.length > 0
       ? effectiveSeats
@@ -195,48 +238,56 @@ export function StepConfirmation({
         <div
           className="rounded-2xl p-8 text-center border"
           style={{
-            background: orderCancelled
-              ? "linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)"
-              : "linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)",
-            borderColor: orderCancelled ? "#fecaca" : "#bbf7d0",
+            background: toneStyles.background,
+            borderColor: toneStyles.border,
           }}
         >
           <div className="flex justify-center mb-4">
-            <div className={`${orderCancelled ? "bg-red-500" : "bg-green-500"} rounded-full p-4`}>
-              {orderCancelled
+            <div className={`${toneStyles.icon} rounded-full p-4`}>
+              {orderCancelled || stripePaymentFailed
                 ? <XCircle className="w-14 h-14 text-white" />
-                : <CheckCircle2 className="w-14 h-14 text-white" />}
+                : stripePaymentPending
+                  ? <CreditCard className="w-14 h-14 text-white" />
+                  : <CheckCircle2 className="w-14 h-14 text-white" />}
             </div>
           </div>
-          <h2 className={`text-3xl font-bold mb-2 ${orderCancelled ? "text-red-900" : "text-green-900"}`}>
+          <h2 className={`text-3xl font-bold mb-2 ${toneStyles.heading}`}>
             {reservationValid
               ? "Reserva Confirmada! 🎉"
               : isPartiallyPaid
                 ? "Pagamento Parcial Recebido"
                 : orderCancelled
                   ? "Reserva cancelada"
-                  : "Pedido Realizado! 🎉"}
+                  : stripePaymentFailed
+                    ? "Pagamento não confirmado"
+                    : stripePaymentPending
+                      ? "Pagamento em confirmação"
+                      : "Pedido Realizado! 🎉"}
           </h2>
-          <p className={`text-lg mb-6 ${orderCancelled ? "text-red-800" : "text-green-800"}`}>
+          <p className={`text-lg mb-6 ${toneStyles.body}`}>
             {reservationValid
               ? "Seu pagamento foi confirmado e a reserva está válida."
               : isPartiallyPaid
                 ? "Uma parte do pagamento foi confirmada. A reserva ainda aguarda atingir o mínimo exigido e ser confirmada."
                 : orderCancelled
                   ? "O prazo de pagamento de 30 minutos terminou e a reserva foi cancelada. Se você já pagou, entre em contato com a agência antes de fazer um novo pedido."
-                : form.paymentMethod === "pix"
-                  ? "Seu pedido foi criado! Complete o pagamento via PIX para confirmar sua reserva."
-                  : form.paymentMethod === "cash"
-                    ? "Seu pedido ficará reservado por 30 minutos. Pague em dinheiro na agência dentro desse prazo para confirmar a reserva."
-                  : stripeCardMethod && !stripePaymentSubmitted
-                    ? "Seu pedido foi criado. Conclua o pagamento com cartão pelo formulário seguro da Stripe."
-                  : "Seu pedido foi criado. Confirme o pagamento para validar a reserva."}
+                  : stripePaymentFailed
+                    ? "A Stripe não confirmou esta tentativa e nenhum pagamento foi registrado. Volte à viagem para iniciar um novo pedido."
+                    : stripePaymentPending
+                      ? "Recebemos o retorno da Stripe. O pedido continuará pendente até a confirmação segura do servidor; não tente pagar novamente enquanto atualizamos o status."
+                      : form.paymentMethod === "pix"
+                        ? "Seu pedido foi criado! Complete o pagamento via PIX para confirmar sua reserva."
+                        : form.paymentMethod === "cash"
+                          ? "Seu pedido ficará reservado por 30 minutos. Pague em dinheiro na agência dentro desse prazo para confirmar a reserva."
+                          : stripeCardMethod && !stripePaymentSubmitted
+                            ? "Seu pedido foi criado. Conclua o pagamento com cartão pelo formulário seguro da Stripe."
+                            : "Seu pedido foi criado. Confirme o pagamento para validar a reserva."}
           </p>
           <div className="inline-flex items-center gap-2 bg-white px-6 py-3 rounded-xl shadow-sm border border-green-200">
             <Ticket className="w-5 h-5 text-green-600" />
             <div className="text-left">
               <p className="text-xs text-muted-foreground">Número do Pedido</p>
-              <p className="text-2xl font-bold text-green-600 font-mono">
+              <p className={`text-2xl font-bold ${toneStyles.ticket} font-mono`}>
                 {completedOrder.orderNumber}
               </p>
             </div>
@@ -518,14 +569,26 @@ export function StepConfirmation({
               <strong>Forma de Pagamento:</strong>{" "}
               {PAYMENT_LABELS[form.paymentMethod] ?? form.paymentMethod}
             </p>
+          {stripePaymentFailed && (
+            <Button
+              type="button"
+              variant="outline"
+              className="mb-6 border-red-300 bg-white text-red-900 hover:bg-red-100"
+              onClick={() => navigate(`/loja/${slug}/produtos/${product.slug}`)}
+            >
+              Voltar à viagem
+            </Button>
+          )}
             {(!completedOrder.pixQrCode || !completedOrder.pixQrCodeUrl) && (
               <p className="mt-1.5 flex items-center gap-1">
                 <Info className="w-3.5 h-3.5" />
                 {stripeCardMethod
                   ? paidAmt > 0
                     ? "A Stripe confirmou uma parte do pagamento. O saldo restante continua indicado acima."
-                    : stripePaymentSubmitted
-                      ? "Pagamento enviado à Stripe; aguardando a confirmação do servidor."
+                    : stripePaymentFailed
+                      ? "A Stripe não confirmou a tentativa. Nenhum pagamento foi registrado; inicie um novo pedido para tentar novamente."
+                      : stripePaymentSubmitted
+                      ? "Solicitação recebida pela Stripe; aguardando confirmação do servidor. Não faça outra tentativa enquanto isso."
                       : "Conclua o pagamento no formulário seguro da Stripe abaixo."
                   : "Aguardando confirmação do pagamento. Você receberá um email assim que o pagamento for confirmado."}
               </p>
@@ -544,6 +607,7 @@ export function StepConfirmation({
               <StripeCardPayment
                 payment={stripePaymentState}
                 submitted={stripePaymentSubmitted}
+                failed={stripePaymentFailed}
                 onSubmitted={handleStripePaymentSubmitted}
               />
             </div>
