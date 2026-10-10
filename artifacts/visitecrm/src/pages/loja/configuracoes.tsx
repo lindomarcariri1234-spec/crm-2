@@ -52,6 +52,7 @@ import {
   STRIPE_STORE_PAYMENT_METHODS,
   validateStripeStoreConfig,
 } from "@/lib/stripe-store-config";
+import { StripeAgencyAccountCard } from "@/components/settings/StripeAgencyAccountCard";
 
 const PIX_KEY_GUIDANCE: Record<string, { placeholder: string; hint: string }> = {
   cpf: {
@@ -1203,7 +1204,7 @@ export default function LojaConfiguracoes() {
           <Card>
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <CardTitle>Stripe</CardTitle>
+                  <CardTitle>Stripe do checkout da loja</CardTitle>
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant={
                       !(form.stripeEnabled ?? false)
@@ -1228,7 +1229,7 @@ export default function LojaConfiguracoes() {
                   </div>
                 </div>
                 <CardDescription>
-                  Configure e teste as credenciais antes de ativar cobranças. A conexão pode ser verificada sem salvar uma chave nova.
+                  Configure as credenciais usadas no checkout desta loja e teste a conexão antes de ativar cobranças. A verificação não salva uma chave nova.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1454,6 +1455,8 @@ export default function LojaConfiguracoes() {
                   </div>
               </CardContent>
             </Card>
+
+          <StripeAgencyAccountCard />
 
           {/* MercadoPago */}
           <Card>

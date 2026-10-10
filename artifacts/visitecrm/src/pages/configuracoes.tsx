@@ -1834,7 +1834,6 @@ function IntegrationsTab() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <WhatsAppIntegrationCards />
         <InstagramDirectIntegrationCard />
-        <IntegrationCard type="stripe_account" />
         <IntegrationCard type="mercadopago" />
         <IntegrationCard type="google_analytics" />
         <IntegrationCard type="distribution_reference" />
