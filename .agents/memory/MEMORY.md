@@ -120,6 +120,7 @@
 - [Manual table migration snapshots](manual-table-snapshot-sync.md) — preserve the published snapshot chain when merging branches; never replay DDL already applied by hand-written migrations.
 - [Clerk React/shared compatibility](clerk-react-shared-compat.md) — a newer React SDK can compile yet fail Vite linking against the shared override; upgrade the pair together.
 - [GitHub API blob uploads](github-api-blob-uploads.md) — encode raw workspace file content inside the authenticated API call; shell base64 output can corrupt large blobs
+- [GitHub CLI auth bridge](github-cli-auth-bridge.md) — a working GitHub API connector may not authorize Git pushes; verify the remote path before release work
 - [GitHub-signed Vercel promotion](github-signed-vercel-promotion.md) — keep the verified-commit gate; promote only unsigned sources with GitHub's API, then smoke-check the exact SHA
 - [Audit failure log hygiene](audit-failure-logging.md) — audit-write failures log only operational identifiers and error type; never snapshots or raw exception details
 - [PMS legacy projection](pms-legacy-projection.md) — keep legacy accommodations as the source and idempotently project new records before PMS reads
