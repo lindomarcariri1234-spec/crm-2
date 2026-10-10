@@ -1040,6 +1040,7 @@ async function runBrowserSmoke({
   const routeByExecutionContextId = new Map();
   const routesWithRuntimeExceptions = new Set();
   let activeRoute = null;
+  let defaultExecutionContextId = null;
 
   client.on("Network.requestWillBeSent", ({ requestId, request, type }) => {
     if (type !== "Script" && !isJavaScriptAssetUrl(request.url)) return;
@@ -1073,6 +1074,30 @@ async function runBrowserSmoke({
   client.on("Runtime.executionContextCreated", ({ context }) => {
     if (activeRoute && Number.isInteger(context?.id)) {
       routeByExecutionContextId.set(context.id, activeRoute);
+      if (context.auxData?.isDefault) {
+        defaultExecutionContextId = context.id;
+      }
+    }
+  });
+  client.on("Page.navigatedWithinDocument", ({ url }) => {
+    let routeUrl;
+    try {
+      routeUrl = new URL(url, baseUrl);
+    } catch {
+      return;
+    }
+    if (routeUrl.origin !== expectedOrigin) return;
+
+    const normalizedPath = (pathname) => pathname.replace(/\/+$/, "") || "/";
+    const route =
+      protectedPaths.find(
+        (path) =>
+          normalizedPath(new URL(path, baseUrl).pathname) ===
+          normalizedPath(routeUrl.pathname),
+      ) ?? routeUrl.pathname;
+    activeRoute = route;
+    if (Number.isInteger(defaultExecutionContextId)) {
+      routeByExecutionContextId.set(defaultExecutionContextId, route);
     }
   });
   // Chrome reports uncaught promise rejections through the same runtime event.

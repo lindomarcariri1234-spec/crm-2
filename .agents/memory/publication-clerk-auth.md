@@ -26,3 +26,11 @@ After a full route reload, Clerk can briefly expose no active user/session while
 **Why:** The first production run after ticket redemption exposed both normal startup/cache behavior as false smoke-test failures, despite the app and health marker being available.
 
 **How to apply:** Wait a bounded interval for the exact expected Clerk user and session to return after route navigation; continue failing on redirects or identity mismatches. Accept cached 304 assets only in browser-observed requests and keep validating page content.
+
+### Runtime exceptions after in-page navigation
+
+Chrome's `Page.navigatedWithinDocument` event identifies SPA route changes that reuse the existing default JavaScript execution context. Update that context's route association on the event; context-creation events alone leave later errors attached to the previous screen.
+
+**Why:** A delayed exception after a client-side route change can otherwise be reported against the screen that first created the context.
+
+**How to apply:** Track the active route for the default context using same-origin in-document navigation events, and keep exception output limited to the route and role label.

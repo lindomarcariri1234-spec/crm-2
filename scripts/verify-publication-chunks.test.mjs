@@ -764,12 +764,14 @@ function fakeBrowserFactory({
   interactionCountByRoute = {},
   delayedRuntimeExceptionByRoute = {},
   delayedRouteSessionReadsByPath = {},
+  inPageRouteChangesByPath = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
   let executionContextId = 0;
   const calls = [];
   const contentChecks = [];
+  const navigationEvents = [];
   const executionContextIdByPath = new Map();
   const sessionStateReadsByPath = new Map();
   function emitConfiguredRuntimeException(pathname, phase, contextId) {
@@ -793,6 +795,7 @@ function fakeBrowserFactory({
   return {
     calls,
     contentChecks,
+    navigationEvents,
     factory: async ({ headers, profileName }) => {
       const browserCall = { headers, navigations: [] };
       calls.push(browserCall);
@@ -811,6 +814,11 @@ function fakeBrowserFactory({
             const pathname = new URL(currentUrl).pathname;
             const contextId = ++executionContextId;
             executionContextIdByPath.set(pathname, contextId);
+            navigationEvents.push({
+              type: "context-created",
+              pathname,
+              contextId,
+            });
             listeners.get("Runtime.executionContextCreated")?.({
               context: { id: contextId, auxData: { isDefault: true } },
             });
@@ -897,10 +905,35 @@ function fakeBrowserFactory({
               };
             }
             if (params.expression?.includes("element.click()")) {
-              emitConfiguredRuntimeException(
-                new URL(currentUrl).pathname,
-                "interaction",
-              );
+              const pathname = new URL(currentUrl).pathname;
+              emitConfiguredRuntimeException(pathname, "interaction");
+              const nextPath = inPageRouteChangesByPath[pathname];
+              if (nextPath) {
+                const contextId = executionContextIdByPath.get(pathname);
+                emitConfiguredRuntimeException(
+                  pathname,
+                  "before-in-page-navigation",
+                  contextId,
+                );
+                currentUrl = new URL(nextPath, currentUrl).href;
+                const nextPathname = new URL(currentUrl).pathname;
+                executionContextIdByPath.set(nextPathname, contextId);
+                navigationEvents.push({
+                  type: "in-page-navigation",
+                  from: pathname,
+                  to: nextPathname,
+                  contextId,
+                });
+                listeners.get("Page.navigatedWithinDocument")?.({
+                  url: currentUrl,
+                  navigationType: "historyApi",
+                });
+                emitConfiguredRuntimeException(
+                  nextPathname,
+                  "after-in-page-navigation",
+                  contextId,
+                );
+              }
               return { result: { value: true } };
             }
             if (params.expression?.includes("document.querySelectorAll(")) {
@@ -1145,6 +1178,66 @@ test("keeps delayed browser exceptions attached to the route that created their 
   assert.doesNotMatch(
     JSON.stringify(results),
     /private@example\.com|customer-private-value|seller-private-session/,
+  );
+});
+
+test("maps exceptions to the correct routes when in-page navigation reuses its execution context", async () => {
+  const browser = fakeBrowserFactory({
+    runtimeExceptionsByRoute: {
+      "/meu-painel": ["before-in-page-navigation"],
+      "/vouchers": ["after-in-page-navigation"],
+    },
+    interactionCountByRoute: { "/meu-painel": 1 },
+    inPageRouteChangesByPath: {
+      "/meu-painel": "/vouchers",
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel", "/vouchers"],
+        headers: { Cookie: "seller-private-session" },
+      },
+    ],
+    interactionSelectors: ['button[aria-haspopup="menu"]'],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  assert.deepEqual(
+    results.map(({ route, ok }) => ({ route, ok })),
+    [
+      { route: "/meu-painel", ok: false },
+      { route: "/vouchers", ok: false },
+    ],
+  );
+  assert.deepEqual(browser.navigationEvents.slice(0, 2), [
+    {
+      type: "context-created",
+      pathname: "/meu-painel",
+      contextId: 1,
+    },
+    {
+      type: "in-page-navigation",
+      from: "/meu-painel",
+      to: "/vouchers",
+      contextId: 1,
+    },
+  ]);
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/meu-painel: vendedor route reported an uncaught JavaScript exception/,
+  );
+  assert.match(
+    results[1].failures.join("\n"),
+    /\/vouchers: vendedor route reported an uncaught JavaScript exception/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /private@example\.com|customer-private-value|seller-private-session|Uncaught Error/,
   );
 });
 
