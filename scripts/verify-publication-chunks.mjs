@@ -666,7 +666,10 @@ function validateObservedAsset({ route, asset, expectedOrigin }) {
       `${route}: JavaScript asset ${asset.url} resolved to unexpected origin ${assetUrl.origin}`,
     );
   }
-  if (asset.status < 200 || asset.status >= 300) {
+  if (
+    asset.status !== 304 &&
+    (asset.status < 200 || asset.status >= 300)
+  ) {
     failures.push(
       `${route}: JavaScript asset ${asset.url} failed: HTTP ${asset.status} (content-type: ${asset.contentType || "missing"})`,
     );
@@ -1254,25 +1257,44 @@ async function runBrowserSmoke({
 
   async function validateRouteSession(route, activeSession) {
     if (!signInToken) return;
-    const state = await getBrowserSessionState();
-    let finalUrl;
-    try {
-      if (state?.origin && state?.pathname) {
-        finalUrl = new URL(state.pathname, state.origin);
-      }
-    } catch {
-      // Report an unavailable session below without exposing browser internals.
-    }
     const requestedUrl = new URL(route, baseUrl);
     const normalizedPath = (pathname) => pathname.replace(/\/+$/, "") || "/";
-    const wasRedirected =
-      !finalUrl ||
-      finalUrl.origin !== expectedOrigin ||
-      normalizedPath(finalUrl.pathname) !== normalizedPath(requestedUrl.pathname);
-    const identityChanged =
-      !state?.sessionId ||
-      state.sessionId !== activeSession.sessionId ||
-      state.userId !== expectedUserId;
+    const deadline = Date.now() + Math.min(Math.max(timeoutMs, 1_000), 5_000);
+    let state = null;
+    let finalUrl = null;
+    let wasRedirected = true;
+    let identityChanged = true;
+    do {
+      state = await getBrowserSessionState();
+      try {
+        finalUrl =
+          state?.origin && state?.pathname
+            ? new URL(state.pathname, state.origin)
+            : null;
+      } catch {
+        finalUrl = null;
+      }
+      wasRedirected =
+        !finalUrl ||
+        finalUrl.origin !== expectedOrigin ||
+        normalizedPath(finalUrl.pathname) !==
+          normalizedPath(requestedUrl.pathname);
+      identityChanged =
+        !state?.sessionId ||
+        state.sessionId !== activeSession.sessionId ||
+        state.userId !== expectedUserId;
+      if (!wasRedirected && !identityChanged) return;
+      if (finalUrl && isAuthenticationRedirect(requestedUrl, finalUrl)) break;
+
+      const hasCompleteIdentity = Boolean(state?.sessionId && state?.userId);
+      const hasDifferentIdentity =
+        hasCompleteIdentity &&
+        (state.sessionId !== activeSession.sessionId ||
+          state.userId !== expectedUserId);
+      if (hasDifferentIdentity || Date.now() >= deadline) break;
+      await wait(100);
+    } while (Date.now() < deadline);
+
     if (!wasRedirected && !identityChanged) return;
 
     if (finalUrl && isAuthenticationRedirect(requestedUrl, finalUrl)) {
