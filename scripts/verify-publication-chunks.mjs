@@ -319,7 +319,6 @@ export async function createPublicationSignInProfiles({
       environment["PUBLICATION_CHUNK_URL"] ??
       environment["PUBLICATION_SMOKE_URL"],
   );
-  const redirectUrl = new URL(DEFAULT_PUBLIC_PATH, baseUrl).href;
   const profiles = [];
 
   for (const profileEnvironment of PROFILE_ENVIRONMENTS) {
@@ -360,32 +359,21 @@ export async function createPublicationSignInProfiles({
         `Clerk could not create the ${profileEnvironment.label} publication sign-in token (HTTP ${response.status}). ${hint}`,
       );
     }
-    if (typeof payload?.id !== "string" || typeof payload?.url !== "string") {
+    if (
+      typeof payload?.id !== "string" ||
+      typeof payload?.token !== "string" ||
+      !payload.token.trim()
+    ) {
       throw new Error(
         `Clerk returned an incomplete sign-in token for the ${profileEnvironment.label} profile; verify the Backend API response and Clerk instance configuration.`,
       );
     }
 
-    let signInUrl;
-    try {
-      signInUrl = new URL(payload.url);
-    } catch {
-      throw new Error(
-        `Clerk returned an invalid sign-in URL for the ${profileEnvironment.label} profile.`,
-      );
-    }
-    if (signInUrl.protocol !== "https:") {
-      throw new Error(
-        `Clerk returned a non-HTTPS sign-in URL for the ${profileEnvironment.label} profile.`,
-      );
-    }
-    signInUrl.searchParams.set("redirect_url", redirectUrl);
-
     const profile = {
       name: profileEnvironment.name,
       label: profileEnvironment.label,
       paths: getConfiguredProfilePaths(profileEnvironment, environment),
-      signInUrl: signInUrl.href,
+      signInToken: payload.token,
       expectedUserId: userId,
       signInTokenId: payload.id,
     };
@@ -540,29 +528,19 @@ function normalizeProtectedProfile(profile, index) {
     "User-Agent": USER_AGENT,
     ...(profile.protectedHeaders ?? profile.headers ?? {}),
   };
-  const signInUrl =
-    typeof profile.signInUrl === "string" && profile.signInUrl.trim()
-      ? profile.signInUrl.trim()
+  const signInToken =
+    typeof profile.signInToken === "string" && profile.signInToken.trim()
+      ? profile.signInToken.trim()
       : undefined;
-  if (!signInUrl) {
+  if (!signInToken) {
     assertProtectedHeaders(headers, name);
-  } else {
-    let parsedSignInUrl;
-    try {
-      parsedSignInUrl = new URL(signInUrl);
-    } catch {
-      throw new Error(`Protected chunk profile ${name} has an invalid Clerk sign-in URL.`);
-    }
-    if (parsedSignInUrl.protocol !== "https:") {
-      throw new Error(`Protected chunk profile ${name} sign-in URL must use HTTPS.`);
-    }
   }
   return {
     name,
     label: profile.label ?? name,
     paths,
     headers,
-    signInUrl,
+    signInToken,
     expectedUserId: profile.expectedUserId,
     signInTokenId: profile.signInTokenId,
   };
@@ -1043,7 +1021,7 @@ async function runBrowserSmoke({
   profileLabel,
   protectedPaths,
   headers,
-  signInUrl,
+  signInToken,
   expectedUserId,
   onSessionCreated,
   expectedOrigin,
@@ -1057,35 +1035,8 @@ async function runBrowserSmoke({
   const assetsByRoute = new Map();
   const requests = new Map();
   const routeByExecutionContextId = new Map();
-  const signInOrigin = signInUrl ? new URL(signInUrl, baseUrl).origin : null;
-  const signInResponseDiagnostics = [];
   const routesWithRuntimeExceptions = new Set();
   let activeRoute = null;
-
-  function recordSignInResponse(type, response) {
-    if (!signInOrigin || !response?.url) return;
-    let responseUrl;
-    try {
-      responseUrl = new URL(response.url);
-    } catch {
-      return;
-    }
-    if (responseUrl.origin !== signInOrigin) return;
-    if (type !== "Document" && response.status < 400) return;
-
-    const status = Number.isFinite(response.status)
-      ? Math.trunc(response.status)
-      : "unknown";
-    const diagnostic =
-      `HTTP ${status} ${type ?? "unknown"} ` +
-      `${responseUrl.origin}${responseUrl.pathname}`;
-    if (
-      signInResponseDiagnostics.length < 8 &&
-      !signInResponseDiagnostics.includes(diagnostic)
-    ) {
-      signInResponseDiagnostics.push(diagnostic);
-    }
-  }
 
   client.on("Network.requestWillBeSent", ({ requestId, request, type }) => {
     if (type !== "Script" && !isJavaScriptAssetUrl(request.url)) return;
@@ -1094,8 +1045,7 @@ async function runBrowserSmoke({
       requests.set(requestId, { url: request.url, route: activeRoute });
     }
   });
-  client.on("Network.responseReceived", ({ requestId, response, type }) => {
-    recordSignInResponse(type, response);
+  client.on("Network.responseReceived", ({ requestId, response }) => {
     const requestInfo = requests.get(requestId);
     if (!requestInfo) return;
     const asset = {
@@ -1241,16 +1191,69 @@ async function runBrowserSmoke({
     const clerkState = state
       ? `Clerk=${state.clerkPresent ? (state.clerkLoaded ? "loaded" : "present/not-loaded") : "absent"}, user=${state.hasUser ? "present" : "absent"}, session=${state.hasSession ? "present" : "absent"}`
       : "browser state unavailable";
-    const portalResponses = signInResponseDiagnostics.length
-      ? signInResponseDiagnostics.join("; ")
-      : "none captured";
     throw new Error(
-      `Clerk did not activate the ${profileLabel ?? profileName} CI session on the published site (last page: ${lastLocation}; title=${JSON.stringify(safeTitle)}; ${clerkState}; Account Portal responses: ${portalResponses}).`,
+      `Clerk did not activate the ${profileLabel ?? profileName} CI session on the published site (last page: ${lastLocation}; title=${JSON.stringify(safeTitle)}; ${clerkState}).`,
     );
   }
 
+  async function activateClerkSignInToken() {
+    const deadline = Date.now() + Math.max(timeoutMs, 5_000);
+    let state = null;
+    while (Date.now() < deadline) {
+      state = await getBrowserSessionState();
+      if (state?.origin === expectedOrigin && state.clerkLoaded) break;
+      await wait(100);
+    }
+    if (!state?.clerkLoaded) {
+      throw new Error(
+        `Clerk did not load on the published site for the ${profileLabel ?? profileName} CI session.`,
+      );
+    }
+
+    const expression = `(() => {
+      const clerk = window.Clerk;
+      return (async () => {
+        const signIn = await clerk.client.signIn.create({
+          strategy: "ticket",
+          ticket: ${JSON.stringify(signInToken)},
+        });
+        if (signIn.status !== "complete" || !signIn.createdSessionId) {
+          throw new Error("ticket sign-in did not complete");
+        }
+        let active = false;
+        try {
+          await clerk.setActive({ session: signIn.createdSessionId });
+          active = true;
+        } catch {
+          // Return the created session ID so the caller can revoke it even
+          // when setting it active fails.
+        }
+        return { sessionId: signIn.createdSessionId, active };
+      })();
+    })()`;
+    try {
+      const result = await client.send("Runtime.evaluate", {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+      });
+      const activation = result.result?.value;
+      if (
+        result.exceptionDetails ||
+        typeof activation?.sessionId !== "string"
+      ) {
+        throw new Error("ticket redemption failed");
+      }
+      return activation;
+    } catch {
+      throw new Error(
+        `Clerk could not redeem the one-use ${profileLabel ?? profileName} CI sign-in token on the published site.`,
+      );
+    }
+  }
+
   async function validateRouteSession(route, activeSession) {
-    if (!signInUrl) return;
+    if (!signInToken) return;
     const state = await getBrowserSessionState();
     let finalUrl;
     try {
@@ -1363,13 +1366,24 @@ async function runBrowserSmoke({
 
   let authenticatedSession = null;
   try {
-    if (signInUrl) {
-      await navigate(signInUrl, null);
-      authenticatedSession = await waitForAuthenticatedSession();
+    if (signInToken) {
+      await navigate(DEFAULT_PUBLIC_PATH, null);
+      const activation = await activateClerkSignInToken();
       await onSessionCreated?.({
         profileName,
-        sessionId: authenticatedSession.sessionId,
+        sessionId: activation.sessionId,
       });
+      if (!activation.active) {
+        throw new Error(
+          `Clerk could not activate the one-use ${profileLabel ?? profileName} CI session on the published site.`,
+        );
+      }
+      authenticatedSession = await waitForAuthenticatedSession();
+      if (authenticatedSession.sessionId !== activation.sessionId) {
+        throw new Error(
+          `Clerk activated a different session than the one-use ${profileLabel ?? profileName} CI token created.`,
+        );
+      }
       if (expectedUserId && authenticatedSession.userId !== expectedUserId) {
         const profileEnvironment = PROFILE_ENVIRONMENTS.find(
           (profile) => profile.name === profileName,
@@ -1455,7 +1469,7 @@ export async function verifyPublishedInteractions({
         profileLabel: profile.label,
         protectedPaths: profile.paths,
         headers: profile.headers,
-        signInUrl: profile.signInUrl,
+        signInToken: profile.signInToken,
         expectedUserId: profile.expectedUserId,
         onSessionCreated,
         expectedOrigin: baseUrl.origin,
