@@ -766,6 +766,7 @@ function fakeBrowserFactory({
   delayedRuntimeExceptionByRoute = {},
   delayedRouteSessionReadsByPath = {},
   inPageRouteChangesByPath = {},
+  inPageAssetRequestsByPath = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
@@ -776,6 +777,25 @@ function fakeBrowserFactory({
   const runtimeExceptionEvents = [];
   const executionContextIdByPath = new Map();
   const sessionStateReadsByPath = new Map();
+  function emitScriptRequest({ requestId, url }) {
+    listeners.get("Network.requestWillBeSent")?.({
+      requestId,
+      request: { url },
+      type: "Script",
+    });
+  }
+  function emitScriptResponse({
+    requestId,
+    url,
+    status = 200,
+    mimeType = "application/javascript",
+  }) {
+    listeners.get("Network.responseReceived")?.({
+      requestId,
+      type: "Script",
+      response: { url, status, mimeType },
+    });
+  }
   function emitConfiguredRuntimeException(pathname, phase, contextId) {
     const phases = runtimeExceptionsByRoute[pathname] ?? [];
     const omitExecutionContextId = (
@@ -916,6 +936,10 @@ function fakeBrowserFactory({
               emitConfiguredRuntimeException(pathname, "interaction");
               const nextPath = inPageRouteChangesByPath[pathname];
               if (nextPath) {
+                const assetRequests = inPageAssetRequestsByPath[pathname] ?? {};
+                if (assetRequests.beforeNavigation) {
+                  emitScriptRequest(assetRequests.beforeNavigation);
+                }
                 const contextId = executionContextIdByPath.get(pathname);
                 emitConfiguredRuntimeException(
                   pathname,
@@ -935,6 +959,13 @@ function fakeBrowserFactory({
                   url: currentUrl,
                   navigationType: "historyApi",
                 });
+                if (assetRequests.beforeNavigation) {
+                  emitScriptResponse(assetRequests.beforeNavigation);
+                }
+                if (assetRequests.afterNavigation) {
+                  emitScriptRequest(assetRequests.afterNavigation);
+                  emitScriptResponse(assetRequests.afterNavigation);
+                }
                 emitConfiguredRuntimeException(
                   nextPathname,
                   "after-in-page-navigation",
@@ -1290,6 +1321,50 @@ test("maps exceptions to the correct routes when in-page navigation reuses its e
     JSON.stringify(results),
     /private@example\.com|customer-private-value|seller-private-session|Uncaught Error/,
   );
+});
+
+test("keeps script requests attributed to their route across in-page navigation", async () => {
+  const originAsset = {
+    requestId: "origin-route-request",
+    url: "https://visitecrm.com/assets/origin-route.js",
+  };
+  const destinationAsset = {
+    requestId: "destination-route-request",
+    url: "https://visitecrm.com/assets/destination-route.js",
+  };
+  const browser = fakeBrowserFactory({
+    interactionCountByRoute: { "/meu-painel": 1 },
+    inPageRouteChangesByPath: { "/meu-painel": "/vouchers" },
+    inPageAssetRequestsByPath: {
+      "/meu-painel": {
+        beforeNavigation: originAsset,
+        afterNavigation: destinationAsset,
+      },
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel", "/vouchers"],
+        headers: { Cookie: "seller-private-session" },
+      },
+    ],
+    interactionSelectors: ['button[aria-haspopup="menu"]'],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  const originResult = results.find((result) => result.route === "/meu-painel");
+  const destinationResult = results.find((result) => result.route === "/vouchers");
+  assert.ok(originResult);
+  assert.ok(destinationResult);
+  assert.ok(originResult.assets.includes(originAsset.url));
+  assert.ok(destinationResult.assets.includes(destinationAsset.url));
+  assert.ok(!destinationResult.assets.includes(originAsset.url));
+  assert.ok(!originResult.assets.includes(destinationAsset.url));
 });
 
 test("redeems one-use Clerk tickets for isolated seller, superadmin, and client browser sessions", async () => {
