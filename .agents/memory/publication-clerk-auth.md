@@ -18,3 +18,19 @@ The published Clerk Account Portal at `accounts.visitecrm.com` returned a Cloudf
 **Why:** Redirecting a CI browser through the branded Account Portal can trigger anti-bot protection even when the app itself is available.
 
 **How to apply:** Prefer the documented ClerkJS ticket strategy on the app origin; do not weaken authenticated coverage or treat a challenged portal as a successful sign-in.
+
+### Protected-route reloads and cached assets
+
+After a full route reload, Clerk can briefly expose no active user/session while its app-origin session rehydrates. The browser can also report HTTP 304 for JavaScript assets it already has cached; these responses are valid only when the MIME type is JavaScript and the protected page still renders its expected content.
+
+**Why:** The first production run after ticket redemption exposed both normal startup/cache behavior as false smoke-test failures, despite the app and health marker being available.
+
+**How to apply:** Wait a bounded interval for the exact expected Clerk user and session to return after route navigation; continue failing on redirects or identity mismatches. Accept cached 304 assets only in browser-observed requests and keep validating page content.
+
+### Runtime exceptions after in-page navigation
+
+Chrome's `Page.navigatedWithinDocument` event identifies SPA route changes that reuse the existing default JavaScript execution context. Update that context's route association on the event; context-creation events alone leave later errors attached to the previous screen.
+
+**Why:** A delayed exception after a client-side route change can otherwise be reported against the screen that first created the context.
+
+**How to apply:** Track the active route for the default context using same-origin in-document navigation events, and keep exception output limited to the route and role label.
