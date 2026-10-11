@@ -768,6 +768,7 @@ function fakeBrowserFactory({
   inPageRouteChangesByPath = {},
   inPageHistoryChangesByPath = {},
   inPageAssetRequestsByPath = {},
+  inPageFailedAssetRequestsByPath = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
@@ -776,6 +777,7 @@ function fakeBrowserFactory({
   const contentChecks = [];
   const navigationEvents = [];
   const runtimeExceptionEvents = [];
+  const loadingFailedEvents = [];
   const executionContextIdByPath = new Map();
   const sessionStateReadsByPath = new Map();
   function emitScriptRequest({ requestId, url }) {
@@ -796,6 +798,11 @@ function fakeBrowserFactory({
       type: "Script",
       response: { url, status, mimeType },
     });
+  }
+  function emitScriptLoadingFailed({ requestId, errorText }) {
+    const event = { requestId, errorText };
+    loadingFailedEvents.push(event);
+    listeners.get("Network.loadingFailed")?.(event);
   }
   function emitConfiguredRuntimeException(pathname, phase, contextId) {
     const phases = runtimeExceptionsByRoute[pathname] ?? [];
@@ -824,6 +831,7 @@ function fakeBrowserFactory({
     contentChecks,
     navigationEvents,
     runtimeExceptionEvents,
+    loadingFailedEvents,
     factory: async ({ headers, profileName }) => {
       const browserCall = { headers, navigations: [] };
       calls.push(browserCall);
@@ -938,6 +946,11 @@ function fakeBrowserFactory({
               const nextPath = inPageRouteChangesByPath[pathname];
               if (nextPath) {
                 const assetRequests = inPageAssetRequestsByPath[pathname] ?? {};
+                const failedAssetRequest =
+                  inPageFailedAssetRequestsByPath[pathname];
+                if (failedAssetRequest) {
+                  emitScriptRequest(failedAssetRequest);
+                }
                 if (assetRequests.beforeNavigation) {
                   emitScriptRequest(assetRequests.beforeNavigation);
                 }
@@ -966,6 +979,9 @@ function fakeBrowserFactory({
                 if (assetRequests.afterNavigation) {
                   emitScriptRequest(assetRequests.afterNavigation);
                   emitScriptResponse(assetRequests.afterNavigation);
+                }
+                if (failedAssetRequest) {
+                  emitScriptLoadingFailed(failedAssetRequest);
                 }
                 emitConfiguredRuntimeException(
                   nextPathname,
@@ -1389,6 +1405,57 @@ test("keeps script requests attributed to their route across in-page navigation"
   assert.ok(destinationResult.assets.includes(destinationAsset.url));
   assert.ok(!destinationResult.assets.includes(originAsset.url));
   assert.ok(!originResult.assets.includes(destinationAsset.url));
+});
+
+test("keeps a late script-load failure on its origin route without exposing browser details", async () => {
+  const session = "seller-private-session";
+  const failedAssetRequest = {
+    requestId: "origin-route-failed-request",
+    url: "https://visitecrm.com/assets/origin-route.js",
+    errorText: "net::ERR_FAILED private@example.com token=must-not-be-logged",
+  };
+  const browser = fakeBrowserFactory({
+    interactionCountByRoute: { "/meu-painel": 1 },
+    inPageRouteChangesByPath: { "/meu-painel": "/vouchers" },
+    inPageFailedAssetRequestsByPath: {
+      "/meu-painel": failedAssetRequest,
+    },
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel", "/vouchers"],
+        headers: { Cookie: session },
+      },
+    ],
+    interactionSelectors: ['button[aria-haspopup="menu"]'],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  const originResult = results.find((result) => result.route === "/meu-painel");
+  const destinationResult = results.find((result) => result.route === "/vouchers");
+  assert.ok(originResult);
+  assert.ok(destinationResult);
+  assert.equal(originResult.ok, false);
+  assert.equal(destinationResult.ok, true);
+  assert.equal(browser.loadingFailedEvents.length, 1);
+  assert.equal(
+    browser.loadingFailedEvents[0].requestId,
+    failedAssetRequest.requestId,
+  );
+  assert.match(
+    originResult.failures.join("\n"),
+    /\/meu-painel: JavaScript asset https:\/\/visitecrm\.com\/assets\/origin-route\.js request failed\./,
+  );
+  assert.deepEqual(destinationResult.failures, []);
+  assert.doesNotMatch(
+    JSON.stringify(results),
+    /net::ERR_FAILED|private@example\.com|must-not-be-logged|seller-private-session/,
+  );
 });
 
 test("maps an exception to the restored route after browser back navigation reuses its context", async () => {

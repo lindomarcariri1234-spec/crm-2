@@ -21,6 +21,12 @@ On GitHub-hosted Ubuntu runners, installing `chromium` through apt can select Ca
 
 **How to apply:** use the `GITHUB_ACTIONS` environment to order browser candidates for trusted CI, and keep Replit/local browser selection unchanged.
 
+For browser-observed failed script loads, diagnostics should retain the originating route and asset URL but omit raw network error text and request/session headers.
+
+**Why:** browser-provided failure details can echo private payloads; status diagnostics need to identify the failure without forwarding that untrusted text.
+
+**How to apply:** report a generic script-request failure from `Network.loadingFailed` and test that returned results do not include its `errorText` or protected-session headers.
+
 The Replit workspace may have the Playwright package without the matching browser binary in its cache. The screenshot service uses a separate browser, so successful visual captures do not prove a script-spawned Chromium/CDP browser can start.
 
 **Why:** Local Playwright launch attempts can fail on a missing executable even when the app preview renders correctly.
