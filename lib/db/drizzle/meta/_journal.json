@@ -799,6 +799,13 @@
       "when": 1809960014000,
       "tag": "0114_infinitepay_checkout",
       "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1809960015000,
+      "tag": "0115_club_benefit_idempotency",
+      "breakpoints": true
     }
   ]
 }

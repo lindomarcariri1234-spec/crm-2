@@ -26,10 +26,12 @@ export const clubBenefitsTable = pgTable("club_benefits", {
   description: text("description"),
   value: text("value"),
   sortOrder: integer("sort_order").notNull().default(0),
+  idempotencyKey: text("idempotency_key"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("club_benefits_tenant_tier_idx").on(table.tenantId, table.tier),
+  uniqueIndex("club_benefits_tenant_idempotency_key_unique").on(table.tenantId, table.idempotencyKey),
 ]);
 
 export const insertClubBenefitSchema = createInsertSchema(clubBenefitsTable);

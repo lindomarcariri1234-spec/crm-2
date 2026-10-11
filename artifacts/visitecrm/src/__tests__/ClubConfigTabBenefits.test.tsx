@@ -228,7 +228,7 @@ describe("ClubConfigTab benefit tiers", () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(4);
   });
 
-  it("preserves all benefit fields after a rejected creation so the user can retry", async () => {
+  it("reuses the attempt key and avoids duplicates after a saved response is lost", async () => {
     const { container } = await renderComponent(createElement(ClubConfigTab));
 
     await act(async () => {
@@ -290,6 +290,21 @@ describe("ClubConfigTab benefit tiers", () => {
       }),
     );
 
+    benefitsForLoad = [{
+      id: "benefit-bronze",
+      tier: "bronze",
+      benefitKey: "desconto_de_boas-vindas",
+      label: "Desconto de boas-vindas",
+      description: "Válido na primeira viagem",
+      value: "10%",
+      sortOrder: 0,
+    }];
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expectTierCount(container, "bronze", 1);
+
     rejectPost = false;
     await act(async () => {
       addButton!.click();
@@ -303,6 +318,11 @@ describe("ClubConfigTab benefit tiers", () => {
       value: "10%",
       description: "Válido na primeira viagem",
     });
+    expect(retryPost?.[1]?.headers).toMatchObject({
+      "Idempotency-Key": (failedPost?.[1]?.headers as Record<string, string>)?.["Idempotency-Key"],
+    });
+    expect((failedPost?.[1]?.headers as Record<string, string>)?.["Idempotency-Key"])
+      .toMatch(/^[0-9a-f-]{36}$/i);
     expect(container.querySelector('[data-testid="club-benefit-benefit-bronze"]')?.textContent)
       .toContain("Desconto de boas-vindas");
     expectTierCount(container, "bronze", 1);

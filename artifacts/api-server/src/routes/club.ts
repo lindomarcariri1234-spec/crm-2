@@ -258,6 +258,13 @@ router.post("/club/benefits", async (req, res, next: NextFunction): Promise<void
       return;
     }
 
+    const rawIdempotencyKey = req.get("Idempotency-Key")?.trim();
+    const idempotencyKey = rawIdempotencyKey || null;
+    if (idempotencyKey && !z.string().uuid().safeParse(idempotencyKey).success) {
+      next(new ValidationError("Idempotency-Key must be a UUID"));
+      return;
+    }
+
     const body = z.object({
       tier: z.enum(["bronze", "silver", "gold", "diamond"]),
       benefitKey: z.string().min(1).max(100),
@@ -272,9 +279,10 @@ router.post("/club/benefits", async (req, res, next: NextFunction): Promise<void
     }
 
     const id = generateId();
-    await db.insert(clubBenefitsTable).values({
+    const values = {
       id,
       tenantId: me.tenantId,
+      idempotencyKey,
       tier: body.data.tier,
       benefitKey: body.data.benefitKey,
       label: body.data.label,
@@ -283,9 +291,46 @@ router.post("/club/benefits", async (req, res, next: NextFunction): Promise<void
       sortOrder: body.data.sortOrder,
       createdAt: new Date(),
       updatedAt: new Date(),
-    });
+    };
+    const insert = db.insert(clubBenefitsTable).values(values);
+    const created = idempotencyKey
+      ? await insert
+        .onConflictDoNothing({
+          target: [clubBenefitsTable.tenantId, clubBenefitsTable.idempotencyKey],
+        })
+        .returning({ id: clubBenefitsTable.id })
+      : await insert.returning({ id: clubBenefitsTable.id });
 
-    res.status(201).json({ id });
+    if (created.length > 0) {
+      res.status(201).json({ id: created[0]!.id });
+      return;
+    }
+    if (!idempotencyKey) throw new Error("Club benefit insert returned no row without an idempotency key");
+
+    const [existing] = await db.select({
+      id: clubBenefitsTable.id,
+      tier: clubBenefitsTable.tier,
+      benefitKey: clubBenefitsTable.benefitKey,
+      label: clubBenefitsTable.label,
+      description: clubBenefitsTable.description,
+      value: clubBenefitsTable.value,
+      sortOrder: clubBenefitsTable.sortOrder,
+    }).from(clubBenefitsTable).where(and(
+      eq(clubBenefitsTable.tenantId, me.tenantId),
+      eq(clubBenefitsTable.idempotencyKey, idempotencyKey),
+    )).limit(1);
+    if (!existing) throw new Error("Club benefit idempotency record missing after conflict");
+
+    if (existing.tier !== values.tier
+      || existing.benefitKey !== values.benefitKey
+      || existing.label !== values.label
+      || existing.description !== values.description
+      || existing.value !== values.value
+      || existing.sortOrder !== values.sortOrder) {
+      res.status(409).json({ error: "idempotency_key_conflict" });
+      return;
+    }
+    res.status(200).json({ id: existing.id });
   } catch (err) {
     next(err);
   }

@@ -3858,6 +3858,18 @@ export function ClubConfigTab() {
   const benefitDraftRef = useRef({ label: "", value: "", description: "" });
   const [addingBenefit, setAddingBenefit] = useState(false);
   const addingBenefitRef = useRef(false);
+  const addAttemptRef = useRef<{
+    fingerprint: string;
+    idempotencyKey: string;
+    payload: {
+      tier: string;
+      benefitKey: string;
+      label: string;
+      description: string | null;
+      value: string | null;
+      sortOrder: number;
+    };
+  } | null>(null);
   const [deletingBenefitIds, setDeletingBenefitIds] = useState<Set<string>>(() => new Set());
   const deletingBenefitIdsRef = useRef(new Set<string>());
   const benefitsLoadedRef = useRef(false);
@@ -3967,6 +3979,23 @@ export function ClubConfigTab() {
       value: submittedDraft.value.trim() || null,
       sortOrder: benefits.filter((benefit) => benefit.tier === activeTier).length,
     };
+    const fingerprint = JSON.stringify({
+      tier: submittedBenefit.tier,
+      benefitKey: submittedBenefit.benefitKey,
+      label: submittedBenefit.label,
+      description: submittedBenefit.description,
+      value: submittedBenefit.value,
+    });
+    let attempt = addAttemptRef.current;
+    if (!attempt || attempt.fingerprint !== fingerprint) {
+      attempt = {
+        fingerprint,
+        idempotencyKey: crypto.randomUUID(),
+        payload: submittedBenefit,
+      };
+      addAttemptRef.current = attempt;
+    }
+    const requestBenefit = attempt.payload;
     addingBenefitRef.current = true;
     benefitRevisionRef.current += 1;
     benefitMutationCountRef.current += 1;
@@ -3975,19 +4004,23 @@ export function ClubConfigTab() {
       const res = await fetch(`${BASE}/api/club/benefits`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(submittedBenefit),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": attempt.idempotencyKey },
+        body: JSON.stringify(requestBenefit),
       });
       if (!res.ok) throw new Error("add_benefit_failed");
       const data = await res.json() as { id: string };
-      setBenefits((prev) => [
-        ...prev,
-        {
-          id: data.id,
-          ...submittedBenefit,
-          sortOrder: prev.filter((benefit) => benefit.tier === submittedBenefit.tier).length,
-        },
-      ]);
+      setBenefits((prev) => {
+        if (prev.some((benefit) => benefit.id === data.id)) return prev;
+        return [
+          ...prev,
+          {
+            id: data.id,
+            ...requestBenefit,
+            sortOrder: prev.filter((benefit) => benefit.tier === requestBenefit.tier).length,
+          },
+        ];
+      });
+      if (addAttemptRef.current === attempt) addAttemptRef.current = null;
       if (benefitDraftRef.current.label === submittedDraft.label) {
         benefitDraftRef.current.label = "";
         setNewLabel("");
