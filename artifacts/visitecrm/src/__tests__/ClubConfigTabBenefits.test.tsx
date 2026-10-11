@@ -84,9 +84,11 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 }
 
 let fetchMock: ReturnType<typeof vi.fn>;
+let rejectPost = false;
 
 beforeEach(() => {
   mockToast.mockReset();
+  rejectPost = false;
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -98,6 +100,7 @@ beforeEach(() => {
     }
     if (url.endsWith("/api/club/benefits") && method === "POST") {
       const body = JSON.parse(String(init?.body)) as { tier: string };
+      if (rejectPost) return makeResponse(false, { error: "creation_failed" });
       return makeResponse(true, { id: `benefit-${body.tier}` });
     }
     if (url.includes("/api/club/benefits/") && method === "DELETE") {
@@ -187,5 +190,86 @@ describe("ClubConfigTab benefit tiers", () => {
     }
 
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(4);
+  });
+
+  it("preserves all benefit fields after a rejected creation so the user can retry", async () => {
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    const valueInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-value-input"]',
+    );
+    const descriptionInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-description-input"]',
+    );
+    const addButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-add-benefit"]',
+    );
+    expect(labelInput).not.toBeNull();
+    expect(valueInput).not.toBeNull();
+    expect(descriptionInput).not.toBeNull();
+    expect(addButton).not.toBeNull();
+
+    await act(async () => {
+      setInputValue(labelInput!, "Desconto de boas-vindas");
+      setInputValue(valueInput!, "10%");
+      setInputValue(descriptionInput!, "Válido na primeira viagem");
+    });
+
+    rejectPost = true;
+    await act(async () => {
+      addButton!.click();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/club/benefits"),
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"tier":"bronze"'),
+      }),
+    );
+    const failedPost = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(failedPost?.[1]?.body))).toMatchObject({
+      tier: "bronze",
+      label: "Desconto de boas-vindas",
+      value: "10%",
+      description: "Válido na primeira viagem",
+    });
+    expect(labelInput!.value).toBe("Desconto de boas-vindas");
+    expect(valueInput!.value).toBe("10%");
+    expect(descriptionInput!.value).toBe("Válido na primeira viagem");
+    expect(container.querySelector('[data-testid="club-benefit-benefit-bronze"]')).toBeNull();
+    expectTierCount(container, "bronze", 0);
+    expect(container.querySelector('[data-testid="club-empty-tier-bronze"]')).not.toBeNull();
+    expect(mockToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Erro ao adicionar benefício",
+        variant: "destructive",
+      }),
+    );
+
+    rejectPost = false;
+    await act(async () => {
+      addButton!.click();
+    });
+
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(2);
+    const retryPost = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")[1];
+    expect(JSON.parse(String(retryPost?.[1]?.body))).toMatchObject({
+      tier: "bronze",
+      label: "Desconto de boas-vindas",
+      value: "10%",
+      description: "Válido na primeira viagem",
+    });
+    expect(container.querySelector('[data-testid="club-benefit-benefit-bronze"]')?.textContent)
+      .toContain("Desconto de boas-vindas");
+    expectTierCount(container, "bronze", 1);
+    expect(container.querySelector('[data-testid="club-empty-tier-bronze"]')).toBeNull();
   });
 });
