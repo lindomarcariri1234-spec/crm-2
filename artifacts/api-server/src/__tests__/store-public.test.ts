@@ -1683,9 +1683,18 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
         .send({ orderNumber, paymentToken, returnPath: "/checkout/success" });
 
       expect(response.status).toBe(502);
-      expect(JSON.stringify(response.body)).not.toContain("maria@example.com");
-      expect(JSON.stringify(warning.mock.calls)).not.toContain("maria@example.com");
-      expect(JSON.stringify(warning.mock.calls)).not.toContain("+5585999990000");
+      const providerLeakMarkers = [
+        "maria@example.com",
+        "+5585999990000",
+        "Rejected customer",
+        "customer.email",
+      ];
+      const serializedResponse = JSON.stringify(response.body);
+      const serializedLogs = JSON.stringify(warning.mock.calls);
+      for (const marker of providerLeakMarkers) {
+        expect(serializedResponse).not.toContain(marker);
+        expect(serializedLogs).not.toContain(marker);
+      }
       expect(warning).toHaveBeenCalledWith(expect.objectContaining({
         providerStatusCode: 422,
         providerFailureKind: "validation",
