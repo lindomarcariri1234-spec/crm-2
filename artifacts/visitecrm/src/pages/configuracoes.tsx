@@ -300,18 +300,10 @@ function AgencyProfileTab() {
   const [savedForm, setSavedForm] = useState<UpdateTenantBody>({});
   useAgencySettingsDirty("agency", "agency-profile", JSON.stringify(form) !== JSON.stringify(savedForm));
   const [prefixError, setPrefixError] = useState<string | null>(null);
-  const [uploadingCount, setUploadingCount] = useState(0);
-  const handleUploadingChange = useCallback((uploading: boolean) => {
-    setUploadingCount((n) => Math.max(0, n + (uploading ? 1 : -1)));
-  }, []);
-
   useEffect(() => {
     if (fullTenant) {
       const loadedForm = {
         name: fullTenant.name,
-        logoUrl: fullTenant.logoUrl ?? "",
-        primaryColor: fullTenant.primaryColor ?? "#3B82F6",
-        secondaryColor: fullTenant.secondaryColor ?? "#8B5CF6",
         whatsapp: fullTenant.whatsapp ?? "",
         phone: fullTenant.phone ?? "",
         website: fullTenant.website ?? "",
@@ -322,9 +314,6 @@ function AgencyProfileTab() {
     } else if (me?.tenant) {
       const loadedFields = {
         name: me.tenant.name,
-        logoUrl: me.tenant.logoUrl ?? "",
-        primaryColor: me.tenant.primaryColor ?? "#3B82F6",
-        secondaryColor: me.tenant.secondaryColor ?? "#8B5CF6",
       };
       setForm((current) => ({ ...current, ...loadedFields }));
       setSavedForm((current) => ({ ...current, ...loadedFields }));
@@ -370,18 +359,6 @@ function AgencyProfileTab() {
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
         />
       </div>
-      <div className="space-y-1">
-        <Label>Logo</Label>
-        <CoverImageUpload
-          fileSizeMB="2"
-          value={form.logoUrl ?? ""}
-          onChange={(url) => setForm((f) => ({ ...f, logoUrl: url }))}
-          onUploadingChange={handleUploadingChange}
-          emptyLabel="Clique ou arraste o logo aqui"
-          previewClassName="h-32"
-          objectFit="contain"
-        />
-      </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1">
           <Label>WhatsApp</Label>
@@ -406,40 +383,6 @@ function AgencyProfileTab() {
           onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))}
           placeholder="https://suaagencia.com.br"
         />
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1">
-          <Label>Cor Primária</Label>
-          <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={form.primaryColor ?? "#3B82F6"}
-              onChange={(e) => setForm((f) => ({ ...f, primaryColor: e.target.value }))}
-              className="h-9 w-14 cursor-pointer rounded border"
-            />
-            <Input
-              value={form.primaryColor ?? "#3B82F6"}
-              onChange={(e) => setForm((f) => ({ ...f, primaryColor: e.target.value }))}
-              className="font-mono"
-            />
-          </div>
-        </div>
-        <div className="space-y-1">
-          <Label>Cor Secundária</Label>
-          <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={form.secondaryColor ?? "#8B5CF6"}
-              onChange={(e) => setForm((f) => ({ ...f, secondaryColor: e.target.value }))}
-              className="h-9 w-14 cursor-pointer rounded border"
-            />
-            <Input
-              value={form.secondaryColor ?? "#8B5CF6"}
-              onChange={(e) => setForm((f) => ({ ...f, secondaryColor: e.target.value }))}
-              className="font-mono"
-            />
-          </div>
-        </div>
       </div>
       <div className="space-y-1">
         <div className="flex items-center gap-2">
@@ -499,10 +442,8 @@ function AgencyProfileTab() {
           </div>
         </div>
       </div>
-      <Button onClick={handleSave} disabled={updateTenant.isPending || uploadingCount > 0}>
-        {uploadingCount > 0 ? (
-          <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Aguardando upload...</>
-        ) : updateTenant.isPending ? (
+      <Button onClick={handleSave} disabled={updateTenant.isPending}>
+        {updateTenant.isPending ? (
           <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Salvando...</>
         ) : "Salvar Perfil"}
       </Button>
@@ -3176,19 +3117,9 @@ function CustomizationTab() {
     setUploadingCount((n) => Math.max(0, n + (uploading ? 1 : -1)));
   }, []);
 
-  const [storeLogo, setStoreLogo] = useState("");
-  const [savedStoreLogo, setSavedStoreLogo] = useState("");
-  const [storeLogoUploading, setStoreLogoUploading] = useState(false);
-  const [storeLogoSaving, setStoreLogoSaving] = useState(false);
-  const [pixQrDeliveryMode, setPixQrDeliveryMode] = useState<"screen" | "email" | "whatsapp" | "all">("screen");
-  const [savedPixQrDeliveryMode, setSavedPixQrDeliveryMode] = useState<"screen" | "email" | "whatsapp" | "all">("screen");
-  const [pixQrDeliverySaving, setPixQrDeliverySaving] = useState(false);
-  const [hasStore, setHasStore] = useState(false);
   const customizationDirty = primaryColor !== savedBranding.primaryColor
     || secondaryColor !== savedBranding.secondaryColor
-    || logoUrl !== savedBranding.logoUrl
-    || storeLogo !== savedStoreLogo
-    || pixQrDeliveryMode !== savedPixQrDeliveryMode;
+    || logoUrl !== savedBranding.logoUrl;
   useAgencySettingsDirty("customization", "customization", customizationDirty);
 
   useEffect(() => {
@@ -3203,20 +3134,6 @@ function CustomizationTab() {
       });
     }
   }, [fullTenant?.id]);
-
-  useEffect(() => {
-    storeApi.getSettings()
-      .then((s) => {
-        setStoreLogo(s.logo ?? "");
-        setPixQrDeliveryMode(s.pixQrDeliveryMode ?? "screen");
-        setSavedStoreLogo(s.logo ?? "");
-        setSavedPixQrDeliveryMode(s.pixQrDeliveryMode ?? "screen");
-        setHasStore(true);
-      })
-      .catch(() => {
-        setHasStore(false);
-      });
-  }, []);
 
   async function handleSave() {
     if (!tenantId) {
@@ -3234,36 +3151,10 @@ function CustomizationTab() {
     }
   }
 
-  async function handleSaveStoreLogo() {
-    setStoreLogoSaving(true);
-    try {
-      await storeApi.updateSettings({ logo: storeLogo });
-      setSavedStoreLogo(storeLogo);
-      toast({ title: "Logo da loja salvo com sucesso" });
-    } catch {
-      toast({ title: "Erro ao salvar logo da loja", variant: "destructive" });
-    } finally {
-      setStoreLogoSaving(false);
-    }
-  }
-
-  async function handleSavePixQrDelivery() {
-    setPixQrDeliverySaving(true);
-    try {
-      await storeApi.updateSettings({ pixQrDeliveryMode });
-      setSavedPixQrDeliveryMode(pixQrDeliveryMode);
-      toast({ title: "Preferência de entrega do PIX salva" });
-    } catch {
-      toast({ title: "Erro ao salvar a preferência do PIX", variant: "destructive" });
-    } finally {
-      setPixQrDeliverySaving(false);
-    }
-  }
-
   return (
-    <div className="space-y-6 max-w-xl">
+    <div className="space-y-6 max-w-3xl">
       <div className="space-y-4">
-        <h3 className="font-semibold text-sm">Cores do sistema</h3>
+        <h3 className="font-semibold text-sm">Cores do painel</h3>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Cor primária</Label>
@@ -3346,70 +3237,20 @@ function CustomizationTab() {
         ) : "Salvar personalização"}
       </Button>
 
-      {hasStore && (
-        <div className="border-t pt-6 space-y-2">
-          <h3 className="font-semibold text-sm">Logo da Loja (Vitrine)</h3>
-          <p className="text-xs text-muted-foreground">
-            Exibido na vitrine pública, nos vouchers emitidos e no QR code de confirmação de pedidos.
-          </p>
-          <CoverImageUpload
-            fileSizeMB="2"
-            value={storeLogo}
-            onChange={setStoreLogo}
-            onUploadingChange={(uploading) => setStoreLogoUploading(uploading)}
-            emptyLabel="Clique ou arraste o logo da loja aqui"
-            previewClassName="h-32"
-            objectFit="contain"
-          />
-          <p className="text-xs text-muted-foreground">
-            Recomendado: PNG com fundo transparente, tamanho mínimo 200x60px
-          </p>
-          <Button
-            onClick={handleSaveStoreLogo}
-            disabled={storeLogoSaving || storeLogoUploading}
-            variant="outline"
-          >
-            {storeLogoUploading ? (
-              <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Aguardando upload...</>
-            ) : storeLogoSaving ? (
-              <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Salvando...</>
-            ) : "Salvar logo da loja"}
-          </Button>
-
-          <div className="border-t pt-5 mt-5 space-y-3">
-            <div>
-              <h3 className="font-semibold text-sm">Entrega do QR Code PIX</h3>
-              <p className="text-xs text-muted-foreground mt-1">
-                Escolha onde o cliente receberá o QR Code gerado no checkout. O código também fica
-                disponível na confirmação e na consulta do pedido quando a opção de tela estiver ativa.
-              </p>
-            </div>
-            <select
-              value={pixQrDeliveryMode}
-              onChange={(event) => setPixQrDeliveryMode(event.target.value as typeof pixQrDeliveryMode)}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-            >
-              <option value="screen">Somente na tela</option>
-              <option value="email">E-mail</option>
-              <option value="whatsapp">WhatsApp</option>
-              <option value="all">Tela, e-mail e WhatsApp</option>
-            </select>
-            <p className="text-xs text-muted-foreground">
-              Para e-mail e WhatsApp, os respectivos dados de contato precisam estar preenchidos e
-              configurados para envio.
-            </p>
-            <Button
-              onClick={handleSavePixQrDelivery}
-              disabled={pixQrDeliverySaving}
-              variant="outline"
-            >
-              {pixQrDeliverySaving ? (
-                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Salvando...</>
-              ) : "Salvar entrega do QR Code"}
-            </Button>
-          </div>
+      <div className="rounded-xl border border-dashed p-4">
+        <h3 className="font-semibold text-sm">Configurações da Vitrine</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Cores, logo e banners públicos ficam juntos em Aparência; a entrega do QR Code PIX fica em Pagamentos.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-3 text-sm">
+          <a className="font-medium text-primary underline-offset-4 hover:underline" href="/loja/configuracoes?tab=aparencia">
+            Abrir aparência da Vitrine
+          </a>
+          <a className="font-medium text-primary underline-offset-4 hover:underline" href="/loja/configuracoes?tab=pagamento">
+            Abrir pagamentos da Loja
+          </a>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -4921,7 +4762,7 @@ export default function Configuracoes() {
               <CardHeader>
                 <CardTitle>Perfil da Agência</CardTitle>
                 <CardDescription>
-                  Informações da agência, logotipo e cores do sistema
+                  Dados de contato, identificação e operação da agência
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -4973,7 +4814,7 @@ export default function Configuracoes() {
               <CardHeader>
                 <CardTitle>Personalização</CardTitle>
                 <CardDescription>
-                  Personalize cores, logotipo e aparência do sistema
+                  Personalize a identidade visual do painel administrativo
                 </CardDescription>
               </CardHeader>
               <CardContent>

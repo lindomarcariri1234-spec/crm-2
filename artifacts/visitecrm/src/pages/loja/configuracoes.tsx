@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { CoverImageUpload } from "@/components/cover-image-upload";
 import { useToast } from "@/hooks/use-toast";
 import { storeApi, StoreSettings, InitStoreInput } from "@/lib/storeApi";
@@ -327,6 +327,8 @@ function StoreWizard({ onCreated }: { onCreated: (s: StoreSettings) => void }) {
 
 export default function LojaConfiguracoes() {
   const { toast } = useToast();
+  const search = useSearch();
+  const [, setLocation] = useLocation();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingCount, setUploadingCount] = useState(0);
@@ -344,6 +346,16 @@ export default function LojaConfiguracoes() {
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
   const [showPixKey, setShowPixKey] = useState(false);
+  useEffect(() => {
+    const requestedTab = new URLSearchParams(search).get("tab");
+    const knownTabs = STORE_SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.items.map((item) => item.value));
+    setActiveSettingsTab(requestedTab && knownTabs.includes(requestedTab) ? requestedTab : "geral");
+  }, [search]);
+
+  function changeSettingsTab(tab: string) {
+    setActiveSettingsTab(tab);
+    setLocation(`${window.location.pathname}?tab=${encodeURIComponent(tab)}`);
+  }
 
   const generateQr = useCallback(async (slug: string, updatedAt: string) => {
     const cacheVersion = Date.parse(updatedAt);
@@ -631,14 +643,14 @@ export default function LojaConfiguracoes() {
         </Button>
       </div>
 
-      <Tabs value={activeSettingsTab} onValueChange={setActiveSettingsTab}>
+      <Tabs value={activeSettingsTab} onValueChange={changeSettingsTab}>
         <div className="grid items-start gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
           <SettingsNavigation
             groups={STORE_SETTINGS_NAVIGATION_GROUPS}
             pageLabel="Seções da loja"
             testIdPrefix="store-settings"
             value={activeSettingsTab}
-            onValueChange={setActiveSettingsTab}
+            onValueChange={changeSettingsTab}
           />
           <div className="min-w-0">
 
@@ -1110,6 +1122,32 @@ export default function LojaConfiguracoes() {
 
         {/* ── PAGAMENTOS ── */}
         <TabsContent value="pagamento" className="space-y-4 mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Entrega do QR Code PIX</CardTitle>
+              <CardDescription>
+                Escolha onde o cliente receberá o QR Code gerado no checkout. A opção de tela mantém o código disponível na confirmação e na consulta do pedido.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Label htmlFor="pix-qr-delivery-mode">Enviar QR Code por</Label>
+              <select
+                id="pix-qr-delivery-mode"
+                data-testid="pix-qr-delivery-mode"
+                value={form.pixQrDeliveryMode ?? "screen"}
+                onChange={(event) => set("pixQrDeliveryMode", event.target.value as StoreSettings["pixQrDeliveryMode"])}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              >
+                <option value="screen">Somente na tela</option>
+                <option value="email">E-mail</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="all">Tela, e-mail e WhatsApp</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Para e-mail e WhatsApp, os respectivos dados de contato precisam estar preenchidos e configurados para envio.
+              </p>
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader>
               <CardTitle>Configurações de Pagamento</CardTitle>
