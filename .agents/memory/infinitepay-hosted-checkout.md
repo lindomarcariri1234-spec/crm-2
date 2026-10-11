@@ -16,3 +16,9 @@ Link creation also requires **Checkout Integrado** to be enabled in the merchant
 **Why:** the official InfinitePay setup guide lists activation as a prerequisite, while checkout validation responses may not expose a safe error code.
 
 **How to apply:** when `/links` returns 422, verify the merchant-side activation and exact handle before changing the request contract; only inspect allowlisted error codes from provider responses.
+
+The storefront accepts Brazilian phone numbers in national formatting, while InfinitePay's documented `customer.phone_number` example uses `+55` international format. Normalize Brazilian local numbers to `+55` before sending; omit the optional phone field if it cannot be safely normalized.
+
+**Why:** passing a display-formatted local phone directly can violate provider validation even when the checkout form accepts it.
+
+**How to apply:** normalize only the InfinitePay request payload; preserve the customer's original phone in the order record.

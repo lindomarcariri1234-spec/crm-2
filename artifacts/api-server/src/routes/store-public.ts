@@ -199,7 +199,7 @@ import
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
 import { runDeferredOrderAccounting } from "../services/checkout/post-booking";
 import { applyGatewayPayment } from "./webhooks";
-import { extractInfinitePayErrorCode, parseInfinitePayCheckResult } from "../lib/infinitepay";
+import { extractInfinitePayErrorCode, formatInfinitePayPhoneNumber, parseInfinitePayCheckResult } from "../lib/infinitepay";
 import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
 import {
   getReservationFailureDiagnostic,
@@ -3432,6 +3432,7 @@ router.post("/public/store/:slug/infinitepay/checkout", async (req, res, next: N
     const origin = store.customDomain ? `https://${store.customDomain}` : publicBase;
     const redirectUrl = new URL(returnPath, origin).toString();
     const webhookUrl = `${publicBase}/api/public/store/${encodeURIComponent(store.slug)}/infinitepay/webhook`;
+    const customerPhone = formatInfinitePayPhoneNumber(order.customerPhone);
     const apiResponse = await fetch("https://api.checkout.infinitepay.io/links", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -3442,7 +3443,7 @@ router.post("/public/store/:slug/infinitepay/checkout", async (req, res, next: N
         customer: {
           name: order.customerName,
           email: order.customerEmail,
-          ...(order.customerPhone ? { phone_number: order.customerPhone } : {}),
+          ...(customerPhone ? { phone_number: customerPhone } : {}),
         },
         redirect_url: redirectUrl,
         webhook_url: webhookUrl,

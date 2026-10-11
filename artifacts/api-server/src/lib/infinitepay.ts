@@ -8,6 +8,14 @@ export type InfinitePayCheckResult = {
 const SAFE_PROVIDER_ERROR_CODE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PROVIDER_ERROR_CODE_KEYS = ["code", "error_code", "errorCode"] as const;
 
+export function formatInfinitePayPhoneNumber(phone: string | null | undefined): string | undefined {
+  if (!phone) return undefined;
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length === 10 || digits.length === 11) return `+55${digits}`;
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith("55")) return `+${digits}`;
+  return undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

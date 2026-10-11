@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { extractInfinitePayErrorCode, parseInfinitePayCheckResult } from "../lib/infinitepay.js";
+import {
+  extractInfinitePayErrorCode,
+  formatInfinitePayPhoneNumber,
+  parseInfinitePayCheckResult,
+} from "../lib/infinitepay.js";
+
+describe("formatInfinitePayPhoneNumber", () => {
+  it.each([
+    ["(11) 99988-7766", "+5511999887766"],
+    ["11999887766", "+5511999887766"],
+    ["+55 (11) 99988-7766", "+5511999887766"],
+    ["(11) 3333-2222", "+551133332222"],
+    ["", undefined],
+    ["123", undefined],
+  ])("formats Brazilian checkout phones for InfinitePay", (phone, expected) => {
+    expect(formatInfinitePayPhoneNumber(phone)).toBe(expected);
+  });
+});
 
 describe("extractInfinitePayErrorCode", () => {
   it.each([
