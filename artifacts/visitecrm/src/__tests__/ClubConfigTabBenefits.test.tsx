@@ -628,6 +628,105 @@ describe("ClubConfigTab benefit tiers", () => {
     });
   });
 
+  it("keeps merged field choices and the refreshed version after a temporary save failure", async () => {
+    benefitsForLoad = [{
+      id: "gold-benefit-merge-retry",
+      tier: "gold",
+      benefitKey: "merge_retry",
+      label: "Nome inicial",
+      description: "Descrição inicial",
+      value: "5%",
+      sortOrder: 0,
+    }];
+    conflictBenefit = {
+      ...benefitsForLoad[0],
+      label: "Nome salvo mais recente",
+      description: "Descrição salva mais recente",
+      value: "8%",
+      updatedAt: "2026-02-06T00:00:00.000Z",
+    };
+    conflictPut = true;
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      getTab(container, "gold").click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-edit-benefit-gold-benefit-merge-retry"]',
+      )!.click();
+    });
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-label-gold-benefit-merge-retry"]',
+    )!;
+    const valueInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-value-gold-benefit-merge-retry"]',
+    )!;
+    const descriptionInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-description-gold-benefit-merge-retry"]',
+    )!;
+    await act(async () => {
+      setInputValue(labelInput, "Meu rascunho");
+      setInputValue(valueInput, "6%");
+      setInputValue(descriptionInput, "Minha descrição");
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-merge-retry"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-benefit-conflict-choice-draft-label-gold-benefit-merge-retry"]',
+      )!.click();
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-benefit-conflict-choice-latest-value-gold-benefit-merge-retry"]',
+      )!.click();
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-benefit-conflict-choice-draft-description-gold-benefit-merge-retry"]',
+      )!.click();
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-refresh-edit-benefit-gold-benefit-merge-retry"]',
+      )!.click();
+    });
+
+    rejectPut = true;
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-merge-retry"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(labelInput.value).toBe("Meu rascunho");
+    expect(valueInput.value).toBe("8%");
+    expect(descriptionInput.value).toBe("Minha descrição");
+    expect(container.querySelector('[data-testid="club-edit-benefit-error-gold-benefit-merge-retry"]')?.textContent)
+      .toContain("Seu rascunho foi mantido");
+    expect(container.querySelector('[data-testid="club-edit-benefit-conflict-gold-benefit-merge-retry"]'))
+      .toBeNull();
+    const putCalls = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT");
+    expect(JSON.parse(String(putCalls()[1]?.[1]?.body))).toMatchObject({
+      label: "Meu rascunho",
+      value: "8%",
+      description: "Minha descrição",
+      expectedUpdatedAt: "2026-02-06T00:00:00.000Z",
+    });
+
+    rejectPut = false;
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-merge-retry"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(JSON.parse(String(putCalls()[2]?.[1]?.body))).toMatchObject({
+      label: "Meu rascunho",
+      value: "8%",
+      description: "Minha descrição",
+      expectedUpdatedAt: "2026-02-06T00:00:00.000Z",
+    });
+  });
+
   it("keeps draft fields that were not changed remotely when choosing the saved value for another field", async () => {
     benefitsForLoad = [{
       id: "gold-benefit-mixed-merge",
