@@ -3631,6 +3631,11 @@ export function ClubConfigTab() {
   const [editingBenefitError, setEditingBenefitError] = useState<string | null>(null);
   const [editingBenefitConflict, setEditingBenefitConflict] = useState(false);
   const [editingBenefitExpectedUpdatedAt, setEditingBenefitExpectedUpdatedAt] = useState("");
+  const [editingBenefitOriginal, setEditingBenefitOriginal] = useState<ClubBenefitDraft>({
+    label: "",
+    value: "",
+    description: "",
+  });
   const [editingBenefitDraft, setEditingBenefitDraft] = useState<ClubBenefitDraft>({
     label: "",
     value: "",
@@ -3947,11 +3952,13 @@ export function ClubConfigTab() {
     setEditingBenefitError(null);
     setEditingBenefitConflict(false);
     setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
-    setEditingBenefitDraft({
+    const original = {
       label: benefit.label,
       value: benefit.value ?? "",
       description: benefit.description ?? "",
-    });
+    };
+    setEditingBenefitOriginal(original);
+    setEditingBenefitDraft(original);
   }
 
   async function handleUpdateBenefit(benefit: ClubBenefitAdmin) {
@@ -4201,6 +4208,49 @@ export function ClubConfigTab() {
                                   >
                                     Atualizar versão e continuar com meu rascunho
                                   </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    data-testid={`club-discard-edit-benefit-${benefit.id}`}
+                                    onClick={() => {
+                                      const latest = {
+                                        label: benefit.label,
+                                        value: benefit.value ?? "",
+                                        description: benefit.description ?? "",
+                                      };
+                                      setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
+                                      setEditingBenefitOriginal(latest);
+                                      setEditingBenefitDraft(latest);
+                                      setEditingBenefitConflict(false);
+                                      setEditingBenefitError(null);
+                                    }}
+                                  >
+                                    Descartar rascunho e editar versão atual
+                                  </Button>
+                                  <div className="space-y-1.5 border-t border-amber-500/20 pt-2">
+                                    {([
+                                      ["label", "Nome", editingBenefitOriginal.label, benefit.label],
+                                      ["value", "Valor", editingBenefitOriginal.value, benefit.value ?? ""],
+                                      ["description", "Descrição", editingBenefitOriginal.description, benefit.description ?? ""],
+                                    ] as const)
+                                      .filter(([, , previous, latest]) => previous !== latest)
+                                      .map(([field, title, previous, latest]) => (
+                                        <div
+                                          key={field}
+                                          data-testid={`club-benefit-conflict-field-${field}-${benefit.id}`}
+                                          className="grid gap-1 rounded bg-background/70 p-2 sm:grid-cols-[5rem_minmax(0,1fr)_minmax(0,1fr)] sm:gap-2"
+                                        >
+                                          <span className="font-semibold">{title}</span>
+                                          <span className="break-words text-muted-foreground">
+                                            Antes: {previous || "—"}
+                                          </span>
+                                          <span className="break-words font-medium">
+                                            Salvo agora: {latest || "—"}
+                                          </span>
+                                        </div>
+                                      ))}
+                                  </div>
                                 </div>
                               )}
                               <Label htmlFor={`club-benefit-edit-label-${benefit.id}`} className="sr-only">

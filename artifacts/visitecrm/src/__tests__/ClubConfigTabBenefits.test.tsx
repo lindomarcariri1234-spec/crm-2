@@ -386,6 +386,20 @@ describe("ClubConfigTab benefit tiers", () => {
       .toContain("Outra pessoa salvou uma versão mais recente");
     expect(container.querySelector('[data-testid="club-benefit-last-saved-gold-benefit-conflict"]')?.textContent)
       .toContain("Versão de outra pessoa");
+    const conflictDetails = container.querySelector(
+      '[data-testid="club-edit-benefit-conflict-gold-benefit-conflict"]',
+    );
+    for (const field of ["label", "value", "description"]) {
+      expect(conflictDetails?.querySelector(
+        `[data-testid="club-benefit-conflict-field-${field}-gold-benefit-conflict"]`,
+      )).not.toBeNull();
+    }
+    expect(conflictDetails?.querySelector(
+      '[data-testid="club-benefit-conflict-field-label-gold-benefit-conflict"]',
+    )?.textContent).toContain("Antes: Versão carregada");
+    expect(conflictDetails?.querySelector(
+      '[data-testid="club-benefit-conflict-field-label-gold-benefit-conflict"]',
+    )?.textContent).toContain("Salvo agora: Versão de outra pessoa");
     expect(labelInput.value).toBe("Meu rascunho");
     expect(labelInput.disabled).toBe(true);
 
@@ -408,6 +422,67 @@ describe("ClubConfigTab benefit tiers", () => {
       label: "Meu rascunho",
       expectedUpdatedAt: "2026-02-01T00:00:00.000Z",
     });
+  });
+
+  it("shows only the remotely changed field and can discard the draft for the current version", async () => {
+    benefitsForLoad = [{
+      id: "gold-benefit-one-field-conflict",
+      tier: "gold",
+      benefitKey: "single_field",
+      label: "Nome anterior",
+      description: "Descrição igual",
+      value: "5%",
+      sortOrder: 0,
+    }];
+    conflictBenefit = {
+      ...benefitsForLoad[0],
+      label: "Nome atualizado por outra pessoa",
+      updatedAt: "2026-02-02T00:00:00.000Z",
+    };
+    conflictPut = true;
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      getTab(container, "gold").click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-edit-benefit-gold-benefit-one-field-conflict"]',
+      )!.click();
+    });
+    await act(async () => {
+      setInputValue(container.querySelector<HTMLInputElement>(
+        '[data-testid="club-edit-benefit-label-gold-benefit-one-field-conflict"]',
+      )!, "Meu nome em rascunho");
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-one-field-conflict"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const conflictDetails = container.querySelector(
+      '[data-testid="club-edit-benefit-conflict-gold-benefit-one-field-conflict"]',
+    );
+    expect(conflictDetails?.querySelector(
+      '[data-testid="club-benefit-conflict-field-label-gold-benefit-one-field-conflict"]',
+    )?.textContent).toContain("Nome atualizado por outra pessoa");
+    expect(conflictDetails?.querySelector(
+      '[data-testid="club-benefit-conflict-field-value-gold-benefit-one-field-conflict"]',
+    )).toBeNull();
+    expect(conflictDetails?.querySelector(
+      '[data-testid="club-benefit-conflict-field-description-gold-benefit-one-field-conflict"]',
+    )).toBeNull();
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-discard-edit-benefit-gold-benefit-one-field-conflict"]',
+      )!.click();
+    });
+    expect(container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-label-gold-benefit-one-field-conflict"]',
+    )?.value).toBe("Nome atualizado por outra pessoa");
+    expect(container.querySelector('[data-testid="club-edit-benefit-conflict-gold-benefit-one-field-conflict"]'))
+      .toBeNull();
   });
 
   it("lets staff cancel a failed edit and return to the unchanged saved benefit", async () => {
