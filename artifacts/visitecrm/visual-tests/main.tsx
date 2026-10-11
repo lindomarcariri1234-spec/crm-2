@@ -233,15 +233,17 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
   }
   if (pathname === "/api/club/config") return { clubName: "Clube de Viagens", description: "Benefícios para viajantes." };
   if (pathname === "/api/club/benefits" && isClubBenefitConflictKeyboardScenario()) {
+    const changedByOtherUser =
+      window.sessionStorage.getItem("visual-test:club-benefit-conflict-sent") === "true";
     return { data: [{
       id: "visual-benefit-keyboard",
       tier: "gold",
       benefitKey: "keyboard_conflict",
-      label: "Nome inicial",
-      description: "Descrição inicial",
-      value: "5%",
+      label: changedByOtherUser ? "Nome salvo por outra pessoa" : "Nome inicial",
+      description: changedByOtherUser ? "Descrição salva por outra pessoa" : "Descrição inicial",
+      value: changedByOtherUser ? "8%" : "5%",
       sortOrder: 0,
-      updatedAt: "2026-02-01T00:00:00.000Z",
+      updatedAt: changedByOtherUser ? "2026-02-02T00:00:00.000Z" : "2026-02-01T00:00:00.000Z",
     }] };
   }
   if (pathname === "/api/club/benefits") {
@@ -374,6 +376,15 @@ function installFixtureFetch() {
     if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
       const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
       let requestBody: unknown;
+      if (
+        isClubBenefitConflictKeyboardScenario() &&
+        method === "GET" &&
+        url.pathname === "/api/club/benefits"
+      ) {
+        const refreshCountKey = "visual-test:club-benefits-get-count";
+        const count = Number(window.sessionStorage.getItem(refreshCountKey) ?? "0");
+        window.sessionStorage.setItem(refreshCountKey, String(count + 1));
+      }
       if (
         isClubBenefitConflictKeyboardScenario() &&
         url.pathname === "/api/club/benefits/visual-benefit-keyboard" &&

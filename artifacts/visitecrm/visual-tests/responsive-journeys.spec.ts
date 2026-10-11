@@ -178,11 +178,29 @@ test("club benefit conflict choices can be selected with the keyboard", async ({
   const labelInput = page.getByTestId("club-edit-benefit-label-visual-benefit-keyboard");
   const valueInput = page.getByTestId("club-edit-benefit-value-visual-benefit-keyboard");
   const descriptionInput = page.getByTestId("club-edit-benefit-description-visual-benefit-keyboard");
+  const benefitRow = page.getByTestId("club-benefit-visual-benefit-keyboard");
+  const refreshStatus = benefitRow.getByTestId("club-edit-benefit-refresh-status-visual-benefit-keyboard");
+  await expect(refreshStatus).toHaveRole("status");
+  await expect(refreshStatus).toHaveAttribute("aria-live", "polite");
+  await expect(refreshStatus).toHaveText("");
   await labelInput.fill("Rascunho da equipe");
   await valueInput.fill("6%");
   await descriptionInput.fill("Descrição do rascunho");
   await page.getByTestId("club-save-edit-benefit-visual-benefit-keyboard").click();
   await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toBeVisible();
+  await expect(refreshStatus).toHaveText("");
+
+  const benefitsGetCountKey = "visual-test:club-benefits-get-count";
+  const previousBenefitsGetCount = await page.evaluate(
+    (key) => Number(window.sessionStorage.getItem(key) ?? "0"),
+    benefitsGetCountKey,
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(() => page.evaluate(
+    (key) => Number(window.sessionStorage.getItem(key) ?? "0"),
+    benefitsGetCountKey,
+  )).toBe(previousBenefitsGetCount + 1);
+  await expect(refreshStatus).toHaveText("");
 
   const draftLabel = page.getByTestId("club-benefit-conflict-choice-draft-label-visual-benefit-keyboard");
   const latestLabel = page.getByTestId("club-benefit-conflict-choice-latest-label-visual-benefit-keyboard");
@@ -241,6 +259,9 @@ test("club benefit conflict choices can be selected with the keyboard", async ({
   await refresh.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toHaveCount(0);
+  await expect(refreshStatus).toHaveText(
+    "Versão atualizada. Seu rascunho e as escolhas foram mantidos.",
+  );
   await expect(labelInput).toBeFocused();
   await expect(labelInput).toHaveValue("Rascunho da equipe");
   await expect(valueInput).toHaveValue("8%");

@@ -3630,6 +3630,7 @@ export function ClubConfigTab() {
   const [editingBenefitId, setEditingBenefitId] = useState<string | null>(null);
   const [editingBenefitError, setEditingBenefitError] = useState<string | null>(null);
   const [editingBenefitConflict, setEditingBenefitConflict] = useState(false);
+  const [editingBenefitRefreshAnnouncement, setEditingBenefitRefreshAnnouncement] = useState("");
   const [editingBenefitConflictChoices, setEditingBenefitConflictChoices] = useState<
     Partial<Record<keyof ClubBenefitDraft, "draft" | "latest">>
   >({});
@@ -3968,6 +3969,7 @@ export function ClubConfigTab() {
     setEditingBenefitId(benefit.id);
     setEditingBenefitError(null);
     setEditingBenefitConflict(false);
+    setEditingBenefitRefreshAnnouncement("");
     setEditingBenefitConflictChoices({});
     setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
     const original = {
@@ -4006,6 +4008,7 @@ export function ClubConfigTab() {
         } | null;
         if (body?.error === "benefit_changed" && body.current?.id === benefit.id) {
           setBenefits((previous) => previous.map((item) => item.id === benefit.id ? body.current! : item));
+          setEditingBenefitRefreshAnnouncement("");
           setEditingBenefitConflict(true);
           setEditingBenefitConflictChoices({});
           setEditingBenefitConflictDraft({ ...editingBenefitDraft });
@@ -4206,6 +4209,14 @@ export function ClubConfigTab() {
                                   {editingBenefitError} A versão acima continua salva.
                                 </p>
                               )}
+                              <p
+                                role="status"
+                                aria-live="polite"
+                                className="sr-only"
+                                data-testid={`club-edit-benefit-refresh-status-${benefit.id}`}
+                              >
+                                {editingBenefitRefreshAnnouncement}
+                              </p>
                               {editingBenefitConflict && (
                                 <div
                                   role="alert"
@@ -4222,6 +4233,9 @@ export function ClubConfigTab() {
                                     data-testid={`club-refresh-edit-benefit-${benefit.id}`}
                                     onClick={() => {
                                       focusBenefitLabelAfterConflictRef.current = true;
+                                      setEditingBenefitRefreshAnnouncement(
+                                        "Versão atualizada. Seu rascunho e as escolhas foram mantidos.",
+                                      );
                                       setEditingBenefitOriginal({
                                         label: benefit.label,
                                         value: benefit.value ?? "",
