@@ -24,7 +24,6 @@ import {
   type PlanPublic,
   type SubscriptionInvoice,
 } from "@workspace/api-client-react";
-import { parseBackupText, validateBackupDownload, type ParsedBackup } from "@/lib/backup-file";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import type {
@@ -67,6 +66,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
 import {
   buildAgencySettingsTabUrl,
+  getLegacyBackupRedirect,
   getAgencySettingsAccess,
 } from "@/components/settings/agency-settings-access";
 import {
@@ -116,12 +116,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Save,
-  DatabaseBackup,
-  Download,
-  Upload,
-  FileJson,
-  XCircle,
-  AlertTriangle,
   Wrench,
 } from "lucide-react";
 import { formatCurrencyBRL } from "@/lib/utils";
@@ -284,82 +278,6 @@ function ChangePasswordSection() {
           </Button>
         </form>
       )}
-    </div>
-  );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/** "Backup de dados" — full-agency JSON export. Visible only to agency admins/superadmin. */
-function BackupDataSection() {
-  const { toast } = useToast();
-  const { data: me } = useGetMe();
-  const canManage = me?.role === ROLES.AGENCY_ADMIN || me?.role === ROLES.SUPER_ADMIN;
-  const [isExporting, setIsExporting] = useState(false);
-  const [lastExportSize, setLastExportSize] = useState<number | null>(null);
-
-  if (!canManage) return null;
-
-  async function handleExport() {
-    setIsExporting(true);
-    setLastExportSize(null);
-    try {
-      const res = await fetch("/api/backup/export", { credentials: "include" });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string; message?: string }).message ?? (err as { error?: string }).error ?? "Erro ao gerar backup");
-      }
-      const blob = await validateBackupDownload(await res.blob(), res.headers.get("Content-Type"));
-      const disposition = res.headers.get("Content-Disposition") ?? "";
-      const match = disposition.match(/filename="([^"]+)"/);
-      const filename = match?.[1] ?? "backup.json";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = filename; a.click();
-      URL.revokeObjectURL(url);
-      setLastExportSize(blob.size);
-      toast({ title: "Backup gerado com sucesso!" });
-    } catch (err) {
-      toast({ title: "Erro ao gerar backup", description: String(err instanceof Error ? err.message : err), variant: "destructive" });
-    } finally {
-      setIsExporting(false);
-    }
-  }
-
-  return (
-    <div className="border rounded-lg p-4 space-y-3 mt-4">
-      <div className="flex items-center gap-2">
-        <DatabaseBackup className="w-4 h-4 text-muted-foreground" />
-        <h3 className="text-sm font-semibold">Backup de Dados</h3>
-      </div>
-      <p className="text-xs text-muted-foreground max-w-md">
-        Baixe um arquivo JSON com todos os dados da sua agência: configurações, usuários, clientes
-        (com notas, conquistas, destinos dos sonhos, favoritos e pontuação), fornecedores,
-        hospedagens, destinos, veículos, viagens (com layouts de veículo, locais de embarque,
-        custos, mídias e check-ins), reservas com passageiros e parcelas, documentos, modelos de
-        mensagem, automações e campanhas, calendário, comissões, funil de vendas, fidelidade, clube
-        de vantagens, indicações, pesquisas de satisfação (NPS), convites de equipe pendentes, loja
-        (categorias, produtos, cupons, páginas, avaliações, pedidos e alertas de preço), catálogo de
-        marketing (categorias, produtos e pedidos), parceiros de marketplace (com produtos e
-        comissões), acertos financeiros, cupons da agência, metas de vendas e financeiro (pagamentos
-        e despesas). Credenciais de autenticação e segredos de pagamento nunca são incluídos.
-      </p>
-      <div className="flex items-center gap-3">
-        <Button onClick={handleExport} disabled={isExporting} size="sm" variant="outline">
-          {isExporting ? (
-            <><Loader2 className="w-3 h-3 mr-2 animate-spin" />Gerando backup...</>
-          ) : (
-            <><DatabaseBackup className="w-3 h-3 mr-2" />Baixar backup (.json)</>
-          )}
-        </Button>
-        {lastExportSize != null && (
-          <span className="text-xs text-muted-foreground">Arquivo gerado: {formatBytes(lastExportSize)}</span>
-        )}
-      </div>
     </div>
   );
 }
@@ -591,7 +509,6 @@ function AgencyProfileTab() {
 
       <SalesGoalSection />
       <ChangePasswordSection />
-      <BackupDataSection />
     </div>
   );
 }
@@ -4855,411 +4772,6 @@ function PipelineSettingsTab() {
   );
 }
 
-/* ──────────────────── Backup de Dados Tab ──────────────────── */
-function formatBackupBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function parseBackupFilename(contentDisposition: string | null): string | null {
-  if (!contentDisposition) return null;
-  const match = /filename="?([^";]+)"?/i.exec(contentDisposition);
-  return match?.[1] ?? null;
-}
-
-interface BackupImportGroupResult {
-  created: number;
-  duplicate: number;
-  skipped: number;
-  errors: Array<{ sourceId?: string; label?: string; error: string }>;
-}
-
-interface BackupImportUserMatch {
-  sourceId: string;
-  email: string | null;
-  name: string | null;
-}
-
-interface BackupImportReport {
-  agencia: { updated: boolean };
-  usuarios: { matched: number; fallbackToImporter: number; fallbackDetails: BackupImportUserMatch[] };
-  clientes: BackupImportGroupResult;
-  viagens: BackupImportGroupResult;
-  reservas: BackupImportGroupResult;
-  passageiros: BackupImportGroupResult;
-  embarqueLocais: BackupImportGroupResult;
-  checkins: BackupImportGroupResult;
-  automacoes: BackupImportGroupResult;
-  automacaoAcoes: BackupImportGroupResult;
-  automacaoLogs: BackupImportGroupResult;
-  indicacoes: BackupImportGroupResult;
-  lojaProdutos: BackupImportGroupResult;
-  lojaCupons: BackupImportGroupResult;
-  lojaPedidos: BackupImportGroupResult;
-  lojaItensPedido: BackupImportGroupResult;
-  pagamentos: BackupImportGroupResult;
-  despesas: BackupImportGroupResult;
-}
-
-const BACKUP_IMPORT_GROUP_LABELS: Record<keyof Omit<BackupImportReport, "agencia" | "usuarios">, string> = {
-  clientes: "Clientes",
-  viagens: "Viagens",
-  reservas: "Reservas",
-  passageiros: "Passageiros",
-  embarqueLocais: "Locais de embarque",
-  checkins: "Check-ins",
-  automacoes: "Automações",
-  automacaoAcoes: "Ações de automação",
-  automacaoLogs: "Logs de automação",
-  indicacoes: "Indicações",
-  lojaProdutos: "Produtos da loja",
-  lojaCupons: "Cupons da loja",
-  lojaPedidos: "Pedidos da loja",
-  lojaItensPedido: "Itens de pedido da loja",
-  pagamentos: "Pagamentos",
-  despesas: "Despesas",
-};
-
-function BackupImportReportView({ report }: { report: BackupImportReport }) {
-  const groupKeys = Object.keys(BACKUP_IMPORT_GROUP_LABELS) as Array<keyof typeof BACKUP_IMPORT_GROUP_LABELS>;
-  const totalErrors = groupKeys.reduce((acc, key) => acc + report[key].errors.length, 0);
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-lg border p-3 text-sm">
-        <div className="flex items-center gap-2 font-medium">
-          <Building2 className="w-4 h-4 text-muted-foreground" />
-          Agência
-        </div>
-        <p className="text-muted-foreground mt-1">
-          {report.agencia.updated
-            ? "Configurações e marca da agência atualizadas com os dados do backup."
-            : "Nenhum dado de agência encontrado para atualizar."}
-        </p>
-      </div>
-
-      <div className="rounded-lg border p-3 text-sm">
-        <div className="flex items-center gap-2 font-medium">
-          <Users className="w-4 h-4 text-muted-foreground" />
-          Usuários (referência)
-        </div>
-        <p className="text-muted-foreground mt-1">
-          {report.usuarios.matched} associados por e-mail a contas existentes
-          {report.usuarios.fallbackToImporter > 0 && (
-            <> · {report.usuarios.fallbackToImporter} sem conta correspondente (associados a você)</>
-          )}
-          .
-        </p>
-        {report.usuarios.fallbackDetails.length > 0 && (
-          <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground list-disc list-inside">
-            {report.usuarios.fallbackDetails.slice(0, 10).map((u, i) => (
-              <li key={u.sourceId ?? i}>{u.name ?? "Sem nome"} {u.email ? `(${u.email})` : ""}</li>
-            ))}
-            {report.usuarios.fallbackDetails.length > 10 && (
-              <li>e mais {report.usuarios.fallbackDetails.length - 10}...</li>
-            )}
-          </ul>
-        )}
-      </div>
-
-      <div className="rounded-lg border overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50">
-            <tr>
-              <th className="text-left font-medium px-3 py-2">Tipo de registro</th>
-              <th className="text-right font-medium px-3 py-2">Criados</th>
-              <th className="text-right font-medium px-3 py-2">Já existiam</th>
-              <th className="text-right font-medium px-3 py-2">Ignorados</th>
-              <th className="text-right font-medium px-3 py-2">Erros</th>
-            </tr>
-          </thead>
-          <tbody>
-            {groupKeys.map((key) => {
-              const g = report[key];
-              const hasErrors = g.errors.length > 0;
-              return (
-                <tr key={key} className="border-t">
-                  <td className="px-3 py-2">{BACKUP_IMPORT_GROUP_LABELS[key]}</td>
-                  <td className="text-right px-3 py-2">{g.created}</td>
-                  <td className="text-right px-3 py-2">{g.duplicate}</td>
-                  <td className="text-right px-3 py-2">{g.skipped}</td>
-                  <td className={`text-right px-3 py-2 ${hasErrors ? "text-destructive font-medium" : ""}`}>{g.errors.length}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {totalErrors > 0 && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm space-y-1">
-          <div className="flex items-center gap-2 font-medium text-destructive">
-            <AlertTriangle className="w-4 h-4" />
-            Detalhes dos erros
-          </div>
-          <ul className="text-xs text-muted-foreground space-y-0.5 max-h-48 overflow-y-auto">
-            {groupKeys.flatMap((key) =>
-              report[key].errors.slice(0, 20).map((e, i) => (
-                <li key={`${key}-${i}`}>
-                  <span className="font-medium">{BACKUP_IMPORT_GROUP_LABELS[key]}:</span> {e.error}
-                </li>
-              )),
-            )}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function BackupDataTab() {
-  const { toast } = useToast();
-  const { data: me } = useGetMe();
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [receivedBytes, setReceivedBytes] = useState(0);
-
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [parsedBackup, setParsedBackup] = useState<ParsedBackup | null>(null);
-  const [parseError, setParseError] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
-  const [importReport, setImportReport] = useState<BackupImportReport | null>(null);
-  const [importIdempotencyKey, setImportIdempotencyKey] = useState<string | null>(null);
-
-  async function handleGenerateBackup() {
-    setIsGenerating(true);
-    setReceivedBytes(0);
-    try {
-      const response = await fetch(`${BASE}/api/backup/export`, {
-        method: "GET",
-        credentials: "include",
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as
-          | { error?: string; message?: string }
-          | null;
-        throw new Error(payload?.message ?? payload?.error ?? "Não foi possível gerar o backup.");
-      }
-      if (!response.body) {
-        // Fallback for environments without streaming response support.
-        const blob = await validateBackupDownload(await response.blob(), response.headers.get("Content-Type"));
-        downloadBackupBlob(blob, response.headers.get("Content-Disposition"));
-        setReceivedBytes(blob.size);
-        toast({ title: "Backup gerado com sucesso", description: "O download do arquivo foi iniciado." });
-        return;
-      }
-
-      const reader = response.body.getReader();
-      const chunks: BlobPart[] = [];
-      let total = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          chunks.push(value as BlobPart);
-          total += value.byteLength;
-          setReceivedBytes(total);
-        }
-      }
-      const blob = await validateBackupDownload(
-        new Blob(chunks, { type: "application/json" }),
-        response.headers.get("Content-Type"),
-      );
-      downloadBackupBlob(blob, response.headers.get("Content-Disposition"));
-      toast({ title: "Backup gerado com sucesso", description: "O download do arquivo foi iniciado." });
-    } catch (err) {
-      toast({
-        title: "Erro ao gerar backup",
-        description: err instanceof Error ? err.message : "Tente novamente.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsGenerating(false);
-    }
-  }
-
-  function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
-    e.target.value = "";
-    setImportReport(null);
-    setParseError(null);
-    setSelectedFile(null);
-    setParsedBackup(null);
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".json")) {
-      setParseError("Selecione um arquivo .json gerado pela exportação de backup.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const text = String(reader.result ?? "");
-        const parsed = parseBackupText(text);
-        setSelectedFile(file);
-        setParsedBackup(parsed);
-        setConfirmOpen(true);
-      } catch (error) {
-        setParseError(error instanceof Error ? error.message : "Não foi possível validar o arquivo selecionado.");
-      }
-    };
-    reader.onerror = () => setParseError("Não foi possível ler o arquivo selecionado.");
-    reader.readAsText(file);
-  }
-
-  async function handleConfirmImport() {
-    if (!parsedBackup) return;
-    setConfirmOpen(false);
-    setIsImporting(true);
-    setImportReport(null);
-    try {
-      const idempotencyKey = importIdempotencyKey ?? crypto.randomUUID();
-      setImportIdempotencyKey(idempotencyKey);
-      const response = await fetch(`${BASE}/api/backup/import`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idempotencyKey, backup: parsedBackup }),
-      });
-      const payload = await response.json().catch(() => null) as
-        | { report?: BackupImportReport; replayed?: boolean; message?: string; error?: string }
-        | null;
-      if (!response.ok) {
-        throw new Error(payload?.message ?? payload?.error ?? "Não foi possível restaurar o backup.");
-      }
-      if (!payload?.report) {
-        throw new Error("Resposta inesperada do servidor.");
-      }
-      setImportReport(payload.report);
-      setImportIdempotencyKey(null);
-      setSelectedFile(null);
-      setParsedBackup(null);
-      toast({
-        title: payload.replayed ? "Backup já havia sido restaurado" : "Backup restaurado com sucesso",
-        description: "Veja o relatório abaixo para os detalhes por tipo de registro.",
-      });
-    } catch (err) {
-      toast({
-        title: "Erro ao restaurar backup",
-        description: err instanceof Error ? err.message : "Tente novamente.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsImporting(false);
-    }
-  }
-
-  function downloadBackupBlob(blob: Blob, contentDisposition: string | null) {
-    const filename = parseBackupFilename(contentDisposition) ?? `backup-agencia-${new Date().toISOString().slice(0, 10)}.json`;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
-        <DatabaseBackup className="w-5 h-5 mt-0.5 text-muted-foreground shrink-0" />
-        <div className="text-sm text-muted-foreground">
-          Gere um arquivo .json com todos os dados da sua agência: clientes, viagens, reservas e
-          passageiros, embarque e check-in, automações, indicações, loja, cupons, pagamentos,
-          despesas e cadastros auxiliares. Nenhuma credencial de acesso é incluída no arquivo.
-          Guarde-o em um local seguro — ele contém dados pessoais dos seus clientes.
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <Button onClick={handleGenerateBackup} disabled={isGenerating} className="gap-2">
-          {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          {isGenerating ? "Gerando backup..." : "Gerar e baixar backup"}
-        </Button>
-        {isGenerating && (
-          <span className="text-sm text-muted-foreground">
-            {receivedBytes > 0
-              ? `Montando arquivo... ${formatBackupBytes(receivedBytes)} recebidos`
-              : "Preparando exportação..."}
-          </span>
-        )}
-      </div>
-
-      {isGenerating && (
-        <p className="text-xs text-muted-foreground">
-          Para agências com muitos dados, isso pode levar alguns minutos. Não feche esta página
-          enquanto o backup estiver sendo gerado.
-        </p>
-      )}
-
-      <div className="border-t pt-4 space-y-3">
-        <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
-          <Upload className="w-5 h-5 mt-0.5 text-muted-foreground shrink-0" />
-          <div className="text-sm text-muted-foreground">
-            Envie um arquivo .json gerado por esta exportação para restaurar os dados na sua
-            agência. Usuários não são recriados — registros são associados a contas existentes
-            pelo e-mail, ou a você quando não houver correspondência. Registros já existentes não
-            são duplicados em uma nova tentativa.
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button variant="outline" asChild disabled={isImporting} className="gap-2 cursor-pointer">
-            <label>
-              {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileJson className="w-4 h-4" />}
-              {isImporting ? "Restaurando backup..." : "Selecionar arquivo de backup (.json)"}
-              <input type="file" accept=".json,application/json" className="hidden" disabled={isImporting} onChange={handleFileSelected} />
-            </label>
-          </Button>
-        </div>
-
-        {parseError && (
-          <div className="flex items-center gap-2 text-sm text-destructive">
-            <XCircle className="w-4 h-4 shrink-0" />
-            {parseError}
-          </div>
-        )}
-
-        {importReport && (
-          <div className="pt-2">
-            <h3 className="text-sm font-medium mb-2">Relatório da restauração</h3>
-            <BackupImportReportView report={importReport} />
-          </div>
-        )}
-      </div>
-
-      <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!open) setConfirmOpen(false); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Restaurar dados deste backup?</AlertDialogTitle>
-            <AlertDialogDescription>
-              <span className="block mb-2">
-                <strong>Origem:</strong>{" "}
-                {String((parsedBackup?.tenant as { name?: string; slug?: string } | undefined)?.name
-                  ?? (parsedBackup?.tenant as { slug?: string } | undefined)?.slug
-                  ?? ((parsedBackup as Record<string, unknown> | null)?.meta as { tenantName?: string } | undefined)?.tenantName
-                  ?? "Agência identificada no backup")}
-                <br />
-                <strong>Destino:</strong> {me?.tenant?.name ?? "sua agência atual"}
-              </span>
-              O arquivo <strong>{selectedFile?.name}</strong> será usado para recriar clientes,
-              viagens, reservas, embarque/check-in, automações, indicações, loja e financeiro na
-              sua agência. Registros já existentes serão identificados e ignorados — nenhum dado
-              atual será removido. Esta ação não pode ser desfeita automaticamente.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => { setSelectedFile(null); setParsedBackup(null); }}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmImport}>Restaurar backup</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  );
-}
-
 /* ──────────────────── Main Settings Page ──────────────────── */
 export default function Configuracoes() {
   const [currentRoute, setLocation] = useLocation();
@@ -5272,6 +4784,11 @@ export default function Configuracoes() {
     me?.role,
     requestedTab,
   );
+  useEffect(() => {
+    if (requestedTab !== "backup") return;
+    const destination = getLegacyBackupRedirect(me?.role);
+    if (destination) setLocation(destination);
+  }, [me?.role, requestedTab, setLocation]);
   const [activeTab, setActiveTab] = useState(initialTab);
   const [dirtySources, setDirtySources] = useState<Record<string, string>>({});
   const [pendingExit, setPendingExit] = useState<
@@ -5550,24 +5067,6 @@ export default function Configuracoes() {
             </Card>
           </TabsContent>
 
-          {isAgencyAdmin && (
-            <TabsContent value="backup">
-              <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <DatabaseBackup className="w-4 h-4" />
-                    Backup de Dados
-                  </CardTitle>
-                  <CardDescription>
-                    Gere e baixe um backup completo dos dados da sua agência em um arquivo .json
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <BackupDataTab />
-                </CardContent>
-              </Card>
-            </TabsContent>
-          )}
           </div>
         </div>
       </Tabs>

@@ -3,7 +3,6 @@ import {
   Building2,
   CreditCard,
   Crown,
-  DatabaseBackup,
   GitBranch,
   Key,
   Palette,
@@ -26,7 +25,6 @@ const SETTINGS_TAB_OPTIONS = [
   { value: "pipelines", label: "Pipelines", icon: GitBranch },
   { value: "customization", label: "Personalização", icon: Palette },
   { value: "clube", label: "Clube", icon: Crown },
-  { value: "backup", label: "Backup de Dados", icon: DatabaseBackup, adminOnly: true },
   { value: "integrity", label: "Integridade", icon: Wrench, adminOnly: true },
 ] as const;
 
@@ -34,7 +32,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
   { label: "Agência", values: ["agency", "customization"] },
   { label: "Conta", values: ["plan", "team", "apikeys"] },
   { label: "Operação", values: ["integrations", "notifications", "features", "pipelines"] },
-  { label: "Relacionamento e dados", values: ["clube", "backup", "integrity"] },
+  { label: "Relacionamento e dados", values: ["clube", "integrity"] },
 ] as const;
 
 export function buildAgencySettingsTabUrl(currentHref: string, tab: string): string {
@@ -56,4 +54,9 @@ export function getAgencySettingsAccess(role: string | undefined, requestedTab: 
   }));
 
   return { isAgencyAdmin, initialTab, navigationGroups };
+}
+
+/** Legacy deep link: full backup now lives in Downloads and is agency-admin-only. */
+export function getLegacyBackupRedirect(role: string | undefined): string | null {
+  return role === ROLES.AGENCY_ADMIN ? "/downloads?section=backup" : null;
 }

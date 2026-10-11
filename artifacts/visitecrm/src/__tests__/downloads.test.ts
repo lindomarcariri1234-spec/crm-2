@@ -1012,3 +1012,25 @@ describe("Downloads — empty quick-download result", () => {
     expect(createdPdfDocs.every((doc) => !doc.save.mock.calls.length)).toBe(true);
   });
 });
+
+describe("Downloads — agency backup authorization", () => {
+  afterEach(async () => {
+    await cleanupRoots();
+  });
+
+  it("shows the complete backup area only to the exact agency-admin role", async () => {
+    downloadsApiMocks.useGetMe.mockReturnValue({ data: { role: "agencia" } });
+    const admin = await renderComponent(createElement(Downloads));
+    expect(admin.container.querySelector('[data-testid="downloads-area-backup"]')).not.toBeNull();
+    expect(admin.container.querySelector("#agency-backup")).not.toBeNull();
+    expect(admin.container.querySelector('[data-testid="button-generate-agency-backup"]')).not.toBeNull();
+    expect(admin.container.querySelector('[data-testid="input-agency-backup-file"]')).not.toBeNull();
+    await cleanupRoots();
+
+    downloadsApiMocks.useGetMe.mockReturnValue({ data: { role: "gerente" } });
+    const manager = await renderComponent(createElement(Downloads));
+    expect(manager.container.querySelector('[data-testid="downloads-area-backup"]')).toBeNull();
+    expect(manager.container.querySelector("#agency-backup")).toBeNull();
+    expect(manager.container.querySelector('[data-testid="button-generate-agency-backup"]')).toBeNull();
+  });
+});

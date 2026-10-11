@@ -5,11 +5,12 @@ import { getAgencySettingsAccess } from "../components/settings/agency-settings-
 import { ROLES } from "@workspace/permissions";
 
 const mockGetMe = vi.hoisted(() => vi.fn());
+const mockSetLocation = vi.hoisted(() => vi.fn());
 
 vi.mock("wouter", async () => {
   const React = await import("react");
   return {
-    useLocation: () => [window.location.pathname, vi.fn()],
+    useLocation: () => [window.location.pathname, mockSetLocation],
     useSearch: () => {
       const [, setRevision] = React.useState(0);
       React.useEffect(() => {
@@ -211,6 +212,18 @@ describe("agency settings browser history", () => {
       expect(container.querySelector(`[data-testid="settings-tab-panel-${tab}"]`)).toBeNull();
     },
   );
+
+  it("routes an authorized legacy backup link to the Downloads backup area", async () => {
+    window.history.replaceState({}, "", `${window.location.pathname}?campaign=summer&tab=backup#settings`);
+    const { container } = await renderComponent(createElement(Configuracoes));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockSetLocation).toHaveBeenCalledWith("/downloads?section=backup");
+    expect(container.querySelector('[data-testid="settings-tab-panel-backup"]')).toBeNull();
+  });
 
   it.each(["backup", "integrity"])(
     "does not restore an unauthorized %s section from browser history",

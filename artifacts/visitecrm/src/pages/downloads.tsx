@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useGetMe, useListAuditLogs, useListReferrals, useListCommissions, useListDeals } from "@workspace/api-client-react";
 import { ADMIN_ROLES } from "@workspace/permissions";
+import { ROLES } from "@workspace/permissions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -28,6 +29,8 @@ import { ManifestImportModal } from "./ManifestImportModal";
 import { OperationalImportModal, type ImportEntity } from "@/components/operational-import-modal";
 import { QueryErrorState } from "@/components/query-error-state";
 import { Link, useLocation, useSearch } from "wouter";
+import { AgencyBackupPanel } from "@/components/agency-backup-panel";
+import { DatabaseBackup, ShieldCheck } from "lucide-react";
 
 function downloadCsv(rows: string[][], filename: string) {
   const content = rows.map(r => r.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -92,6 +95,7 @@ export default function Downloads() {
   const { toast } = useToast();
   const { data: me } = useGetMe();
   const isAdmin = !!me && ADMIN_ROLES.includes(me.role);
+  const isBackupAdmin = me?.role === ROLES.AGENCY_ADMIN;
   const {
     data: auditLogs = [],
     isLoading: auditLogsLoading,
@@ -114,15 +118,35 @@ export default function Downloads() {
   const [pmsReservationNumber, setPmsReservationNumber] = useState(() => new URLSearchParams(searchStr).get("reservationNumber") ?? "");
   const [pmsAdjustedBy, setPmsAdjustedBy] = useState(() => new URLSearchParams(searchStr).get("adjustedBy") ?? "");
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [activeArea, setActiveArea] = useState(() => {
+    const section = new URLSearchParams(searchStr).get("section");
+    return section === "backup" ? "backup" : section === "imports" ? "imports" : "reports";
+  });
 
   useEffect(() => {
     const params = new URLSearchParams({ reportType, startDate, endDate });
+    if (activeArea !== "reports") params.set("section", activeArea);
     if (reportType === "financial") {
       if (pmsReservationNumber.trim()) params.set("reservationNumber", pmsReservationNumber.trim());
       if (pmsAdjustedBy.trim()) params.set("adjustedBy", pmsAdjustedBy.trim());
     }
     navigate(`/downloads?${params.toString()}`, { replace: true });
-  }, [reportType, startDate, endDate, pmsReservationNumber, pmsAdjustedBy, navigate]);
+  }, [reportType, startDate, endDate, pmsReservationNumber, pmsAdjustedBy, activeArea, navigate]);
+
+  useEffect(() => {
+    if (activeArea !== "backup" || !isBackupAdmin) return;
+    window.requestAnimationFrame(() => {
+      document.getElementById("agency-backup")?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+  }, [activeArea, isBackupAdmin]);
+
+  useEffect(() => {
+    if (isBackupAdmin && new URLSearchParams(searchStr).get("section") === "backup") {
+      setActiveArea("backup");
+    } else if (!isBackupAdmin && activeArea === "backup") {
+      setActiveArea("reports");
+    }
+  }, [isBackupAdmin, searchStr]);
 
   const today = format(new Date(), "yyyy-MM-dd");
   const monthStart = format(startOfMonth(new Date()), "yyyy-MM-dd");
@@ -431,6 +455,28 @@ export default function Downloads() {
           </Button>
         </Link>
       </div>
+      <nav aria-label="Áreas de exportação" className="flex flex-wrap gap-2 border-b pb-3">
+        {[
+          { id: "reports", label: "Relatórios", target: "report-exports" },
+          { id: "imports", label: "Downloads e planilhas", target: "quick-downloads" },
+          ...(isBackupAdmin ? [{ id: "backup", label: "Backup da agência", target: "agency-backup" }] : []),
+        ].map((area) => (
+          <Button
+            key={area.id}
+            type="button"
+            variant={activeArea === area.id ? "default" : "outline"}
+            size="sm"
+            data-testid={`downloads-area-${area.id}`}
+            onClick={() => {
+              setActiveArea(area.id);
+              document.getElementById(area.target)?.scrollIntoView({ block: "start", behavior: "smooth" });
+            }}
+          >
+            {area.id === "backup" && <DatabaseBackup className="mr-1.5 h-3.5 w-3.5" />}
+            {area.label}
+          </Button>
+        ))}
+      </nav>
       {quickDataError && (
         <QueryErrorState
           resourceLabel="os dados para exportação"
@@ -443,7 +489,7 @@ export default function Downloads() {
       )}
 
       {/* Server-side reports panel */}
-      <Card className="border-primary/20">
+      <Card id="report-exports" className="border-primary/20 scroll-mt-6">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <BarChart2 className="w-4 h-4 text-primary" />
@@ -611,8 +657,8 @@ export default function Downloads() {
         </Card>
       )}
 
-      {/* Quick downloads */}
-      <div>
+      {/* Quick downloads and validated spreadsheet imports */}
+      <div id="quick-downloads" className="scroll-mt-6">
         <h2 className="text-base font-semibold mb-3 text-muted-foreground">Downloads rápidos</h2>
         <Card className="mb-4 bg-muted/40">
           <CardContent className="pt-4">
@@ -715,6 +761,26 @@ export default function Downloads() {
           );
         })}
       </div>
+      {isBackupAdmin && (
+        <Card id="agency-backup" className="scroll-mt-6 border-primary/20">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <DatabaseBackup className="h-4 w-4 text-primary" />
+              Backup completo da agência
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Exportação e restauração JSON da agência. Acesso exclusivo ao administrador da agência.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50/70 p-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              O arquivo contém dados pessoais e deve ser armazenado com segurança.
+            </div>
+            <AgencyBackupPanel />
+          </CardContent>
+        </Card>
+      )}
       <ManifestImportModal open={manifestImportOpen} onClose={() => setManifestImportOpen(false)} />
       {importEntity && (
         <OperationalImportModal
