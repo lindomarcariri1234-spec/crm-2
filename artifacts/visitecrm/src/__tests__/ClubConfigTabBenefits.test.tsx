@@ -344,6 +344,88 @@ describe("ClubConfigTab benefit tiers", () => {
     expect(container.querySelector('[data-testid="club-empty-tier-bronze"]')).toBeNull();
   });
 
+  it("keeps creation and retries working when session storage reads and writes throw", async () => {
+    rejectPost = true;
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Storage unavailable", "SecurityError");
+    });
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage unavailable", "SecurityError");
+    });
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    const addButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-add-benefit"]',
+    );
+    expect(labelInput?.disabled).toBe(false);
+    expect(addButton?.disabled).toBe(true);
+    expect(labelInput).not.toBeNull();
+    expect(addButton).not.toBeNull();
+
+    await act(async () => {
+      setInputValue(labelInput!, "Vantagem sem armazenamento");
+    });
+    expect(addButton!.disabled).toBe(false);
+    await act(async () => {
+      addButton!.click();
+    });
+
+    const posts = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts()).toHaveLength(1);
+    const firstKey = (posts()[0]?.[1]?.headers as Record<string, string>)?.["Idempotency-Key"];
+    expect(firstKey).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(setItem).toHaveBeenCalled();
+    expect(getItem).toHaveBeenCalled();
+    expect(labelInput!.value).toBe("Vantagem sem armazenamento");
+
+    rejectPost = false;
+    await act(async () => {
+      addButton!.click();
+    });
+    expect(posts()).toHaveLength(2);
+    expect((posts()[1]?.[1]?.headers as Record<string, string>)?.["Idempotency-Key"])
+      .toBe(firstKey);
+    expect(container.querySelector('[data-testid="club-benefit-benefit-bronze"]')?.textContent)
+      .toContain("Vantagem sem armazenamento");
+  });
+
+  it("discards malformed saved data without breaking the benefit form", async () => {
+    sessionStorage.setItem(benefitDraftStorageKey, "{invalid-json");
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(sessionStorage.getItem(benefitDraftStorageKey)).toBeNull();
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    const addButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-add-benefit"]',
+    );
+    expect(labelInput?.disabled).toBe(false);
+    expect(addButton?.disabled).toBe(true);
+
+    await act(async () => {
+      setInputValue(labelInput!, "Rascunho válido");
+      addButton!.click();
+    });
+
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(post).toBeDefined();
+    expect(post?.[1]?.headers).toMatchObject({
+      "Idempotency-Key": expect.stringMatching(/^[0-9a-f-]{36}$/i),
+    });
+    expect(container.querySelector('[data-testid="club-benefit-benefit-bronze"]')?.textContent)
+      .toContain("Rascunho válido");
+  });
+
   it("restores an uncertain attempt after remount and clears its recovery data on success", async () => {
     rejectPost = true;
     const firstMount = await renderComponent(createElement(ClubConfigTab));
