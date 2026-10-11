@@ -32,7 +32,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
   { label: "Agência", values: ["agency", "customization"] },
   { label: "Conta", values: ["plan", "team", "apikeys"] },
   { label: "Operação", values: ["integrations", "notifications", "features", "pipelines"] },
-  { label: "Relacionamento e dados", values: ["clube", "integrity"] },
+  { label: "Relacionamento e dados", values: ["integrity"] },
 ] as const;
 
 export function buildAgencySettingsTabUrl(currentHref: string, tab: string): string {
@@ -48,12 +48,14 @@ export function getAgencySettingsAccess(role: string | undefined, requestedTab: 
   );
   const availableTabs = new Set<string>(visibleTabOptions.map((tab) => tab.value));
   const initialTab = requestedTab && availableTabs.has(requestedTab) ? requestedTab : "agency";
-  const navigationGroups: readonly SettingsNavigationGroup[] = SETTINGS_NAVIGATION_GROUPS.map((group) => ({
-    label: group.label,
-    items: visibleTabOptions.filter((tab) => group.values.some((value) => value === tab.value)),
-  }));
+  const navigationGroups: readonly SettingsNavigationGroup[] = SETTINGS_NAVIGATION_GROUPS
+    .map((group) => ({
+      label: group.label,
+      items: visibleTabOptions.filter((tab) => group.values.some((value) => value === tab.value)),
+    }))
+    .filter((group) => group.items.length > 0);
 
-  return { isAgencyAdmin, initialTab, navigationGroups };
+  return { isAgencyAdmin, initialTab, navigationGroups, availableTabs };
 }
 
 /** Legacy deep link: full backup now lives in Downloads and is agency-admin-only. */

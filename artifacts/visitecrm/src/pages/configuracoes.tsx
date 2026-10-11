@@ -4621,7 +4621,7 @@ export default function Configuracoes() {
   const currentHistoryStateRef = useRef(window.history.state);
   const { data: me } = useGetMe();
   const requestedTab = new URLSearchParams(currentSearch).get("tab");
-  const { isAgencyAdmin, initialTab, navigationGroups } = getAgencySettingsAccess(
+  const { isAgencyAdmin, initialTab, navigationGroups, availableTabs } = getAgencySettingsAccess(
     me?.role,
     requestedTab,
   );
@@ -4649,10 +4649,7 @@ export default function Configuracoes() {
     );
   }, []);
 
-  const allowedTabs = useMemo(
-    () => new Set(navigationGroups.flatMap((group) => group.items.map((item) => item.value))),
-    [navigationGroups],
-  );
+  const allowedTabs = availableTabs;
 
   const commitTabChange = useCallback((nextTab: string) => {
     if (!allowedTabs.has(nextTab)) return;
@@ -4732,8 +4729,15 @@ export default function Configuracoes() {
 
   useEffect(() => {
     const historyTab = requestedTab && allowedTabs.has(requestedTab) ? requestedTab : "agency";
-    if (historyTab !== activeTab) setActiveTab(historyTab);
-  }, [activeTab, allowedTabs, currentRoute, requestedTab]);
+    if (historyTab === activeTab) return;
+    if (activeTabHasUnsavedChanges) {
+      const currentTabUrl = buildAgencySettingsTabUrl(window.location.href, activeTab);
+      setLocation(currentTabUrl, { replace: true });
+      setPendingExit({ kind: "tab", destination: historyTab });
+      return;
+    }
+    setActiveTab(historyTab);
+  }, [activeTab, activeTabHasUnsavedChanges, allowedTabs, currentRoute, requestedTab, setLocation]);
 
   return (
     <AgencySettingsDirtyContext.Provider value={reportDirty}>

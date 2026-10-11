@@ -20,6 +20,17 @@ describe("agency settings access", () => {
     expect(values(admin.navigationGroups)).toContain("integrity");
     expect(values(manager.navigationGroups)).not.toContain("backup");
     expect(values(manager.navigationGroups)).not.toContain("integrity");
+    expect(values(admin.navigationGroups)).not.toContain("clube");
+    expect(values(manager.navigationGroups)).not.toContain("clube");
+  });
+
+  it("keeps the club deep link available without listing it in settings navigation", () => {
+    const access = getAgencySettingsAccess(ROLES.AGENCY_MANAGER, "clube");
+
+    expect(access.initialTab).toBe("clube");
+    expect(access.availableTabs.has("clube")).toBe(true);
+    expect(access.navigationGroups.flatMap((group) => group.items.map((item) => item.value)))
+      .not.toContain("clube");
   });
 
   it.each(["backup", "integrity"])(

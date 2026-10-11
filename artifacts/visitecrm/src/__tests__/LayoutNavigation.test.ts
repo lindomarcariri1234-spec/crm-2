@@ -28,6 +28,7 @@ vi.mock("wouter", () => ({
       children as never,
     ),
   useLocation: () => ["/dashboard", vi.fn()],
+  useSearch: () => "",
 }));
 
 vi.mock("@clerk/react", () => ({
@@ -109,6 +110,34 @@ describe("NavigationMenu", () => {
 
     expect(onNavigate).toHaveBeenCalledOnce();
   });
+
+  it("marks the club menu item active for its settings deep link", async () => {
+    const { container } = await renderComponent(
+      createElement(NavigationMenu, {
+        items: [
+          { name: "Configurações", href: "/configuracoes", icon: BookOpen },
+          {
+            name: "Relacionamento",
+            href: "/marketing",
+            icon: BookOpen,
+            children: [
+              { name: "Marketing", href: "/marketing", icon: BookOpen },
+              { name: "Clube", href: "/configuracoes?tab=clube", icon: Map },
+            ],
+          },
+        ],
+        location: "/configuracoes?tab=clube",
+        userRole: "agency_admin",
+      }),
+    );
+
+    expect(container.querySelector('button[aria-controls="submenu--marketing"]')?.getAttribute("aria-expanded"))
+      .toBe("true");
+    expect(container.querySelector('a[href="/configuracoes?tab=clube"]')?.getAttribute("aria-current"))
+      .toBe("page");
+    expect(container.querySelector('a[href="/configuracoes"]')?.getAttribute("aria-current"))
+      .toBeNull();
+  });
 });
 
 describe("getNavigationContext", () => {
@@ -136,5 +165,17 @@ describe("getNavigationContext", () => {
 
     expect(context.parent).toBeUndefined();
     expect(context.current?.name).toBe("Viagens");
+  });
+
+  it("prefers a query-specific menu item over the general settings link", () => {
+    const context = getNavigationContext(
+      [
+        { name: "Configurações", href: "/configuracoes", icon: BookOpen },
+        { name: "Clube", href: "/configuracoes?tab=clube", icon: Map },
+      ],
+      "/configuracoes?tab=clube",
+    );
+
+    expect(context.current?.name).toBe("Clube");
   });
 });
