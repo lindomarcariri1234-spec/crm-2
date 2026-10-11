@@ -23,6 +23,8 @@ import { errorHandler } from "../middlewares/errorHandler.js";
 const run = randomUUID().replaceAll("-", "").slice(0, 12);
 const tenantId = `club-benefit-race-${run}`;
 const idempotencyKey = randomUUID();
+const concurrentBenefitId = `club-benefit-edit-race-${run}`;
+const originalUpdatedAt = new Date("2026-01-01T00:00:00.000Z");
 const app = express();
 app.use(express.json());
 app.use("/api", clubRouter);
@@ -75,5 +77,53 @@ describe("POST /api/club/benefits PostgreSQL idempotency race", () => {
         eq(clubBenefitsTable.idempotencyKey, idempotencyKey),
       ));
     expect(persisted).toEqual([{ id: first.body.id }]);
+  });
+});
+
+describe("PUT /api/club/benefits/:id PostgreSQL version race", () => {
+  it("allows only one concurrent edit from the same version and returns the persisted winner", async () => {
+    await db.insert(clubBenefitsTable).values({
+      id: concurrentBenefitId,
+      tenantId,
+      tier: body.tier,
+      benefitKey: `race-${run}`,
+      label: "Original benefit",
+      description: "Original description",
+      value: "5%",
+      sortOrder: 0,
+      createdAt: originalUpdatedAt,
+      updatedAt: originalUpdatedAt,
+    });
+
+    const update = (label: string) => request(app)
+      .put(`/api/club/benefits/${concurrentBenefitId}`)
+      .send({
+        expectedUpdatedAt: originalUpdatedAt.toISOString(),
+        label,
+      });
+    const [first, second] = await Promise.all([
+      update("First staff edit"),
+      update("Second staff edit"),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([200, 409]);
+    const winner = first.status === 200 ? first : second;
+    const conflict = first.status === 409 ? first : second;
+    expect(winner.body.label).toMatch(/^First staff edit$|^Second staff edit$/);
+    expect(winner.body.updatedAt).not.toBe(originalUpdatedAt.toISOString());
+    expect(conflict.body).toMatchObject({
+      error: "benefit_changed",
+      current: { id: concurrentBenefitId, label: winner.body.label },
+    });
+
+    const [persisted] = await db.select()
+      .from(clubBenefitsTable)
+      .where(and(
+        eq(clubBenefitsTable.id, concurrentBenefitId),
+        eq(clubBenefitsTable.tenantId, tenantId),
+      ))
+      .limit(1);
+    expect(persisted?.label).toBe(winner.body.label);
+    expect(persisted?.updatedAt.toISOString()).toBe(winner.body.updatedAt);
   });
 });
