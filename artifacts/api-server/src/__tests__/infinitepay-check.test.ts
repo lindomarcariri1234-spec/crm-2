@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  extractInfinitePayErrorCode,
+  classifyInfinitePayHttpFailure,
   formatInfinitePayPhoneNumber,
   parseInfinitePayCheckResult,
 } from "../lib/infinitepay.js";
@@ -18,24 +18,16 @@ describe("formatInfinitePayPhoneNumber", () => {
   });
 });
 
-describe("extractInfinitePayErrorCode", () => {
+describe("classifyInfinitePayHttpFailure", () => {
   it.each([
-    [{ code: "INVALID_HANDLE" }, "INVALID_HANDLE"],
-    [{ error_code: "handle_not_active" }, "handle_not_active"],
-    [{ error: { errorCode: "REQUEST_REJECTED" } }, "REQUEST_REJECTED"],
-    [{ error: "invalid_request" }, "invalid_request"],
-  ])("extracts only a machine-readable provider code", (payload, expected) => {
-    expect(extractInfinitePayErrorCode(payload)).toBe(expected);
-  });
-
-  it.each([
-    [{ message: "The checkout was rejected" }],
-    [{ code: "Invalid handle" }],
-    [{ code: "x".repeat(65) }],
-    [null],
-    ["REQUEST_REJECTED"],
-  ])("does not treat free-form content as a provider code", (payload) => {
-    expect(extractInfinitePayErrorCode(payload)).toBeUndefined();
+    [400, "validation"],
+    [422, "validation"],
+    [401, "authorization"],
+    [403, "authorization"],
+    [429, "rate_limit"],
+    [500, "provider_error"],
+  ] as const)("classifies HTTP %i without relying on an undocumented response body", (status, expected) => {
+    expect(classifyInfinitePayHttpFailure(status)).toBe(expected);
   });
 });
 

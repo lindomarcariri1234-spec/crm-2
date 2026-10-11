@@ -5,9 +5,6 @@ export type InfinitePayCheckResult = {
   captureMethod: "pix" | "credit_card";
 };
 
-const SAFE_PROVIDER_ERROR_CODE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const PROVIDER_ERROR_CODE_KEYS = ["code", "error_code", "errorCode"] as const;
-
 export function formatInfinitePayPhoneNumber(phone: string | null | undefined): string | undefined {
   if (!phone) return undefined;
   const digits = phone.replace(/\D/g, "");
@@ -16,35 +13,17 @@ export function formatInfinitePayPhoneNumber(phone: string | null | undefined): 
   return undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readProviderErrorCode(record: Record<string, unknown>): string | undefined {
-  for (const key of PROVIDER_ERROR_CODE_KEYS) {
-    const value = record[key];
-    if (typeof value === "string" && SAFE_PROVIDER_ERROR_CODE.test(value)) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 /**
- * Extract only a bounded machine-readable code from the provider response.
- * Provider messages and the rest of the response may contain customer data.
+ * InfinitePay documents successful link creation and payment checks, but does
+ * not publish a /links error-body schema. Classify only the HTTP status; never
+ * infer that arbitrary response strings are safe machine-readable codes.
  */
-export function extractInfinitePayErrorCode(payload: unknown): string | undefined {
-  if (!isRecord(payload)) return undefined;
-
-  const topLevelCode = readProviderErrorCode(payload);
-  if (topLevelCode) return topLevelCode;
-
-  const error = payload["error"];
-  if (typeof error === "string" && SAFE_PROVIDER_ERROR_CODE.test(error)) {
-    return error;
-  }
-  return isRecord(error) ? readProviderErrorCode(error) : undefined;
+export function classifyInfinitePayHttpFailure(status: number):
+  "validation" | "authorization" | "rate_limit" | "provider_error" {
+  if (status === 400 || status === 422) return "validation";
+  if (status === 401 || status === 403) return "authorization";
+  if (status === 429) return "rate_limit";
+  return "provider_error";
 }
 
 export function parseInfinitePayCheckResult(payload: unknown, expectedAmountCents: number): InfinitePayCheckResult | null {

@@ -199,7 +199,7 @@ import
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
 import { runDeferredOrderAccounting } from "../services/checkout/post-booking";
 import { applyGatewayPayment } from "./webhooks";
-import { extractInfinitePayErrorCode, formatInfinitePayPhoneNumber, parseInfinitePayCheckResult } from "../lib/infinitepay";
+import { classifyInfinitePayHttpFailure, formatInfinitePayPhoneNumber, parseInfinitePayCheckResult } from "../lib/infinitepay";
 import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
 import {
   getReservationFailureDiagnostic,
@@ -3443,15 +3443,13 @@ router.post("/public/store/:slug/infinitepay/checkout", async (req, res, next: N
       signal: AbortSignal.timeout(10_000),
     });
     if (!apiResponse.ok) {
-      // Never log the response body: provider errors may echo customer or
-      // checkout data. Keep only an HTTP status and a validated error code.
-      const providerErrorPayload = await apiResponse.clone().json().catch(() => undefined);
-      const providerErrorCode = extractInfinitePayErrorCode(providerErrorPayload);
+      // InfinitePay does not document a /links error-body schema. Treat any
+      // response body as untrusted and classify only its HTTP status.
       logger.warn(
         {
           requestId: req.id ?? "unknown",
           providerStatusCode: apiResponse.status,
-          ...(providerErrorCode ? { providerErrorCode } : {}),
+          providerFailureKind: classifyInfinitePayHttpFailure(apiResponse.status),
         },
         "InfinitePay link API rejected checkout",
       );

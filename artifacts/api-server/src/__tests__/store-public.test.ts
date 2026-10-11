@@ -243,6 +243,7 @@ import {
 import { getTenantUser } from "../lib/tenant.js";
 import { generatePixQrCodeUrl } from "../lib/pix.js";
 import { AppError } from "../lib/errors.js";
+import { logger } from "../lib/logger.js";
 import { createReservationsForOrder } from "../services/checkout/create-reservations.js";
 import { ne } from "drizzle-orm";
 
@@ -1610,6 +1611,7 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
 
     afterEach(() => {
       vi.unstubAllGlobals();
+      vi.restoreAllMocks();
       mockUpdateSet.mockReset().mockImplementation(() => ({
         where: vi.fn().mockResolvedValue([]),
       }));
@@ -1656,6 +1658,39 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
       expect(repeated.status).toBe(200);
       expect(repeated.body).toEqual({ checkoutUrl });
       expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("logs a safe diagnosis for provider validation errors without recording response or customer data", async () => {
+      const warning = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+      const sensitiveProviderBody = {
+        error_code: "maria@example.com",
+        message: "Rejected customer maria@example.com with phone +5585999990000",
+        field: "customer.email",
+        value: "maria@example.com",
+      };
+      mockUpdateSet.mockImplementation(() => ({
+        where: vi.fn(() => Object.assign(Promise.resolve([]), {
+          returning: vi.fn().mockResolvedValue([{ id: infinitePayOrder.id }]),
+        })),
+      }));
+      mockLimit
+        .mockResolvedValueOnce([infinitePayStore])
+        .mockResolvedValueOnce([infinitePayOrder]);
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(sensitiveProviderBody), { status: 422 }));
+
+      const response = await request(buildApp())
+        .post("/api/public/store/minha-loja/infinitepay/checkout")
+        .send({ orderNumber, paymentToken, returnPath: "/checkout/success" });
+
+      expect(response.status).toBe(502);
+      expect(JSON.stringify(response.body)).not.toContain("maria@example.com");
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("maria@example.com");
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("+5585999990000");
+      expect(warning).toHaveBeenCalledWith(expect.objectContaining({
+        providerStatusCode: 422,
+        providerFailureKind: "validation",
+      }), "InfinitePay link API rejected checkout");
+      expect(warning.mock.calls[0]?.[0]).not.toHaveProperty("providerErrorCode");
     });
 
     it.each([
