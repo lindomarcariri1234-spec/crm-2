@@ -6,10 +6,21 @@ import { ROLES } from "@workspace/permissions";
 
 const mockGetMe = vi.hoisted(() => vi.fn());
 
-vi.mock("wouter", () => ({
-  useLocation: () => [window.location.pathname, vi.fn()],
-  useSearch: () => window.location.search,
-}));
+vi.mock("wouter", async () => {
+  const React = await import("react");
+  return {
+    useLocation: () => [window.location.pathname, vi.fn()],
+    useSearch: () => {
+      const [, setRevision] = React.useState(0);
+      React.useEffect(() => {
+        const refresh = () => setRevision((revision) => revision + 1);
+        window.addEventListener("popstate", refresh);
+        return () => window.removeEventListener("popstate", refresh);
+      }, []);
+      return window.location.search;
+    },
+  };
+});
 
 vi.mock("@workspace/api-client-react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@workspace/api-client-react")>();
@@ -72,6 +83,29 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
+async function traverseHistory(direction: "back" | "forward"): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener("popstate", onPopState);
+        resolve();
+      }, 100);
+      function onPopState() {
+        window.clearTimeout(timeout);
+        resolve();
+      }
+      window.addEventListener("popstate", onPopState, { once: true });
+      window.history[direction]();
+    });
+  });
+}
+
+function expectActivePanel(container: HTMLElement, tab: string): void {
+  expect(container.querySelector(
+    `[data-testid="settings-tab-panel-${tab}"]`,
+  )?.hasAttribute("hidden")).toBe(false);
+}
+
 describe("agency settings shared section links", () => {
   it.each(adminTabs)(
     "opens the %s section from a copied link and preserves other URL values",
@@ -120,6 +154,86 @@ describe("agency settings shared section links", () => {
       expect(updatedSearch.get("campaign")).toBe("summer");
       expect(updatedSearch.get("tab")).toBe(nextTab);
       expect(window.location.hash).toBe("#agency-settings");
+    },
+  );
+});
+
+describe("agency settings browser history", () => {
+  beforeEach(() => {
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}?source=history-test&tab=agency#settings`,
+    );
+  });
+
+  it("restores the selected section and URL when moving backward and forward", async () => {
+    const { container } = await renderComponent(createElement(Configuracoes));
+    expectActivePanel(container, "agency");
+
+    for (const tab of ["plan", "team"]) {
+      const link = container.querySelector<HTMLButtonElement>(`[data-testid="settings-link-${tab}"]`);
+      expect(link).not.toBeNull();
+      await act(async () => {
+        link!.click();
+      });
+      expectActivePanel(container, tab);
+      expect(new URLSearchParams(window.location.search).get("tab")).toBe(tab);
+      expect(new URLSearchParams(window.location.search).get("source")).toBe("history-test");
+    }
+
+    await traverseHistory("back");
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("plan");
+    expectActivePanel(container, "plan");
+
+    await traverseHistory("back");
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("agency");
+    expectActivePanel(container, "agency");
+
+    await traverseHistory("forward");
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("plan");
+    expectActivePanel(container, "plan");
+
+    await traverseHistory("forward");
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("team");
+    expectActivePanel(container, "team");
+  });
+
+  it.each(["backup", "integrity"])(
+    "keeps an unauthorized direct link to %s on the agency section",
+    async (tab) => {
+      mockGetMe.mockReturnValue({ data: { role: ROLES.AGENCY_MANAGER } });
+      window.history.replaceState({}, "", `${window.location.pathname}?tab=${tab}`);
+
+      const { container } = await renderComponent(createElement(Configuracoes));
+      expectActivePanel(container, "agency");
+      expect(container.querySelector(`[data-testid="settings-link-${tab}"]`)).toBeNull();
+      expect(container.querySelector(`[data-testid="settings-tab-panel-${tab}"]`)).toBeNull();
+    },
+  );
+
+  it.each(["backup", "integrity"])(
+    "does not restore an unauthorized %s section from browser history",
+    async (tab) => {
+      mockGetMe.mockReturnValue({ data: { role: ROLES.AGENCY_MANAGER } });
+      const { container } = await renderComponent(createElement(Configuracoes));
+      expectActivePanel(container, "agency");
+      expect(container.querySelector(`[data-testid="settings-link-${tab}"]`)).toBeNull();
+
+      window.history.pushState(
+        {},
+        "",
+        `${window.location.pathname}?source=history-test&tab=${tab}`,
+      );
+
+      await traverseHistory("back");
+      expect(new URLSearchParams(window.location.search).get("tab")).toBe("agency");
+      expectActivePanel(container, "agency");
+
+      await traverseHistory("forward");
+      expect(new URLSearchParams(window.location.search).get("tab")).toBe(tab);
+      expectActivePanel(container, "agency");
+      expect(container.querySelector(`[data-testid="settings-tab-panel-${tab}"]`)).toBeNull();
     },
   );
 });
