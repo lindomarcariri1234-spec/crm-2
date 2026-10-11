@@ -58,6 +58,8 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
+  SelectLabel,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -4840,6 +4842,21 @@ function BackupDataTab() {
 }
 
 /* ──────────────────── Main Settings Page ──────────────────── */
+const SETTINGS_TAB_OPTIONS = [
+  { value: "agency", label: "Agência", category: "Conta", icon: Building2 },
+  { value: "plan", label: "Plano", category: "Conta", icon: CreditCard },
+  { value: "team", label: "Equipe", category: "Conta", icon: Users },
+  { value: "apikeys", label: "Chaves API", category: "Conta", icon: Key },
+  { value: "integrations", label: "Integrações", category: "Operação", icon: Puzzle },
+  { value: "notifications", label: "Notificações", category: "Operação", icon: Bell },
+  { value: "features", label: "Funcionalidades", category: "Operação", icon: ToggleLeft },
+  { value: "pipelines", label: "Pipelines", category: "Operação", icon: GitBranch },
+  { value: "customization", label: "Personalização", category: "Marca e relacionamento", icon: Palette },
+  { value: "clube", label: "Clube", category: "Marca e relacionamento", icon: Crown },
+  { value: "backup", label: "Backup de Dados", category: "Dados e integridade", icon: DatabaseBackup, adminOnly: true },
+  { value: "integrity", label: "Integridade", category: "Dados e integridade", icon: Wrench, adminOnly: true },
+] as const;
+
 export default function Configuracoes() {
   const { data: me } = useGetMe();
   const isAgencyAdmin = me?.role === ROLES.AGENCY_ADMIN;
@@ -4850,6 +4867,20 @@ export default function Configuracoes() {
     ...(isAgencyAdmin ? ["backup", "integrity"] : []),
   ]);
   const initialTab = requestedTab && availableTabs.has(requestedTab) ? requestedTab : "agency";
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const visibleTabOptions = SETTINGS_TAB_OPTIONS.filter(
+    (tab) => !("adminOnly" in tab && tab.adminOnly) || isAgencyAdmin,
+  );
+
+  useEffect(() => {
+    if (
+      isAgencyAdmin
+      && activeTab === "agency"
+      && (requestedTab === "backup" || requestedTab === "integrity")
+    ) {
+      setActiveTab(requestedTab);
+    }
+  }, [activeTab, isAgencyAdmin, requestedTab]);
 
   return (
     <div className="visite-enter mx-auto max-w-[1440px] space-y-6">
@@ -4862,61 +4893,64 @@ export default function Configuracoes() {
         </div>
       </div>
 
-      <Tabs defaultValue={initialTab}>
-        <TabsList className="flex h-auto w-full max-w-full flex-nowrap justify-start gap-1 overflow-x-auto rounded-2xl border border-[#DCE3E8] bg-white/85 p-1.5 shadow-sm dark:border-border dark:bg-card">
-          <TabsTrigger value="agency" className="flex shrink-0 items-center gap-1.5">
-            <Building2 className="w-3.5 h-3.5" />
-            Agência
-          </TabsTrigger>
-          <TabsTrigger value="plan" className="flex shrink-0 items-center gap-1.5">
-            <CreditCard className="w-3.5 h-3.5" />
-            Plano
-          </TabsTrigger>
-          <TabsTrigger value="integrations" className="flex shrink-0 items-center gap-1.5">
-            <Puzzle className="w-3.5 h-3.5" />
-            Integrações
-          </TabsTrigger>
-          <TabsTrigger value="notifications" className="flex shrink-0 items-center gap-1.5">
-            <Bell className="w-3.5 h-3.5" />
-            Notificações
-          </TabsTrigger>
-          <TabsTrigger value="customization" className="flex shrink-0 items-center gap-1.5">
-            <Palette className="w-3.5 h-3.5" />
-            Personalização
-          </TabsTrigger>
-          <TabsTrigger value="team" className="flex shrink-0 items-center gap-1.5">
-            <Users className="w-3.5 h-3.5" />
-            Equipe
-          </TabsTrigger>
-          <TabsTrigger value="apikeys" className="flex shrink-0 items-center gap-1.5">
-            <Key className="w-3.5 h-3.5" />
-            Chaves API
-          </TabsTrigger>
-          <TabsTrigger value="features" className="flex shrink-0 items-center gap-1.5">
-            <ToggleLeft className="w-3.5 h-3.5" />
-            Funcionalidades
-          </TabsTrigger>
-          <TabsTrigger value="clube" className="flex shrink-0 items-center gap-1.5">
-            <Crown className="w-3.5 h-3.5" />
-            Clube
-          </TabsTrigger>
-          <TabsTrigger value="pipelines" className="flex shrink-0 items-center gap-1.5">
-            <GitBranch className="w-3.5 h-3.5" />
-            Pipelines
-          </TabsTrigger>
-          {isAgencyAdmin && (
-            <TabsTrigger value="backup" className="flex shrink-0 items-center gap-1.5">
-              <DatabaseBackup className="w-3.5 h-3.5" />
-              Backup de Dados
-            </TabsTrigger>
-          )}
-          {isAgencyAdmin && (
-            <TabsTrigger value="integrity" className="flex shrink-0 items-center gap-1.5" data-testid="tab-linked-data-integrity">
-              <Wrench className="w-3.5 h-3.5" />
-              Integridade
-            </TabsTrigger>
-          )}
-        </TabsList>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <div className="md:hidden">
+          <Select value={activeTab} onValueChange={setActiveTab}>
+            <SelectTrigger
+              aria-label="Seção de configurações"
+              data-testid="settings-tab-select"
+              className="h-12 rounded-xl border-[#DCE3E8] bg-white dark:bg-card"
+            >
+              <SelectValue placeholder="Escolha uma seção" />
+            </SelectTrigger>
+            <SelectContent>
+              {(["Conta", "Operação", "Marca e relacionamento", "Dados e integridade"] as const).map((category) => {
+                const options = visibleTabOptions.filter((tab) => tab.category === category);
+                if (options.length === 0) return null;
+                return (
+                  <SelectGroup key={category}>
+                    <SelectLabel>{category}</SelectLabel>
+                    {options.map((tab) => (
+                      <SelectItem key={tab.value} value={tab.value} data-testid={`settings-option-${tab.value}`}>
+                        {tab.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                );
+              })}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="relative hidden md:block">
+          <div
+            className="overflow-x-auto overscroll-x-contain pb-1"
+            data-testid="settings-tabs-scroll"
+          >
+            <TabsList
+              aria-label="Seções das configurações"
+              className="flex h-auto w-max min-w-full flex-nowrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/85 p-1.5 shadow-sm dark:border-border dark:bg-card"
+            >
+              {visibleTabOptions.map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <TabsTrigger
+                    key={tab.value}
+                    value={tab.value}
+                    data-testid={tab.value === "integrity" ? "tab-linked-data-integrity" : `settings-tab-${tab.value}`}
+                    className="flex shrink-0 items-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                    {tab.label}
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
+          </div>
+          <p className="mt-1 text-right text-xs text-muted-foreground lg:hidden">
+            Role horizontalmente para acessar todas as seções
+          </p>
+        </div>
 
         <div className="mt-4">
           <TabsContent value="agency">
