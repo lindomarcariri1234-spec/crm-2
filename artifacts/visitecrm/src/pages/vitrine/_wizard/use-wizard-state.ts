@@ -957,10 +957,24 @@ export function useWizardState({
           "O pagamento com cartão está indisponível porque a Stripe ainda não foi configurada nesta loja.",
         STRIPE_NOT_ENABLED:
           "O pagamento com cartão está indisponível nesta loja no momento.",
+        INFINITEPAY_CHECKOUT_FAILED:
+          "Não foi possível abrir o checkout da InfinitePay. Tente novamente ou fale com a agência; este aviso não confirma a causa.",
+        INFINITEPAY_INVALID_RESPONSE:
+          "Não foi possível abrir o checkout da InfinitePay. Tente novamente ou fale com a agência; este aviso não confirma a causa.",
+        INFINITEPAY_NOT_CONFIGURED:
+          "Este pagamento não está disponível nesta loja no momento. Escolha outra forma ou entre em contato com a agência.",
+        INFINITEPAY_CHECKOUT_IN_PROGRESS:
+          "O checkout da InfinitePay está sendo preparado. Aguarde um instante e tente novamente.",
       };
+      const fallbackMessage =
+        form.paymentProvider === "infinitepay" && code?.startsWith("INFINITEPAY_")
+          ? "Não foi possível concluir o checkout da InfinitePay. Tente novamente ou fale com a agência; este aviso não confirma a causa."
+          : err instanceof Error
+            ? err.message
+            : "Erro ao finalizar reserva. Tente novamente.";
       const message =
         (code && messages[code]) ||
-        (err instanceof Error ? err.message : "Erro ao finalizar reserva. Tente novamente.");
+        fallbackMessage;
       const requestId =
         err instanceof PublicApiError ? err.requestId : undefined;
       setSubmitError(

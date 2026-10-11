@@ -1231,6 +1231,30 @@ export default function LojaConfiguracoes() {
                   A loja só oferecerá este provedor quando estiver ativado e a InfiniteTag estiver preenchida.
                 </p>
               </div>
+              <div
+                className="space-y-2 rounded-lg border border-muted bg-muted/30 p-3 text-sm"
+                data-testid="infinitepay-setup-guidance"
+              >
+                <p className="font-medium">Antes de testar um pagamento</p>
+                <p className="text-muted-foreground">
+                  No app InfinitePay, acesse Vendas → Checkout → Configurações → Habilitar Checkout Integrado.
+                  Também é possível habilitar pelo{" "}
+                  <a
+                    className="underline underline-offset-2"
+                    data-testid="link-infinitepay-settings"
+                    href="https://app.infinitepay.io/external-checkout#configuracoes"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    painel web da InfinitePay
+                  </a>
+                  . Confira também se a InfiniteTag acima está correta e sem o símbolo $.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Se a criação do link for recusada, confira esses requisitos. Uma resposta de validação, sozinha,
+                  não confirma qual configuração causou a recusa.
+                </p>
+              </div>
             </CardContent>
           </Card>
 

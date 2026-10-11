@@ -287,6 +287,11 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
             <div className="flex-1">
               <p className="font-semibold mb-0.5">Reserva não concluída</p>
               <p>{submitError}</p>
+              {form.paymentProvider === "infinitepay" && submitError.includes("este aviso não confirma a causa") && (
+                <p className="mt-1 text-xs text-amber-800" data-testid="status-infinitepay-checkout-help">
+                  Se o problema persistir, fale com a agência. Esta mensagem não confirma a causa da falha.
+                </p>
+              )}
             </div>
             <button
               aria-label="Fechar"
