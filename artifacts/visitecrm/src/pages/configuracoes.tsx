@@ -3627,6 +3627,7 @@ export function ClubConfigTab() {
   const [deletingBenefitIds, setDeletingBenefitIds] = useState<Set<string>>(() => new Set());
   const deletingBenefitIdsRef = useRef(new Set<string>());
   const [editingBenefitId, setEditingBenefitId] = useState<string | null>(null);
+  const [editingBenefitError, setEditingBenefitError] = useState<string | null>(null);
   const [editingBenefitDraft, setEditingBenefitDraft] = useState<ClubBenefitDraft>({
     label: "",
     value: "",
@@ -3939,6 +3940,7 @@ export function ClubConfigTab() {
 
   function startEditingBenefit(benefit: ClubBenefitAdmin) {
     setEditingBenefitId(benefit.id);
+    setEditingBenefitError(null);
     setEditingBenefitDraft({
       label: benefit.label,
       value: benefit.value ?? "",
@@ -3972,10 +3974,10 @@ export function ClubConfigTab() {
         item.id === benefit.id ? { ...item, ...updatedFields } : item
       )));
       setEditingBenefitId(null);
+      setEditingBenefitError(null);
       toast({ title: "Benefício atualizado!" });
     } catch {
-      // Keep the saved list untouched and return to it when an edit fails.
-      setEditingBenefitId(null);
+      setEditingBenefitError("Não foi possível salvar. Seu rascunho foi mantido para você tentar novamente ou cancelar.");
       toast({ title: "Erro ao atualizar benefício", variant: "destructive" });
     } finally {
       savingEditedBenefitRef.current = false;
@@ -4135,6 +4137,25 @@ export function ClubConfigTab() {
                           </span>
                           {editingBenefitId === benefit.id ? (
                             <div className="min-w-0 flex-1 space-y-2">
+                              <div
+                                className="rounded-md border bg-muted/30 px-3 py-2 text-xs"
+                                data-testid={`club-benefit-last-saved-${benefit.id}`}
+                              >
+                                <p className="font-medium">Última versão salva</p>
+                                <p className="mt-1">{benefit.label}{benefit.value ? ` · ${benefit.value}` : ""}</p>
+                                {benefit.description && (
+                                  <p className="mt-0.5 text-muted-foreground">{benefit.description}</p>
+                                )}
+                              </div>
+                              {editingBenefitError && (
+                                <p
+                                  role="alert"
+                                  className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+                                  data-testid={`club-edit-benefit-error-${benefit.id}`}
+                                >
+                                  {editingBenefitError} A versão acima continua salva.
+                                </p>
+                              )}
                               <Label htmlFor={`club-benefit-edit-label-${benefit.id}`} className="sr-only">
                                 Nome do benefício
                               </Label>
@@ -4142,10 +4163,10 @@ export function ClubConfigTab() {
                                 id={`club-benefit-edit-label-${benefit.id}`}
                                 data-testid={`club-edit-benefit-label-${benefit.id}`}
                                 value={editingBenefitDraft.label}
-                                onChange={(event) => setEditingBenefitDraft((draft) => ({
-                                  ...draft,
-                                  label: event.target.value,
-                                }))}
+                                onChange={(event) => {
+                                  setEditingBenefitError(null);
+                                  setEditingBenefitDraft((draft) => ({ ...draft, label: event.target.value }));
+                                }}
                                 maxLength={200}
                                 aria-label={`Nome do benefício ${benefit.label}`}
                               />
@@ -4159,10 +4180,10 @@ export function ClubConfigTab() {
                                     data-testid={`club-edit-benefit-value-${benefit.id}`}
                                     placeholder="Valor ou condição (opcional)"
                                     value={editingBenefitDraft.value}
-                                    onChange={(event) => setEditingBenefitDraft((draft) => ({
-                                      ...draft,
-                                      value: event.target.value,
-                                    }))}
+                                    onChange={(event) => {
+                                      setEditingBenefitError(null);
+                                      setEditingBenefitDraft((draft) => ({ ...draft, value: event.target.value }));
+                                    }}
                                     maxLength={200}
                                   />
                                 </div>
@@ -4175,10 +4196,10 @@ export function ClubConfigTab() {
                                     data-testid={`club-edit-benefit-description-${benefit.id}`}
                                     placeholder="Detalhes adicionais (opcional)"
                                     value={editingBenefitDraft.description}
-                                    onChange={(event) => setEditingBenefitDraft((draft) => ({
-                                      ...draft,
-                                      description: event.target.value,
-                                    }))}
+                                    onChange={(event) => {
+                                      setEditingBenefitError(null);
+                                      setEditingBenefitDraft((draft) => ({ ...draft, description: event.target.value }));
+                                    }}
                                     maxLength={500}
                                   />
                                 </div>
@@ -4188,7 +4209,10 @@ export function ClubConfigTab() {
                                   type="button"
                                   variant="ghost"
                                   data-testid={`club-cancel-edit-benefit-${benefit.id}`}
-                                  onClick={() => setEditingBenefitId(null)}
+                                  onClick={() => {
+                                    setEditingBenefitId(null);
+                                    setEditingBenefitError(null);
+                                  }}
                                   disabled={savingEditedBenefit}
                                 >
                                   Cancelar

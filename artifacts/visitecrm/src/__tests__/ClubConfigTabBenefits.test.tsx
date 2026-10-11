@@ -173,7 +173,7 @@ afterEach(async () => {
 });
 
 describe("ClubConfigTab benefit tiers", () => {
-  it("updates a benefit in place and keeps the saved row when an edit fails", async () => {
+  it("keeps a failed edit available for retry while showing the last saved values", async () => {
     benefitsForLoad = [
       {
         id: "gold-benefit-editable",
@@ -253,8 +253,16 @@ describe("ClubConfigTab benefit tiers", () => {
     const failedLabelInput = container.querySelector<HTMLInputElement>(
       '[data-testid="club-edit-benefit-label-gold-benefit-failure"]',
     );
+    const failedValueInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-value-gold-benefit-failure"]',
+    );
+    const failedDescriptionInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-description-gold-benefit-failure"]',
+    );
     await act(async () => {
       setInputValue(failedLabelInput!, "Alteração que falhou");
+      setInputValue(failedValueInput!, "12%");
+      setInputValue(failedDescriptionInput!, "Descrição da tentativa");
       container.querySelector<HTMLButtonElement>(
         '[data-testid="club-save-edit-benefit-gold-benefit-failure"]',
       )!.click();
@@ -265,12 +273,91 @@ describe("ClubConfigTab benefit tiers", () => {
       .toContain("Benefício não alterado");
     expect(container.querySelector('[data-testid="club-benefit-gold-benefit-failure"]')?.textContent)
       .toContain("Descrição preservada");
-    expect(container.querySelector('[data-testid="club-edit-benefit-label-gold-benefit-failure"]'))
-      .toBeNull();
+    expect(container.querySelector('[data-testid="club-benefit-last-saved-gold-benefit-failure"]')?.textContent)
+      .toContain("Benefício não alterado");
+    expect(container.querySelector('[data-testid="club-benefit-last-saved-gold-benefit-failure"]')?.textContent)
+      .toContain("5%");
+    expect(container.querySelector('[data-testid="club-benefit-last-saved-gold-benefit-failure"]')?.textContent)
+      .toContain("Descrição preservada");
+    expect(failedLabelInput?.value).toBe("Alteração que falhou");
+    expect(failedValueInput?.value).toBe("12%");
+    expect(failedDescriptionInput?.value).toBe("Descrição da tentativa");
+    expect(container.querySelector('[data-testid="club-edit-benefit-error-gold-benefit-failure"]')?.textContent)
+      .toContain("Seu rascunho foi mantido");
     expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
       title: "Erro ao atualizar benefício",
       variant: "destructive",
     }));
+
+    rejectPut = false;
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-failure"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const retriedUpdate = fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT").at(-1);
+    expect(JSON.parse(String(retriedUpdate?.[1]?.body))).toEqual({
+      label: "Alteração que falhou",
+      value: "12%",
+      description: "Descrição da tentativa",
+    });
+    expect(container.querySelector('[data-testid="club-edit-benefit-label-gold-benefit-failure"]'))
+      .toBeNull();
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-failure"]')?.textContent)
+      .toContain("Alteração que falhou");
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-failure"]')?.textContent)
+      .toContain("Descrição da tentativa");
+  });
+
+  it("lets staff cancel a failed edit and return to the unchanged saved benefit", async () => {
+    benefitsForLoad = [{
+      id: "gold-benefit-cancel",
+      tier: "gold",
+      benefitKey: "saved_key",
+      label: "Benefício salvo",
+      description: "Descrição salva",
+      value: "8%",
+      sortOrder: 0,
+    }];
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      getTab(container, "gold").click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-edit-benefit-gold-benefit-cancel"]',
+      )!.click();
+    });
+    rejectPut = true;
+
+    const label = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-label-gold-benefit-cancel"]',
+    );
+    await act(async () => {
+      setInputValue(label!, "Rascunho não salvo");
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-cancel"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.querySelector('[data-testid="club-edit-benefit-error-gold-benefit-cancel"]'))
+      .not.toBeNull();
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-cancel-edit-benefit-gold-benefit-cancel"]',
+      )!.click();
+    });
+
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-cancel"]')?.textContent)
+      .toContain("Benefício salvo");
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-cancel"]')?.textContent)
+      .toContain("Descrição salva");
+    expect(container.querySelector('[data-testid="club-edit-benefit-label-gold-benefit-cancel"]'))
+      .toBeNull();
   });
 
   it("keeps each tier's list and count isolated while adding and removing benefits", async () => {
