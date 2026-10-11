@@ -2,10 +2,12 @@ import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreOrder } from "@/lib/storeApi";
 import { cleanupRoots, renderComponent } from "../../__tests__/eventSourceHarness";
-import { OrderDetail, StripeModeBadge } from "./pedidos";
+import { LatePaymentReviewQueue, OrderDetail, StripeModeBadge } from "./pedidos";
 
 const mocks = vi.hoisted(() => ({
   getOrder: vi.fn(),
+  getLatePayments: vi.fn(),
+  refundLatePayment: vi.fn(),
   recordManualPixDeposit: vi.fn(),
   updateOrderStatus: vi.fn(),
   toast: vi.fn(),
@@ -14,6 +16,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/storeApi", () => ({
   storeApi: {
     getOrder: mocks.getOrder,
+    getLatePayments: mocks.getLatePayments,
+    refundLatePayment: mocks.refundLatePayment,
     recordManualPixDeposit: mocks.recordManualPixDeposit,
     updateOrderStatus: mocks.updateOrderStatus,
   },
@@ -27,6 +31,8 @@ afterEach(cleanupRoots);
 
 beforeEach(() => {
   mocks.getOrder.mockReset();
+  mocks.getLatePayments.mockReset();
+  mocks.refundLatePayment.mockReset();
   mocks.recordManualPixDeposit.mockReset();
   mocks.updateOrderStatus.mockReset();
   mocks.toast.mockReset();
@@ -92,6 +98,27 @@ function KeyedOrderDetail({ orderId }: { orderId: string }) {
 }
 
 describe("OrderDetail", () => {
+  it("shows manual refund instructions for late payments from providers without automated refunds", async () => {
+    mocks.getLatePayments.mockResolvedValue({ data: [{
+      id: "payment-late-manual",
+      amount: "75.00",
+      status: "paid",
+      gateway: "infinitepay",
+      transactionId: "tx-late",
+      notes: "Pagamento tardio confirmado pelo provedor",
+      createdAt: "2026-10-11T12:00:00.000Z",
+      orderId: "order-cancelled",
+      orderNumber: "ORD-100",
+      customerName: "Cliente",
+      isTestMode: false,
+    }] });
+    const view = await renderComponent(createElement(LatePaymentReviewQueue));
+    await act(async () => { await Promise.resolve(); });
+    expect(view.container.textContent).toContain("Pagamentos recebidos após cancelamento");
+    expect(view.container.textContent).toContain("Faça o reembolso no painel do provedor");
+    expect(view.container.querySelector('[data-testid="button-refund-late-payment-payment-late-manual"]')).toBeNull();
+  });
+
   it("labels Stripe test and unknown modes while leaving live orders unmarked", async () => {
     const view = await renderComponent(createElement(StripeModeBadge, {
       paymentProvider: "stripe",

@@ -723,6 +723,74 @@ export function StripeModeBadge({
 
 const LIMIT = 50;
 
+export function LatePaymentReviewQueue() {
+  const { toast } = useToast();
+  const [payments, setPayments] = useState<Awaited<ReturnType<typeof storeApi.getLatePayments>>["data"]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refundingId, setRefundingId] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      const result = await storeApi.getLatePayments();
+      setPayments(result.data);
+    } catch (error) {
+      toast({ title: "Não foi possível carregar pagamentos para revisão", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+  useEffect(() => { void load(); }, [load]);
+
+  async function refund(id: string) {
+    if (!window.confirm("Solicitar o reembolso integral deste pagamento no Stripe?")) return;
+    setRefundingId(id);
+    try {
+      const result = await storeApi.refundLatePayment(id);
+      toast({
+        title: result.status === "succeeded" ? "Reembolso concluído" : result.status === "failed" ? "Reembolso falhou" : "Reembolso enviado",
+        description: `Stripe: ${result.status}`,
+        variant: result.status === "failed" ? "destructive" : undefined,
+      });
+      await load();
+    } catch (error) {
+      toast({ title: "Reembolso não confirmado", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally {
+      setRefundingId(null);
+    }
+  }
+
+  return (
+    <Card data-testid="card-late-payment-review">
+      <CardHeader><CardTitle>Pagamentos recebidos após cancelamento</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? <Loader2 className="h-5 w-5 animate-spin" data-testid="status-late-payments-loading" /> :
+          payments.length === 0 ? <p className="text-sm text-muted-foreground" data-testid="text-no-late-payments">Nenhum pagamento aguardando revisão.</p> :
+          payments.map((payment) => {
+            const manualStripeReview = payment.notes?.includes("Reembolso Stripe failed:")
+              || payment.notes?.includes("Reembolso Stripe não confirmado");
+            return (
+            <div key={payment.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3" data-testid={`row-late-payment-${payment.id}`}>
+              <div className="min-w-0">
+                <p className="font-medium">{payment.customerName} · pedido {payment.orderNumber}</p>
+                <p className="text-sm text-muted-foreground">{payment.gateway === "stripe" ? `Stripe${payment.isTestMode ? " · teste" : ""}` : `${payment.gateway ?? "Provedor"} · reembolso manual`} · R$ {Number(payment.amount).toFixed(2)} · {payment.status}</p>
+                {payment.notes?.includes("Reembolso Stripe") && <p className="text-xs text-muted-foreground">{payment.notes.split("\n").at(-1)}</p>}
+              </div>
+              {payment.gateway === "stripe" && manualStripeReview ? (
+                <p className="max-w-sm text-sm text-amber-700">Estorno não confirmado. Confira o painel Stripe antes de qualquer nova tentativa.</p>
+              ) : payment.gateway === "stripe" && payment.status !== "refunded" && !payment.notes?.includes("Reembolso Stripe succeeded:") ? (
+                <Button size="sm" disabled={refundingId !== null} onClick={() => void refund(payment.id)} data-testid={`button-refund-late-payment-${payment.id}`}>
+                  {refundingId === payment.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Reembolsar no Stripe
+                </Button>
+              ) : payment.gateway !== "stripe" ? (
+                <p className="max-w-sm text-sm text-amber-700">Faça o reembolso no painel do provedor e registre a devolução manualmente. A reserva continua cancelada.</p>
+              ) : null}
+            </div>
+          );
+          })}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function LojaPedidos() {
   const { toast } = useToast();
   const [orders, setOrders] = useState<StoreOrder[]>([]);
@@ -806,6 +874,7 @@ export default function LojaPedidos() {
 
   return (
     <div className="space-y-6">
+      <LatePaymentReviewQueue />
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold">Pedidos</h1>

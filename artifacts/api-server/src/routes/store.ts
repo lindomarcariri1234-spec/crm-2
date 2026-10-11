@@ -41,6 +41,7 @@ import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, STORE_ORDER_STATUS, S
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
 import { decryptOrPassthrough, encryptCredential } from "../lib/crypto";
 import { sendPriceDropAlertEmail } from "../queues/email-helpers";
+import { logger } from "../lib/logger";
 import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
 import { recalculateClientFinancials } from "../services/client-financials";
 import {
@@ -832,6 +833,106 @@ router.delete("/store/products/:id", async (req, res, next: NextFunction): Promi
   } catch (err) {
     next(err);
   }
+});
+
+router.get("/store/late-payments", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const store = await getStoreForTenant(me.tenantId);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    const data = await db.select({
+      id: paymentsTable.id,
+      amount: paymentsTable.amount,
+      status: paymentsTable.status,
+      gateway: paymentsTable.gateway,
+      transactionId: paymentsTable.transactionId,
+      notes: paymentsTable.notes,
+      createdAt: paymentsTable.createdAt,
+      orderId: storeOrdersTable.id,
+      orderNumber: storeOrdersTable.orderNumber,
+      customerName: storeOrdersTable.customerName,
+      isTestMode: paymentsTable.isTestMode,
+    }).from(paymentsTable).innerJoin(storeOrdersTable, eq(storeOrdersTable.id, paymentsTable.orderId))
+      .where(and(
+        eq(storeOrdersTable.storeId, store.id),
+        eq(storeOrdersTable.tenantId, me.tenantId),
+        ilike(paymentsTable.notes, "%Pagamento tardio confirmado pelo provedor%"),
+        ne(paymentsTable.status, PAYMENT_STATUS.REFUNDED),
+      )).orderBy(desc(paymentsTable.createdAt)).limit(100);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+router.post("/store/late-payments/:id/refund", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const store = await getStoreForTenant(me.tenantId);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    const [payment] = await db.select({
+      id: paymentsTable.id, amount: paymentsTable.amount, status: paymentsTable.status,
+      gateway: paymentsTable.gateway, transactionId: paymentsTable.transactionId,
+      isTestMode: paymentsTable.isTestMode, notes: paymentsTable.notes,
+      orderId: storeOrdersTable.id, orderStatus: storeOrdersTable.status,
+    }).from(paymentsTable).innerJoin(storeOrdersTable, eq(storeOrdersTable.id, paymentsTable.orderId))
+      .where(and(
+        eq(paymentsTable.id, req.params.id),
+        eq(paymentsTable.tenantId, me.tenantId),
+        eq(storeOrdersTable.storeId, store.id),
+        eq(storeOrdersTable.tenantId, me.tenantId),
+        ilike(paymentsTable.notes, "%Pagamento tardio confirmado pelo provedor%"),
+      )).limit(1);
+    if (!payment) { next(new NotFoundError("Late payment not found", "NOT_FOUND")); return; }
+    if (payment.orderStatus !== STORE_ORDER_STATUS.CANCELLED) {
+      res.status(409).json({ error: "O pedido não está cancelado; este fluxo é reservado a pagamentos recebidos após o cancelamento." });
+      return;
+    }
+    if (payment.gateway !== "stripe") {
+      res.status(409).json({ error: "Este provedor exige reembolso manual. Confira o recebimento no painel do provedor e registre a devolução por lá." });
+      return;
+    }
+    if (payment.status === PAYMENT_STATUS.REFUNDED || payment.notes?.includes("Reembolso Stripe confirmado:")) {
+      res.status(409).json({ error: "Este pagamento já foi reembolsado." });
+      return;
+    }
+    if (!payment.transactionId?.startsWith("pi_") || payment.isTestMode == null) {
+      res.status(409).json({ error: "Não foi possível confirmar o modo Stripe do pagamento. Revise-o manualmente no painel Stripe." });
+      return;
+    }
+    const secretKey = decryptOrPassthrough(store.stripeSecretKey);
+    if (!secretKey || (payment.isTestMode ? !secretKey.startsWith("sk_test_") : !secretKey.startsWith("sk_live_"))) {
+      res.status(409).json({ error: "A chave Stripe configurada não corresponde ao modo deste pagamento. Revise-o no painel Stripe correto." });
+      return;
+    }
+    try {
+      const stripe = new Stripe(secretKey, {
+        apiVersion: "2025-08-27.basil" as Stripe.LatestApiVersion,
+        maxNetworkRetries: 0,
+        timeout: 15_000,
+      });
+      const refund = await stripe.refunds.create({
+        payment_intent: payment.transactionId,
+        amount: Math.round(Number(payment.amount) * 100),
+      }, { idempotencyKey: `late-payment-refund-${payment.id}` });
+      const note = `Reembolso Stripe ${refund.status}: ${refund.id}`;
+      await db.update(paymentsTable).set({
+        status: refund.status === "succeeded" ? PAYMENT_STATUS.REFUNDED : payment.status,
+        notes: sql`concat_ws(E'\\n', NULLIF(${paymentsTable.notes}, ''), ${note})`,
+      }).where(and(eq(paymentsTable.id, payment.id), eq(paymentsTable.tenantId, me.tenantId)));
+      res.json({ success: refund.status !== "failed", status: refund.status, refundId: refund.id });
+    } catch (err) {
+      // Keep the late-payment marker visible. Retry uses the same Stripe key and cannot create a second refund.
+      logger.error({ paymentId: payment.id, errorType: err instanceof Error ? err.name : "unknown" }, "[store] Stripe late-payment refund failed");
+      await db.update(paymentsTable).set({
+        notes: sql`concat_ws(E'\\n', NULLIF(${paymentsTable.notes}, ''), 'Reembolso Stripe não confirmado; revisar no painel Stripe antes de uma nova tentativa.')`,
+      }).where(and(eq(paymentsTable.id, payment.id), eq(paymentsTable.tenantId, me.tenantId)));
+      res.status(502).json({ error: "O Stripe não confirmou o reembolso. O pagamento continua na fila para nova tentativa ou revisão manual." });
+    }
+  } catch (err) { next(err); }
 });
 
 router.get("/store/orders", async (req, res, next: NextFunction): Promise<void> => {
