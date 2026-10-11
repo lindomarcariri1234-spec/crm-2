@@ -1,5 +1,5 @@
 import { db } from "@workspace/db";
-import { paymentsTable, reservationsTable, storeOrdersTable, tripsTable } from "@workspace/db";
+import { reservationsTable, storeOrdersTable, tripsTable } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS } from "@workspace/permissions";
@@ -80,7 +80,31 @@ export async function runExpiredReservationsCron(): Promise<void> {
         SET
           status       = ${RESERVATION_STATUS.CANCELLED},
           cancelled_at = now(),
-          updated_at   = now()
+          updated_at   = now(),
+          notes        = CASE WHEN EXISTS (
+            SELECT 1
+            FROM payments
+            WHERE payments.tenant_id = reservations.tenant_id
+              AND payments.type = ${PAYMENT_TYPE.RECEIVABLE}
+              AND payments.status = ${PAYMENT_STATUS.PAID}
+              AND (
+                payments.reservation_id = reservations.id
+                OR (
+                  payments.reservation_id IS NULL
+                  AND payments.category = 'reservation'
+                  AND payments.order_id = (
+                    SELECT store_orders.id
+                    FROM store_orders
+                    WHERE store_orders.tenant_id = reservations.tenant_id
+                      AND store_orders.order_number = reservations.store_order_id
+                  )
+                )
+              )
+          ) THEN concat_ws(
+            E'\n',
+            NULLIF(reservations.notes, ''),
+            'Pagamento confirmado abaixo do valor necessário; reserva expirou e foi cancelada. Revisar reembolso.'
+          ) ELSE reservations.notes END
         WHERE
           status     = ${RESERVATION_STATUS.PENDING}
           AND expires_at IS NOT NULL

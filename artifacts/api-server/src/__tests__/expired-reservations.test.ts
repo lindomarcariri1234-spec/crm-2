@@ -262,6 +262,10 @@ describe("runExpiredReservationsCron()", () => {
 
     expect((await readReservation(resId("payment-partial")))?.status).toBe("cancelled");
     expect(await readAvailableSeats()).toBe(INITIAL_SEATS);
+    const [reservationWithPartialPayment] = await db.select({ notes: reservationsTable.notes })
+      .from(reservationsTable)
+      .where(eq(reservationsTable.id, resId("payment-partial")));
+    expect(reservationWithPartialPayment?.notes).toContain("Revisar reembolso");
   });
 
   it("uses the full reservation value as the threshold when no deposit is configured", async () => {
