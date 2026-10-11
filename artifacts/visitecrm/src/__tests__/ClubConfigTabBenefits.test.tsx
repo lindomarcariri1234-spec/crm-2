@@ -342,7 +342,7 @@ describe("ClubConfigTab benefit tiers", () => {
       .toContain("Descrição da tentativa");
   });
 
-  it("preserves the draft on a concurrent edit and requires refresh before retry", async () => {
+  it("combines selected fields from both versions before retrying a concurrent edit", async () => {
     benefitsForLoad = [{
       id: "gold-benefit-conflict",
       tier: "gold",
@@ -374,8 +374,12 @@ describe("ClubConfigTab benefit tiers", () => {
     const labelInput = container.querySelector<HTMLInputElement>(
       '[data-testid="club-edit-benefit-label-gold-benefit-conflict"]',
     )!;
+    const descriptionInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-description-gold-benefit-conflict"]',
+    )!;
     await act(async () => {
       setInputValue(labelInput, "Meu rascunho");
+      setInputValue(descriptionInput, "Minha descrição em rascunho");
       container.querySelector<HTMLButtonElement>(
         '[data-testid="club-save-edit-benefit-gold-benefit-conflict"]',
       )!.click();
@@ -405,10 +409,30 @@ describe("ClubConfigTab benefit tiers", () => {
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-benefit-conflict-choice-latest-label-gold-benefit-conflict"]',
+      )!.click();
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-benefit-conflict-choice-draft-label-gold-benefit-conflict"]',
+      )!.click();
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-benefit-conflict-choice-latest-value-gold-benefit-conflict"]',
+      )!.click();
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-benefit-conflict-choice-draft-description-gold-benefit-conflict"]',
+      )!.click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
         '[data-testid="club-refresh-edit-benefit-gold-benefit-conflict"]',
       )!.click();
     });
     expect(labelInput.value).toBe("Meu rascunho");
+    expect(container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-value-gold-benefit-conflict"]',
+    )?.value).toBe("8%");
+    expect(container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-description-gold-benefit-conflict"]',
+    )?.value).toBe("Minha descrição em rascunho");
     expect(labelInput.disabled).toBe(false);
 
     await act(async () => {
@@ -420,6 +444,8 @@ describe("ClubConfigTab benefit tiers", () => {
     const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT");
     expect(JSON.parse(String(puts[1]?.[1]?.body))).toMatchObject({
       label: "Meu rascunho",
+      value: "8%",
+      description: "Minha descrição em rascunho",
       expectedUpdatedAt: "2026-02-01T00:00:00.000Z",
     });
   });
@@ -483,6 +509,81 @@ describe("ClubConfigTab benefit tiers", () => {
     )?.value).toBe("Nome atualizado por outra pessoa");
     expect(container.querySelector('[data-testid="club-edit-benefit-conflict-gold-benefit-one-field-conflict"]'))
       .toBeNull();
+  });
+
+  it("keeps draft fields that were not changed remotely when choosing the saved value for another field", async () => {
+    benefitsForLoad = [{
+      id: "gold-benefit-mixed-merge",
+      tier: "gold",
+      benefitKey: "mixed_merge",
+      label: "Nome anterior",
+      description: "Descrição anterior",
+      value: "5%",
+      sortOrder: 0,
+    }];
+    conflictBenefit = {
+      ...benefitsForLoad[0],
+      label: "Nome salvo por outra pessoa",
+      updatedAt: "2026-02-03T00:00:00.000Z",
+    };
+    conflictPut = true;
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      getTab(container, "gold").click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-edit-benefit-gold-benefit-mixed-merge"]',
+      )!.click();
+    });
+    await act(async () => {
+      setInputValue(container.querySelector<HTMLInputElement>(
+        '[data-testid="club-edit-benefit-label-gold-benefit-mixed-merge"]',
+      )!, "Meu nome");
+      setInputValue(container.querySelector<HTMLInputElement>(
+        '[data-testid="club-edit-benefit-value-gold-benefit-mixed-merge"]',
+      )!, "6%");
+      setInputValue(container.querySelector<HTMLInputElement>(
+        '[data-testid="club-edit-benefit-description-gold-benefit-mixed-merge"]',
+      )!, "Minha descrição");
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-mixed-merge"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-benefit-conflict-choice-latest-label-gold-benefit-mixed-merge"]',
+      )!.click();
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-refresh-edit-benefit-gold-benefit-mixed-merge"]',
+      )!.click();
+    });
+    expect(container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-label-gold-benefit-mixed-merge"]',
+    )?.value).toBe("Nome salvo por outra pessoa");
+    expect(container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-value-gold-benefit-mixed-merge"]',
+    )?.value).toBe("6%");
+    expect(container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-description-gold-benefit-mixed-merge"]',
+    )?.value).toBe("Minha descrição");
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-mixed-merge"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const retry = fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT").at(-1);
+    expect(JSON.parse(String(retry?.[1]?.body))).toMatchObject({
+      label: "Nome salvo por outra pessoa",
+      value: "6%",
+      description: "Minha descrição",
+      expectedUpdatedAt: "2026-02-03T00:00:00.000Z",
+    });
   });
 
   it("lets staff cancel a failed edit and return to the unchanged saved benefit", async () => {

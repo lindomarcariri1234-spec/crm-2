@@ -3630,6 +3630,14 @@ export function ClubConfigTab() {
   const [editingBenefitId, setEditingBenefitId] = useState<string | null>(null);
   const [editingBenefitError, setEditingBenefitError] = useState<string | null>(null);
   const [editingBenefitConflict, setEditingBenefitConflict] = useState(false);
+  const [editingBenefitConflictChoices, setEditingBenefitConflictChoices] = useState<
+    Partial<Record<keyof ClubBenefitDraft, "draft" | "latest">>
+  >({});
+  const [editingBenefitConflictDraft, setEditingBenefitConflictDraft] = useState<ClubBenefitDraft>({
+    label: "",
+    value: "",
+    description: "",
+  });
   const [editingBenefitExpectedUpdatedAt, setEditingBenefitExpectedUpdatedAt] = useState("");
   const [editingBenefitOriginal, setEditingBenefitOriginal] = useState<ClubBenefitDraft>({
     label: "",
@@ -3951,6 +3959,7 @@ export function ClubConfigTab() {
     setEditingBenefitId(benefit.id);
     setEditingBenefitError(null);
     setEditingBenefitConflict(false);
+    setEditingBenefitConflictChoices({});
     setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
     const original = {
       label: benefit.label,
@@ -3989,6 +3998,8 @@ export function ClubConfigTab() {
         if (body?.error === "benefit_changed" && body.current?.id === benefit.id) {
           setBenefits((previous) => previous.map((item) => item.id === benefit.id ? body.current! : item));
           setEditingBenefitConflict(true);
+          setEditingBenefitConflictChoices({});
+          setEditingBenefitConflictDraft({ ...editingBenefitDraft });
           setEditingBenefitError(null);
           toast({
             title: "Este benefício foi alterado por outra pessoa",
@@ -4203,6 +4214,7 @@ export function ClubConfigTab() {
                                     onClick={() => {
                                       setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
                                       setEditingBenefitConflict(false);
+                                      setEditingBenefitConflictChoices({});
                                       setEditingBenefitError(null);
                                     }}
                                   >
@@ -4223,6 +4235,7 @@ export function ClubConfigTab() {
                                       setEditingBenefitOriginal(latest);
                                       setEditingBenefitDraft(latest);
                                       setEditingBenefitConflict(false);
+                                      setEditingBenefitConflictChoices({});
                                       setEditingBenefitError(null);
                                     }}
                                   >
@@ -4248,6 +4261,37 @@ export function ClubConfigTab() {
                                           <span className="break-words font-medium">
                                             Salvo agora: {latest || "—"}
                                           </span>
+                                          <div className="flex flex-wrap gap-1 sm:col-start-2 sm:col-span-2">
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant={editingBenefitConflictChoices[field] === "latest" ? "outline" : "secondary"}
+                                              aria-pressed={editingBenefitConflictChoices[field] !== "latest"}
+                                              data-testid={`club-benefit-conflict-choice-draft-${field}-${benefit.id}`}
+                                              onClick={() => {
+                                                setEditingBenefitConflictChoices((choices) => ({ ...choices, [field]: "draft" }));
+                                                setEditingBenefitDraft((draft) => ({
+                                                  ...draft,
+                                                  [field]: editingBenefitConflictDraft[field],
+                                                }));
+                                              }}
+                                            >
+                                              Manter meu rascunho
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant={editingBenefitConflictChoices[field] === "latest" ? "secondary" : "outline"}
+                                              aria-pressed={editingBenefitConflictChoices[field] === "latest"}
+                                              data-testid={`club-benefit-conflict-choice-latest-${field}-${benefit.id}`}
+                                              onClick={() => {
+                                                setEditingBenefitConflictChoices((choices) => ({ ...choices, [field]: "latest" }));
+                                                setEditingBenefitDraft((draft) => ({ ...draft, [field]: latest }));
+                                              }}
+                                            >
+                                              Usar valor salvo
+                                            </Button>
+                                          </div>
                                         </div>
                                       ))}
                                   </div>
