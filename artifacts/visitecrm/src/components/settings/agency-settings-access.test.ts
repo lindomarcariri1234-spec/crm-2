@@ -21,19 +21,25 @@ describe("agency settings access", () => {
     )).toBe("/configuracoes?campaign=summer#contact");
   });
 
-  it("exposes only the agency profile for every agency role", () => {
+  it("exposes general agency settings and the Club for every agency role", () => {
     const admin = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, null);
     const manager = getAgencySettingsAccess(ROLES.AGENCY_MANAGER, null);
     const values = (groups: typeof admin.navigationGroups) =>
       groups.flatMap((group) => group.items.map((item) => item.value));
 
-    expect(values(admin.navigationGroups)).toEqual(["agency"]);
-    expect(values(manager.navigationGroups)).toEqual(["agency"]);
-    expect([...admin.availableTabs]).toEqual(["agency"]);
-    expect([...manager.availableTabs]).toEqual(["agency"]);
+    expect(values(admin.navigationGroups)).toEqual(["agency", "clube"]);
+    expect(values(manager.navigationGroups)).toEqual(["agency", "clube"]);
+    expect([...admin.availableTabs]).toEqual(["agency", "clube"]);
+    expect([...manager.availableTabs]).toEqual(["agency", "clube"]);
   });
 
-  it.each(["backup", "integrity", "clube", "integrations", "plan"])(
+  it("opens the Club for a direct link", () => {
+    const access = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, "clube");
+    expect(access.initialTab).toBe("clube");
+    expect(access.availableTabs.has("clube")).toBe(true);
+  });
+
+  it.each(["backup", "integrity", "integrations", "plan"])(
     "sends the legacy %s section to the agency profile",
     (requestedTab) => {
       const access = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, requestedTab);

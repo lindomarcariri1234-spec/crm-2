@@ -138,7 +138,7 @@ describe("agency settings shared section links", () => {
       expect(window.location.search).toContain(`tab=${tab}`);
       expect(window.location.hash).toBe("#agency-settings");
 
-      const nextTab = tab === "agency" ? "plan" : "agency";
+      const nextTab = tab === "agency" ? "clube" : "agency";
       const nextLink = container.querySelector<HTMLButtonElement>(
         `[data-testid="settings-link-${nextTab}"]`,
       );
@@ -172,7 +172,7 @@ describe("agency settings browser history", () => {
     const { container } = await renderComponent(createElement(Configuracoes));
     expectActivePanel(container, "agency");
 
-    for (const tab of ["plan", "team"]) {
+    for (const tab of ["clube"]) {
       const link = container.querySelector<HTMLButtonElement>(`[data-testid="settings-link-${tab}"]`);
       expect(link).not.toBeNull();
       await act(async () => {
@@ -184,20 +184,12 @@ describe("agency settings browser history", () => {
     }
 
     await traverseHistory("back");
-    expect(new URLSearchParams(window.location.search).get("tab")).toBe("plan");
-    expectActivePanel(container, "plan");
-
-    await traverseHistory("back");
     expect(new URLSearchParams(window.location.search).get("tab")).toBe("agency");
     expectActivePanel(container, "agency");
 
     await traverseHistory("forward");
-    expect(new URLSearchParams(window.location.search).get("tab")).toBe("plan");
-    expectActivePanel(container, "plan");
-
-    await traverseHistory("forward");
-    expect(new URLSearchParams(window.location.search).get("tab")).toBe("team");
-    expectActivePanel(container, "team");
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("clube");
+    expectActivePanel(container, "clube");
   });
 
   it.each(["backup", "integrity"])(

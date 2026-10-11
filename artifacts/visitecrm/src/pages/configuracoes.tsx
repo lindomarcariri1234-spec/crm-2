@@ -62,6 +62,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
 import {
   buildAgencySettingsTabUrl,
   getLegacyBackupRedirect,
@@ -4769,7 +4770,7 @@ export default function Configuracoes() {
   const currentHistoryStateRef = useRef(window.history.state);
   const { data: me } = useGetMe();
   const requestedTab = new URLSearchParams(currentSearch).get("tab");
-  const { isAgencyAdmin, initialTab, availableTabs } = getAgencySettingsAccess(
+  const { isAgencyAdmin, initialTab, navigationGroups, availableTabs } = getAgencySettingsAccess(
     me?.role,
     requestedTab,
   );
@@ -4783,7 +4784,7 @@ export default function Configuracoes() {
       }
       return;
     }
-    if (!requestedTab || requestedTab === "agency") return;
+    if (!requestedTab || requestedTab === "agency" || requestedTab === "clube") return;
     setLocation(normalizeAgencySettingsTabUrl(window.location.href), { replace: true });
   }, [me, me?.role, requestedTab, setLocation]);
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -4901,16 +4902,30 @@ export default function Configuracoes() {
       <div className="relative overflow-hidden rounded-3xl border border-[#D9CBBE] bg-[#FFF9F0] px-5 py-6 shadow-[0_10px_28px_rgba(93,62,42,.07)] sm:px-7 dark:border-border dark:bg-card">
         <div className="pointer-events-none absolute -right-10 -top-16 h-44 w-44 rounded-full border-[16px] border-[#D8A646]/20" />
         <div className="relative">
-          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F]">CRM · Operação turística</p>
-          <h1 className="text-2xl font-bold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">Configuração geral</h1>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F]">
+            {activeTab === "clube" ? "CRM · Relacionamento" : "CRM · Operação turística"}
+          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">
+            {activeTab === "clube" ? "Clube de benefícios" : "Configuração geral"}
+          </h1>
           <p className="mt-1 max-w-2xl text-sm text-[#71808C] dark:text-muted-foreground">
-            Cadastre os dados do seu empreendimento e os identificadores usados por viagens, reservas e atendimento.
+            {activeTab === "clube"
+              ? "Configure a identidade e os benefícios do programa de relacionamento com seus clientes."
+              : "Cadastre os dados do seu empreendimento e os identificadores usados por viagens, reservas e atendimento."}
           </p>
         </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <div className="min-w-0">
+        <div className="grid items-start gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <SettingsNavigation
+            groups={navigationGroups}
+            pageLabel="Seções do CRM"
+            testIdPrefix="agency-settings"
+            value={activeTab}
+            onValueChange={handleTabChange}
+          />
+          <div className="min-w-0">
           <TabsContent value="agency">
             <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
@@ -5062,6 +5077,7 @@ export default function Configuracoes() {
             </Card>
           </TabsContent>
 
+        </div>
         </div>
       </Tabs>
       <AlertDialog open={pendingExit !== null} onOpenChange={(open) => { if (!open) setPendingExit(null); }}>

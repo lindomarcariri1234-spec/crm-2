@@ -1,13 +1,15 @@
-import { Building2 } from "lucide-react";
+import { Building2, Crown } from "lucide-react";
 import { ROLES } from "@workspace/permissions";
 import type { SettingsNavigationGroup } from "./SettingsNavigation";
 
 const SETTINGS_TAB_OPTIONS = [
   { value: "agency", label: "Agência", icon: Building2 },
+  { value: "clube", label: "Clube", icon: Crown },
 ] as const;
 
 const SETTINGS_NAVIGATION_GROUPS = [
   { label: "Configuração geral", values: ["agency"] },
+  { label: "Relacionamento", values: ["clube"] },
 ] as const;
 
 export function buildAgencySettingsTabUrl(currentHref: string, tab: string): string {
@@ -22,11 +24,11 @@ export function normalizeAgencySettingsTabUrl(currentHref: string): string {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-export function getAgencySettingsAccess(role: string | undefined, _requestedTab: string | null) {
+export function getAgencySettingsAccess(role: string | undefined, requestedTab: string | null) {
   const isAgencyAdmin = role === ROLES.AGENCY_ADMIN;
   const visibleTabOptions = SETTINGS_TAB_OPTIONS;
   const availableTabs = new Set<string>(visibleTabOptions.map((tab) => tab.value));
-  const initialTab = "agency";
+  const initialTab = requestedTab && availableTabs.has(requestedTab) ? requestedTab : "agency";
   const navigationGroups: readonly SettingsNavigationGroup[] = SETTINGS_NAVIGATION_GROUPS
     .map((group) => ({
       label: group.label,
