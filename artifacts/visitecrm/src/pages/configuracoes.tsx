@@ -3576,6 +3576,7 @@ interface ClubBenefitAdmin {
   description: string | null;
   value: string | null;
   sortOrder: number;
+  updatedAt: string;
 }
 
 type ClubBenefitDraft = { label: string; value: string; description: string };
@@ -3628,6 +3629,8 @@ export function ClubConfigTab() {
   const deletingBenefitIdsRef = useRef(new Set<string>());
   const [editingBenefitId, setEditingBenefitId] = useState<string | null>(null);
   const [editingBenefitError, setEditingBenefitError] = useState<string | null>(null);
+  const [editingBenefitConflict, setEditingBenefitConflict] = useState(false);
+  const [editingBenefitExpectedUpdatedAt, setEditingBenefitExpectedUpdatedAt] = useState("");
   const [editingBenefitDraft, setEditingBenefitDraft] = useState<ClubBenefitDraft>({
     label: "",
     value: "",
@@ -3878,7 +3881,7 @@ export function ClubConfigTab() {
         body: JSON.stringify(requestBenefit),
       });
       if (!res.ok) throw new Error("add_benefit_failed");
-      const data = await res.json() as { id: string };
+      const data = await res.json() as { id: string; updatedAt: string };
       setBenefits((prev) => {
         if (prev.some((benefit) => benefit.id === data.id)) return prev;
         return [
@@ -3887,6 +3890,7 @@ export function ClubConfigTab() {
             id: data.id,
             ...requestBenefit,
             sortOrder: prev.filter((benefit) => benefit.tier === requestBenefit.tier).length,
+            updatedAt: data.updatedAt,
           },
         ];
       });
@@ -3941,6 +3945,8 @@ export function ClubConfigTab() {
   function startEditingBenefit(benefit: ClubBenefitAdmin) {
     setEditingBenefitId(benefit.id);
     setEditingBenefitError(null);
+    setEditingBenefitConflict(false);
+    setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
     setEditingBenefitDraft({
       label: benefit.label,
       value: benefit.value ?? "",
@@ -3966,15 +3972,32 @@ export function ClubConfigTab() {
         method: "PUT",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updatedFields),
+        body: JSON.stringify({ ...updatedFields, expectedUpdatedAt: editingBenefitExpectedUpdatedAt }),
       });
+      if (response.status === 409) {
+        const body = await response.json().catch(() => null) as {
+          error?: string;
+          current?: ClubBenefitAdmin;
+        } | null;
+        if (body?.error === "benefit_changed" && body.current?.id === benefit.id) {
+          setBenefits((previous) => previous.map((item) => item.id === benefit.id ? body.current! : item));
+          setEditingBenefitConflict(true);
+          setEditingBenefitError(null);
+          toast({
+            title: "Este benefício foi alterado por outra pessoa",
+            description: "Confira a versão salva antes de continuar com seu rascunho.",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
       if (!response.ok) throw new Error("update_benefit_failed");
 
-      setBenefits((previous) => previous.map((item) => (
-        item.id === benefit.id ? { ...item, ...updatedFields } : item
-      )));
+      const savedBenefit = await response.json() as ClubBenefitAdmin;
+      setBenefits((previous) => previous.map((item) => item.id === benefit.id ? savedBenefit : item));
       setEditingBenefitId(null);
       setEditingBenefitError(null);
+      setEditingBenefitConflict(false);
       toast({ title: "Benefício atualizado!" });
     } catch {
       setEditingBenefitError("Não foi possível salvar. Seu rascunho foi mantido para você tentar novamente ou cancelar.");
@@ -4156,6 +4179,30 @@ export function ClubConfigTab() {
                                   {editingBenefitError} A versão acima continua salva.
                                 </p>
                               )}
+                              {editingBenefitConflict && (
+                                <div
+                                  role="alert"
+                                  className="space-y-2 rounded-md border border-amber-500/40 bg-amber-50 p-3 text-xs text-amber-950 dark:bg-amber-950/20 dark:text-amber-100"
+                                  data-testid={`club-edit-benefit-conflict-${benefit.id}`}
+                                >
+                                  <p>
+                                    Outra pessoa salvou uma versão mais recente. Seu rascunho foi mantido; os valores salvos acima foram atualizados.
+                                  </p>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    data-testid={`club-refresh-edit-benefit-${benefit.id}`}
+                                    onClick={() => {
+                                      setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
+                                      setEditingBenefitConflict(false);
+                                      setEditingBenefitError(null);
+                                    }}
+                                  >
+                                    Atualizar versão e continuar com meu rascunho
+                                  </Button>
+                                </div>
+                              )}
                               <Label htmlFor={`club-benefit-edit-label-${benefit.id}`} className="sr-only">
                                 Nome do benefício
                               </Label>
@@ -4163,6 +4210,7 @@ export function ClubConfigTab() {
                                 id={`club-benefit-edit-label-${benefit.id}`}
                                 data-testid={`club-edit-benefit-label-${benefit.id}`}
                                 value={editingBenefitDraft.label}
+                                disabled={savingEditedBenefit || editingBenefitConflict}
                                 onChange={(event) => {
                                   setEditingBenefitError(null);
                                   setEditingBenefitDraft((draft) => ({ ...draft, label: event.target.value }));
@@ -4180,6 +4228,7 @@ export function ClubConfigTab() {
                                     data-testid={`club-edit-benefit-value-${benefit.id}`}
                                     placeholder="Valor ou condição (opcional)"
                                     value={editingBenefitDraft.value}
+                                    disabled={savingEditedBenefit || editingBenefitConflict}
                                     onChange={(event) => {
                                       setEditingBenefitError(null);
                                       setEditingBenefitDraft((draft) => ({ ...draft, value: event.target.value }));
@@ -4196,6 +4245,7 @@ export function ClubConfigTab() {
                                     data-testid={`club-edit-benefit-description-${benefit.id}`}
                                     placeholder="Detalhes adicionais (opcional)"
                                     value={editingBenefitDraft.description}
+                                    disabled={savingEditedBenefit || editingBenefitConflict}
                                     onChange={(event) => {
                                       setEditingBenefitError(null);
                                       setEditingBenefitDraft((draft) => ({ ...draft, description: event.target.value }));
@@ -4212,6 +4262,7 @@ export function ClubConfigTab() {
                                   onClick={() => {
                                     setEditingBenefitId(null);
                                     setEditingBenefitError(null);
+                                    setEditingBenefitConflict(false);
                                   }}
                                   disabled={savingEditedBenefit}
                                 >
@@ -4221,7 +4272,7 @@ export function ClubConfigTab() {
                                   type="button"
                                   data-testid={`club-save-edit-benefit-${benefit.id}`}
                                   onClick={() => void handleUpdateBenefit(benefit)}
-                                  disabled={savingEditedBenefit || !editingBenefitDraft.label.trim()}
+                                  disabled={savingEditedBenefit || editingBenefitConflict || !editingBenefitDraft.label.trim()}
                                 >
                                   {savingEditedBenefit ? (
                                     <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Salvando...</>

@@ -302,7 +302,7 @@ router.post("/club/benefits", async (req, res, next: NextFunction): Promise<void
       : await insert.returning({ id: clubBenefitsTable.id });
 
     if (created.length > 0) {
-      res.status(201).json({ id: created[0]!.id });
+      res.status(201).json({ id: created[0]!.id, updatedAt: values.updatedAt });
       return;
     }
     if (!idempotencyKey) throw new Error("Club benefit insert returned no row without an idempotency key");
@@ -315,6 +315,7 @@ router.post("/club/benefits", async (req, res, next: NextFunction): Promise<void
       description: clubBenefitsTable.description,
       value: clubBenefitsTable.value,
       sortOrder: clubBenefitsTable.sortOrder,
+      updatedAt: clubBenefitsTable.updatedAt,
     }).from(clubBenefitsTable).where(and(
       eq(clubBenefitsTable.tenantId, me.tenantId),
       eq(clubBenefitsTable.idempotencyKey, idempotencyKey),
@@ -330,7 +331,7 @@ router.post("/club/benefits", async (req, res, next: NextFunction): Promise<void
       res.status(409).json({ error: "idempotency_key_conflict" });
       return;
     }
-    res.status(200).json({ id: existing.id });
+    res.status(200).json({ id: existing.id, updatedAt: existing.updatedAt });
   } catch (err) {
     next(err);
   }
@@ -347,17 +348,8 @@ router.put("/club/benefits/:id", async (req, res, next: NextFunction): Promise<v
     }
 
     const { id } = req.params;
-    const [existing] = await db
-      .select({ id: clubBenefitsTable.id })
-      .from(clubBenefitsTable)
-      .where(and(eq(clubBenefitsTable.id, id!), eq(clubBenefitsTable.tenantId, me.tenantId)))
-      .limit(1);
-    if (!existing) {
-      next(new NotFoundError("Benefício não encontrado", "NOT_FOUND"));
-      return;
-    }
-
     const body = z.object({
+      expectedUpdatedAt: z.string().datetime(),
       tier: z.enum(["bronze", "silver", "gold", "diamond"]).optional(),
       benefitKey: z.string().min(1).max(100).optional(),
       label: z.string().min(1).max(200).optional(),
@@ -370,7 +362,10 @@ router.put("/club/benefits/:id", async (req, res, next: NextFunction): Promise<v
       return;
     }
 
-    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    const expectedUpdatedAt = new Date(body.data.expectedUpdatedAt);
+    const updates: Record<string, unknown> = {
+      updatedAt: new Date(Math.max(Date.now(), expectedUpdatedAt.getTime() + 1)),
+    };
     if (body.data.tier !== undefined) updates.tier = body.data.tier;
     if (body.data.benefitKey !== undefined) updates.benefitKey = body.data.benefitKey;
     if (body.data.label !== undefined) updates.label = body.data.label;
@@ -378,8 +373,28 @@ router.put("/club/benefits/:id", async (req, res, next: NextFunction): Promise<v
     if (body.data.value !== undefined) updates.value = body.data.value;
     if (body.data.sortOrder !== undefined) updates.sortOrder = body.data.sortOrder;
 
-    await db.update(clubBenefitsTable).set(updates).where(eq(clubBenefitsTable.id, id!));
-    res.status(204).end();
+    const updated = await db.update(clubBenefitsTable)
+      .set(updates)
+      .where(and(
+        eq(clubBenefitsTable.id, id!),
+        eq(clubBenefitsTable.tenantId, me.tenantId),
+        eq(clubBenefitsTable.updatedAt, expectedUpdatedAt),
+      ))
+      .returning();
+    if (updated.length) {
+      res.json(updated[0]);
+      return;
+    }
+
+    const [current] = await db.select().from(clubBenefitsTable).where(and(
+      eq(clubBenefitsTable.id, id!),
+      eq(clubBenefitsTable.tenantId, me.tenantId),
+    )).limit(1);
+    if (!current) {
+      next(new NotFoundError("Benefício não encontrado", "NOT_FOUND"));
+      return;
+    }
+    res.status(409).json({ error: "benefit_changed", current });
   } catch (err) {
     next(err);
   }

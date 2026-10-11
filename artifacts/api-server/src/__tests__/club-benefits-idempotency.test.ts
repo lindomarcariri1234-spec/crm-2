@@ -11,6 +11,9 @@ const {
   conflictTargets,
   mockSelect,
   mockInsert,
+  updateResults,
+  updatedValues,
+  mockUpdate,
 } = vi.hoisted(() => {
   const mockRequireAuth = vi.fn();
   const selectRows: unknown[][] = [];
@@ -43,6 +46,20 @@ const {
     };
     return chain;
   });
+  const updateResults: unknown[][] = [];
+  const updatedValues: Array<Record<string, unknown>> = [];
+  const mockUpdate = vi.fn(() => {
+    const result = updateResults.shift() ?? [];
+    const chain: Record<string, unknown> = {
+      set: vi.fn((values: Record<string, unknown>) => {
+        updatedValues.push(values);
+        return chain;
+      }),
+      where: vi.fn(() => chain),
+      returning: vi.fn(async () => result),
+    };
+    return chain;
+  });
   return {
     mockRequireAuth,
     selectRows,
@@ -51,6 +68,9 @@ const {
     conflictTargets,
     mockSelect,
     mockInsert,
+    updateResults,
+    updatedValues,
+    mockUpdate,
   };
 });
 
@@ -59,7 +79,7 @@ vi.mock("@workspace/db", () => {
     get: (_target, property: string | symbol) => String(property),
   });
   return {
-    db: { select: mockSelect, insert: mockInsert },
+    db: { select: mockSelect, insert: mockInsert, update: mockUpdate },
     clientsTable: table(),
     clubConfigTable: table(),
     clubBenefitsTable: table(),
@@ -124,7 +144,13 @@ function postBenefit(key: string, body = benefit) {
 }
 
 function storedBenefit(id: string) {
-  return { id, tenantId: ADMIN.tenantId, idempotencyKey: IDEMPOTENCY_KEY, ...benefit };
+  return {
+    id,
+    tenantId: ADMIN.tenantId,
+    idempotencyKey: IDEMPOTENCY_KEY,
+    ...benefit,
+    updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+  };
 }
 
 beforeEach(() => {
@@ -132,23 +158,29 @@ beforeEach(() => {
   insertResults.length = 0;
   insertedValues.length = 0;
   conflictTargets.length = 0;
+  updateResults.length = 0;
+  updatedValues.length = 0;
   mockRequireAuth.mockReset().mockResolvedValue(ADMIN);
   mockSelect.mockClear();
   mockInsert.mockClear();
+  mockUpdate.mockClear();
 });
 
 describe("POST /api/club/benefits idempotency", () => {
   it("replays the saved benefit when the same attempt is retried", async () => {
+    const persisted = storedBenefit("benefit-saved-once");
     insertResults.push([{ id: "benefit-saved-once" }], []);
-    selectRows.push([storedBenefit("benefit-saved-once")]);
+    selectRows.push([persisted]);
 
     const first = await postBenefit(IDEMPOTENCY_KEY);
+    persisted.updatedAt = insertedValues[0]!.updatedAt as Date;
     const retry = await postBenefit(IDEMPOTENCY_KEY);
 
     expect(first.status).toBe(201);
-    expect(first.body).toEqual({ id: "benefit-saved-once" });
+    expect(first.body.id).toBe("benefit-saved-once");
+    expect(typeof first.body.updatedAt).toBe("string");
     expect(retry.status).toBe(200);
-    expect(retry.body).toEqual({ id: "benefit-saved-once" });
+    expect(retry.body).toEqual(first.body);
     expect(mockInsert).toHaveBeenCalledTimes(2);
     expect(insertedValues.map((values) => values["idempotencyKey"]))
       .toEqual([IDEMPOTENCY_KEY, IDEMPOTENCY_KEY]);
@@ -173,8 +205,36 @@ describe("POST /api/club/benefits idempotency", () => {
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(201);
-    expect(second.body).toEqual({ id: "benefit-second" });
+    expect(second.body.id).toBe("benefit-second");
+    expect(typeof second.body.updatedAt).toBe("string");
     expect(insertedValues).toHaveLength(2);
     expect(new Set(insertedValues.map((values) => values["idempotencyKey"])).size).toBe(2);
+  });
+});
+
+describe("PUT /api/club/benefits/:id version check", () => {
+  it("returns the newer saved benefit instead of overwriting it when the version is stale", async () => {
+    const current = {
+      id: "benefit-1",
+      tenantId: ADMIN.tenantId,
+      ...benefit,
+      label: "Versão atual",
+      updatedAt: new Date("2026-02-01T00:00:00.000Z"),
+    };
+    updateResults.push([]);
+    selectRows.push([current]);
+
+    const response = await request(buildApp())
+      .put("/api/club/benefits/benefit-1")
+      .send({
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        label: "Rascunho antigo",
+      });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("benefit_changed");
+    expect(response.body.current.label).toBe("Versão atual");
+    expect(updatedValues[0]?.["label"]).toBe("Rascunho antigo");
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 });

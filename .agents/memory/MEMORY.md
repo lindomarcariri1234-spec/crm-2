@@ -156,3 +156,4 @@
 - [Completed-trip storefront availability](completed-trip-storefront.md) — hide completed trips in public storefront queries and reject stale-cart checkout, rechecking status under the reservation lock.
 - [InfinitePay hosted checkout](infinitepay-hosted-checkout.md) — treat redirects/webhooks as untrusted; confirm via payment_check; do not infer fees, settlement, refunds, or signature support.
 - [CRM settings route scope](crm-settings-route-scope.md) — keep `/configuracoes` focused on general agency and tourism-operation setup; specialized settings remain elsewhere.
+- [Club benefit edit versions](club-benefit-edit-versions.md) — every benefit mutation must strictly advance `updatedAt`, which the editor uses as its optimistic concurrency token.
