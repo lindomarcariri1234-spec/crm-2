@@ -15,6 +15,7 @@ interface TripFilters {
   search: string;
   locationFilter: string;
   statusFilter: string;
+  storePublicationFilter: string;
   typeFilter: string;
   dateFilter: string;
   page: number;
@@ -26,6 +27,7 @@ function parseTripFilters(searchStr: string): TripFilters {
     search: params.get("q") ?? "",
     locationFilter: params.get("location") ?? "",
     statusFilter: params.get("status") ?? "all",
+    storePublicationFilter: params.get("storePublication") ?? "all",
     typeFilter: params.get("type") ?? "all",
     dateFilter: params.get("date") ?? "",
     page: parseInt(params.get("page") ?? "1") || 1,
@@ -36,6 +38,7 @@ function tripFiltersMatch(left: TripFilters, right: TripFilters): boolean {
   return left.search === right.search
     && left.locationFilter === right.locationFilter
     && left.statusFilter === right.statusFilter
+    && left.storePublicationFilter === right.storePublicationFilter
     && left.typeFilter === right.typeFilter
     && left.dateFilter === right.dateFilter
     && left.page === right.page;
@@ -46,6 +49,7 @@ function serializeTripFilters(filters: TripFilters): string {
   if (filters.search) params.set("q", filters.search);
   if (filters.locationFilter) params.set("location", filters.locationFilter);
   if (filters.statusFilter !== "all") params.set("status", filters.statusFilter);
+  if (filters.storePublicationFilter !== "all") params.set("storePublication", filters.storePublicationFilter);
   if (filters.typeFilter !== "all") params.set("type", filters.typeFilter);
   if (filters.dateFilter) params.set("date", filters.dateFilter);
   if (filters.page > 1) params.set("page", String(filters.page));
@@ -64,6 +68,7 @@ export function useTrips() {
   const [search, setSearchState] = useState(initialFilters.search);
   const [locationFilter, setLocationFilterState] = useState(initialFilters.locationFilter);
   const [statusFilter, setStatusFilterState] = useState(initialFilters.statusFilter);
+  const [storePublicationFilter, setStorePublicationFilterState] = useState(initialFilters.storePublicationFilter);
   const [typeFilter, setTypeFilterState] = useState(initialFilters.typeFilter);
   const [dateFilter, setDateFilterState] = useState(initialFilters.dateFilter);
   const [page, setPage] = useState(initialFilters.page);
@@ -73,6 +78,10 @@ export function useTrips() {
   }, []);
   const setStatusFilter = useCallback((value: string) => {
     setStatusFilterState(value);
+    setPage(1);
+  }, []);
+  const setStorePublicationFilter = useCallback((value: string) => {
+    setStorePublicationFilterState(value);
     setPage(1);
   }, []);
   const setTypeFilter = useCallback((value: string) => {
@@ -89,7 +98,7 @@ export function useTrips() {
   }, []);
 
   useEffect(() => {
-    const currentFilters = { search, locationFilter, statusFilter, typeFilter, dateFilter, page };
+    const currentFilters = { search, locationFilter, statusFilter, storePublicationFilter, typeFilter, dateFilter, page };
 
     if (lastObservedSearchStrRef.current !== searchStr) {
       lastObservedSearchStrRef.current = searchStr;
@@ -104,6 +113,7 @@ export function useTrips() {
       setSearchState(incomingFilters.search);
       setLocationFilterState(incomingFilters.locationFilter);
       setStatusFilterState(incomingFilters.statusFilter);
+      setStorePublicationFilterState(incomingFilters.storePublicationFilter);
       setTypeFilterState(incomingFilters.typeFilter);
       setDateFilterState(incomingFilters.dateFilter);
       setPage(incomingFilters.page);
@@ -121,14 +131,15 @@ export function useTrips() {
     const qs = serializeTripFilters(currentFilters);
     if (new URLSearchParams(searchStr).toString() === qs) return;
     navigate(qs ? `?${qs}` : window.location.pathname, { replace: true });
-  }, [search, locationFilter, statusFilter, typeFilter, dateFilter, page, searchStr, navigate]);
+  }, [search, locationFilter, statusFilter, storePublicationFilter, typeFilter, dateFilter, page, searchStr, navigate]);
 
-  const hasActiveFilters = !!(search || locationFilter || statusFilter !== "all" || typeFilter !== "all" || dateFilter);
+  const hasActiveFilters = !!(search || locationFilter || statusFilter !== "all" || storePublicationFilter !== "all" || typeFilter !== "all" || dateFilter);
 
   const clearFilters = () => {
     setSearch("");
     setLocationFilterState("");
     setStatusFilter("all");
+    setStorePublicationFilter("all");
     setTypeFilter("all");
     setDateFilter("");
     setPage(1);
@@ -141,6 +152,7 @@ export function useTrips() {
     search: search || undefined,
     location: locationFilter.trim() || undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
+    storePublication: storePublicationFilter !== "all" ? storePublicationFilter as "published" | "unpublished" : undefined,
     type: typeFilter !== "all" ? typeFilter : undefined,
     date: dateFilter || undefined,
     page,
@@ -254,6 +266,7 @@ export function useTrips() {
     search, setSearch,
     locationFilter, setLocationFilter,
     statusFilter, setStatusFilter,
+    storePublicationFilter, setStorePublicationFilter,
     typeFilter, setTypeFilter,
     dateFilter, setDateFilter,
     page, setPage,

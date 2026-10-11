@@ -3117,13 +3117,27 @@ export const DeleteLayoutResponse = zod.object({
 /**
  * @summary List trips
  */
+export const listTripsQueryLocationMax = 100;
+
 export const listTripsQueryPageDefault = 1;
 export const listTripsQueryLimitDefault = 20;
 
 export const ListTripsQueryParams = zod.object({
   search: zod.coerce.string().nullish(),
-  location: zod.coerce.string().max(100).optional(),
+  location: zod.coerce
+    .string()
+    .max(listTripsQueryLocationMax)
+    .optional()
+    .describe(
+      "Case-insensitive match across trip origin and destination city/state (maximum 100 characters).",
+    ),
   status: zod.coerce.string().nullish(),
+  storePublication: zod
+    .enum(["published", "unpublished"])
+    .optional()
+    .describe(
+      "Filter trips by whether their linked store product is active in the public storefront.",
+    ),
   type: zod.coerce.string().optional(),
   date: zod.coerce
     .string()

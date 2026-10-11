@@ -724,6 +724,7 @@ router.post("/store/products", async (req, res, next: NextFunction): Promise<voi
       ...(data.isFeatured != null && { isFeatured: data.isFeatured }),
       ...(data.order != null && { order: data.order }),
       ...(data.status && { status: data.status }),
+      ...(data.status === "active" && { publishedAt: new Date() }),
       ...(data.partnerProductId !== undefined && { partnerProductId: data.partnerProductId ?? null }),
     });
     const [product] = await db.select().from(storeProductsTable)
@@ -768,6 +769,9 @@ router.put("/store/products/:id", async (req, res, next: NextFunction): Promise<
       if (!pp) { next(new ValidationError(String("Produto de parceiro não encontrado" ), "VALIDATION_ERROR")); return; }
     }
     const updates: Record<string, unknown> = { ...parsed.data };
+    if (parsed.data.status === "active" && existingProduct.status !== "active") {
+      updates.publishedAt = new Date();
+    }
     if (parsed.data.saleStartsAt) updates.saleStartsAt = new Date(parsed.data.saleStartsAt);
     if (parsed.data.saleEndsAt) updates.saleEndsAt = new Date(parsed.data.saleEndsAt);
     if (parsed.data.startDate) updates.startDate = new Date(parsed.data.startDate);

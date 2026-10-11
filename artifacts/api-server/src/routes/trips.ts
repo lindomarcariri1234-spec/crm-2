@@ -10,10 +10,10 @@ import { addSeatClient, removeSeatClient } from "../lib/seat-sse";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { tryAddBoardingClient, removeBoardingClient, emitBoardingUpdate } from "../lib/boarding-sse";
 import { getClientIp } from "../lib/get-client-ip";
-import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationRoomsTable, accommodationsTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, tripCostsTable, expensesTable, paymentsTable, type TripImportResult } from "@workspace/db";
+import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationRoomsTable, accommodationsTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, tripCostsTable, expensesTable, paymentsTable, storesTable, storeProductsTable, type TripImportResult } from "@workspace/db";
 import { checkPlanLimit } from "../lib/planLimits";
 import type { LayoutCell, FixedCostItem, VariableCostItem, FreePassenger } from "@workspace/db";
-import { eq, and, ilike, sql, desc, asc, inArray, or, gt, gte, isNotNull } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, asc, inArray, or, gt, gte, isNotNull, exists, notExists } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser, MANAGEMENT_ROLES, ADMIN_ROLES } from "../lib/tenant";
 import { parseBrazilCalendarDateStart } from "../lib/trip-date-filter";
@@ -75,6 +75,7 @@ const ListTripsQuery = z.object({
   search: z.string().optional(),
   location: z.string().trim().max(100).optional(),
   status: z.enum(["draft", "published", "active", "confirmed", "cancelled", "completed"]).optional(),
+  storePublication: z.enum(["published", "unpublished"]).optional(),
   type: z.string().optional(),
   date: z.string()
     .refine((value) => parseBrazilCalendarDateStart(value) !== null, {
@@ -528,7 +529,7 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
       next(new ValidationError(queryResult.error.errors[0]?.message ?? "Invalid query params", "VALIDATION_ERROR"));
       return;
     }
-    const { search, location, status, type, date, page: pageNum, limit: limitNum } = queryResult.data;
+    const { search, location, status, storePublication, type, date, page: pageNum, limit: limitNum } = queryResult.data;
     const offset = (pageNum - 1) * limitNum;
 
     const conditions: ReturnType<typeof eq>[] = [eq(tripsTable.tenantId, me.tenantId)];
@@ -544,6 +545,19 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
       )! as ReturnType<typeof eq>);
     }
     if (status) conditions.push(eq(tripsTable.status, parseTripStatus(status)));
+    if (storePublication) {
+      const activeStoreProduct = db.select({ id: storeProductsTable.id })
+        .from(storeProductsTable)
+        .innerJoin(storesTable, eq(storeProductsTable.storeId, storesTable.id))
+        .where(and(
+          eq(storeProductsTable.tripId, tripsTable.id),
+          eq(storeProductsTable.status, "active"),
+          eq(storesTable.tenantId, tripsTable.tenantId),
+        ));
+      conditions.push((storePublication === "published"
+        ? exists(activeStoreProduct)
+        : notExists(activeStoreProduct)) as ReturnType<typeof eq>);
+    }
     if (type) conditions.push(eq(tripsTable.type, type) as ReturnType<typeof eq>);
     if (date) {
       const departureDateStart = parseBrazilCalendarDateStart(date);

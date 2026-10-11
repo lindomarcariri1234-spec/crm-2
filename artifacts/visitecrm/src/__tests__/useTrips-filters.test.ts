@@ -63,7 +63,7 @@ describe("useTrips filter pagination", () => {
   });
 
   it("hydrates filters from the initial query without rewriting it", async () => {
-    routeState.search = "q=montanha&location=Recife&status=active&type=excursao&date=2026-09-15&page=3";
+    routeState.search = "q=montanha&location=Recife&status=active&storePublication=published&type=excursao&date=2026-09-15&page=3";
 
     const { result } = await renderHook(() => useTrips());
 
@@ -71,6 +71,7 @@ describe("useTrips filter pagination", () => {
       search: "montanha",
       locationFilter: "Recife",
       statusFilter: "active",
+      storePublicationFilter: "published",
       typeFilter: "excursao",
       dateFilter: "2026-09-15",
       page: 3,
@@ -79,6 +80,7 @@ describe("useTrips filter pagination", () => {
       search: "montanha",
       location: "Recife",
       status: "active",
+      storePublication: "published",
       type: "excursao",
       date: "2026-09-15",
       page: 3,
@@ -181,12 +183,13 @@ describe("useTrips filter pagination", () => {
       result.current.setLocationFilter("Crato");
       result.current.setSearch("serra");
       result.current.setStatusFilter("active");
+      result.current.setStorePublicationFilter("unpublished");
       result.current.setTypeFilter("excursao");
       result.current.setDateFilter("2026-09-15");
       result.current.setPage(5);
     });
     expect(result.current.page).toBe(5);
-    routeState.search = "q=serra&location=Crato&status=active&type=excursao&date=2026-09-15&page=5";
+    routeState.search = "q=serra&location=Crato&status=active&storePublication=unpublished&type=excursao&date=2026-09-15&page=5";
     await flushAct(() => rerender());
 
     await flushAct(() => result.current.setLocationFilter("Fortaleza"));
@@ -198,7 +201,7 @@ describe("useTrips filter pagination", () => {
     await flushAct(() => result.current.setStatusFilter("completed"));
     expect(result.current.page).toBe(1);
 
-    routeState.search = "q=litoral&location=Fortaleza&status=completed&type=excursao&date=2026-09-15";
+    routeState.search = "q=litoral&location=Fortaleza&status=completed&storePublication=unpublished&type=excursao&date=2026-09-15";
     await flushAct(() => rerender());
     await flushAct(() => {
       result.current.setPage(6);
@@ -209,6 +212,7 @@ describe("useTrips filter pagination", () => {
       search: "",
       locationFilter: "",
       statusFilter: "all",
+      storePublicationFilter: "all",
       typeFilter: "all",
       dateFilter: "",
       page: 1,
@@ -218,6 +222,7 @@ describe("useTrips filter pagination", () => {
       search: undefined,
       location: undefined,
       status: undefined,
+      storePublication: undefined,
       type: undefined,
       date: undefined,
       page: 1,

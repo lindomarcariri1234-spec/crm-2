@@ -12,6 +12,8 @@ import {
   pool,
   tenantsTable,
   tripsTable,
+  storesTable,
+  storeProductsTable,
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { ROLES } from "@workspace/permissions";
@@ -32,6 +34,7 @@ import tripsRouter from "../routes/trips.js";
 const RUN_ID = randomUUID().replaceAll("-", "").slice(0, 12);
 const TENANT_ID = `trips-filter-${RUN_ID}`;
 const OTHER_TENANT_ID = `trips-filter-other-${RUN_ID}`;
+const STORE_ID = `trips-filter-store-${RUN_ID}`;
 
 const tripFixture = ({
   id,
@@ -163,6 +166,16 @@ const selectedDayTrips = [
     priceAdult: "900.00",
   }),
   tripFixture({
+    id: `store-active-trip-${RUN_ID}`,
+    name: "Trip with active storefront product",
+    departureDate: new Date("2026-08-17T03:00:00.000Z"),
+  }),
+  tripFixture({
+    id: `store-draft-trip-${RUN_ID}`,
+    name: "Trip with draft storefront product",
+    departureDate: new Date("2026-08-18T03:00:00.000Z"),
+  }),
+  tripFixture({
     id: `origin-city-${RUN_ID}`,
     name: "Origin city match",
     originCity: "Crato",
@@ -220,10 +233,41 @@ beforeAll(async () => {
     },
   ]);
   await db.insert(tripsTable).values(selectedDayTrips);
+  await db.insert(storesTable).values({
+    id: STORE_ID,
+    tenantId: TENANT_ID,
+    name: "Trip Filter Store",
+    slug: STORE_ID,
+    email: `${STORE_ID}@example.com`,
+  });
+  await db.insert(storeProductsTable).values([
+    {
+      id: `store-active-product-${RUN_ID}`,
+      storeId: STORE_ID,
+      tripId: `store-active-trip-${RUN_ID}`,
+      type: "trip",
+      name: "Published trip",
+      slug: `published-${RUN_ID}`,
+      price: "100.00",
+      status: "active",
+    },
+    {
+      id: `store-draft-product-${RUN_ID}`,
+      storeId: STORE_ID,
+      tripId: `store-draft-trip-${RUN_ID}`,
+      type: "trip",
+      name: "Draft trip",
+      slug: `draft-${RUN_ID}`,
+      price: "100.00",
+      status: "draft",
+    },
+  ]);
 });
 
 afterAll(async () => {
   try {
+    await db.delete(storeProductsTable).where(eq(storeProductsTable.storeId, STORE_ID));
+    await db.delete(storesTable).where(eq(storesTable.id, STORE_ID));
     await db.delete(tripsTable).where(eq(tripsTable.tenantId, TENANT_ID));
     await db.delete(tripsTable).where(eq(tripsTable.tenantId, OTHER_TENANT_ID));
     await db.delete(tenantsTable).where(eq(tenantsTable.id, TENANT_ID));
@@ -234,6 +278,28 @@ afterAll(async () => {
 });
 
 describe("GET /trips — real database type/date filtering and pagination", () => {
+  it("filters storefront visibility by active linked products, independently of trip status", async () => {
+    const published = await request(app)
+      .get("/trips")
+      .query({ storePublication: "published", limit: 100 });
+    const unpublished = await request(app)
+      .get("/trips")
+      .query({ storePublication: "unpublished", limit: 100 });
+
+    expect(published.status).toBe(200);
+    expect(published.body.total).toBe(1);
+    expect(published.body.data.map((trip: { id: string }) => trip.id))
+      .toEqual([`store-active-trip-${RUN_ID}`]);
+
+    expect(unpublished.status).toBe(200);
+    const unpublishedIds = unpublished.body.data.map((trip: { id: string }) => trip.id);
+    expect(unpublished.body.total).toBe(
+      selectedDayTrips.filter((trip) => trip.tenantId === TENANT_ID).length - 1,
+    );
+    expect(unpublishedIds).toContain(`store-draft-trip-${RUN_ID}`);
+    expect(unpublishedIds).not.toContain(`store-active-trip-${RUN_ID}`);
+  });
+
   it("keeps the Sao Paulo midnight boundary, tied pages, totals, and filtered stats aligned", async () => {
     const getPage = (page: number) =>
       request(app)

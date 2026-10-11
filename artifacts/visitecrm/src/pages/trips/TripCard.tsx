@@ -27,6 +27,7 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
   const [checking, setChecking] = useState(true);
   const [storeError, setStoreError] = useState<string | null>(null);
   const [existingProductId, setExistingProductId] = useState<string | null>(null);
+  const [existingProductStatus, setExistingProductStatus] = useState<string | null>(null);
   const [, navigate] = useLocation();
 
   useEffect(() => {
@@ -38,6 +39,7 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
       .then((products) => {
         const linked = products.find((p) => p.tripId === trip.id);
         setExistingProductId(linked ? linked.id : null);
+        setExistingProductStatus(linked ? linked.status : null);
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : "";
@@ -45,6 +47,7 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
           setStoreError("Loja não configurada. Vá em Loja → Configurações para criar sua vitrine antes de publicar.");
         } else {
           setExistingProductId(null);
+          setExistingProductStatus(null);
         }
       })
       .finally(() => setChecking(false));
@@ -54,7 +57,11 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
     setLoading(true);
     try {
       const slug = generateProductSlug(trip.name);
-      await storeApi.createProduct({ ...buildTripProductPayload(trip), slug, tripId: trip.id });
+      if (existingProductId) {
+        await storeApi.updateProduct(existingProductId, { ...buildTripProductPayload(trip), status: "active" });
+      } else {
+        await storeApi.createProduct({ ...buildTripProductPayload(trip), slug, tripId: trip.id, status: "active" });
+      }
       toast({ title: "Publicado na loja!", description: `${trip.name} já está disponível na vitrine.` });
       onClose();
       navigate("/loja/produtos");
@@ -87,6 +94,7 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
   }
 
   const payload = buildTripProductPayload(trip);
+  const isPublishedInStore = existingProductStatus === "active";
   const durationLabel = payload.durationDays
     ? `${payload.durationDays} dia${payload.durationDays > 1 ? "s" : ""}${payload.durationNights ? ` / ${payload.durationNights} noite${payload.durationNights > 1 ? "s" : ""}` : ""}`
     : null;
@@ -97,7 +105,7 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShoppingBag className="w-5 h-5" />
-            {existingProductId ? "Sincronizar com a Loja" : "Publicar na Loja"}
+            {isPublishedInStore ? "Sincronizar com a Loja" : "Publicar na Loja"}
           </DialogTitle>
         </DialogHeader>
         {checking ? (
@@ -117,7 +125,7 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
           </div>
         ) : (
           <div className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-1">
-            {existingProductId && (
+            {isPublishedInStore && (
               <div className="flex items-center gap-3 p-3 rounded-lg bg-amber-50 border border-amber-200">
                 <ShoppingBag className="w-5 h-5 text-amber-600 shrink-0" />
                 <p className="text-sm text-amber-800">
@@ -241,7 +249,7 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
               )}
             </div>
 
-            {!existingProductId && (
+            {!isPublishedInStore && (
               <p className="text-xs text-muted-foreground">
                 Todos os dados acima serão publicados automaticamente na sua vitrine pública. Você pode ajustar detalhes adicionais depois em Loja → Produtos.
               </p>
@@ -251,7 +259,7 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
               <Button variant="outline" onClick={onClose} disabled={loading}>
                 {existingProductId ? "Fechar" : "Cancelar"}
               </Button>
-              {existingProductId ? (
+              {isPublishedInStore ? (
                 <>
                   <Button variant="outline" onClick={goToProduct} disabled={loading}>
                     Ver na Loja

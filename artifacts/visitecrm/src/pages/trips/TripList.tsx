@@ -37,6 +37,7 @@ export function TripList() {
   const {
     trips, exportTrips, isLoading, isError, error, totalPages, upcomingTrips, stats, me,
     search, setSearch, locationFilter, setLocationFilter, statusFilter, setStatusFilter,
+    storePublicationFilter, setStorePublicationFilter,
     typeFilter, setTypeFilter, dateFilter, setDateFilter,
     page, setPage, updateTrip, handleDuplicate, handleMarkCompleted,
     hasActiveFilters, clearFilters, refetch,
@@ -227,7 +228,7 @@ export function TripList() {
       </div>
 
       <div className="rounded-xl border bg-card p-3 sm:p-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(145px,0.8fr)_minmax(140px,0.8fr)_minmax(165px,0.9fr)_auto]">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(145px,0.8fr)_minmax(165px,0.9fr)_minmax(140px,0.8fr)_minmax(165px,0.9fr)_auto]">
         <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
           Buscar viagem
           <div className="relative">
@@ -249,6 +250,17 @@ export function TripList() {
             <SelectContent>
               <SelectItem value="all">Todos os status</SelectItem>
               {Object.entries(STATUS_MAP).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Vitrine da loja
+          <Select value={storePublicationFilter} onValueChange={setStorePublicationFilter}>
+            <SelectTrigger className="w-full"><SelectValue placeholder="Todas as viagens" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as viagens</SelectItem>
+              <SelectItem value="published">Publicada na vitrine</SelectItem>
+              <SelectItem value="unpublished">Não publicada</SelectItem>
             </SelectContent>
           </Select>
         </label>

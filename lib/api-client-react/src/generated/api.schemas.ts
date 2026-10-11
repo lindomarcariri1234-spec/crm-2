@@ -5885,11 +5885,19 @@ export type ListTripsParams = {
    * @nullable
    */
   search?: string | null;
+  /**
+   * Case-insensitive match across trip origin and destination city/state (maximum 100 characters).
+   * @maxLength 100
+   */
   location?: string;
   /**
    * @nullable
    */
   status?: string | null;
+  /**
+   * Filter trips by whether their linked store product is active in the public storefront.
+   */
+  storePublication?: ListTripsStorePublication;
   type?: string;
   /**
    * Inclusive departure-date lower bound in YYYY-MM-DD (America/Sao_Paulo).
@@ -5898,6 +5906,14 @@ export type ListTripsParams = {
   page?: number;
   limit?: number;
 };
+
+export type ListTripsStorePublication =
+  (typeof ListTripsStorePublication)[keyof typeof ListTripsStorePublication];
+
+export const ListTripsStorePublication = {
+  published: "published",
+  unpublished: "unpublished",
+} as const;
 
 export type SyncTripPassengers200 = {
   /** Number of passenger records created */

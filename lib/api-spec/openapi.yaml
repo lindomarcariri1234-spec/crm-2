@@ -1476,6 +1476,12 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: storePublication
+          in: query
+          description: Filter trips by whether their linked store product is active in the public storefront.
+          schema:
+            type: string
+            enum: [published, unpublished]
         - name: type
           in: query
           schema:

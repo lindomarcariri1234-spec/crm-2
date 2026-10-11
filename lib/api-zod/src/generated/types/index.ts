@@ -272,6 +272,7 @@ export * from "./listSupportTicketsParams";
 export * from "./listSupportTicketsStatus";
 export * from "./listTripCostsResponse";
 export * from "./listTripsParams";
+export * from "./listTripsStorePublication";
 export * from "./loyaltyMember";
 export * from "./loyaltyProgram";
 export * from "./loyaltyProgramTierBenefits";
