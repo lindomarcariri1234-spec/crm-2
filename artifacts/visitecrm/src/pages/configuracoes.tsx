@@ -3855,6 +3855,7 @@ export function ClubConfigTab() {
   const [newLabel, setNewLabel] = useState("");
   const [newValue, setNewValue] = useState("");
   const [newDescription, setNewDescription] = useState("");
+  const benefitDraftRef = useRef({ label: "", value: "", description: "" });
   const [addingBenefit, setAddingBenefit] = useState(false);
   const addingBenefitRef = useRef(false);
   const [deletingBenefitIds, setDeletingBenefitIds] = useState<Set<string>>(() => new Set());
@@ -3955,7 +3956,17 @@ export function ClubConfigTab() {
   }
 
   async function handleAddBenefit() {
-    if (!newLabel.trim() || addingBenefitRef.current) return;
+    if (addingBenefitRef.current) return;
+    const submittedDraft = { ...benefitDraftRef.current };
+    if (!submittedDraft.label.trim()) return;
+    const submittedBenefit = {
+      tier: activeTier,
+      benefitKey: submittedDraft.label.toLowerCase().replace(/\s+/g, "_").slice(0, 100),
+      label: submittedDraft.label.trim(),
+      description: submittedDraft.description.trim() || null,
+      value: submittedDraft.value.trim() || null,
+      sortOrder: benefits.filter((benefit) => benefit.tier === activeTier).length,
+    };
     addingBenefitRef.current = true;
     benefitRevisionRef.current += 1;
     benefitMutationCountRef.current += 1;
@@ -3965,14 +3976,7 @@ export function ClubConfigTab() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tier: activeTier,
-          benefitKey: newLabel.toLowerCase().replace(/\s+/g, "_").slice(0, 100),
-          label: newLabel.trim(),
-          description: newDescription.trim() || null,
-          value: newValue.trim() || null,
-          sortOrder: benefits.filter((b) => b.tier === activeTier).length,
-        }),
+        body: JSON.stringify(submittedBenefit),
       });
       if (!res.ok) throw new Error("add_benefit_failed");
       const data = await res.json() as { id: string };
@@ -3980,17 +3984,22 @@ export function ClubConfigTab() {
         ...prev,
         {
           id: data.id,
-          tier: activeTier,
-          benefitKey: newLabel.toLowerCase().replace(/\s+/g, "_").slice(0, 100),
-          label: newLabel.trim(),
-          description: newDescription.trim() || null,
-          value: newValue.trim() || null,
-          sortOrder: prev.filter((b) => b.tier === activeTier).length,
+          ...submittedBenefit,
+          sortOrder: prev.filter((benefit) => benefit.tier === submittedBenefit.tier).length,
         },
       ]);
-      setNewLabel("");
-      setNewValue("");
-      setNewDescription("");
+      if (benefitDraftRef.current.label === submittedDraft.label) {
+        benefitDraftRef.current.label = "";
+        setNewLabel("");
+      }
+      if (benefitDraftRef.current.value === submittedDraft.value) {
+        benefitDraftRef.current.value = "";
+        setNewValue("");
+      }
+      if (benefitDraftRef.current.description === submittedDraft.description) {
+        benefitDraftRef.current.description = "";
+        setNewDescription("");
+      }
       toast({ title: "Benefício adicionado!" });
     } catch {
       toast({ title: "Erro ao adicionar benefício", variant: "destructive" });
@@ -4211,7 +4220,10 @@ export function ClubConfigTab() {
                           data-testid="club-benefit-label-input"
                           placeholder="Ex.: 5% de desconto em todas as viagens"
                           value={newLabel}
-                          onChange={(e) => setNewLabel(e.target.value)}
+                          onChange={(e) => {
+                            benefitDraftRef.current.label = e.target.value;
+                            setNewLabel(e.target.value);
+                          }}
                           maxLength={200}
                         />
                       </div>
@@ -4222,7 +4234,10 @@ export function ClubConfigTab() {
                           data-testid="club-benefit-value-input"
                           placeholder="Valor ou condição (ex.: 5%)"
                           value={newValue}
-                          onChange={(e) => setNewValue(e.target.value)}
+                          onChange={(e) => {
+                            benefitDraftRef.current.value = e.target.value;
+                            setNewValue(e.target.value);
+                          }}
                           maxLength={200}
                         />
                       </div>
@@ -4233,7 +4248,10 @@ export function ClubConfigTab() {
                           data-testid="club-benefit-description-input"
                           placeholder="Detalhes adicionais (opcional)"
                           value={newDescription}
-                          onChange={(e) => setNewDescription(e.target.value)}
+                          onChange={(e) => {
+                            benefitDraftRef.current.description = e.target.value;
+                            setNewDescription(e.target.value);
+                          }}
                           maxLength={500}
                         />
                       </div>

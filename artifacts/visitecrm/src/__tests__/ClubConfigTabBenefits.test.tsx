@@ -372,6 +372,70 @@ describe("ClubConfigTab benefit tiers", () => {
     expect(descriptionInput!.value).toBe("");
   });
 
+  it("preserves a newer draft when an earlier benefit creation finishes", async () => {
+    deferPost = true;
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    const valueInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-value-input"]',
+    );
+    const descriptionInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-description-input"]',
+    );
+    const addButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-add-benefit"]',
+    );
+    expect(labelInput).not.toBeNull();
+    expect(valueInput).not.toBeNull();
+    expect(descriptionInput).not.toBeNull();
+    expect(addButton).not.toBeNull();
+
+    await act(async () => {
+      setInputValue(labelInput!, "Acesso ao lounge");
+      setInputValue(valueInput!, "1 acesso");
+      setInputValue(descriptionInput!, "Apresente o voucher na entrada");
+    });
+    await act(async () => {
+      addButton!.click();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      setInputValue(labelInput!, "Traslado executivo");
+    });
+    expect(labelInput!.disabled).toBe(false);
+    expect(labelInput!.value).toBe("Traslado executivo");
+
+    await act(async () => {
+      completePost?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const savedBenefit = container.querySelector(
+      '[data-testid="club-benefit-created-after-pending"]',
+    );
+    expect(savedBenefit?.textContent).toContain("Acesso ao lounge");
+    expect(savedBenefit?.textContent).toContain("1 acesso");
+    expect(savedBenefit?.textContent).toContain("Apresente o voucher na entrada");
+    expect(labelInput!.value).toBe("Traslado executivo");
+    expect(valueInput!.value).toBe("");
+    expect(descriptionInput!.value).toBe("");
+    expect(addButton!.disabled).toBe(false);
+    const submittedPost = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(submittedPost?.[1]?.body))).toMatchObject({
+      label: "Acesso ao lounge",
+      value: "1 acesso",
+      description: "Apresente o voucher na entrada",
+    });
+  });
+
   it("keeps the benefit and its count when the server rejects removal", async () => {
     benefitsForLoad = [{
       id: "gold-benefit-1",
