@@ -268,6 +268,76 @@ test("club benefit conflict choices can be selected with the keyboard", async ({
   await expect(descriptionInput).toHaveValue("Descrição do rascunho");
 });
 
+test("club benefit conflict choices remain usable on a phone and at 200% zoom", async ({ page }) => {
+  const viewports = [
+    { label: "phone", width: 390, height: 844 },
+    // A 1280×900 CSS viewport becomes 640×450 CSS pixels at 200% browser zoom.
+    { label: "200% zoom equivalent", width: 640, height: 450 },
+  ];
+
+  for (const [index, viewport] of viewports.entries()) {
+    if (index > 0) await page.evaluate(() => window.sessionStorage.clear());
+    await openFixture(page, "club-benefit-conflict-keyboard", viewport.width, viewport.height);
+    await page.getByTestId("club-tier-tab-gold").click();
+    await page.getByTestId("club-edit-benefit-visual-benefit-keyboard").click();
+
+    const labelInput = page.getByTestId("club-edit-benefit-label-visual-benefit-keyboard");
+    const valueInput = page.getByTestId("club-edit-benefit-value-visual-benefit-keyboard");
+    const descriptionInput = page.getByTestId("club-edit-benefit-description-visual-benefit-keyboard");
+    await labelInput.fill("Rascunho da equipe");
+    await valueInput.fill("6%");
+    await descriptionInput.fill("Descrição do rascunho");
+    await page.getByTestId("club-save-edit-benefit-visual-benefit-keyboard").click();
+    await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toBeVisible();
+    await assertNoDocumentOverflow(page, viewport.label);
+
+    const choices = [
+      ["club-benefit-conflict-choice-draft-label-visual-benefit-keyboard", "Nome: manter meu rascunho"],
+      ["club-benefit-conflict-choice-latest-label-visual-benefit-keyboard", "Nome: usar valor salvo"],
+      ["club-benefit-conflict-choice-draft-value-visual-benefit-keyboard", "Valor: manter meu rascunho"],
+      ["club-benefit-conflict-choice-latest-value-visual-benefit-keyboard", "Valor: usar valor salvo"],
+      ["club-benefit-conflict-choice-draft-description-visual-benefit-keyboard", "Descrição: manter meu rascunho"],
+      ["club-benefit-conflict-choice-latest-description-visual-benefit-keyboard", "Descrição: usar valor salvo"],
+    ].map(([testId, accessibleName]) => ({
+      locator: page.getByTestId(testId),
+      accessibleName,
+    }));
+    for (const { locator, accessibleName } of choices) {
+      await expect(locator).toBeVisible();
+      await expect(locator).toHaveAccessibleName(accessibleName);
+      await locator.scrollIntoViewIfNeeded();
+      await expect(locator).toBeInViewport();
+      const bounds = await locator.boundingBox();
+      expect(bounds, `${viewport.label}: choice should have a visible box`).not.toBeNull();
+      expect(bounds!.x, `${viewport.label}: choice should not clip left`).toBeGreaterThanOrEqual(-1);
+      expect(bounds!.x + bounds!.width, `${viewport.label}: choice should not clip right`)
+        .toBeLessThanOrEqual(viewport.width + 1);
+    }
+
+    await choices[0].locator.focus();
+    for (const [choiceIndex, choice] of choices.entries()) {
+      if (choiceIndex > 0) await page.keyboard.press("Tab");
+      await expect(choice.locator, `${viewport.label}: choice ${choiceIndex + 1} should be in Tab order`)
+        .toBeFocused();
+      await page.keyboard.press(choiceIndex % 2 === 0 ? "Space" : "Enter");
+    }
+    await choices[0].locator.focus();
+    await page.keyboard.press("Space");
+    await choices[4].locator.focus();
+    await page.keyboard.press("Space");
+
+    const refresh = page.getByTestId("club-refresh-edit-benefit-visual-benefit-keyboard");
+    await refresh.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toHaveCount(0);
+    await expect(labelInput).toBeFocused();
+    await expect(labelInput).toHaveValue("Rascunho da equipe");
+    await expect(valueInput).toHaveValue("8%");
+    await expect(descriptionInput).toHaveValue("Descrição do rascunho");
+    await assertNoDocumentOverflow(page, `${viewport.label} after refresh`);
+  }
+});
+
 for (const viewport of widths) {
   test(`portal tabs stay navigable at ${viewport.label} width`, async ({ page }) => {
     await openFixture(page, "perfil", viewport.width, viewport.height);
