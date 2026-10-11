@@ -43,7 +43,7 @@ export function Improved() {
           </Select>
         </div>
         <div className="relative hidden md:block">
-          <div className="overflow-x-auto overscroll-x-contain pb-1">
+          <div className="settings-tabs-scroll overflow-x-auto overscroll-x-contain pb-1">
             <TabsList aria-label="Seções das configurações" className="flex h-auto w-max min-w-full flex-nowrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/85 p-1.5 shadow-sm">
               {groups.flatMap((group) => group.options).map(({ value, label, icon: Icon }) => (
                 <TabsTrigger key={value} value={value} className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
@@ -53,7 +53,7 @@ export function Improved() {
               ))}
             </TabsList>
           </div>
-          <p className="mt-1 flex items-center justify-end gap-1 text-xs text-muted-foreground lg:hidden">
+          <p className="mt-1 flex items-center justify-end gap-1 text-xs text-muted-foreground xl:hidden">
             Role horizontalmente para acessar todas as seções <ChevronRight className="h-3.5 w-3.5" />
           </p>
         </div>

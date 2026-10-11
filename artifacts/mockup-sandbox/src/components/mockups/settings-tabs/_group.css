@@ -43,3 +43,12 @@
   --destructive: 4.82 65.88% 66.67%;
   --destructive-foreground: 3.33 33.33% 10.59%;
 }
+
+.settings-tabs-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.settings-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}

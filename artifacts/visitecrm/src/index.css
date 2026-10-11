@@ -198,6 +198,13 @@
   .visite-enter {
     animation: visite-enter .45s ease-out both;
   }
+  .settings-tabs-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .settings-tabs-scroll::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @keyframes visite-enter {

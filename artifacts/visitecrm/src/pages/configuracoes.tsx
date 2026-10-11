@@ -4924,7 +4924,7 @@ export default function Configuracoes() {
 
         <div className="relative hidden md:block">
           <div
-            className="overflow-x-auto overscroll-x-contain pb-1"
+            className="settings-tabs-scroll overflow-x-auto overscroll-x-contain pb-1"
             data-testid="settings-tabs-scroll"
           >
             <TabsList
@@ -4947,7 +4947,7 @@ export default function Configuracoes() {
               })}
             </TabsList>
           </div>
-          <p className="mt-1 text-right text-xs text-muted-foreground lg:hidden">
+          <p className="mt-1 text-right text-xs text-muted-foreground xl:hidden">
             Role horizontalmente para acessar todas as seções
           </p>
         </div>
