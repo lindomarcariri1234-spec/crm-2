@@ -3,8 +3,8 @@ name: CRM settings route scope
 description: Product decision about which configuration belongs on the main CRM settings route.
 ---
 
-Keep `/configuracoes` focused on general agency, establishment, and tourism-operation setup, plus the Clube relationship-program settings. Other specialized sections should remain outside this route; their legacy links should land on the general profile. Preserve the separate storefront settings page and the agency-admin backup redirect to Downloads.
+`/configuracoes` includes general agency and tourism-operation setup, the Plano/Equipe/Chaves API/Integrações/Notificações/Funcionalidades/Pipelines settings, Personalização, and Clube. Integridade is agency-admin-only. Backup remains in Downloads with its legacy redirect.
 
-**Why:** The user chose the general agency/tourism scope, then explicitly asked to restore navigation and viewing for Clube.
+**Why:** The user first narrowed the page, then explicitly requested that the settings tabs shown in their reference be restored and functional.
 
-**How to apply:** Keep Clube as the sole specialized exception in `/configuracoes`. Keep billing, team, integrations, notifications, pipelines, customization, and integrity panels elsewhere; retain compatibility redirects for their old links.
+**How to apply:** Keep the listed existing settings panels reachable from the horizontal navigation and direct `?tab=` links. Preserve role gating for Integridade and keep backup in Downloads.

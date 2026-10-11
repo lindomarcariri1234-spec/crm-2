@@ -27,6 +27,7 @@ type SettingsNavigationProps = {
   testIdPrefix: string;
   value: string;
   onValueChange: (value: string) => void;
+  orientation?: "vertical" | "horizontal";
 };
 
 export function SettingsNavigation({
@@ -35,7 +36,34 @@ export function SettingsNavigation({
   testIdPrefix,
   value,
   onValueChange,
+  orientation = "vertical",
 }: SettingsNavigationProps) {
+  if (orientation === "horizontal") {
+    return (
+      <div className="w-full overflow-x-auto rounded-2xl border border-[#DCE3E8] bg-white/85 shadow-sm dark:border-border dark:bg-card">
+        <TabsList
+          aria-label={`${pageLabel}: navegação`}
+          className="flex h-auto w-max min-w-full items-center justify-start gap-1 rounded-2xl bg-transparent p-2 text-muted-foreground"
+        >
+          {groups.flatMap((group) => group.items.map((item) => {
+            const Icon = item.icon;
+            return (
+              <TabsTrigger
+                key={item.value}
+                value={item.value}
+                data-testid={`${testIdPrefix}-tab-${item.value}`}
+                className="shrink-0 justify-start gap-2 rounded-lg px-3 py-2.5 text-sm whitespace-nowrap data-[state=active]:bg-[#EAF1F4] data-[state=active]:text-[#1E5B8C] data-[state=active]:shadow-none dark:data-[state=active]:bg-secondary dark:data-[state=active]:text-secondary-foreground"
+              >
+                <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>{item.label}</span>
+              </TabsTrigger>
+            );
+          }))}
+        </TabsList>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="lg:hidden">

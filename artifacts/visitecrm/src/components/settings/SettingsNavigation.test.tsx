@@ -34,8 +34,10 @@ vi.mock("@/components/ui/select", async () => {
 });
 
 import { SettingsNavigation } from "./SettingsNavigation";
+import { getAgencySettingsAccess } from "./agency-settings-access";
 import { STORE_SETTINGS_NAVIGATION_GROUPS } from "./store-settings-navigation";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { ROLES } from "@workspace/permissions";
 
 function StoreSettingsNavigationHarness() {
   const [activeTab, setActiveTab] = useState("geral");
@@ -61,7 +63,65 @@ function StoreSettingsNavigationHarness() {
   );
 }
 
+function AgencySettingsNavigationHarness() {
+  const [activeTab, setActiveTab] = useState("agency");
+  const { navigationGroups } = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, null);
+  const sections = navigationGroups.flatMap((group) => group.items);
+
+  return createElement(
+    Tabs,
+    { value: activeTab, onValueChange: setActiveTab },
+    createElement(SettingsNavigation, {
+      groups: navigationGroups,
+      pageLabel: "Seções do CRM",
+      testIdPrefix: "agency-settings",
+      value: activeTab,
+      onValueChange: setActiveTab,
+      orientation: "horizontal",
+    }),
+    ...sections.map((section) =>
+      createElement(
+        TabsContent,
+        { key: section.value, value: section.value },
+        createElement("p", { "data-testid": "active-agency-section" }, section.label),
+      ),
+    ),
+  );
+}
+
 afterEach(cleanupRoots);
+
+describe("agency settings horizontal navigation", () => {
+  it("shows every available section and opens the selected panel", async () => {
+    const view = await renderComponent(createElement(AgencySettingsNavigationHarness));
+    const access = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, null);
+    const sections = access.navigationGroups.flatMap((group) => group.items);
+
+    expect(view.container.querySelectorAll('[data-testid^="agency-settings-tab-"]'))
+      .toHaveLength(sections.length);
+    expect(view.container.querySelector('[data-testid="agency-settings-tab-plan"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-testid="agency-settings-tab-team"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-testid="agency-settings-tab-apikeys"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-testid="agency-settings-tab-integrations"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-testid="agency-settings-tab-notifications"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-testid="agency-settings-tab-features"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-testid="agency-settings-tab-pipelines"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-testid="active-agency-section"]')?.textContent)
+      .toBe("Agência");
+
+    await act(async () => {
+      const integrationTab = view.container.querySelector<HTMLButtonElement>(
+        '[data-testid="agency-settings-tab-integrations"]',
+      )!;
+      integrationTab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    });
+    expect(view.container.querySelector<HTMLButtonElement>(
+      '[data-testid="agency-settings-tab-integrations"]',
+    )?.getAttribute("aria-selected")).toBe("true");
+    expect(view.container.querySelector('[role="tabpanel"][data-state="active"] [data-testid="active-agency-section"]')
+      ?.textContent).toBe("Integrações");
+  });
+});
 
 describe("store settings mobile navigation", () => {
   it("opens each of the nine sections without changing the store settings route", async () => {

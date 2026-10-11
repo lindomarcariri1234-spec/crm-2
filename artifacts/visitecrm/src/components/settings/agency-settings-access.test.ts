@@ -21,28 +21,74 @@ describe("agency settings access", () => {
     )).toBe("/configuracoes?campaign=summer#contact");
   });
 
-  it("exposes general agency settings and the Club for every agency role", () => {
+  it("exposes the requested settings to agency roles and reserves integrity for admins", () => {
     const admin = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, null);
     const manager = getAgencySettingsAccess(ROLES.AGENCY_MANAGER, null);
     const values = (groups: typeof admin.navigationGroups) =>
       groups.flatMap((group) => group.items.map((item) => item.value));
 
-    expect(values(admin.navigationGroups)).toEqual(["agency", "clube"]);
-    expect(values(manager.navigationGroups)).toEqual(["agency", "clube"]);
-    expect([...admin.availableTabs]).toEqual(["agency", "clube"]);
-    expect([...manager.availableTabs]).toEqual(["agency", "clube"]);
+    const expectedManagerTabs = [
+      "agency",
+      "customization",
+      "plan",
+      "team",
+      "apikeys",
+      "integrations",
+      "notifications",
+      "features",
+      "pipelines",
+      "clube",
+    ];
+    expect(values(admin.navigationGroups)).toEqual([...expectedManagerTabs, "integrity"]);
+    expect(values(manager.navigationGroups)).toEqual(expectedManagerTabs);
+    expect([...admin.availableTabs]).toEqual([
+      "agency",
+      "plan",
+      "team",
+      "apikeys",
+      "integrations",
+      "notifications",
+      "features",
+      "pipelines",
+      "customization",
+      "clube",
+      "integrity",
+    ]);
+    expect([...manager.availableTabs]).toEqual([
+      "agency",
+      "plan",
+      "team",
+      "apikeys",
+      "integrations",
+      "notifications",
+      "features",
+      "pipelines",
+      "customization",
+      "clube",
+    ]);
   });
 
-  it("opens the Club for a direct link", () => {
-    const access = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, "clube");
-    expect(access.initialTab).toBe("clube");
-    expect(access.availableTabs.has("clube")).toBe(true);
+  it.each([
+    "plan",
+    "team",
+    "apikeys",
+    "integrations",
+    "notifications",
+    "features",
+    "pipelines",
+    "customization",
+    "clube",
+    "integrity",
+  ])("opens %s for a direct link when authorized", (tab) => {
+    const access = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, tab);
+    expect(access.initialTab).toBe(tab);
+    expect(access.availableTabs.has(tab)).toBe(true);
   });
 
-  it.each(["backup", "integrity", "integrations", "plan"])(
-    "sends the legacy %s section to the agency profile",
+  it.each(["backup", "integrity", "unknown"])(
+    "keeps unauthorized or removed %s links on the agency profile",
     (requestedTab) => {
-      const access = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, requestedTab);
+      const access = getAgencySettingsAccess(ROLES.AGENCY_MANAGER, requestedTab);
 
       expect(access.initialTab).toBe("agency");
       expect(access.availableTabs.has(requestedTab)).toBe(false);

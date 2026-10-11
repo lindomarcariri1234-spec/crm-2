@@ -4774,6 +4774,7 @@ export default function Configuracoes() {
     me?.role,
     requestedTab,
   );
+  const allowedTabs = availableTabs;
   useEffect(() => {
     if (requestedTab === "backup") {
       const destination = getLegacyBackupRedirect(me?.role);
@@ -4784,9 +4785,9 @@ export default function Configuracoes() {
       }
       return;
     }
-    if (!requestedTab || requestedTab === "agency" || requestedTab === "clube") return;
+    if (!requestedTab || allowedTabs.has(requestedTab)) return;
     setLocation(normalizeAgencySettingsTabUrl(window.location.href), { replace: true });
-  }, [me, me?.role, requestedTab, setLocation]);
+  }, [allowedTabs, me, me?.role, requestedTab, setLocation]);
   const [activeTab, setActiveTab] = useState(initialTab);
   const [dirtySources, setDirtySources] = useState<Record<string, string>>({});
   const [pendingExit, setPendingExit] = useState<
@@ -4805,8 +4806,6 @@ export default function Configuracoes() {
       updateAgencySettingsDirtySources(current, section, source, isDirty),
     );
   }, []);
-
-  const allowedTabs = availableTabs;
 
   const commitTabChange = useCallback((nextTab: string) => {
     if (!allowedTabs.has(nextTab)) return;
@@ -4903,27 +4902,28 @@ export default function Configuracoes() {
         <div className="pointer-events-none absolute -right-10 -top-16 h-44 w-44 rounded-full border-[16px] border-[#D8A646]/20" />
         <div className="relative">
           <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F]">
-            {activeTab === "clube" ? "CRM · Relacionamento" : "CRM · Operação turística"}
+            BASTIDORES DA AGÊNCIA · CARIRI
           </p>
           <h1 className="text-2xl font-bold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">
-            {activeTab === "clube" ? "Clube de benefícios" : "Configuração geral"}
+            {activeTab === "clube" ? "Clube de benefícios" : "Configurações"}
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-[#71808C] dark:text-muted-foreground">
             {activeTab === "clube"
               ? "Configure a identidade e os benefícios do programa de relacionamento com seus clientes."
-              : "Cadastre os dados do seu empreendimento e os identificadores usados por viagens, reservas e atendimento."}
+              : "Deixe a operação com a sua cara e mantenha os serviços essenciais prontos para a próxima saída."}
           </p>
         </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <div className="grid items-start gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="space-y-4">
           <SettingsNavigation
             groups={navigationGroups}
             pageLabel="Seções do CRM"
             testIdPrefix="agency-settings"
             value={activeTab}
             onValueChange={handleTabChange}
+            orientation="horizontal"
           />
           <div className="min-w-0">
           <TabsContent value="agency">
