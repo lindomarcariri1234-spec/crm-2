@@ -137,7 +137,7 @@ function SalesGoalSection() {
   }, [currentGoal]);
 
   async function handleSaveGoal() {
-    const parsed = parseFloat(goalInput.replace(/\./g, "").replace(",", "."));
+    const parsed = parseFloat(goalInput);
     if (isNaN(parsed) || parsed <= 0) {
       toast({ title: "Valor inválido para a meta", variant: "destructive" });
       return;
@@ -858,7 +858,7 @@ function PlanTab() {
         </CardHeader>
         {usageItems.length > 0 && (
           <CardContent>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               {usageItems.map((item) => {
                 const pct = Math.min((item.used / item.max) * 100, 100);
                 const isNearLimit = pct >= 80;
@@ -958,7 +958,7 @@ function PlanTab() {
 
         return (
           <TooltipProvider>
-          <div className={`grid gap-4 ${visiblePlans.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+          <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${visiblePlans.length === 3 ? "lg:grid-cols-3" : ""}`}>
             {visiblePlans.map((plan) => {
               const isCurrentPlan = plan.slug === subData?.tenant?.planId || plan.id === subData?.tenant?.planId;
               const price = selectedCycle === "annual" ? Number(plan.annualPrice) : Number(plan.monthlyPrice);
@@ -1297,6 +1297,7 @@ function IntegrationCard({
   const [testing, setTesting] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [forbidden, setForbidden] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const [data, setData] = useState<IntegrationData | null>(null);
   const [formConfig, setFormConfig] = useState<Record<string, string>>({});
@@ -1309,6 +1310,8 @@ function IntegrationCard({
   const [showLogs, setShowLogs] = useState(false);
 
   const loadConfig = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
       const query = integrationId ? `?integrationId=${encodeURIComponent(integrationId)}` : "";
       const res = await fetch(`${BASE}/api/integrations/${type}${query}`, { credentials: "include" });
@@ -1335,7 +1338,7 @@ function IntegrationCard({
       setEnabled(d.enabled);
       setDirty(false);
     } catch {
-      // silent — card stays in default state
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -1507,6 +1510,13 @@ function IntegrationCard({
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
             <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
+          </div>
+        ) : loadError ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm" role="alert">
+            <span>Não foi possível carregar a configuração atual. Nenhuma alteração foi salva.</span>
+            <Button type="button" size="sm" variant="outline" onClick={() => void loadConfig()} disabled={loading}>
+              Tentar novamente
+            </Button>
           </div>
         ) : (
           <>
@@ -2085,8 +2095,11 @@ function AICard() {
   const [logs, setLogs] = useState<AILog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const loadConfig = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
       const res = await fetch(`${BASE}/api/ai-integration`, { credentials: "include" });
       if (res.status === 403) {
@@ -2110,7 +2123,7 @@ function AICard() {
       setMaskedAccessToken(data.maskedAccessToken ?? null);
       setDirty(false);
     } catch {
-      // silent — card stays in default state
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -2239,6 +2252,13 @@ function AICard() {
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
             <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
+          </div>
+        ) : loadError ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm" role="alert">
+            <span>Não foi possível carregar a configuração atual. Nenhuma alteração foi salva.</span>
+            <Button type="button" size="sm" variant="outline" onClick={() => void loadConfig()} disabled={loading}>
+              Tentar novamente
+            </Button>
           </div>
         ) : (
           <>
@@ -2883,6 +2903,7 @@ function NotificationsTab() {
               <Switch
                 checked={notifConfig[n.key] ?? true}
                 onCheckedChange={(v) => handleToggle(n.key, v)}
+                disabled={upsert.isPending}
               />
             </div>
           ))}
@@ -2901,6 +2922,7 @@ function NotificationsTab() {
           <Switch
             checked={npsAutoSend}
             onCheckedChange={handleNpsAutoSendToggle}
+            disabled={upsert.isPending}
           />
         </div>
         {npsAutoSend && (
@@ -2910,11 +2932,17 @@ function NotificationsTab() {
               type="number"
               min={1}
               max={720}
+              step={1}
               value={npsHoursInput}
-              onChange={(e) => setNpsHoursInput(Number(e.target.value))}
+              onChange={(e) => setNpsHoursInput(e.target.value === "" ? 0 : Number(e.target.value))}
               className="w-24"
             />
-            <Button size="sm" variant="outline" onClick={handleNpsHoursSave}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleNpsHoursSave}
+              disabled={upsert.isPending || !Number.isInteger(npsHoursInput) || npsHoursInput < 1 || npsHoursInput > 720}
+            >
               Salvar
             </Button>
           </div>
@@ -2972,15 +3000,28 @@ function WhatsAppNotificationsSection() {
   });
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [loadingSettings, setLoadingSettings] = useState(true);
+  const [settingsLoadError, setSettingsLoadError] = useState(false);
 
   const BASE = (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_BASE_URL ?? "";
 
-  useEffect(() => {
-    fetch(`${BASE}/api/whatsapp-notifications/settings`, { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => { if (data) setSettings(data); })
-      .catch(() => {});
+  const loadSettings = useCallback(async () => {
+    setLoadingSettings(true);
+    setSettingsLoadError(false);
+    try {
+      const response = await fetch(`${BASE}/api/whatsapp-notifications/settings`, { credentials: "include" });
+      if (!response.ok) throw new Error("load_failed");
+      setSettings(await response.json());
+    } catch {
+      setSettingsLoadError(true);
+    } finally {
+      setLoadingSettings(false);
+    }
   }, [BASE]);
+
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
 
   function update(patch: Partial<WaSettings>) {
     setSettings((s) => ({ ...s, ...patch }));
@@ -3056,6 +3097,23 @@ function WhatsAppNotificationsSection() {
         </p>
       </div>
 
+      {settingsLoadError && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm" role="alert">
+          <span>Não foi possível carregar as preferências atuais. Tente novamente antes de editar.</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => void loadSettings()} disabled={loadingSettings}>
+            {loadingSettings && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+            Tentar novamente
+          </Button>
+        </div>
+      )}
+
+      {loadingSettings && (
+        <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground" role="status">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Carregando preferências de WhatsApp...
+        </div>
+      )}
+
       {TYPES.map((t) => (
         <div key={t.key} className="space-y-2 border-t pt-4 first:border-t-0 first:pt-0">
           <div className="flex items-center justify-between">
@@ -3063,6 +3121,7 @@ function WhatsAppNotificationsSection() {
             <Switch
               checked={settings[t.key] ?? false}
               onCheckedChange={(v) => update({ [t.key]: v })}
+              disabled={loadingSettings || settingsLoadError || saving}
             />
           </div>
           {settings[t.key] && (
@@ -3109,6 +3168,7 @@ function WhatsAppNotificationsSection() {
                 value={settings[t.msgKey] ?? ""}
                 onChange={(e) => update({ [t.msgKey]: e.target.value || null })}
                 className="text-sm resize-none font-mono"
+                disabled={loadingSettings || settingsLoadError || saving}
               />
               <div className="space-y-1.5" aria-label={`Pré-visualização de ${t.label}`}>
                 <p className="text-xs font-medium text-muted-foreground">Pré-visualização</p>
@@ -3126,6 +3186,7 @@ function WhatsAppNotificationsSection() {
                   type="button"
                   className="text-xs text-muted-foreground underline"
                   onClick={() => update({ [t.msgKey]: null })}
+                  disabled={loadingSettings || settingsLoadError || saving}
                 >
                   Usar mensagem padrão
                 </button>
@@ -3135,7 +3196,7 @@ function WhatsAppNotificationsSection() {
         </div>
       ))}
 
-      <Button size="sm" onClick={handleSave} disabled={saving || !dirty} className="w-full">
+      <Button size="sm" onClick={handleSave} disabled={saving || !dirty || loadingSettings || settingsLoadError} className="w-full">
         {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
         Salvar configurações de WhatsApp
       </Button>
@@ -3434,23 +3495,25 @@ function TeamTab() {
   const inviteRole = "vendedor" as const;
   const [inviting, setInviting] = useState(false);
   const [limitError, setLimitError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
 
   async function loadTeam() {
     setLoading(true);
+    setLoadError(false);
     try {
       const [membersRes, invitesRes] = await Promise.all([
         fetch(`${BASE}/api/team/members`, { credentials: "include" }),
         fetch(`${BASE}/api/team/invites`, { credentials: "include" }),
       ]);
-      if (membersRes.ok) {
-        const all: TeamMember[] = await membersRes.json();
-        setMembers(all.filter((m) => m.role === "vendedor"));
-      }
-      if (invitesRes.ok) {
-        const all: PendingInvite[] = await invitesRes.json();
-        setInvites(all.filter((i) => !i.accepted && i.role === "vendedor"));
-      }
+      if (!membersRes.ok || !invitesRes.ok) throw new Error("team_load_failed");
+      const [allMembers, allInvites] = await Promise.all([
+        membersRes.json() as Promise<TeamMember[]>,
+        invitesRes.json() as Promise<PendingInvite[]>,
+      ]);
+      setMembers(allMembers.filter((m) => m.role === "vendedor"));
+      setInvites(allInvites.filter((i) => !i.accepted && i.role === "vendedor"));
     } catch {
+      setLoadError(true);
       toast({ title: "Erro ao carregar equipe", variant: "destructive" });
     } finally {
       setLoading(false);
@@ -3500,12 +3563,13 @@ function TeamTab() {
 
   async function handleRemove(id: string) {
     try {
-      await fetch(`${BASE}/api/team/members/${id}`, {
+      const response = await fetch(`${BASE}/api/team/members/${id}`, {
         method: "DELETE",
         credentials: "include",
       });
+      if (!response.ok) throw new Error("remove_failed");
       toast({ title: "Membro desativado" });
-      loadTeam();
+      await loadTeam();
     } catch {
       toast({ title: "Erro ao remover membro", variant: "destructive" });
     }
@@ -3513,12 +3577,13 @@ function TeamTab() {
 
   async function handleCancelInvite(id: string) {
     try {
-      await fetch(`${BASE}/api/team/invites/${id}`, {
+      const response = await fetch(`${BASE}/api/team/invites/${id}`, {
         method: "DELETE",
         credentials: "include",
       });
+      if (!response.ok) throw new Error("cancel_failed");
       toast({ title: "Convite cancelado" });
-      loadTeam();
+      await loadTeam();
     } catch {
       toast({ title: "Erro ao cancelar convite", variant: "destructive" });
     }
@@ -3558,6 +3623,11 @@ function TeamTab() {
         <div className="flex items-center gap-2 py-8 text-muted-foreground text-sm justify-center">
           <Loader2 className="w-4 h-4 animate-spin" />
           Carregando equipe...
+        </div>
+      ) : loadError ? (
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-8 text-center" role="alert">
+          <p className="text-sm text-muted-foreground">Não foi possível carregar os membros e convites. A lista pode estar desatualizada.</p>
+          <Button variant="outline" size="sm" onClick={() => void loadTeam()}>Tentar novamente</Button>
         </div>
       ) : (
         <>
@@ -3689,53 +3759,14 @@ function TeamTab() {
 
 /* ──────────────────── API Keys Tab ──────────────────── */
 function ApiKeysTab() {
-  const [keys] = useState([
-    { id: "1", name: "Produção", key: "••••••••••••••••••••", createdAt: "2024-01-15", lastUsed: "Hoje" },
-    { id: "2", name: "Desenvolvimento", key: "••••••••••••••••••••", createdAt: "2024-02-20", lastUsed: "Ontem" },
-  ]);
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
-
-  function toggleVisible(id: string) {
-    setVisible((v) => ({ ...v, [id]: !v[id] }));
-  }
-
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          Use chaves de API para integrar o VisiteCRM com sistemas externos.
-        </p>
-        <Button variant="outline">
-          <Key className="w-4 h-4 mr-2" />
-          Gerar nova chave
-        </Button>
-      </div>
-
-      <div className="rounded-md border bg-background divide-y">
-        {keys.map((k) => (
-          <div key={k.id} className="p-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium text-sm">{k.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  Criado em {k.createdAt} · Último uso: {k.lastUsed}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => toggleVisible(k.id)}>
-                  {visible[k.id] ? "Ocultar" : "Mostrar"}
-                </Button>
-                <Button variant="outline" size="sm" className="text-destructive">
-                  Revogar
-                </Button>
-              </div>
-            </div>
-            {visible[k.id] && (
-              <div className="font-mono text-xs bg-muted rounded p-2 break-all">{k.key}</div>
-            )}
-          </div>
-        ))}
-      </div>
+    <div className="rounded-lg border border-dashed p-6 text-center">
+      <Key className="mx-auto mb-3 h-8 w-8 text-muted-foreground" aria-hidden="true" />
+      <h3 className="text-sm font-medium">Gerenciamento de chaves ainda não disponível</h3>
+      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+        Esta tela ainda não está conectada a um serviço de criação e revogação de chaves.
+        Nenhuma chave foi criada; não use os controles desta aba para configurar integrações.
+      </p>
     </div>
   );
 }
@@ -3781,6 +3812,7 @@ function ClubConfigTab() {
           fetch(`${BASE}/api/club/config`, { credentials: "include" }),
           fetch(`${BASE}/api/club/benefits`, { credentials: "include" }),
         ]);
+        if (!cfgRes.ok || !bnfRes.ok) throw new Error("load_failed");
         const cfg = await cfgRes.json() as { clubName: string; description: string | null };
         const bnf = await bnfRes.json() as { data: ClubBenefitAdmin[] };
         setClubName(cfg.clubName ?? "Clube Visite");
@@ -3798,12 +3830,13 @@ function ClubConfigTab() {
   async function handleSaveConfig() {
     setSavingConfig(true);
     try {
-      await fetch(`${BASE}/api/club/config`, {
+      const response = await fetch(`${BASE}/api/club/config`, {
         method: "PUT",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ clubName, description: clubDescription || null }),
       });
+      if (!response.ok) throw new Error("save_failed");
       toast({ title: "Configurações do clube salvas!" });
     } catch {
       toast({ title: "Erro ao salvar configurações", variant: "destructive" });
@@ -3829,6 +3862,7 @@ function ClubConfigTab() {
           sortOrder: benefits.filter((b) => b.tier === activeTier).length,
         }),
       });
+      if (!res.ok) throw new Error("add_benefit_failed");
       const data = await res.json() as { id: string };
       setBenefits((prev) => [
         ...prev,
@@ -3856,10 +3890,11 @@ function ClubConfigTab() {
   async function handleDeleteBenefit(id: string) {
     setDeletingId(id);
     try {
-      await fetch(`${BASE}/api/club/benefits/${id}`, {
+      const response = await fetch(`${BASE}/api/club/benefits/${id}`, {
         method: "DELETE",
         credentials: "include",
       });
+      if (!response.ok) throw new Error("delete_benefit_failed");
       setBenefits((prev) => prev.filter((b) => b.id !== id));
       toast({ title: "Benefício removido" });
     } catch {
@@ -4059,6 +4094,13 @@ function PipelineSettingsTab() {
   const [editingStageId, setEditingStageId] = useState<string | null>(null);
   const [editingStageValue, setEditingStageValue] = useState("");
 
+  function reportRequestError(error: unknown) {
+    toast({
+      title: error instanceof Error ? error.message : "Não foi possível atualizar o pipeline.",
+      variant: "destructive",
+    });
+  }
+
   async function createPipeline() {
     if (!newPipelineName.trim()) return;
     setLoadingAction("create-pipeline");
@@ -4074,6 +4116,8 @@ function PipelineSettingsTab() {
       setCreatingPipeline(false);
       setActivePipelineId(p.id);
       await refetchPipelines();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4081,13 +4125,19 @@ function PipelineSettingsTab() {
     if (!renameValue.trim()) return;
     setLoadingAction(`rename-${id}`);
     try {
-      await fetch(`${BASE}/api/pipelines/${id}`, {
+      const r = await fetch(`${BASE}/api/pipelines/${id}`, {
         method: "PATCH", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: renameValue.trim() }),
       });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.message ?? d.error ?? "Não foi possível renomear o pipeline.");
+      }
       setRenamingPipelineId(null);
       await refetchPipelines();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4101,6 +4151,8 @@ function PipelineSettingsTab() {
       });
       if (!r.ok) { const d = await r.json().catch(() => ({})); toast({ title: "Erro", description: d.message, variant: "destructive" }); return; }
       await refetchPipelines();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4111,6 +4163,8 @@ function PipelineSettingsTab() {
       if (!r.ok) { const d = await r.json().catch(() => ({})); toast({ title: "Erro", description: d.message, variant: "destructive" }); return; }
       if (activePipeline?.id === id) setActivePipelineId(null);
       await refetchPipelines();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4118,13 +4172,19 @@ function PipelineSettingsTab() {
     if (!newStageName.trim() || !activePipeline) return;
     setLoadingAction("add-stage");
     try {
-      await fetch(`${BASE}/api/pipeline/stages?pipelineId=${activePipeline.id}`, {
+      const r = await fetch(`${BASE}/api/pipeline/stages?pipelineId=${activePipeline.id}`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: newStageName.trim(), color: newStageColor }),
       });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.message ?? d.error ?? "Não foi possível adicionar a etapa.");
+      }
       setNewStageName("");
       await refetchStages();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4132,13 +4192,19 @@ function PipelineSettingsTab() {
     if (!editingStageValue.trim()) return;
     setLoadingAction(`rename-stage-${stageId}`);
     try {
-      await fetch(`${BASE}/api/pipeline/stages/${stageId}`, {
+      const r = await fetch(`${BASE}/api/pipeline/stages/${stageId}`, {
         method: "PATCH", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: editingStageValue.trim() }),
       });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.message ?? d.error ?? "Não foi possível renomear a etapa.");
+      }
       setEditingStageId(null);
       await refetchStages();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4148,6 +4214,8 @@ function PipelineSettingsTab() {
       const r = await fetch(`${BASE}/api/pipeline/stages/${stageId}`, { method: "DELETE", credentials: "include" });
       if (!r.ok) { const d = await r.json().catch(() => ({})); toast({ title: "Erro", description: d.message, variant: "destructive" }); return; }
       await refetchStages();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4775,6 +4843,13 @@ function BackupDataTab() {
 export default function Configuracoes() {
   const { data: me } = useGetMe();
   const isAgencyAdmin = me?.role === ROLES.AGENCY_ADMIN;
+  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  const availableTabs = new Set([
+    "agency", "plan", "integrations", "notifications", "customization",
+    "team", "apikeys", "features", "clube", "pipelines",
+    ...(isAgencyAdmin ? ["backup", "integrity"] : []),
+  ]);
+  const initialTab = requestedTab && availableTabs.has(requestedTab) ? requestedTab : "agency";
 
   return (
     <div className="visite-enter mx-auto max-w-[1440px] space-y-6">
@@ -4787,56 +4862,56 @@ export default function Configuracoes() {
         </div>
       </div>
 
-      <Tabs defaultValue={new URLSearchParams(window.location.search).get("tab") ?? "agency"}>
-        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/85 p-1.5 shadow-sm dark:border-border dark:bg-card">
-          <TabsTrigger value="agency" className="flex items-center gap-1.5">
+      <Tabs defaultValue={initialTab}>
+        <TabsList className="flex h-auto w-full max-w-full flex-nowrap justify-start gap-1 overflow-x-auto rounded-2xl border border-[#DCE3E8] bg-white/85 p-1.5 shadow-sm dark:border-border dark:bg-card">
+          <TabsTrigger value="agency" className="flex shrink-0 items-center gap-1.5">
             <Building2 className="w-3.5 h-3.5" />
             Agência
           </TabsTrigger>
-          <TabsTrigger value="plan" className="flex items-center gap-1.5">
+          <TabsTrigger value="plan" className="flex shrink-0 items-center gap-1.5">
             <CreditCard className="w-3.5 h-3.5" />
             Plano
           </TabsTrigger>
-          <TabsTrigger value="integrations" className="flex items-center gap-1.5">
+          <TabsTrigger value="integrations" className="flex shrink-0 items-center gap-1.5">
             <Puzzle className="w-3.5 h-3.5" />
             Integrações
           </TabsTrigger>
-          <TabsTrigger value="notifications" className="flex items-center gap-1.5">
+          <TabsTrigger value="notifications" className="flex shrink-0 items-center gap-1.5">
             <Bell className="w-3.5 h-3.5" />
             Notificações
           </TabsTrigger>
-          <TabsTrigger value="customization" className="flex items-center gap-1.5">
+          <TabsTrigger value="customization" className="flex shrink-0 items-center gap-1.5">
             <Palette className="w-3.5 h-3.5" />
             Personalização
           </TabsTrigger>
-          <TabsTrigger value="team" className="flex items-center gap-1.5">
+          <TabsTrigger value="team" className="flex shrink-0 items-center gap-1.5">
             <Users className="w-3.5 h-3.5" />
             Equipe
           </TabsTrigger>
-          <TabsTrigger value="apikeys" className="flex items-center gap-1.5">
+          <TabsTrigger value="apikeys" className="flex shrink-0 items-center gap-1.5">
             <Key className="w-3.5 h-3.5" />
             Chaves API
           </TabsTrigger>
-          <TabsTrigger value="features" className="flex items-center gap-1.5">
+          <TabsTrigger value="features" className="flex shrink-0 items-center gap-1.5">
             <ToggleLeft className="w-3.5 h-3.5" />
             Funcionalidades
           </TabsTrigger>
-          <TabsTrigger value="clube" className="flex items-center gap-1.5">
+          <TabsTrigger value="clube" className="flex shrink-0 items-center gap-1.5">
             <Crown className="w-3.5 h-3.5" />
             Clube
           </TabsTrigger>
-          <TabsTrigger value="pipelines" className="flex items-center gap-1.5">
+          <TabsTrigger value="pipelines" className="flex shrink-0 items-center gap-1.5">
             <GitBranch className="w-3.5 h-3.5" />
             Pipelines
           </TabsTrigger>
           {isAgencyAdmin && (
-            <TabsTrigger value="backup" className="flex items-center gap-1.5">
+            <TabsTrigger value="backup" className="flex shrink-0 items-center gap-1.5">
               <DatabaseBackup className="w-3.5 h-3.5" />
               Backup de Dados
             </TabsTrigger>
           )}
           {isAgencyAdmin && (
-            <TabsTrigger value="integrity" className="flex items-center gap-1.5" data-testid="tab-linked-data-integrity">
+            <TabsTrigger value="integrity" className="flex shrink-0 items-center gap-1.5" data-testid="tab-linked-data-integrity">
               <Wrench className="w-3.5 h-3.5" />
               Integridade
             </TabsTrigger>
