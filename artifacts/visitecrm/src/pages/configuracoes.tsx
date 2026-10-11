@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
+import { useLocation } from "wouter";
 import { CoverImageUpload } from "@/components/cover-image-upload";
 import { storeApi } from "@/lib/storeApi";
 import { useUser } from "@clerk/react";
@@ -65,6 +66,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
 import { getAgencySettingsAccess } from "@/components/settings/agency-settings-access";
+import {
+  AgencySettingsDirtyContext,
+  hasUnsavedAgencySettings,
+  updateAgencySettingsDirtySources,
+  useAgencySettingsDirty,
+} from "@/components/settings/agency-settings-dirty";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -133,6 +140,7 @@ function SalesGoalSection() {
     return typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : 50000;
   })();
   const [goalInput, setGoalInput] = useState("");
+  useAgencySettingsDirty("agency", "sales-monthly-goal", goalInput !== String(currentGoal));
 
   useEffect(() => {
     setGoalInput(String(currentGoal));
@@ -186,6 +194,11 @@ function ChangePasswordSection() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  useAgencySettingsDirty(
+    "agency",
+    "change-password",
+    Boolean(currentPassword || newPassword || confirmPassword),
+  );
 
   async function handleChangePassword(e: React.FormEvent) {
     e.preventDefault();
@@ -363,6 +376,8 @@ function AgencyProfileTab() {
   const updateTenant = useUpdateTenant();
 
   const [form, setForm] = useState<UpdateTenantBody>({});
+  const [savedForm, setSavedForm] = useState<UpdateTenantBody>({});
+  useAgencySettingsDirty("agency", "agency-profile", JSON.stringify(form) !== JSON.stringify(savedForm));
   const [prefixError, setPrefixError] = useState<string | null>(null);
   const [uploadingCount, setUploadingCount] = useState(0);
   const handleUploadingChange = useCallback((uploading: boolean) => {
@@ -371,7 +386,7 @@ function AgencyProfileTab() {
 
   useEffect(() => {
     if (fullTenant) {
-      setForm({
+      const loadedForm = {
         name: fullTenant.name,
         logoUrl: fullTenant.logoUrl ?? "",
         primaryColor: fullTenant.primaryColor ?? "#3B82F6",
@@ -380,15 +395,18 @@ function AgencyProfileTab() {
         phone: fullTenant.phone ?? "",
         website: fullTenant.website ?? "",
         reservationPrefix: fullTenant.reservationPrefix ?? "",
-      });
+      };
+      setForm(loadedForm);
+      setSavedForm(loadedForm);
     } else if (me?.tenant) {
-      setForm((f) => ({
-        ...f,
-        name: me.tenant!.name,
-        logoUrl: me.tenant!.logoUrl ?? "",
-        primaryColor: me.tenant!.primaryColor ?? "#3B82F6",
-        secondaryColor: me.tenant!.secondaryColor ?? "#8B5CF6",
-      }));
+      const loadedFields = {
+        name: me.tenant.name,
+        logoUrl: me.tenant.logoUrl ?? "",
+        primaryColor: me.tenant.primaryColor ?? "#3B82F6",
+        secondaryColor: me.tenant.secondaryColor ?? "#8B5CF6",
+      };
+      setForm((current) => ({ ...current, ...loadedFields }));
+      setSavedForm((current) => ({ ...current, ...loadedFields }));
     }
   }, [fullTenant?.id, me?.tenant?.id]);
 
@@ -408,6 +426,7 @@ function AgencyProfileTab() {
         delete submitData.reservationPrefix;
       }
       await updateTenant.mutateAsync({ id: tenantId, data: submitData });
+      setSavedForm(form);
       toast({ title: "Perfil da agência atualizado" });
       await queryClient.invalidateQueries({ queryKey: getGetTenantQueryKey(tenantId) });
       refetchMe();
@@ -1308,6 +1327,7 @@ function IntegrationCard({
   const [environment, setEnvironment] = useState<"production" | "test">("production");
   const [enabled, setEnabled] = useState(false);
   const [dirty, setDirty] = useState(false);
+  useAgencySettingsDirty("integrations", `integration-${type}-${integrationId ?? "new"}`, dirty);
   const [logs, setLogs] = useState<IntegrationLog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
 
@@ -2097,6 +2117,7 @@ function AICard() {
   const [logs, setLogs] = useState<AILog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   const [dirty, setDirty] = useState(false);
+  useAgencySettingsDirty("integrations", "ai-integration", dirty);
   const [loadError, setLoadError] = useState(false);
 
   const loadConfig = useCallback(async () => {
@@ -2868,6 +2889,7 @@ function NotificationsTab() {
   const npsAutoSend = (configs.find((c) => c.key === "npsAutoSend")?.value ?? false) as boolean;
   const npsHoursAfterReturn = (configs.find((c) => c.key === "npsHoursAfterReturn")?.value ?? 24) as number;
   const [npsHoursInput, setNpsHoursInput] = useState<number>(npsHoursAfterReturn);
+  useAgencySettingsDirty("notifications", "nps-hours", npsHoursInput !== npsHoursAfterReturn);
 
   useEffect(() => {
     setNpsHoursInput(npsHoursAfterReturn);
@@ -3002,6 +3024,7 @@ function WhatsAppNotificationsSection() {
   });
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  useAgencySettingsDirty("notifications", "whatsapp-notifications", dirty);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [settingsLoadError, setSettingsLoadError] = useState(false);
 
@@ -3223,23 +3246,41 @@ function CustomizationTab() {
   const [primaryColor, setPrimaryColor] = useState(me?.tenant?.primaryColor ?? "#3B82F6");
   const [secondaryColor, setSecondaryColor] = useState(me?.tenant?.secondaryColor ?? "#8B5CF6");
   const [logoUrl, setLogoUrl] = useState(me?.tenant?.logoUrl ?? "");
+  const [savedBranding, setSavedBranding] = useState({
+    primaryColor: me?.tenant?.primaryColor ?? "#3B82F6",
+    secondaryColor: me?.tenant?.secondaryColor ?? "#8B5CF6",
+    logoUrl: me?.tenant?.logoUrl ?? "",
+  });
   const [uploadingCount, setUploadingCount] = useState(0);
   const handleUploadingChange = useCallback((uploading: boolean) => {
     setUploadingCount((n) => Math.max(0, n + (uploading ? 1 : -1)));
   }, []);
 
   const [storeLogo, setStoreLogo] = useState("");
+  const [savedStoreLogo, setSavedStoreLogo] = useState("");
   const [storeLogoUploading, setStoreLogoUploading] = useState(false);
   const [storeLogoSaving, setStoreLogoSaving] = useState(false);
   const [pixQrDeliveryMode, setPixQrDeliveryMode] = useState<"screen" | "email" | "whatsapp" | "all">("screen");
+  const [savedPixQrDeliveryMode, setSavedPixQrDeliveryMode] = useState<"screen" | "email" | "whatsapp" | "all">("screen");
   const [pixQrDeliverySaving, setPixQrDeliverySaving] = useState(false);
   const [hasStore, setHasStore] = useState(false);
+  const customizationDirty = primaryColor !== savedBranding.primaryColor
+    || secondaryColor !== savedBranding.secondaryColor
+    || logoUrl !== savedBranding.logoUrl
+    || storeLogo !== savedStoreLogo
+    || pixQrDeliveryMode !== savedPixQrDeliveryMode;
+  useAgencySettingsDirty("customization", "customization", customizationDirty);
 
   useEffect(() => {
     if (fullTenant) {
       setPrimaryColor(fullTenant.primaryColor ?? "#3B82F6");
       setSecondaryColor(fullTenant.secondaryColor ?? "#8B5CF6");
       setLogoUrl(fullTenant.logoUrl ?? "");
+      setSavedBranding({
+        primaryColor: fullTenant.primaryColor ?? "#3B82F6",
+        secondaryColor: fullTenant.secondaryColor ?? "#8B5CF6",
+        logoUrl: fullTenant.logoUrl ?? "",
+      });
     }
   }, [fullTenant?.id]);
 
@@ -3248,6 +3289,8 @@ function CustomizationTab() {
       .then((s) => {
         setStoreLogo(s.logo ?? "");
         setPixQrDeliveryMode(s.pixQrDeliveryMode ?? "screen");
+        setSavedStoreLogo(s.logo ?? "");
+        setSavedPixQrDeliveryMode(s.pixQrDeliveryMode ?? "screen");
         setHasStore(true);
       })
       .catch(() => {
@@ -3262,6 +3305,7 @@ function CustomizationTab() {
     }
     try {
       await updateTenant.mutateAsync({ id: tenantId, data: { primaryColor, secondaryColor, logoUrl } });
+      setSavedBranding({ primaryColor, secondaryColor, logoUrl });
       toast({ title: "Personalização salva com sucesso" });
       await queryClient.invalidateQueries({ queryKey: getGetTenantQueryKey(tenantId) });
       refetchMe();
@@ -3274,6 +3318,7 @@ function CustomizationTab() {
     setStoreLogoSaving(true);
     try {
       await storeApi.updateSettings({ logo: storeLogo });
+      setSavedStoreLogo(storeLogo);
       toast({ title: "Logo da loja salvo com sucesso" });
     } catch {
       toast({ title: "Erro ao salvar logo da loja", variant: "destructive" });
@@ -3286,6 +3331,7 @@ function CustomizationTab() {
     setPixQrDeliverySaving(true);
     try {
       await storeApi.updateSettings({ pixQrDeliveryMode });
+      setSavedPixQrDeliveryMode(pixQrDeliveryMode);
       toast({ title: "Preferência de entrega do PIX salva" });
     } catch {
       toast({ title: "Erro ao salvar a preferência do PIX", variant: "destructive" });
@@ -3494,6 +3540,7 @@ function TeamTab() {
   const [loading, setLoading] = useState(true);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
+  useAgencySettingsDirty("team", "team-invite", inviteOpen && Boolean(inviteEmail.trim()));
   const inviteRole = "vendedor" as const;
   const [inviting, setInviting] = useState(false);
   const [limitError, setLimitError] = useState<string | null>(null);
@@ -3797,6 +3844,7 @@ function ClubConfigTab() {
   const { toast } = useToast();
   const [clubName, setClubName] = useState("Clube Visite");
   const [clubDescription, setClubDescription] = useState("");
+  const [savedClubConfig, setSavedClubConfig] = useState({ clubName: "Clube Visite", clubDescription: "" });
   const [benefits, setBenefits] = useState<ClubBenefitAdmin[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingConfig, setSavingConfig] = useState(false);
@@ -3806,6 +3854,10 @@ function ClubConfigTab() {
   const [newDescription, setNewDescription] = useState("");
   const [addingBenefit, setAddingBenefit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const clubSettingsDirty = clubName !== savedClubConfig.clubName
+    || clubDescription !== savedClubConfig.clubDescription
+    || Boolean(newLabel.trim() || newValue.trim() || newDescription.trim());
+  useAgencySettingsDirty("clube", "club-settings", clubSettingsDirty);
 
   useEffect(() => {
     async function load() {
@@ -3819,6 +3871,10 @@ function ClubConfigTab() {
         const bnf = await bnfRes.json() as { data: ClubBenefitAdmin[] };
         setClubName(cfg.clubName ?? "Clube Visite");
         setClubDescription(cfg.description ?? "");
+        setSavedClubConfig({
+          clubName: cfg.clubName ?? "Clube Visite",
+          clubDescription: cfg.description ?? "",
+        });
         setBenefits(bnf.data ?? []);
       } catch {
         toast({ title: "Erro ao carregar configurações do clube", variant: "destructive" });
@@ -3839,6 +3895,7 @@ function ClubConfigTab() {
         body: JSON.stringify({ clubName, description: clubDescription || null }),
       });
       if (!response.ok) throw new Error("save_failed");
+      setSavedClubConfig({ clubName, clubDescription });
       toast({ title: "Configurações do clube salvas!" });
     } catch {
       toast({ title: "Erro ao salvar configurações", variant: "destructive" });
@@ -4095,6 +4152,16 @@ function PipelineSettingsTab() {
   const [newStageColor, setNewStageColor] = useState(PIPELINE_PRESET_COLORS[0]);
   const [editingStageId, setEditingStageId] = useState<string | null>(null);
   const [editingStageValue, setEditingStageValue] = useState("");
+  useAgencySettingsDirty(
+    "pipelines",
+    "pipeline-drafts",
+    Boolean(
+      (creatingPipeline && newPipelineName.trim())
+      || (renamingPipelineId && renameValue.trim())
+      || newStageName.trim()
+      || (editingStageId && editingStageValue.trim()),
+    ),
+  );
 
   function reportRequestError(error: unknown) {
     toast({
@@ -4843,6 +4910,9 @@ function BackupDataTab() {
 
 /* ──────────────────── Main Settings Page ──────────────────── */
 export default function Configuracoes() {
+  const [currentRoute, setLocation] = useLocation();
+  const currentUrlRef = useRef(window.location.href);
+  const currentHistoryStateRef = useRef(window.history.state);
   const { data: me } = useGetMe();
   const requestedTab = new URLSearchParams(window.location.search).get("tab");
   const { isAgencyAdmin, initialTab, navigationGroups } = getAgencySettingsAccess(
@@ -4850,6 +4920,90 @@ export default function Configuracoes() {
     requestedTab,
   );
   const [activeTab, setActiveTab] = useState(initialTab);
+  const [dirtySources, setDirtySources] = useState<Record<string, string>>({});
+  const [pendingExit, setPendingExit] = useState<
+    { kind: "tab"; destination: string } | { kind: "route"; destination: string } | null
+  >(null);
+  const hasUnsavedChanges = hasUnsavedAgencySettings(dirtySources);
+  const activeTabHasUnsavedChanges = hasUnsavedAgencySettings(dirtySources, activeTab);
+
+  useEffect(() => {
+    currentUrlRef.current = window.location.href;
+    currentHistoryStateRef.current = window.history.state;
+  }, [currentRoute]);
+
+  const reportDirty = useCallback((section: string, source: string, isDirty: boolean) => {
+    setDirtySources((current) =>
+      updateAgencySettingsDirtySources(current, section, source, isDirty),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const guardHistoryNavigation = (event: PopStateEvent) => {
+      const destination = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const currentUrl = new URL(currentUrlRef.current);
+      const currentRouteUrl = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
+      if (destination === currentRouteUrl) return;
+
+      event.stopImmediatePropagation();
+      window.history.pushState(currentHistoryStateRef.current, "", currentRouteUrl);
+      setPendingExit({ kind: "route", destination });
+    };
+    window.addEventListener("popstate", guardHistoryNavigation, true);
+    return () => window.removeEventListener("popstate", guardHistoryNavigation, true);
+  }, [hasUnsavedChanges]);
+
+  const handleTabChange = useCallback((nextTab: string) => {
+    if (nextTab === activeTab) return;
+    if (activeTabHasUnsavedChanges) {
+      setPendingExit({ kind: "tab", destination: nextTab });
+      return;
+    }
+    setActiveTab(nextTab);
+  }, [activeTab, activeTabHasUnsavedChanges]);
+
+  const handleRouteClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!hasUnsavedChanges || event.defaultPrevented || event.button !== 0
+      || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const anchor = target.closest<HTMLAnchorElement>("a[href]");
+    if (!anchor || anchor.hasAttribute("download") || (anchor.target && anchor.target !== "_self")) return;
+    const nextUrl = new URL(anchor.href, window.location.href);
+    if (nextUrl.origin !== window.location.origin || nextUrl.pathname === window.location.pathname) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    setPendingExit({
+      kind: "route",
+      destination: `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
+    });
+  }, [hasUnsavedChanges]);
+
+  const discardAndContinue = useCallback(() => {
+    if (!pendingExit) return;
+    if (pendingExit.kind === "tab") {
+      setDirtySources((current) => Object.fromEntries(
+        Object.entries(current).filter(([, section]) => section !== activeTab),
+      ));
+      setActiveTab(pendingExit.destination);
+    } else {
+      setDirtySources({});
+      setLocation(pendingExit.destination);
+    }
+    setPendingExit(null);
+  }, [activeTab, pendingExit, setLocation]);
 
   useEffect(() => {
     if (
@@ -4862,7 +5016,8 @@ export default function Configuracoes() {
   }, [activeTab, isAgencyAdmin, requestedTab]);
 
   return (
-    <div className="visite-enter mx-auto max-w-[1440px] space-y-6">
+    <AgencySettingsDirtyContext.Provider value={reportDirty}>
+    <div className="visite-enter mx-auto max-w-[1440px] space-y-6" onClickCapture={handleRouteClickCapture}>
       <div className="relative overflow-hidden rounded-3xl border border-[#D9CBBE] bg-[#FFF9F0] px-5 py-6 shadow-[0_10px_28px_rgba(93,62,42,.07)] sm:px-7 dark:border-border dark:bg-card">
         <div className="pointer-events-none absolute -right-10 -top-16 h-44 w-44 rounded-full border-[16px] border-[#D8A646]/20" />
         <div className="relative">
@@ -4872,7 +5027,7 @@ export default function Configuracoes() {
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <div className="grid items-start gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
           <SettingsNavigation
             groups={navigationGroups}
@@ -5054,6 +5209,23 @@ export default function Configuracoes() {
           </div>
         </div>
       </Tabs>
+      <AlertDialog open={pendingExit !== null} onOpenChange={(open) => { if (!open) setPendingExit(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Descartar alterações não salvas?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Há mudanças nesta seção que ainda não foram salvas. Se continuar, elas serão perdidas.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Continuar editando</AlertDialogCancel>
+            <AlertDialogAction onClick={discardAndContinue}>
+              {pendingExit?.kind === "tab" ? "Descartar e trocar de seção" : "Descartar e sair"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+    </AgencySettingsDirtyContext.Provider>
   );
 }
