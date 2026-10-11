@@ -3640,11 +3640,13 @@ export function ClubConfigTab() {
   const [newDescription, setNewDescription] = useState("");
   const benefitDraftRef = useRef<ClubBenefitDraft>({ label: "", value: "", description: "" });
   const [benefitDraftStorageReady, setBenefitDraftStorageReady] = useState(false);
+  const [benefitDraftStorageUnavailable, setBenefitDraftStorageUnavailable] = useState(false);
   const [hasRecoveredBenefitDraft, setHasRecoveredBenefitDraft] = useState(false);
   const [addingBenefit, setAddingBenefit] = useState(false);
   const addingBenefitRef = useRef(false);
   const addAttemptRef = useRef<ClubBenefitCreateAttempt | null>(null);
   const benefitDraftStorageReadyRef = useRef(false);
+  const benefitDraftStorageReadableRef = useRef(false);
   const [deletingBenefitIds, setDeletingBenefitIds] = useState<Set<string>>(() => new Set());
   const deletingBenefitIdsRef = useRef(new Set<string>());
   const benefitsLoadedRef = useRef(false);
@@ -3669,8 +3671,14 @@ export function ClubConfigTab() {
         const stored: StoredClubBenefitDraft = { version: 1, tier, draft, attempt };
         sessionStorage.setItem(benefitDraftStorageKey, JSON.stringify(stored));
       }
+      if (!benefitDraftStorageReadableRef.current) {
+        sessionStorage.getItem(benefitDraftStorageKey);
+        benefitDraftStorageReadableRef.current = true;
+      }
+      setBenefitDraftStorageUnavailable(false);
     } catch {
       // Storage can be disabled by browser policy; keep the in-memory form usable.
+      setBenefitDraftStorageUnavailable(true);
     }
   }
 
@@ -3682,18 +3690,26 @@ export function ClubConfigTab() {
     setNewValue("");
     setNewDescription("");
     setHasRecoveredBenefitDraft(false);
+    setBenefitDraftStorageUnavailable(false);
     benefitDraftStorageReadyRef.current = false;
+    benefitDraftStorageReadableRef.current = false;
     setBenefitDraftStorageReady(false);
     if (!benefitDraftStorageKey) return;
 
     try {
       const storedText = sessionStorage.getItem(benefitDraftStorageKey);
+      benefitDraftStorageReadableRef.current = true;
       if (storedText) {
-        const stored = JSON.parse(storedText) as Partial<StoredClubBenefitDraft>;
-        const draft = stored.draft;
-        const attempt = stored.attempt;
-        const draftIsValid = stored.version === 1
-          && CLUB_TIERS.some((tier) => tier.value === stored.tier)
+        let stored: Partial<StoredClubBenefitDraft> | null;
+        try {
+          stored = JSON.parse(storedText) as Partial<StoredClubBenefitDraft>;
+        } catch {
+          stored = null;
+        }
+        const draft = stored?.draft;
+        const attempt = stored?.attempt;
+        const draftIsValid = stored?.version === 1
+          && CLUB_TIERS.some((tier) => tier.value === stored?.tier)
           && !!draft
           && typeof draft.label === "string"
           && typeof draft.value === "string"
@@ -3712,7 +3728,7 @@ export function ClubConfigTab() {
         );
         if (draftIsValid && attemptIsValid) {
           benefitDraftRef.current = draft;
-          setActiveTier(stored.tier!);
+          setActiveTier(stored!.tier!);
           setNewLabel(draft.label);
           setNewValue(draft.value);
           setNewDescription(draft.description);
@@ -3724,7 +3740,9 @@ export function ClubConfigTab() {
           sessionStorage.removeItem(benefitDraftStorageKey);
         }
       }
+      setBenefitDraftStorageUnavailable(false);
     } catch {
+      setBenefitDraftStorageUnavailable(true);
       try {
         sessionStorage.removeItem(benefitDraftStorageKey);
       } catch {
@@ -4121,6 +4139,16 @@ export function ClubConfigTab() {
                       {hasRecoveredBenefitDraft && (
                         <p className="mt-1 text-xs text-primary" role="status">
                           Rascunho recuperado desta sessão.
+                        </p>
+                      )}
+                      {benefitDraftStorageReady && benefitDraftStorageUnavailable && (
+                        <p
+                          className="mt-1 text-xs text-amber-700 dark:text-amber-400"
+                          data-testid="club-benefit-storage-warning"
+                          role="status"
+                        >
+                          Não foi possível salvar este rascunho neste navegador. Ele pode ser perdido
+                          se você recarregar a página, mas ainda é possível adicionar o benefício.
                         </p>
                       )}
                     </div>

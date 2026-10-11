@@ -357,6 +357,8 @@ describe("ClubConfigTab benefit tiers", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
+    expect(container.querySelector('[data-testid="club-benefit-storage-warning"]')?.textContent)
+      .toContain("pode ser perdido");
     const labelInput = container.querySelector<HTMLInputElement>(
       '[data-testid="club-benefit-label-input"]',
     );
@@ -393,6 +395,47 @@ describe("ClubConfigTab benefit tiers", () => {
       .toBe(firstKey);
     expect(container.querySelector('[data-testid="club-benefit-benefit-bronze"]')?.textContent)
       .toContain("Vantagem sem armazenamento");
+
+    getItem.mockRestore();
+    setItem.mockRestore();
+    await act(async () => {
+      setInputValue(labelInput!, "Rascunho recuperável");
+    });
+    expect(container.querySelector('[data-testid="club-benefit-storage-warning"]')).toBeNull();
+    expect(sessionStorage.getItem(benefitDraftStorageKey)).not.toBeNull();
+  });
+
+  it("shows and clears the warning when draft writes alone fail and recover", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+    });
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.querySelector('[data-testid="club-benefit-storage-warning"]')).toBeNull();
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    expect(labelInput?.disabled).toBe(false);
+    await act(async () => {
+      setInputValue(labelInput!, "Rascunho temporário");
+    });
+
+    expect(setItem).toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="club-benefit-storage-warning"]')?.textContent)
+      .toContain("pode ser perdido");
+    expect(container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-add-benefit"]',
+    )?.disabled).toBe(false);
+
+    setItem.mockRestore();
+    await act(async () => {
+      setInputValue(labelInput!, "Rascunho recuperável");
+    });
+    expect(container.querySelector('[data-testid="club-benefit-storage-warning"]')).toBeNull();
+    expect(sessionStorage.getItem(benefitDraftStorageKey)).not.toBeNull();
   });
 
   it("discards malformed saved data without breaking the benefit form", async () => {
@@ -403,6 +446,7 @@ describe("ClubConfigTab benefit tiers", () => {
     });
 
     expect(sessionStorage.getItem(benefitDraftStorageKey)).toBeNull();
+    expect(container.querySelector('[data-testid="club-benefit-storage-warning"]')).toBeNull();
     const labelInput = container.querySelector<HTMLInputElement>(
       '[data-testid="club-benefit-label-input"]',
     );
