@@ -11491,6 +11491,16 @@ components:
           type: string
         email:
           type: string
+        cnpj:
+          type: ["string", "null"]
+        address:
+          type: ["string", "null"]
+        city:
+          type: ["string", "null"]
+        state:
+          type: ["string", "null"]
+        zipCode:
+          type: ["string", "null"]
         whatsapp:
           type: ["string", "null"]
         phone:

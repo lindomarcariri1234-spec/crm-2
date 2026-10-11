@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ROLES } from "@workspace/permissions";
-import { buildAgencySettingsTabUrl, getAgencySettingsAccess, getLegacyBackupRedirect } from "./agency-settings-access";
+import {
+  buildAgencySettingsTabUrl,
+  getAgencySettingsAccess,
+  getLegacyBackupRedirect,
+  normalizeAgencySettingsTabUrl,
+} from "./agency-settings-access";
 
 describe("agency settings access", () => {
   it("updates only the section query parameter and keeps the current route", () => {
@@ -10,48 +15,33 @@ describe("agency settings access", () => {
     )).toBe("/configuracoes?campaign=summer&tab=integrations#team");
   });
 
-  it("keeps only integrity in settings navigation for agency administrators", () => {
+  it("removes legacy section links while preserving other query parameters and the hash", () => {
+    expect(normalizeAgencySettingsTabUrl(
+      "https://crm.example.com/configuracoes?campaign=summer&tab=integrations#contact",
+    )).toBe("/configuracoes?campaign=summer#contact");
+  });
+
+  it("exposes only the agency profile for every agency role", () => {
     const admin = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, null);
     const manager = getAgencySettingsAccess(ROLES.AGENCY_MANAGER, null);
     const values = (groups: typeof admin.navigationGroups) =>
       groups.flatMap((group) => group.items.map((item) => item.value));
 
-    expect(values(admin.navigationGroups)).not.toContain("backup");
-    expect(values(admin.navigationGroups)).toContain("integrity");
-    expect(values(manager.navigationGroups)).not.toContain("backup");
-    expect(values(manager.navigationGroups)).not.toContain("integrity");
-    expect(values(admin.navigationGroups)).not.toContain("clube");
-    expect(values(manager.navigationGroups)).not.toContain("clube");
+    expect(values(admin.navigationGroups)).toEqual(["agency"]);
+    expect(values(manager.navigationGroups)).toEqual(["agency"]);
+    expect([...admin.availableTabs]).toEqual(["agency"]);
+    expect([...manager.availableTabs]).toEqual(["agency"]);
   });
 
-  it("keeps the club deep link available without listing it in settings navigation", () => {
-    const access = getAgencySettingsAccess(ROLES.AGENCY_MANAGER, "clube");
-
-    expect(access.initialTab).toBe("clube");
-    expect(access.availableTabs.has("clube")).toBe(true);
-    expect(access.navigationGroups.flatMap((group) => group.items.map((item) => item.value)))
-      .not.toContain("clube");
-  });
-
-  it.each(["backup", "integrity"])(
-    "keeps direct links to %s on the agency profile for non-admin users",
+  it.each(["backup", "integrity", "clube", "integrations", "plan"])(
+    "sends the legacy %s section to the agency profile",
     (requestedTab) => {
-      const access = getAgencySettingsAccess(ROLES.AGENCY_MANAGER, requestedTab);
+      const access = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, requestedTab);
 
       expect(access.initialTab).toBe("agency");
-      expect(access.navigationGroups.flatMap((group) => group.items.map((item) => item.value)))
-        .not.toContain(requestedTab);
-      expect(access.isAgencyAdmin).toBe(false);
+      expect(access.availableTabs.has(requestedTab)).toBe(false);
     },
   );
-
-  it("keeps authorized integrity direct links within settings", () => {
-    const requestedTab = "integrity";
-    const access = getAgencySettingsAccess(ROLES.AGENCY_ADMIN, requestedTab);
-
-    expect(access.initialTab).toBe(requestedTab);
-    expect(access.isAgencyAdmin).toBe(true);
-  });
 
   it("redirects only the agency admin's legacy backup link to Downloads", () => {
     expect(getLegacyBackupRedirect(ROLES.AGENCY_ADMIN)).toBe("/downloads?section=backup");

@@ -116,8 +116,6 @@
 - [Mockup sandbox routing isolation](mockup-sandbox-routing-isolation.md) — direct wouter imports can trigger invalid hooks in isolated previews; use a local hash-navigation shim.
 - [Expo watcher pressure from sandbox builds](expo-watcher-pressure-from-sandbox-builds.md) — keep Metro roots narrow, use importer-scoped native shims, and verify complete iOS/Android bundles.
 - [Workspace-scoped package installs](package-management-workspace-scope.md) — if Replit's package tool hits ERR_PNPM_ADDING_TO_ROOT, scope pnpm add/remove to the target artifact.
-- [Vercel CLI firewall fallback](vercel-cli-firewall-fallback.md) — if pnpm dlx is blocked on a transitive download, reuse an already extracted CLI from the pnpm cache
-- [Vercel runtime logs](vercel-runtime-logs.md) — deployment-scoped runtime-log queries may still hit the five-minute limit after time filtering; treat failures as unverified.
 - [Manual table migration snapshots](manual-table-snapshot-sync.md) — preserve the published snapshot chain when merging branches; never replay DDL already applied by hand-written migrations.
 - [Clerk React/shared compatibility](clerk-react-shared-compat.md) — a newer React SDK can compile yet fail Vite linking against the shared override; upgrade the pair together.
 - [GitHub API blob uploads](github-api-blob-uploads.md) — encode raw workspace file content inside the authenticated API call; shell base64 output can corrupt large blobs
@@ -157,3 +155,4 @@
 - [Storefront card installments](storefront-card-installments.md) — do not advertise Brazilian card installments until the configured Stripe account's support is verified and the chosen schedule reaches the PaymentIntent.
 - [Completed-trip storefront availability](completed-trip-storefront.md) — hide completed trips in public storefront queries and reject stale-cart checkout, rechecking status under the reservation lock.
 - [InfinitePay hosted checkout](infinitepay-hosted-checkout.md) — treat redirects/webhooks as untrusted; confirm via payment_check; do not infer fees, settlement, refunds, or signature support.
+- [CRM settings route scope](crm-settings-route-scope.md) — keep `/configuracoes` focused on general agency and tourism-operation setup; specialized settings remain elsewhere.

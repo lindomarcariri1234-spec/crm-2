@@ -3857,6 +3857,16 @@ export interface Tenant {
   slug: string;
   email: string;
   /** @nullable */
+  cnpj?: string | null;
+  /** @nullable */
+  address?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  state?: string | null;
+  /** @nullable */
+  zipCode?: string | null;
+  /** @nullable */
   whatsapp?: string | null;
   /** @nullable */
   phone?: string | null;

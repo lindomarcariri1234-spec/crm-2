@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as R
 import { useLocation, useSearch } from "wouter";
 import { CoverImageUpload } from "@/components/cover-image-upload";
 import { storeApi } from "@/lib/storeApi";
-import { useUser } from "@clerk/react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import {
   useGetTenant,
@@ -63,11 +62,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
 import {
   buildAgencySettingsTabUrl,
   getLegacyBackupRedirect,
   getAgencySettingsAccess,
+  normalizeAgencySettingsTabUrl,
 } from "@/components/settings/agency-settings-access";
 import {
   AgencySettingsDirtyContext,
@@ -183,105 +182,6 @@ function SalesGoalSection() {
   );
 }
 
-/* ──────────────────── Change Password Section ──────────────────── */
-function ChangePasswordSection() {
-  const { user } = useUser();
-  const { toast } = useToast();
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  useAgencySettingsDirty(
-    "agency",
-    "change-password",
-    Boolean(currentPassword || newPassword || confirmPassword),
-  );
-
-  async function handleChangePassword(e: React.FormEvent) {
-    e.preventDefault();
-    if (!user) {
-      toast({ title: "Usuário não autenticado", variant: "destructive" });
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast({ title: "As senhas não coincidem", variant: "destructive" });
-      return;
-    }
-    if (newPassword.length < 8) {
-      toast({ title: "A nova senha deve ter pelo menos 8 caracteres", variant: "destructive" });
-      return;
-    }
-    setIsLoading(true);
-    try {
-      await user.updatePassword({ currentPassword, newPassword, signOutOfOtherSessions: false });
-      toast({ title: "Senha alterada com sucesso" });
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-    } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : "Erro ao alterar senha";
-      toast({ title: msg, variant: "destructive" });
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  return (
-    <div className="border rounded-lg p-4 space-y-3 mt-4">
-      <div className="flex items-center gap-2">
-        <Lock className="w-4 h-4 text-muted-foreground" />
-        <h3 className="text-sm font-semibold">Alterar Senha</h3>
-      </div>
-      {user?.passwordEnabled === false ? (
-        <p className="text-xs text-muted-foreground">
-          Sua conta usa login pelo Google — não é necessário definir uma senha.
-        </p>
-      ) : (
-        <form onSubmit={handleChangePassword} className="space-y-3 max-w-sm">
-          <div className="space-y-1">
-            <Label htmlFor="currentPassword" className="text-xs">Senha Atual</Label>
-            <Input
-              id="currentPassword"
-              type="password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="newPassword" className="text-xs">Nova Senha</Label>
-            <Input
-              id="newPassword"
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              autoComplete="new-password"
-              required
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="confirmPassword" className="text-xs">Confirmar Nova Senha</Label>
-            <Input
-              id="confirmPassword"
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              autoComplete="new-password"
-              required
-            />
-          </div>
-          <Button type="submit" size="sm" disabled={isLoading}>
-            {isLoading && <Loader2 className="w-3 h-3 mr-2 animate-spin" />}
-            Alterar Senha
-          </Button>
-        </form>
-      )}
-    </div>
-  );
-}
-
 /* ──────────────────── Agency Profile Tab ──────────────────── */
 function AgencyProfileTab() {
   const { toast } = useToast();
@@ -304,6 +204,12 @@ function AgencyProfileTab() {
     if (fullTenant) {
       const loadedForm = {
         name: fullTenant.name,
+        cnpj: fullTenant.cnpj ?? "",
+        logoUrl: fullTenant.logoUrl ?? "",
+        address: fullTenant.address ?? "",
+        city: fullTenant.city ?? "",
+        state: fullTenant.state ?? "",
+        zipCode: fullTenant.zipCode ?? "",
         whatsapp: fullTenant.whatsapp ?? "",
         phone: fullTenant.phone ?? "",
         website: fullTenant.website ?? "",
@@ -351,105 +257,175 @@ function AgencyProfileTab() {
   }
 
   return (
-    <div className="space-y-4 max-w-xl">
-      <div className="space-y-1">
-        <Label>Nome da Agência</Label>
-        <Input
-          value={form.name ?? ""}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1">
-          <Label>WhatsApp</Label>
-          <Input
-            value={form.whatsapp ?? ""}
-            onChange={(e) => setForm((f) => ({ ...f, whatsapp: e.target.value }))}
-            placeholder="+55 (11) 99999-9999"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label>Telefone</Label>
-          <Input
-            value={form.phone ?? ""}
-            onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-          />
-        </div>
-      </div>
-      <div className="space-y-1">
-        <Label>Website</Label>
-        <Input
-          value={form.website ?? ""}
-          onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))}
-          placeholder="https://suaagencia.com.br"
-        />
-      </div>
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <Label>Prefixo de Identificação</Label>
-          {fullTenant?.prefixLocked && (
-            <Badge variant="secondary" className="text-xs gap-1">
-              <Lock className="w-3 h-3" />
-              Fixado
-            </Badge>
-          )}
-        </div>
-        <div className="flex flex-col gap-1.5">
-          {fullTenant?.prefixLocked ? (
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-muted font-mono text-sm w-36">
-                  <Lock className="w-3 h-3 text-muted-foreground shrink-0" />
-                  <span>{fullTenant.reservationPrefix || "—"}</span>
+    <div className="space-y-5">
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Card className="rounded-2xl border-[#DCE3E8] shadow-sm dark:border-border">
+          <CardHeader>
+            <CardTitle className="text-base">Identificação do empreendimento</CardTitle>
+            <CardDescription>Dados usados para identificar sua agência no CRM e nos registros da operação.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-[150px_minmax(0,1fr)]">
+              <div className="space-y-2">
+                <Label>Logo</Label>
+                <CoverImageUpload
+                  value={form.logoUrl ?? ""}
+                  onChange={(logoUrl) => setForm((current) => ({ ...current, logoUrl }))}
+                  previewClassName="h-28 w-28 rounded-xl"
+                  emptyLabel="Adicionar logo"
+                  placeholder="https://..."
+                />
+              </div>
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label>Nome comercial</Label>
+                  <Input
+                    value={form.name ?? ""}
+                    onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))}
+                    placeholder="Nome da agência ou estabelecimento"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>CNPJ</Label>
+                  <Input
+                    value={form.cnpj ?? ""}
+                    onChange={(e) => setForm((current) => ({ ...current, cnpj: e.target.value }))}
+                    placeholder="00.000.000/0000-00"
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>E-mail cadastrado</Label>
+                  <Input value={fullTenant?.email ?? ""} readOnly disabled />
+                  <p className="text-xs text-muted-foreground">O e-mail de acesso não é alterado por esta configuração.</p>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground">Configurado permanentemente — não pode ser alterado.</p>
             </div>
-          ) : (
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border-[#DCE3E8] shadow-sm dark:border-border">
+          <CardHeader>
+            <CardTitle className="text-base">Contato e localização</CardTitle>
+            <CardDescription>Informações para atendimento aos viajantes e identificação do estabelecimento.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>WhatsApp de atendimento</Label>
+                <Input
+                  value={form.whatsapp ?? ""}
+                  onChange={(e) => setForm((current) => ({ ...current, whatsapp: e.target.value }))}
+                  placeholder="+55 (11) 99999-9999"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Telefone</Label>
+                <Input
+                  value={form.phone ?? ""}
+                  onChange={(e) => setForm((current) => ({ ...current, phone: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Site</Label>
+              <Input
+                value={form.website ?? ""}
+                onChange={(e) => setForm((current) => ({ ...current, website: e.target.value }))}
+                placeholder="https://suaagencia.com.br"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Endereço</Label>
+              <Input
+                value={form.address ?? ""}
+                onChange={(e) => setForm((current) => ({ ...current, address: e.target.value }))}
+                placeholder="Rua, número e complemento"
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-[1.4fr_1fr_0.7fr]">
+              <div className="space-y-1.5">
+                <Label>Cidade</Label>
+                <Input value={form.city ?? ""} onChange={(e) => setForm((current) => ({ ...current, city: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Estado</Label>
+                <Input value={form.state ?? ""} onChange={(e) => setForm((current) => ({ ...current, state: e.target.value.toUpperCase().slice(0, 2) }))} maxLength={2} placeholder="CE" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>CEP</Label>
+                <Input value={form.zipCode ?? ""} onChange={(e) => setForm((current) => ({ ...current, zipCode: e.target.value }))} placeholder="00000-000" inputMode="numeric" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="rounded-2xl border-[#DCE3E8] shadow-sm dark:border-border">
+        <CardHeader>
+          <CardTitle className="text-base">Identificação de reservas e clientes</CardTitle>
+          <CardDescription>O prefixo aparece nos códigos operacionais gerados pelo CRM.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Label>Prefixo de identificação</Label>
+              {fullTenant?.prefixLocked && (
+                <Badge variant="secondary" className="gap-1 text-xs">
+                  <Lock className="h-3 w-3" /> Fixado
+                </Badge>
+              )}
+            </div>
+            {fullTenant?.prefixLocked ? (
+              <>
+                <div className="flex w-36 items-center gap-2 rounded-md border bg-muted px-3 py-2 font-mono text-sm">
+                  <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span>{fullTenant.reservationPrefix || "—"}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">Configurado permanentemente — não pode ser alterado.</p>
+              </>
+            ) : (
+              <>
                 <Input
                   value={form.reservationPrefix ?? ""}
                   onChange={(e) => {
-                    const v = e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 5);
-                    setForm((f) => ({ ...f, reservationPrefix: v }));
+                    const value = e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 5);
+                    setForm((current) => ({ ...current, reservationPrefix: value }));
                     setPrefixError(null);
                   }}
-                  placeholder="Ex: CHQ, AGT..."
-                  className={`font-mono w-36 ${prefixError ? "border-destructive" : ""}`}
+                  placeholder="Ex.: CHQ, AGT"
+                  className={`w-36 font-mono ${prefixError ? "border-destructive" : ""}`}
                   maxLength={5}
                 />
-                <span className="text-xs text-muted-foreground">1–5 letras. Será fixado permanentemente ao salvar.</span>
-              </div>
-              {prefixError && (
-                <p className="text-xs text-destructive">{prefixError}</p>
-              )}
+                <p className="text-xs text-muted-foreground">De 1 a 5 letras. O prefixo fica fixo após o primeiro salvamento.</p>
+                {prefixError && <p className="text-xs text-destructive">{prefixError}</p>}
+              </>
+            )}
+            <div className="space-y-0.5 text-xs text-muted-foreground">
+              {(() => {
+                const now = new Date();
+                const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+                const prefix = (fullTenant?.prefixLocked ? fullTenant.reservationPrefix : form.reservationPrefix) || "CLI";
+                return (
+                  <>
+                    <p>Exemplo de reserva: <span className="font-mono font-semibold text-foreground">{prefix}-EXC-{yyyymm}-00001</span></p>
+                    <p>Exemplo de cliente: <span className="font-mono font-semibold text-foreground">{prefix}-{yyyymm}-00043</span></p>
+                  </>
+                );
+              })()}
             </div>
-          )}
-          <p className="text-xs text-muted-foreground">Usado nos códigos de reservas e nos códigos de registro de clientes.</p>
-          <div className="text-xs text-muted-foreground space-y-0.5">
-            {(() => {
-              const now = new Date();
-              const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-              const prefix = (fullTenant?.prefixLocked ? fullTenant.reservationPrefix : form.reservationPrefix) || "CLI";
-              return (
-                <>
-                  <p>Reservas: <span className="font-mono font-semibold text-foreground">{prefix}-EXC-{yyyymm}-00001</span></p>
-                  <p>Código de cliente: <span className="font-mono font-semibold text-foreground">{prefix}-{yyyymm}-00043</span></p>
-                </>
-              );
-            })()}
           </div>
-        </div>
-      </div>
-      <Button onClick={handleSave} disabled={updateTenant.isPending}>
-        {updateTenant.isPending ? (
-          <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Salvando...</>
-        ) : "Salvar Perfil"}
-      </Button>
+          <div className="flex justify-end border-t pt-4">
+            <Button onClick={handleSave} disabled={updateTenant.isPending}>
+              {updateTenant.isPending ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Salvando...</>
+              ) : "Salvar configuração geral"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <SalesGoalSection />
-      <ChangePasswordSection />
     </div>
   );
 }
@@ -4793,15 +4769,23 @@ export default function Configuracoes() {
   const currentHistoryStateRef = useRef(window.history.state);
   const { data: me } = useGetMe();
   const requestedTab = new URLSearchParams(currentSearch).get("tab");
-  const { isAgencyAdmin, initialTab, navigationGroups, availableTabs } = getAgencySettingsAccess(
+  const { isAgencyAdmin, initialTab, availableTabs } = getAgencySettingsAccess(
     me?.role,
     requestedTab,
   );
   useEffect(() => {
-    if (requestedTab !== "backup") return;
-    const destination = getLegacyBackupRedirect(me?.role);
-    if (destination) setLocation(destination);
-  }, [me?.role, requestedTab, setLocation]);
+    if (requestedTab === "backup") {
+      const destination = getLegacyBackupRedirect(me?.role);
+      if (destination) {
+        setLocation(destination);
+      } else if (me) {
+        setLocation(normalizeAgencySettingsTabUrl(window.location.href), { replace: true });
+      }
+      return;
+    }
+    if (!requestedTab || requestedTab === "agency") return;
+    setLocation(normalizeAgencySettingsTabUrl(window.location.href), { replace: true });
+  }, [me, me?.role, requestedTab, setLocation]);
   const [activeTab, setActiveTab] = useState(initialTab);
   const [dirtySources, setDirtySources] = useState<Record<string, string>>({});
   const [pendingExit, setPendingExit] = useState<
@@ -4917,28 +4901,22 @@ export default function Configuracoes() {
       <div className="relative overflow-hidden rounded-3xl border border-[#D9CBBE] bg-[#FFF9F0] px-5 py-6 shadow-[0_10px_28px_rgba(93,62,42,.07)] sm:px-7 dark:border-border dark:bg-card">
         <div className="pointer-events-none absolute -right-10 -top-16 h-44 w-44 rounded-full border-[16px] border-[#D8A646]/20" />
         <div className="relative">
-          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F]">Bastidores da agência · Cariri</p>
-          <h1 className="text-2xl font-bold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">Configurações</h1>
-          <p className="mt-1 max-w-2xl text-sm text-[#71808C] dark:text-muted-foreground">Deixe a operação com a sua cara e mantenha os serviços essenciais prontos para a próxima saída.</p>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F]">CRM · Operação turística</p>
+          <h1 className="text-2xl font-bold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">Configuração geral</h1>
+          <p className="mt-1 max-w-2xl text-sm text-[#71808C] dark:text-muted-foreground">
+            Cadastre os dados do seu empreendimento e os identificadores usados por viagens, reservas e atendimento.
+          </p>
         </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <div className="grid items-start gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <SettingsNavigation
-            groups={navigationGroups}
-            pageLabel="Seções da agência"
-            testIdPrefix="agency-settings"
-            value={activeTab}
-            onValueChange={handleTabChange}
-          />
-          <div className="min-w-0">
+        <div className="min-w-0">
           <TabsContent value="agency">
             <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
-                <CardTitle>Perfil da Agência</CardTitle>
+                <CardTitle>Dados gerais do estabelecimento</CardTitle>
                 <CardDescription>
-                  Dados de contato, identificação e operação da agência
+                  Identificação, contato e dados básicos da operação turística
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -5084,7 +5062,6 @@ export default function Configuracoes() {
             </Card>
           </TabsContent>
 
-          </div>
         </div>
       </Tabs>
       <AlertDialog open={pendingExit !== null} onOpenChange={(open) => { if (!open) setPendingExit(null); }}>
