@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  MapPin, Calendar, Users, Bus, Edit, Trash2, Eye, Copy,
+  MapPin, Calendar, Users, Bus, Edit, Archive, Eye, Copy,
   AlertCircle, ClipboardList, ShoppingBag, Loader2, Clock, Star,
   CheckCircle2, XCircle, UserRound,
 } from "lucide-react";
@@ -277,20 +277,20 @@ export function TripCard({
   trip,
   canEditTrip = false,
   canCreateTrip = false,
-  canDeleteTrip = false,
+  canCompleteTrip = false,
   canPublishToStore = false,
   seatMapEnabled = true,
-  onDelete,
+  onComplete,
   onDuplicate,
   onBoarding,
 }: {
   trip: Trip;
   canEditTrip?: boolean;
   canCreateTrip?: boolean;
-  canDeleteTrip?: boolean;
+  canCompleteTrip?: boolean;
   canPublishToStore?: boolean;
   seatMapEnabled?: boolean;
-  onDelete: () => void;
+  onComplete: () => void;
   onDuplicate: () => void;
   onBoarding: () => void;
 }) {
@@ -361,7 +361,7 @@ export function TripCard({
               <Copy className="w-4 h-4" />
             </Button>
           )}
-          {canDeleteTrip && <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={onDelete} title="Excluir"><Trash2 className="w-4 h-4" /></Button>}
+          {canCompleteTrip && <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={onComplete} title="Transferir para Realizadas" aria-label={`Transferir ${trip.name} para Realizadas`}><Archive className="w-4 h-4" /></Button>}
           {canPublishToStore && <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => setPublishOpen(true)} title="Publicar na Loja"><ShoppingBag className="w-4 h-4" /></Button>}
         </div>
       </div>

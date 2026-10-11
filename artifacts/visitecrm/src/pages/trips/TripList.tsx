@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  Plus, Search, MapPin, Calendar, Users, Bus, Edit, Trash2, Eye,
+  Plus, Search, MapPin, Calendar, Users, Bus, Edit, Archive, Eye,
   ChevronsLeft, ChevronsRight, LayoutGrid, List, ChevronLeft, ChevronRight,
   X, DollarSign, ClipboardList, AlertCircle, Copy, ShoppingBag, Images, Upload, Download, Loader2,
 } from "lucide-react";
@@ -27,7 +27,7 @@ import { useToast } from "@/hooks/use-toast";
 
 export function TripList() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [completingId, setCompletingId] = useState<string | null>(null);
   const [boardingTrip, setBoardingTrip] = useState<{ id: string; name: string } | null>(null);
   const [publishingTrip, setPublishingTrip] = useState<Trip | null>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -38,20 +38,19 @@ export function TripList() {
     trips, exportTrips, isLoading, isError, error, totalPages, upcomingTrips, stats, me,
     search, setSearch, statusFilter, setStatusFilter,
     typeFilter, setTypeFilter, dateFilter, setDateFilter,
-    page, setPage, deleteTrip, handleDuplicate, handleDelete,
+    page, setPage, updateTrip, handleDuplicate, handleMarkCompleted,
     hasActiveFilters, clearFilters, refetch,
   } = useTrips();
   const tenantId = me?.tenantId ?? null;
   const {
     canCreateTrip,
     canEditTrip,
-    canDeleteTrip,
     canManageTrip,
     canImportTrips,
     canExportTrips,
     canPublishToStore,
   } = getTripListActionPermissions(me?.role);
-  const isReadOnly = !canCreateTrip && !canEditTrip && !canDeleteTrip && !canManageTrip;
+  const isReadOnly = !canCreateTrip && !canEditTrip && !canManageTrip;
   const { data: tenantData } = useGetTenant(tenantId ?? "", {
     query: { enabled: !!tenantId, queryKey: ["tenant", tenantId] },
   });
@@ -97,9 +96,23 @@ export function TripList() {
     }
   };
 
-  const onDelete = async (id: string) => {
-    await handleDelete(id);
-    setDeletingId(null);
+  const onMarkCompleted = async (id: string) => {
+    try {
+      await handleMarkCompleted(id);
+      setCompletingId(null);
+      setStatusFilter("completed");
+      setPage(1);
+      toast({
+        title: "Viagem transferida para Realizadas",
+        description: "Reservas, passageiros e registros financeiros foram preservados.",
+      });
+    } catch {
+      toast({
+        title: "Não foi possível transferir a viagem",
+        description: "Tente novamente. Nenhum dado foi excluído.",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -183,6 +196,29 @@ export function TripList() {
         </div>
       </div>
 
+      <div className="flex border rounded-md overflow-hidden w-fit" role="tablist" aria-label="Seção de viagens">
+        <Button
+          type="button"
+          role="tab"
+          aria-selected={statusFilter !== "completed"}
+          variant={statusFilter !== "completed" ? "default" : "ghost"}
+          className="rounded-none"
+          onClick={() => { setStatusFilter("all"); setPage(1); }}
+        >
+          Todas
+        </Button>
+        <Button
+          type="button"
+          role="tab"
+          aria-selected={statusFilter === "completed"}
+          variant={statusFilter === "completed" ? "default" : "ghost"}
+          className="rounded-none"
+          onClick={() => { setStatusFilter("completed"); setPage(1); }}
+        >
+          Realizadas
+        </Button>
+      </div>
+
       <div className="flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-[180px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -243,7 +279,7 @@ export function TripList() {
       ) : viewMode === "grid" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {trips.map(trip => (
-            <TripCard key={trip.id} trip={trip} canEditTrip={canEditTrip} canCreateTrip={canCreateTrip} canDeleteTrip={canDeleteTrip} canPublishToStore={canPublishToStore} seatMapEnabled={seatMapEnabled} onDelete={() => setDeletingId(trip.id)} onDuplicate={() => handleDuplicate(trip)} onBoarding={() => setBoardingTrip({ id: trip.id, name: trip.name })} />
+            <TripCard key={trip.id} trip={trip} canEditTrip={canEditTrip} canCreateTrip={canCreateTrip} canCompleteTrip={canEditTrip && trip.status !== "completed" && trip.status !== "cancelled"} canPublishToStore={canPublishToStore} seatMapEnabled={seatMapEnabled} onComplete={() => setCompletingId(trip.id)} onDuplicate={() => handleDuplicate(trip)} onBoarding={() => setBoardingTrip({ id: trip.id, name: trip.name })} />
           ))}
         </div>
       ) : (
@@ -274,7 +310,7 @@ export function TripList() {
                 {seatMapEnabled && <Link href={`/trips/${trip.id}/seat-map`}><Button size="icon" variant="ghost" className="h-8 w-8" title="Mapa de Assentos"><Bus className="w-4 h-4" /></Button></Link>}
                 {canEditTrip && <Link href={`/trips/${trip.id}/edit`}><Button size="icon" variant="ghost" className="h-8 w-8" title="Editar"><Edit className="w-4 h-4" /></Button></Link>}
                 {canCreateTrip && <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleDuplicate(trip)} title="Duplicar"><Copy className="w-4 h-4" /></Button>}
-                {canDeleteTrip && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setDeletingId(trip.id)} title="Excluir"><Trash2 className="w-4 h-4" /></Button>}
+                {canEditTrip && trip.status !== "completed" && trip.status !== "cancelled" && <Button size="icon" variant="ghost" className="h-8 w-8 text-primary" onClick={() => setCompletingId(trip.id)} title="Transferir para Realizadas" aria-label={`Transferir ${trip.name} para Realizadas`}><Archive className="w-4 h-4" /></Button>}
                 {canPublishToStore && <Button size="icon" variant="ghost" className="h-8 w-8 text-primary" onClick={() => setPublishingTrip(trip)} title="Publicar na Loja"><ShoppingBag className="w-4 h-4" /></Button>}
               </div>
             </div>
@@ -292,14 +328,16 @@ export function TripList() {
         </div>
       )}
 
-      <Dialog open={!!deletingId} onOpenChange={() => setDeletingId(null)}>
+      <Dialog open={!!completingId} onOpenChange={(open) => { if (!open && !updateTrip.isPending) setCompletingId(null); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Confirmar exclusão</DialogTitle></DialogHeader>
-          <p className="text-muted-foreground">Tem certeza que deseja excluir esta viagem? Esta ação não pode ser desfeita.</p>
+          <DialogHeader><DialogTitle>Transferir para viagens realizadas?</DialogTitle></DialogHeader>
+          <p className="text-muted-foreground">
+            A viagem será marcada como concluída e aparecerá na aba Realizadas. Reservas, passageiros, pagamentos e histórico serão preservados.
+          </p>
           <div className="flex justify-end gap-2 mt-4">
-            <Button variant="outline" onClick={() => setDeletingId(null)}>Cancelar</Button>
-            <Button variant="destructive" onClick={() => deletingId && onDelete(deletingId)} disabled={deleteTrip.isPending}>
-              {deleteTrip.isPending ? "Excluindo..." : "Excluir"}
+            <Button variant="outline" onClick={() => setCompletingId(null)} disabled={updateTrip.isPending}>Cancelar</Button>
+            <Button onClick={() => completingId && onMarkCompleted(completingId)} disabled={updateTrip.isPending}>
+              {updateTrip.isPending ? "Transferindo..." : "Transferir para Realizadas"}
             </Button>
           </div>
         </DialogContent>

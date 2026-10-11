@@ -81,9 +81,9 @@ const defaultTripsHook = {
     page: 1,
     setPage: vi.fn(),
     refetch: vi.fn(),
-    deleteTrip: { mutateAsync: vi.fn() },
+    updateTrip: { mutateAsync: vi.fn(), isPending: false },
     handleDuplicate: vi.fn(),
-    handleDelete: vi.fn(),
+    handleMarkCompleted: vi.fn(),
     hasActiveFilters: false,
     clearFilters: vi.fn(),
 };

@@ -38,7 +38,7 @@ vi.mock("@workspace/api-client-react", () => ({
   useListTrips: mockUseListTrips,
   useGetMe: () => ({ data: { tenantId: "tenant-test", role: "agency_admin" } }),
   useCreateTrip: () => ({ mutateAsync: vi.fn() }),
-  useDeleteTrip: () => ({ mutateAsync: vi.fn() }),
+  useUpdateTrip: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useGetDashboardUpcomingTrips: () => ({ data: [] }),
 }));
 

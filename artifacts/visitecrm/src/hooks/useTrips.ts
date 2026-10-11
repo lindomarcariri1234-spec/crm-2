@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useSearch, useLocation } from "wouter";
 import {
-  useListTrips, useCreateTrip, useDeleteTrip, useGetDashboardUpcomingTrips, useGetMe,
+  useListTrips, useCreateTrip, useUpdateTrip, useGetDashboardUpcomingTrips, useGetMe,
 } from "@workspace/api-client-react";
 import type { Trip } from "@workspace/api-client-react";
 import { ROLES } from "@workspace/permissions";
@@ -128,7 +128,7 @@ export function useTrips() {
   });
 
   const createTrip = useCreateTrip();
-  const deleteTrip = useDeleteTrip();
+  const updateTrip = useUpdateTrip();
   const { data: upcomingTrips = [] } = useGetDashboardUpcomingTrips();
 
   const exportTrips = useCallback(async (onBatch: ExportTripsBatchHandler): Promise<number> => {
@@ -224,8 +224,8 @@ export function useTrips() {
     refetch();
   };
 
-  const handleDelete = async (id: string) => {
-    await deleteTrip.mutateAsync({ id });
+  const handleMarkCompleted = async (id: string) => {
+    await updateTrip.mutateAsync({ id, data: { status: "completed" } });
     refetch();
   };
 
@@ -237,7 +237,7 @@ export function useTrips() {
     dateFilter, setDateFilter,
     page, setPage,
     hasActiveFilters, clearFilters,
-    refetch, deleteTrip,
-    handleDuplicate, handleDelete,
+    refetch, updateTrip,
+    handleDuplicate, handleMarkCompleted,
   };
 }

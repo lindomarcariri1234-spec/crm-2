@@ -32,3 +32,11 @@ For an isolated-database guard, permit the CI service database only when `CI` is
 **Why:** The Actions job connects through `localhost`, but PostgreSQL reports its service container's bridge-network address.
 
 **How to apply:** Keep the developer path constrained to the dedicated local test database and loopback server address; use the exact CI database name plus a loopback URL host for the hosted-service path.
+
+## Trips hook query-client constraint
+
+The focused `useTrips` filter tests render hooks without a `QueryClientProvider`. Do not add direct `useQueryClient()` usage to this hook unless the harness is updated to provide a client.
+
+**Why:** Cache invalidation through `useQueryClient` caused every filter test to fail before it could exercise the hook.
+
+**How to apply:** Prefer the hook's existing refetch path for trip mutations, or add a provider to the shared test harness before introducing query-client access.
