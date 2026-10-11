@@ -331,63 +331,75 @@ export function AgencyBackupPanel() {
   if (me?.role !== ROLES.AGENCY_ADMIN) return null;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
-        <DatabaseBackup className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
-        <div className="text-sm text-muted-foreground">
-          Gere um arquivo .json com todos os dados da sua agência: clientes, viagens, reservas e
-          passageiros, embarque e check-in, automações, indicações, loja, cupons, pagamentos,
-          despesas e cadastros auxiliares. Nenhuma credencial de acesso é incluída no arquivo.
-          Guarde-o em um local seguro — ele contém dados pessoais dos seus clientes.
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <Button onClick={handleGenerateBackup} disabled={isGenerating} className="gap-2" data-testid="button-generate-agency-backup">
-          {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-          {isGenerating ? "Gerando backup..." : "Gerar e baixar backup"}
-        </Button>
-        {isGenerating && (
-          <span className="text-sm text-muted-foreground" data-testid="status-backup-export-progress">
-            {receivedBytes > 0
-              ? `Montando arquivo... ${formatBackupBytes(receivedBytes)} recebidos`
-              : "Preparando exportação..."}
-          </span>
-        )}
-      </div>
-      {isGenerating && (
-        <p className="text-xs text-muted-foreground">
-          Para agências com muitos dados, isso pode levar alguns minutos. Não feche esta página
-          enquanto o backup estiver sendo gerado.
-        </p>
-      )}
-      <div className="space-y-3 border-t pt-4">
-        <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
-          <Upload className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
-          <div className="text-sm text-muted-foreground">
-            Envie um arquivo .json gerado por esta exportação para restaurar os dados na sua
-            agência. Usuários não são recriados — registros são associados a contas existentes
-            pelo e-mail, ou a você quando não houver correspondência. Registros já existentes não
-            são duplicados em uma nova tentativa.
+    <div className="space-y-3" data-testid="agency-backup-panel">
+      <section aria-labelledby="backup-export-title" className="rounded-md border bg-muted/20 px-3 py-2.5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h3 id="backup-export-title" className="flex items-center gap-1.5 text-sm font-medium">
+              <DatabaseBackup className="h-4 w-4 text-muted-foreground" />
+              Exportar cópia completa
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground" data-testid="text-backup-export-description">
+              JSON com os dados operacionais da agência. Não inclui credenciais; contém dados pessoais e deve ser guardado em local seguro.
+            </p>
           </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" asChild disabled={isImporting} className="cursor-pointer gap-2">
-            <label>
-              {isImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileJson className="h-4 w-4" />}
-              {isImporting ? "Restaurando backup..." : "Selecionar arquivo de backup (.json)"}
-              <input
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
-                disabled={isImporting}
-                onChange={handleFileSelected}
-                data-testid="input-agency-backup-file"
-              />
-            </label>
+          <Button
+            onClick={handleGenerateBackup}
+            disabled={isGenerating}
+            size="sm"
+            className="shrink-0 gap-2"
+            data-testid="button-generate-agency-backup"
+          >
+            {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {isGenerating ? "Gerando..." : "Baixar backup"}
           </Button>
         </div>
+        {isGenerating && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+            <span data-testid="status-backup-export-progress">
+              {receivedBytes > 0
+                ? `Montando arquivo... ${formatBackupBytes(receivedBytes)} recebidos`
+                : "Preparando exportação..."}
+            </span>
+            <span>Não feche esta página enquanto o arquivo é gerado.</span>
+          </div>
+        )}
+      </section>
+
+      <section aria-labelledby="backup-restore-title" className="rounded-md border px-3 py-2.5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h3 id="backup-restore-title" className="flex items-center gap-1.5 text-sm font-medium">
+              <Upload className="h-4 w-4 text-muted-foreground" />
+              Restaurar de arquivo
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Use um backup JSON válido. Usuários são associados por e-mail quando possível; registros existentes não são duplicados.
+            </p>
+          </div>
+          <Button variant="outline" asChild disabled={isImporting} className="shrink-0 gap-2">
+            <label
+              htmlFor="agency-backup-json-file"
+              className="cursor-pointer focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2"
+              data-testid="label-agency-backup-file"
+            >
+              {isImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileJson className="h-4 w-4" />}
+              {isImporting ? "Restaurando..." : "Selecionar JSON"}
+            </label>
+          </Button>
+          <input
+            id="agency-backup-json-file"
+            type="file"
+            accept=".json,application/json"
+            className="sr-only"
+            disabled={isImporting}
+            onChange={handleFileSelected}
+            aria-label="Selecionar arquivo JSON de backup"
+            data-testid="input-agency-backup-file"
+          />
+        </div>
         {parseError && (
-          <div className="flex items-center gap-2 text-sm text-destructive" data-testid="status-backup-parse-error">
+          <div className="mt-2 flex items-center gap-2 text-xs text-destructive" data-testid="status-backup-parse-error">
             <XCircle className="h-4 w-4 shrink-0" />
             {parseError}
           </div>
@@ -398,7 +410,7 @@ export function AgencyBackupPanel() {
             <BackupImportReportView report={importReport} />
           </div>
         )}
-      </div>
+      </section>
       <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!open) setConfirmOpen(false); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

@@ -1025,6 +1025,11 @@ describe("Downloads — agency backup authorization", () => {
     expect(admin.container.querySelector("#agency-backup")).not.toBeNull();
     expect(admin.container.querySelector('[data-testid="button-generate-agency-backup"]')).not.toBeNull();
     expect(admin.container.querySelector('[data-testid="input-agency-backup-file"]')).not.toBeNull();
+    expect(admin.container.querySelector('[data-testid="text-backup-export-description"]')?.textContent)
+      .toContain("local seguro");
+    expect(admin.container.querySelector('[data-testid="input-agency-backup-file"]')?.getAttribute("aria-label"))
+      .toBe("Selecionar arquivo JSON de backup");
+    expect(admin.container.textContent).toContain("Restaurar de arquivo");
     await cleanupRoots();
 
     downloadsApiMocks.useGetMe.mockReturnValue({ data: { role: "gerente" } });
