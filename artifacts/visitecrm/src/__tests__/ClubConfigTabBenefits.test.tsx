@@ -85,6 +85,8 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let rejectPost = false;
+let deferPost = false;
+let completePost: (() => void) | null = null;
 let rejectDelete = false;
 let deferDelete = false;
 let completeDelete: (() => void) | null = null;
@@ -102,6 +104,8 @@ let benefitsForLoad: Array<{
 beforeEach(() => {
   mockToast.mockReset();
   rejectPost = false;
+  deferPost = false;
+  completePost = null;
   rejectDelete = false;
   deferDelete = false;
   completeDelete = null;
@@ -118,6 +122,11 @@ beforeEach(() => {
     }
     if (url.endsWith("/api/club/benefits") && method === "POST") {
       const body = JSON.parse(String(init?.body)) as { tier: string };
+      if (deferPost) {
+        return new Promise((resolve) => {
+          completePost = () => resolve(makeResponse(true, { id: "created-after-pending" }));
+        });
+      }
       if (rejectPost) return makeResponse(false, { error: "creation_failed" });
       return makeResponse(true, { id: `benefit-${body.tier}` });
     }
@@ -298,6 +307,69 @@ describe("ClubConfigTab benefit tiers", () => {
       .toContain("Desconto de boas-vindas");
     expectTierCount(container, "bronze", 1);
     expect(container.querySelector('[data-testid="club-empty-tier-bronze"]')).toBeNull();
+  });
+
+  it("sends one creation for repeated clicks and keeps the fields available while pending", async () => {
+    deferPost = true;
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    const valueInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-value-input"]',
+    );
+    const descriptionInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-description-input"]',
+    );
+    const addButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-add-benefit"]',
+    );
+    expect(labelInput).not.toBeNull();
+    expect(valueInput).not.toBeNull();
+    expect(descriptionInput).not.toBeNull();
+    expect(addButton).not.toBeNull();
+
+    await act(async () => {
+      setInputValue(labelInput!, "Acesso ao lounge");
+      setInputValue(valueInput!, "1 acesso");
+      setInputValue(descriptionInput!, "Apresente o voucher na entrada");
+    });
+
+    await act(async () => {
+      addButton!.click();
+      addButton!.click();
+      addButton!.click();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(addButton!.disabled).toBe(true);
+    expect(labelInput!.disabled).toBe(false);
+    expect(valueInput!.disabled).toBe(false);
+    expect(descriptionInput!.disabled).toBe(false);
+    expect(labelInput!.value).toBe("Acesso ao lounge");
+    expect(valueInput!.value).toBe("1 acesso");
+    expect(descriptionInput!.value).toBe("Apresente o voucher na entrada");
+    expect(container.querySelector('[data-testid="club-benefit-benefit-bronze"]')).toBeNull();
+    expect(completePost).toBeTypeOf("function");
+
+    await act(async () => {
+      completePost?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(container.querySelector('[data-testid="club-benefit-created-after-pending"]')?.textContent)
+      .toContain("Acesso ao lounge");
+    expectTierCount(container, "bronze", 1);
+    expect(labelInput!.value).toBe("");
+    expect(valueInput!.value).toBe("");
+    expect(descriptionInput!.value).toBe("");
   });
 
   it("keeps the benefit and its count when the server rejects removal", async () => {

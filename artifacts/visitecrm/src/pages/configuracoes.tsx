@@ -3856,6 +3856,7 @@ export function ClubConfigTab() {
   const [newValue, setNewValue] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [addingBenefit, setAddingBenefit] = useState(false);
+  const addingBenefitRef = useRef(false);
   const [deletingBenefitIds, setDeletingBenefitIds] = useState<Set<string>>(() => new Set());
   const deletingBenefitIdsRef = useRef(new Set<string>());
   const benefitsLoadedRef = useRef(false);
@@ -3954,7 +3955,8 @@ export function ClubConfigTab() {
   }
 
   async function handleAddBenefit() {
-    if (!newLabel.trim()) return;
+    if (!newLabel.trim() || addingBenefitRef.current) return;
+    addingBenefitRef.current = true;
     benefitRevisionRef.current += 1;
     benefitMutationCountRef.current += 1;
     setAddingBenefit(true);
@@ -3993,6 +3995,7 @@ export function ClubConfigTab() {
     } catch {
       toast({ title: "Erro ao adicionar benefício", variant: "destructive" });
     } finally {
+      addingBenefitRef.current = false;
       benefitMutationCountRef.current = Math.max(0, benefitMutationCountRef.current - 1);
       setAddingBenefit(false);
     }
