@@ -37,6 +37,12 @@ const SETTINGS_NAVIGATION_GROUPS = [
   { label: "Relacionamento e dados", values: ["clube", "backup", "integrity"] },
 ] as const;
 
+export function buildAgencySettingsTabUrl(currentHref: string, tab: string): string {
+  const url = new URL(currentHref);
+  url.searchParams.set("tab", tab);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 export function getAgencySettingsAccess(role: string | undefined, requestedTab: string | null) {
   const isAgencyAdmin = role === ROLES.AGENCY_ADMIN;
   const visibleTabOptions = SETTINGS_TAB_OPTIONS.filter(

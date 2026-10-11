@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { CoverImageUpload } from "@/components/cover-image-upload";
 import { storeApi } from "@/lib/storeApi";
 import { useUser } from "@clerk/react";
@@ -65,7 +65,10 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
-import { getAgencySettingsAccess } from "@/components/settings/agency-settings-access";
+import {
+  buildAgencySettingsTabUrl,
+  getAgencySettingsAccess,
+} from "@/components/settings/agency-settings-access";
 import {
   AgencySettingsDirtyContext,
   hasUnsavedAgencySettings,
@@ -4911,10 +4914,11 @@ function BackupDataTab() {
 /* ──────────────────── Main Settings Page ──────────────────── */
 export default function Configuracoes() {
   const [currentRoute, setLocation] = useLocation();
+  const currentSearch = useSearch();
   const currentUrlRef = useRef(window.location.href);
   const currentHistoryStateRef = useRef(window.history.state);
   const { data: me } = useGetMe();
-  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  const requestedTab = new URLSearchParams(currentSearch).get("tab");
   const { isAgencyAdmin, initialTab, navigationGroups } = getAgencySettingsAccess(
     me?.role,
     requestedTab,
@@ -4930,13 +4934,27 @@ export default function Configuracoes() {
   useEffect(() => {
     currentUrlRef.current = window.location.href;
     currentHistoryStateRef.current = window.history.state;
-  }, [currentRoute]);
+  }, [currentRoute, currentSearch]);
 
   const reportDirty = useCallback((section: string, source: string, isDirty: boolean) => {
     setDirtySources((current) =>
       updateAgencySettingsDirtySources(current, section, source, isDirty),
     );
   }, []);
+
+  const allowedTabs = useMemo(
+    () => new Set(navigationGroups.flatMap((group) => group.items.map((item) => item.value))),
+    [navigationGroups],
+  );
+
+  const commitTabChange = useCallback((nextTab: string) => {
+    if (!allowedTabs.has(nextTab)) return;
+    const nextUrl = buildAgencySettingsTabUrl(window.location.href, nextTab);
+    window.history.pushState(window.history.state, "", nextUrl);
+    currentUrlRef.current = new URL(nextUrl, window.location.origin).href;
+    currentHistoryStateRef.current = window.history.state;
+    setActiveTab(nextTab);
+  }, [allowedTabs]);
 
   useEffect(() => {
     if (!hasUnsavedChanges) return;
@@ -4970,8 +4988,8 @@ export default function Configuracoes() {
       setPendingExit({ kind: "tab", destination: nextTab });
       return;
     }
-    setActiveTab(nextTab);
-  }, [activeTab, activeTabHasUnsavedChanges]);
+    commitTabChange(nextTab);
+  }, [activeTab, activeTabHasUnsavedChanges, commitTabChange]);
 
   const handleRouteClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     if (!hasUnsavedChanges || event.defaultPrevented || event.button !== 0
@@ -4997,23 +5015,18 @@ export default function Configuracoes() {
       setDirtySources((current) => Object.fromEntries(
         Object.entries(current).filter(([, section]) => section !== activeTab),
       ));
-      setActiveTab(pendingExit.destination);
+      commitTabChange(pendingExit.destination);
     } else {
       setDirtySources({});
       setLocation(pendingExit.destination);
     }
     setPendingExit(null);
-  }, [activeTab, pendingExit, setLocation]);
+  }, [activeTab, commitTabChange, pendingExit, setLocation]);
 
   useEffect(() => {
-    if (
-      isAgencyAdmin
-      && activeTab === "agency"
-      && (requestedTab === "backup" || requestedTab === "integrity")
-    ) {
-      setActiveTab(requestedTab);
-    }
-  }, [activeTab, isAgencyAdmin, requestedTab]);
+    const historyTab = requestedTab && allowedTabs.has(requestedTab) ? requestedTab : "agency";
+    if (historyTab !== activeTab) setActiveTab(historyTab);
+  }, [activeTab, allowedTabs, currentRoute, requestedTab]);
 
   return (
     <AgencySettingsDirtyContext.Provider value={reportDirty}>
@@ -5034,7 +5047,7 @@ export default function Configuracoes() {
             pageLabel="Seções da agência"
             testIdPrefix="agency-settings"
             value={activeTab}
-            onValueChange={setActiveTab}
+            onValueChange={handleTabChange}
           />
           <div className="min-w-0">
           <TabsContent value="agency">
