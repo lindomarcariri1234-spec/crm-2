@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
+import { STORE_SETTINGS_NAVIGATION_GROUPS } from "@/components/settings/store-settings-navigation";
 import {
   Card,
   CardContent,
@@ -88,33 +89,6 @@ function slugify(text: string): string {
 }
 
 const BASE_URL = import.meta.env.BASE_URL.replace(/\/$/, "");
-
-const STORE_SETTINGS_NAVIGATION_GROUPS = [
-  {
-    label: "Loja e vitrine",
-    items: [
-      { value: "geral", label: "Geral", icon: Store },
-      { value: "aparencia", label: "Aparência", icon: Palette },
-      { value: "contato", label: "Contato", icon: Phone },
-    ],
-  },
-  {
-    label: "Descoberta",
-    items: [
-      { value: "seo", label: "SEO", icon: Search },
-      { value: "dominio", label: "Domínio", icon: Link2 },
-      { value: "compartilhar", label: "Compartilhar", icon: Share2 },
-    ],
-  },
-  {
-    label: "Operação",
-    items: [
-      { value: "pagamento", label: "Pagamentos", icon: CreditCard },
-      { value: "politicas", label: "Políticas", icon: FileText },
-      { value: "notificacoes", label: "Notificações", icon: Bell },
-    ],
-  },
-] as const;
 
 function StoreWizard({ onCreated }: { onCreated: (s: StoreSettings) => void }) {
   const { toast } = useToast();
