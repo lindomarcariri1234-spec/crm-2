@@ -58,13 +58,12 @@ import {
 import {
   Select,
   SelectContent,
-  SelectGroup,
-  SelectLabel,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -4843,18 +4842,25 @@ function BackupDataTab() {
 
 /* ──────────────────── Main Settings Page ──────────────────── */
 const SETTINGS_TAB_OPTIONS = [
-  { value: "agency", label: "Agência", category: "Conta", icon: Building2 },
-  { value: "plan", label: "Plano", category: "Conta", icon: CreditCard },
-  { value: "team", label: "Equipe", category: "Conta", icon: Users },
-  { value: "apikeys", label: "Chaves API", category: "Conta", icon: Key },
-  { value: "integrations", label: "Integrações", category: "Operação", icon: Puzzle },
-  { value: "notifications", label: "Notificações", category: "Operação", icon: Bell },
-  { value: "features", label: "Funcionalidades", category: "Operação", icon: ToggleLeft },
-  { value: "pipelines", label: "Pipelines", category: "Operação", icon: GitBranch },
-  { value: "customization", label: "Personalização", category: "Marca e relacionamento", icon: Palette },
-  { value: "clube", label: "Clube", category: "Marca e relacionamento", icon: Crown },
-  { value: "backup", label: "Backup de Dados", category: "Dados e integridade", icon: DatabaseBackup, adminOnly: true },
-  { value: "integrity", label: "Integridade", category: "Dados e integridade", icon: Wrench, adminOnly: true },
+  { value: "agency", label: "Agência", icon: Building2 },
+  { value: "plan", label: "Plano", icon: CreditCard },
+  { value: "team", label: "Equipe", icon: Users },
+  { value: "apikeys", label: "Chaves API", icon: Key },
+  { value: "integrations", label: "Integrações", icon: Puzzle },
+  { value: "notifications", label: "Notificações", icon: Bell },
+  { value: "features", label: "Funcionalidades", icon: ToggleLeft },
+  { value: "pipelines", label: "Pipelines", icon: GitBranch },
+  { value: "customization", label: "Personalização", icon: Palette },
+  { value: "clube", label: "Clube", icon: Crown },
+  { value: "backup", label: "Backup de Dados", icon: DatabaseBackup, adminOnly: true },
+  { value: "integrity", label: "Integridade", icon: Wrench, adminOnly: true },
+] as const;
+
+const SETTINGS_NAVIGATION_GROUPS = [
+  { label: "Agência", values: ["agency", "customization"] },
+  { label: "Conta", values: ["plan", "team", "apikeys"] },
+  { label: "Operação", values: ["integrations", "notifications", "features", "pipelines"] },
+  { label: "Relacionamento e dados", values: ["clube", "backup", "integrity"] },
 ] as const;
 
 export default function Configuracoes() {
@@ -4871,6 +4877,10 @@ export default function Configuracoes() {
   const visibleTabOptions = SETTINGS_TAB_OPTIONS.filter(
     (tab) => !("adminOnly" in tab && tab.adminOnly) || isAgencyAdmin,
   );
+  const navigationGroups = SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    label: group.label,
+    items: visibleTabOptions.filter((tab) => group.values.some((value) => value === tab.value)),
+  }));
 
   useEffect(() => {
     if (
@@ -4894,65 +4904,15 @@ export default function Configuracoes() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <div className="md:hidden">
-          <Select value={activeTab} onValueChange={setActiveTab}>
-            <SelectTrigger
-              aria-label="Seção de configurações"
-              data-testid="settings-tab-select"
-              className="h-12 rounded-xl border-[#DCE3E8] bg-white dark:bg-card"
-            >
-              <SelectValue placeholder="Escolha uma seção" />
-            </SelectTrigger>
-            <SelectContent>
-              {(["Conta", "Operação", "Marca e relacionamento", "Dados e integridade"] as const).map((category) => {
-                const options = visibleTabOptions.filter((tab) => tab.category === category);
-                if (options.length === 0) return null;
-                return (
-                  <SelectGroup key={category}>
-                    <SelectLabel>{category}</SelectLabel>
-                    {options.map((tab) => (
-                      <SelectItem key={tab.value} value={tab.value} data-testid={`settings-option-${tab.value}`}>
-                        {tab.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                );
-              })}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="relative hidden md:block">
-          <div
-            className="settings-tabs-scroll overflow-x-auto overscroll-x-contain pb-1"
-            data-testid="settings-tabs-scroll"
-          >
-            <TabsList
-              aria-label="Seções das configurações"
-              className="flex h-auto w-max min-w-full flex-nowrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/85 p-1.5 shadow-sm dark:border-border dark:bg-card"
-            >
-              {visibleTabOptions.map((tab) => {
-                const Icon = tab.icon;
-                return (
-                  <TabsTrigger
-                    key={tab.value}
-                    value={tab.value}
-                    data-testid={tab.value === "integrity" ? "tab-linked-data-integrity" : `settings-tab-${tab.value}`}
-                    className="flex shrink-0 items-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                    {tab.label}
-                  </TabsTrigger>
-                );
-              })}
-            </TabsList>
-          </div>
-          <p className="mt-1 text-right text-xs text-muted-foreground xl:hidden">
-            Role horizontalmente para acessar todas as seções
-          </p>
-        </div>
-
-        <div className="mt-4">
+        <div className="grid items-start gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <SettingsNavigation
+            groups={navigationGroups}
+            pageLabel="Seções da agência"
+            testIdPrefix="agency-settings"
+            value={activeTab}
+            onValueChange={setActiveTab}
+          />
+          <div className="min-w-0">
           <TabsContent value="agency">
             <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
@@ -5122,6 +5082,7 @@ export default function Configuracoes() {
               </Card>
             </TabsContent>
           )}
+          </div>
         </div>
       </Tabs>
     </div>

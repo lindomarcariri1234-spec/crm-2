@@ -10,7 +10,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
 import {
   Card,
   CardContent,
@@ -87,6 +88,33 @@ function slugify(text: string): string {
 }
 
 const BASE_URL = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+const STORE_SETTINGS_NAVIGATION_GROUPS = [
+  {
+    label: "Loja e vitrine",
+    items: [
+      { value: "geral", label: "Geral", icon: Store },
+      { value: "aparencia", label: "Aparência", icon: Palette },
+      { value: "contato", label: "Contato", icon: Phone },
+    ],
+  },
+  {
+    label: "Descoberta",
+    items: [
+      { value: "seo", label: "SEO", icon: Search },
+      { value: "dominio", label: "Domínio", icon: Link2 },
+      { value: "compartilhar", label: "Compartilhar", icon: Share2 },
+    ],
+  },
+  {
+    label: "Operação",
+    items: [
+      { value: "pagamento", label: "Pagamentos", icon: CreditCard },
+      { value: "politicas", label: "Políticas", icon: FileText },
+      { value: "notificacoes", label: "Notificações", icon: Bell },
+    ],
+  },
+] as const;
 
 function StoreWizard({ onCreated }: { onCreated: (s: StoreSettings) => void }) {
   const { toast } = useToast();
@@ -333,6 +361,7 @@ export default function LojaConfiguracoes() {
     setUploadingCount((prev) => (uploading ? prev + 1 : Math.max(0, prev - 1)));
   const [store, setStore] = useState<StoreSettings | null>(null);
   const [form, setForm] = useState<Partial<StoreSettings>>({});
+  const [activeSettingsTab, setActiveSettingsTab] = useState("geral");
   const [testingStripeConnection, setTestingStripeConnection] = useState(false);
   const [stripeConnectionResult, setStripeConnectionResult] = useState<{
     kind: "success" | "error";
@@ -628,45 +657,16 @@ export default function LojaConfiguracoes() {
         </Button>
       </div>
 
-      <Tabs defaultValue="geral">
-        <TabsList className="flex-wrap h-auto gap-1">
-          <TabsTrigger value="geral">
-            <Store className="w-4 h-4 mr-1.5" />
-            Geral
-          </TabsTrigger>
-          <TabsTrigger value="aparencia">
-            <Palette className="w-4 h-4 mr-1.5" />
-            Aparência
-          </TabsTrigger>
-          <TabsTrigger value="contato">
-            <Phone className="w-4 h-4 mr-1.5" />
-            Contato
-          </TabsTrigger>
-          <TabsTrigger value="seo">
-            <Search className="w-4 h-4 mr-1.5" />
-            SEO
-          </TabsTrigger>
-          <TabsTrigger value="dominio">
-            <Link2 className="w-4 h-4 mr-1.5" />
-            Domínio
-          </TabsTrigger>
-          <TabsTrigger value="pagamento">
-            <CreditCard className="w-4 h-4 mr-1.5" />
-            Pagamentos
-          </TabsTrigger>
-          <TabsTrigger value="politicas">
-            <FileText className="w-4 h-4 mr-1.5" />
-            Políticas
-          </TabsTrigger>
-          <TabsTrigger value="notificacoes">
-            <Bell className="w-4 h-4 mr-1.5" />
-            Notificações
-          </TabsTrigger>
-          <TabsTrigger value="compartilhar">
-            <Share2 className="w-4 h-4 mr-1.5" />
-            Compartilhar
-          </TabsTrigger>
-        </TabsList>
+      <Tabs value={activeSettingsTab} onValueChange={setActiveSettingsTab}>
+        <div className="grid items-start gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <SettingsNavigation
+            groups={STORE_SETTINGS_NAVIGATION_GROUPS}
+            pageLabel="Seções da loja"
+            testIdPrefix="store-settings"
+            value={activeSettingsTab}
+            onValueChange={setActiveSettingsTab}
+          />
+          <div className="min-w-0">
 
         {/* ── GERAL ── */}
         <TabsContent value="geral" className="space-y-4 mt-4">
@@ -1877,6 +1877,8 @@ export default function LojaConfiguracoes() {
             </CardContent>
           </Card>
         </TabsContent>
+          </div>
+        </div>
       </Tabs>
     </div>
   );
