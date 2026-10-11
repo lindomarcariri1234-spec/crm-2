@@ -86,6 +86,8 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 let fetchMock: ReturnType<typeof vi.fn>;
 let rejectPost = false;
 let rejectDelete = false;
+let deferDelete = false;
+let completeDelete: (() => void) | null = null;
 let benefitsForLoad: Array<{
   id: string;
   tier: string;
@@ -100,6 +102,8 @@ beforeEach(() => {
   mockToast.mockReset();
   rejectPost = false;
   rejectDelete = false;
+  deferDelete = false;
+  completeDelete = null;
   benefitsForLoad = [];
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -116,6 +120,11 @@ beforeEach(() => {
       return makeResponse(true, { id: `benefit-${body.tier}` });
     }
     if (url.includes("/api/club/benefits/") && method === "DELETE") {
+      if (deferDelete) {
+        return new Promise((resolve) => {
+          completeDelete = () => resolve(makeResponse(true));
+        });
+      }
       return makeResponse(!rejectDelete);
     }
     throw new Error(`Unexpected fetch: ${method} ${url}`);
@@ -434,5 +443,53 @@ describe("ClubConfigTab benefit tiers", () => {
     expect(descriptionInput!.value).toBe("Válido para o cliente");
     expect(fetchMock.mock.calls.filter(([, init]) => !init?.method || init.method === "GET")
       .filter(([url]) => String(url).endsWith("/api/club/benefits"))).toHaveLength(3);
+  });
+
+  it("sends only one removal when the same benefit is clicked repeatedly while pending", async () => {
+    benefitsForLoad = [{
+      id: "gold-pending",
+      tier: "gold",
+      benefitKey: "pending",
+      label: "Benefício em remoção",
+      description: null,
+      value: null,
+      sortOrder: 0,
+    }];
+    deferDelete = true;
+
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      getTab(container, "gold").click();
+    });
+    const removeButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-delete-benefit-gold-pending"]',
+    );
+    expect(removeButton).not.toBeNull();
+
+    await act(async () => {
+      removeButton!.click();
+      removeButton!.click();
+      removeButton!.click();
+      await Promise.resolve();
+    });
+
+    expect(removeButton!.disabled).toBe(true);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+    expect(container.querySelector('[data-testid="club-benefit-gold-pending"]')).not.toBeNull();
+    expectTierCount(container, "gold", 1);
+    expect(completeDelete).toBeTypeOf("function");
+
+    await act(async () => {
+      completeDelete?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+    expect(container.querySelector('[data-testid="club-benefit-gold-pending"]')).toBeNull();
+    expectTierCount(container, "gold", 0);
   });
 });

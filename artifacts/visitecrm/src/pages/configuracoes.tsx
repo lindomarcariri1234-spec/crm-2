@@ -3857,6 +3857,7 @@ export function ClubConfigTab() {
   const [newDescription, setNewDescription] = useState("");
   const [addingBenefit, setAddingBenefit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deletingBenefitIdsRef = useRef(new Set<string>());
   const benefitsLoadedRef = useRef(false);
   const benefitsRefreshInFlightRef = useRef(false);
   const benefitMutationCountRef = useRef(0);
@@ -3998,6 +3999,8 @@ export function ClubConfigTab() {
   }
 
   async function handleDeleteBenefit(id: string) {
+    if (deletingBenefitIdsRef.current.has(id)) return;
+    deletingBenefitIdsRef.current.add(id);
     benefitRevisionRef.current += 1;
     benefitMutationCountRef.current += 1;
     setDeletingId(id);
@@ -4012,6 +4015,7 @@ export function ClubConfigTab() {
     } catch {
       toast({ title: "Erro ao remover benefício", variant: "destructive" });
     } finally {
+      deletingBenefitIdsRef.current.delete(id);
       benefitMutationCountRef.current = Math.max(0, benefitMutationCountRef.current - 1);
       setDeletingId(null);
     }
