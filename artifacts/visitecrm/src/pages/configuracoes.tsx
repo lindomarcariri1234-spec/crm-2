@@ -3966,145 +3966,238 @@ function ClubConfigTab() {
     }
   }
 
-  const tierBenefits = benefits.filter((b) => b.tier === activeTier);
-
   if (loading) {
-    return <div className="py-8 text-center text-sm text-muted-foreground">Carregando configurações do clube...</div>;
+    return (
+      <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+        Carregando configurações do clube...
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div className="space-y-4">
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          <Crown className="w-4 h-4 text-amber-500" />
-          Identidade do Clube
-        </h3>
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <Label>Nome do Clube</Label>
+    <div className="max-w-5xl space-y-5">
+      <Card className="overflow-hidden rounded-xl border-[#E7DED0] shadow-sm dark:border-border">
+        <CardHeader className="border-b border-[#EEE7DC] bg-gradient-to-r from-amber-50/80 to-white px-5 py-4 dark:border-border dark:from-amber-950/20 dark:to-card">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+              <Crown className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <CardTitle className="text-base">Identidade do Clube</CardTitle>
+              <CardDescription className="mt-1">
+                Defina como o programa de benefícios aparece para os clientes.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-4 p-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] md:items-end">
+          <div className="space-y-1.5">
+            <Label htmlFor="club-name">Nome do Clube</Label>
             <Input
+              id="club-name"
+              data-testid="club-name-input"
               value={clubName}
               onChange={(e) => setClubName(e.target.value)}
               placeholder="Ex: Clube Visite Cariri"
               maxLength={100}
             />
           </div>
-          <div className="space-y-1">
-            <Label>Descrição <span className="text-xs text-muted-foreground">(opcional)</span></Label>
+          <div className="space-y-1.5">
+            <Label htmlFor="club-description">
+              Descrição <span className="font-normal text-muted-foreground">(opcional)</span>
+            </Label>
             <Input
+              id="club-description"
+              data-testid="club-description-input"
               value={clubDescription}
               onChange={(e) => setClubDescription(e.target.value)}
               placeholder="Uma frase sobre o clube para os clientes"
               maxLength={500}
             />
           </div>
-          <Button size="sm" onClick={handleSaveConfig} disabled={savingConfig}>
-            {savingConfig ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Salvando...</> : "Salvar"}
-          </Button>
-        </div>
-      </div>
+          <div className="md:col-span-2 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-muted-foreground">
+              Essas informações identificam o programa em toda a experiência do cliente.
+            </p>
+            <Button
+              data-testid="club-save-identity"
+              onClick={handleSaveConfig}
+              disabled={savingConfig}
+              className="sm:min-w-32"
+            >
+              {savingConfig ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Salvando...</>
+              ) : "Salvar identidade"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
-      <div className="border-t pt-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold flex items-center gap-2">
-            <Star className="w-4 h-4 text-amber-500" />
-            Benefícios por Nível
-          </h3>
-          <Button size="sm" variant="outline" asChild>
-            <a href="/embaixadores" className="flex items-center gap-1.5">
-              <Users className="w-3.5 h-3.5" />
-              Ver Ranking de Embaixadores
+      <Card className="overflow-hidden rounded-xl border-[#DCE3E8] shadow-sm dark:border-border">
+        <CardHeader className="gap-3 border-b bg-muted/20 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Star className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <CardTitle className="text-base">Benefícios por nível</CardTitle>
+              <CardDescription className="mt-1">
+                Organize as vantagens e acompanhe quantas estão ativas em cada categoria.
+              </CardDescription>
+            </div>
+          </div>
+          <Button size="sm" variant="outline" asChild className="shrink-0">
+            <a href="/embaixadores" data-testid="club-ambassadors-link" className="flex items-center gap-1.5">
+              <Users className="h-3.5 w-3.5" aria-hidden="true" />
+              Ranking de Embaixadores
             </a>
           </Button>
-        </div>
+        </CardHeader>
+        <CardContent className="space-y-5 p-4 sm:p-5">
+          <Tabs value={activeTier} onValueChange={setActiveTier}>
+            <TabsList aria-label="Nível do Clube" className="grid h-auto w-full grid-cols-2 gap-1.5 bg-muted/70 p-1.5 sm:grid-cols-4">
+              {CLUB_TIERS.map((tier) => {
+                const count = benefits.filter((benefit) => benefit.tier === tier.value).length;
+                return (
+                  <TabsTrigger
+                    key={tier.value}
+                    value={tier.value}
+                    data-testid={`club-tier-tab-${tier.value}`}
+                    className="min-h-11 justify-between gap-2 rounded-lg px-3 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span aria-hidden="true">{tier.icon}</span>
+                      <span>{tier.label}</span>
+                    </span>
+                    <Badge variant="secondary" className="h-5 min-w-5 justify-center px-1.5 text-[10px]">
+                      {count}
+                    </Badge>
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
 
-        <Tabs value={activeTier} onValueChange={setActiveTier}>
-          <TabsList>
-            {CLUB_TIERS.map((t) => (
-              <TabsTrigger key={t.value} value={t.value} className="gap-1">
-                <span>{t.icon}</span>
-                {t.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-
-          {CLUB_TIERS.map((t) => (
-            <TabsContent key={t.value} value={t.value} className="space-y-3 mt-4">
-              {tierBenefits.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Nenhum benefício cadastrado para {t.label} ainda.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {tierBenefits.map((b) => (
-                    <div key={b.id} className="flex items-start gap-3 p-3 border rounded-lg bg-card">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium">{b.label}</span>
-                          {b.value && <Badge variant="outline" className="text-xs">{b.value}</Badge>}
-                        </div>
-                        {b.description && (
-                          <p className="text-xs text-muted-foreground mt-0.5">{b.description}</p>
-                        )}
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive hover:text-destructive h-7 w-7 p-0 shrink-0"
-                        onClick={() => handleDeleteBenefit(b.id)}
-                        disabled={deletingId === b.id}
-                      >
-                        {deletingId === b.id ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-3.5 h-3.5" />
-                        )}
-                      </Button>
+            {CLUB_TIERS.map((tier) => {
+              const tierBenefits = benefits.filter((benefit) => benefit.tier === tier.value);
+              return (
+                <TabsContent key={tier.value} value={tier.value} className="mt-5 space-y-4">
+                  {tierBenefits.length === 0 ? (
+                    <div className="rounded-xl border border-dashed bg-muted/20 px-4 py-6 text-center">
+                      <span className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-background text-lg shadow-sm" aria-hidden="true">
+                        {tier.icon}
+                      </span>
+                      <p data-testid={`club-empty-tier-${tier.value}`} className="text-sm font-medium">
+                        Nenhum benefício para {tier.label} ainda
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Adicione uma vantagem para destacar este nível do clube.
+                      </p>
                     </div>
-                  ))}
-                </div>
-              )}
+                  ) : (
+                    <div className="space-y-2">
+                      {tierBenefits.map((benefit) => (
+                        <div
+                          key={benefit.id}
+                          data-testid={`club-benefit-${benefit.id}`}
+                          className="flex items-start gap-3 rounded-xl border bg-card p-3.5 transition-colors hover:bg-muted/20"
+                        >
+                          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950/30 dark:text-amber-300">
+                            <Star className="h-4 w-4" aria-hidden="true" />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium">{benefit.label}</span>
+                              {benefit.value && <Badge variant="outline" className="text-xs">{benefit.value}</Badge>}
+                            </div>
+                            {benefit.description && (
+                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{benefit.description}</p>
+                            )}
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            data-testid={`club-delete-benefit-${benefit.id}`}
+                            aria-label={`Remover benefício ${benefit.label}`}
+                            className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => handleDeleteBenefit(benefit.id)}
+                            disabled={deletingId === benefit.id}
+                          >
+                            {deletingId === benefit.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
-              <div className="border rounded-lg p-3 space-y-2 bg-muted/30">
-                <p className="text-xs font-medium text-muted-foreground">Adicionar benefício para {t.label}</p>
-                <Input
-                  placeholder="Ex: 5% de desconto em todas as viagens"
-                  value={newLabel}
-                  onChange={(e) => setNewLabel(e.target.value)}
-                  className="text-sm"
-                  maxLength={200}
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    placeholder="Valor (ex: 5%)"
-                    value={newValue}
-                    onChange={(e) => setNewValue(e.target.value)}
-                    className="text-sm"
-                    maxLength={200}
-                  />
-                  <Input
-                    placeholder="Descrição (opcional)"
-                    value={newDescription}
-                    onChange={(e) => setNewDescription(e.target.value)}
-                    className="text-sm"
-                    maxLength={500}
-                  />
-                </div>
-                <Button
-                  size="sm"
-                  onClick={handleAddBenefit}
-                  disabled={addingBenefit || !newLabel.trim()}
-                >
-                  {addingBenefit ? (
-                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                  ) : null}
-                  + Adicionar
-                </Button>
-              </div>
-            </TabsContent>
-          ))}
-        </Tabs>
-      </div>
+                  <div className="rounded-xl border border-primary/15 bg-primary/[0.03] p-4">
+                    <div className="mb-3">
+                      <h4 className="text-sm font-semibold">Adicionar benefício</h4>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        A nova vantagem será incluída no nível {tier.label}.
+                      </p>
+                    </div>
+                    <div className="grid gap-2.5 sm:grid-cols-2">
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <Label htmlFor="club-benefit-label" className="sr-only">Nome do benefício</Label>
+                        <Input
+                          id="club-benefit-label"
+                          data-testid="club-benefit-label-input"
+                          placeholder="Ex.: 5% de desconto em todas as viagens"
+                          value={newLabel}
+                          onChange={(e) => setNewLabel(e.target.value)}
+                          maxLength={200}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="club-benefit-value" className="sr-only">Valor ou condição</Label>
+                        <Input
+                          id="club-benefit-value"
+                          data-testid="club-benefit-value-input"
+                          placeholder="Valor ou condição (ex.: 5%)"
+                          value={newValue}
+                          onChange={(e) => setNewValue(e.target.value)}
+                          maxLength={200}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="club-benefit-description" className="sr-only">Descrição do benefício</Label>
+                        <Input
+                          id="club-benefit-description"
+                          data-testid="club-benefit-description-input"
+                          placeholder="Detalhes adicionais (opcional)"
+                          value={newDescription}
+                          onChange={(e) => setNewDescription(e.target.value)}
+                          maxLength={500}
+                        />
+                      </div>
+                      <div className="sm:col-span-2 flex flex-col gap-2 pt-1 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="text-xs text-muted-foreground">
+                          {tier.icon} Nível selecionado: <strong className="font-medium text-foreground">{tier.label}</strong>
+                        </span>
+                        <Button
+                          data-testid="club-add-benefit"
+                          onClick={handleAddBenefit}
+                          disabled={addingBenefit || !newLabel.trim()}
+                          className="sm:min-w-32"
+                        >
+                          {addingBenefit ? (
+                            <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Adicionando...</>
+                          ) : "Adicionar benefício"}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </TabsContent>
+              );
+            })}
+          </Tabs>
+        </CardContent>
+      </Card>
     </div>
   );
 }
