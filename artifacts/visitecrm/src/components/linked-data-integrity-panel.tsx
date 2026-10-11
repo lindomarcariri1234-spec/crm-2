@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, History, Loader2, RefreshCw, Wrench } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -67,8 +67,47 @@ export function groupReconciliationIssues(issues: LinkedDataReconciliationIssue[
   }, {});
 }
 
-function readable(value: string) {
-  return value.replace(/_/g, " ").replace(/-/g, " ");
+const CATEGORY_LABELS: Record<string, string> = {
+  "client-financial": "Financeiro do cliente",
+  "trip-seats": "Assentos da viagem",
+  "reservation-passengers": "Passageiros da reserva",
+  "client-user": "Conta do cliente",
+  "reservation-order": "Reserva e pedido",
+  "order-client": "Cliente do pedido",
+  "order-payment": "Pedido e pagamento",
+  "referral-reservation": "Indicação e reserva",
+  "deal-reservation": "Oportunidade e reserva",
+  "pipeline-deal": "Oportunidade do pipeline",
+};
+
+const ISSUE_REASON_LABELS: Record<string, string> = {
+  receivable_totals_mismatch: "Totais de recebíveis divergentes",
+  seat_counters_mismatch: "Contadores de assentos divergentes",
+  missing_unambiguous_primary_passenger: "Passageiro principal ausente; origem única identificada",
+  passenger_count_diagnostic: "Quantidade de passageiros divergente; requer análise",
+  missing_unambiguous_email_link: "Conta sem vínculo com correspondência exata",
+  ambiguous_or_already_linked_email: "E-mail ambíguo ou já vinculado",
+  order_missing_in_tenant: "Pedido não encontrado nesta agência",
+  missing_unambiguous_client: "Cliente ausente; origem única identificada",
+  client_mismatch_or_multi_trip: "Cliente divergente ou pedido com várias viagens",
+  fully_paid_reservations_with_unpaid_order: "Reservas quitadas, mas pedido não pago",
+  reservation_missing_in_tenant: "Reserva não encontrada nesta agência",
+  ambiguous_order_candidates: "Mais de um pedido possível",
+  ambiguous_multi_reservation_order: "Pedido com várias reservas possíveis",
+  referral_order_has_no_trip_reservations: "Pedido de indicação sem reserva de viagem",
+  missing_unambiguous_canonical_reservation: "Reserva canônica ausente; origem única identificada",
+  duplicate_reservation_deals: "Mais de uma oportunidade ligada à reserva",
+  client_trip_or_value_mismatch: "Cliente, viagem ou valor divergente da reserva",
+  missing_valid_reservation_deal: "Oportunidade válida da reserva não encontrada",
+  missing_deal_invalid_reservation_links: "Oportunidade ausente e vínculos da reserva inválidos",
+};
+
+export function readableIntegrityCategory(value: string) {
+  return CATEGORY_LABELS[value] ?? value.replace(/[_-]/g, " ");
+}
+
+export function readableIntegrityReason(value: string) {
+  return ISSUE_REASON_LABELS[value] ?? value.replace(/[_-]/g, " ");
 }
 
 async function reconcileLinkedData(repair: boolean): Promise<LinkedDataReconciliationResult> {
@@ -128,6 +167,7 @@ export function LinkedDataIntegrityPanel() {
   const [historyOffset, setHistoryOffset] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const repairInFlightRef = useRef(false);
 
   const loadHistory = useCallback(async (offset: number) => {
     setHistoryLoading(true);
@@ -164,6 +204,8 @@ export function LinkedDataIntegrityPanel() {
   const issueCount = result?.issues.length ?? 0;
 
   async function repair() {
+    if (repairInFlightRef.current) return;
+    repairInFlightRef.current = true;
     setConfirmOpen(false);
     setRepairing(true);
     setError(null);
@@ -183,6 +225,7 @@ export function LinkedDataIntegrityPanel() {
       setError(err instanceof Error ? err.message : "Não foi possível sincronizar os vínculos.");
       toast({ title: "Erro na sincronização", variant: "destructive" });
     } finally {
+      repairInFlightRef.current = false;
       setRepairing(false);
     }
   }
@@ -212,6 +255,22 @@ export function LinkedDataIntegrityPanel() {
       </CardHeader>
       <CardContent className="space-y-4">
         {generatedAt && <p className="text-xs text-muted-foreground" data-testid="text-linked-integrity-generated-at">Última verificação: {generatedAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}</p>}
+        {result && (
+          <div className="grid gap-3 sm:grid-cols-3" data-testid="summary-linked-integrity">
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <p className="text-xs text-muted-foreground">Registros verificados</p>
+              <p className="mt-1 text-xl font-semibold" data-testid="text-linked-integrity-checked">{result.checked}</p>
+            </div>
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <p className="text-xs text-muted-foreground">Inconsistências</p>
+              <p className="mt-1 text-xl font-semibold" data-testid="text-linked-integrity-issue-count">{issueCount}</p>
+            </div>
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <p className="text-xs text-muted-foreground">Corrigidos nesta execução</p>
+              <p className="mt-1 text-xl font-semibold" data-testid="text-linked-integrity-repaired-count">{result.repairedCount}</p>
+            </div>
+          </div>
+        )}
         {loading ? (
           <div className="flex items-center gap-2 py-5 text-sm text-muted-foreground" data-testid="status-linked-integrity-loading">
             <Loader2 className="h-4 w-4 animate-spin" /> Verificando vínculos da agência…
@@ -232,11 +291,11 @@ export function LinkedDataIntegrityPanel() {
               {Object.entries(categories).map(([type, issues]) => (
                 <div key={type} className="rounded-md border p-3" data-testid={`group-linked-integrity-${type}`}>
                   <div className="mb-2 flex items-center gap-2">
-                    <span className="text-sm font-medium capitalize">{readable(type)}</span>
+                    <span className="text-sm font-medium">{readableIntegrityCategory(type)}</span>
                     <Badge variant="secondary">{issues.length}</Badge>
                   </div>
                   <ul className="space-y-1 text-xs text-muted-foreground">
-                    {issues.map((issue) => <li key={`${issue.type}-${issue.id}`} data-testid={`issue-linked-integrity-${issue.id}`}><span className="font-mono">{issue.id}</span> · {readable(issue.reason)}</li>)}
+                    {issues.map((issue) => <li key={`${issue.type}-${issue.id}`} data-testid={`issue-linked-integrity-${issue.id}`}><span className="font-mono">{issue.id}</span> · {readableIntegrityReason(issue.reason)}</li>)}
                   </ul>
                 </div>
               ))}
@@ -258,7 +317,18 @@ export function LinkedDataIntegrityPanel() {
               <Loader2 className="h-4 w-4 animate-spin" /> Carregando histórico…
             </div>
           ) : historyError ? (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" data-testid="status-linked-integrity-history-error">{historyError}</div>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" data-testid="status-linked-integrity-history-error">
+              <span>{historyError}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void loadHistory(historyOffset)}
+                disabled={historyLoading}
+                data-testid="button-retry-linked-integrity-history"
+              >
+                Tentar novamente
+              </Button>
+            </div>
           ) : !history?.items.length ? (
             <p className="py-4 text-sm text-muted-foreground" data-testid="status-linked-integrity-history-empty">Nenhuma sincronização registrada ainda.</p>
           ) : (
@@ -281,8 +351,8 @@ export function LinkedDataIntegrityPanel() {
                   <div className="mt-2 flex flex-wrap gap-2">
                     {Object.entries(run.summary).map(([type, category]) => (
                       <span key={type} className="rounded bg-muted px-2 py-1 text-xs" data-testid={`history-linked-integrity-category-${run.id}-${type}`}>
-                        {readable(type)}: {category.checked} verificados · {category.repaired} corrigidos · {category.issues} inconsistências
-                        {Object.entries(category.reasons).length ? ` · ${Object.entries(category.reasons).map(([reason, count]) => `${readable(reason)} (${count})`).join(", ")}` : ""}
+                        {readableIntegrityCategory(type)}: {category.checked} verificados · {category.repaired} corrigidos · {category.issues} inconsistências
+                        {Object.entries(category.reasons).length ? ` · ${Object.entries(category.reasons).map(([reason, count]) => `${readableIntegrityReason(reason)} (${count})`).join(", ")}` : ""}
                       </span>
                     ))}
                   </div>
