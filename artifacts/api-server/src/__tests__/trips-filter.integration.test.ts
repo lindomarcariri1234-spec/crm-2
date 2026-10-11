@@ -39,6 +39,10 @@ const tripFixture = ({
   name,
   type = "excursao",
   departureDate,
+  destinationCity = "Fortaleza",
+  destinationState = "CE",
+  originCity = null,
+  originState = null,
   status = "active",
   totalCapacity = 10,
   reservedSeats = 0,
@@ -50,6 +54,10 @@ const tripFixture = ({
   name: string;
   type?: string;
   departureDate: Date;
+  destinationCity?: string;
+  destinationState?: string;
+  originCity?: string | null;
+  originState?: string | null;
   status?: "active" | "confirmed" | "draft";
   totalCapacity?: number;
   reservedSeats?: number;
@@ -61,8 +69,10 @@ const tripFixture = ({
   name,
   slug: id,
   destination: "Fortaleza",
-  destinationCity: "Fortaleza",
-  destinationState: "CE",
+  destinationCity,
+  destinationState,
+  originCity,
+  originState,
   type,
   category: "standard",
   departureDate,
@@ -151,6 +161,34 @@ const selectedDayTrips = [
     totalCapacity: 90,
     reservedSeats: 4,
     priceAdult: "900.00",
+  }),
+  tripFixture({
+    id: `origin-city-${RUN_ID}`,
+    name: "Origin city match",
+    originCity: "Crato",
+    originState: "CE",
+    departureDate: new Date("2026-08-01T03:00:00.000Z"),
+  }),
+  tripFixture({
+    id: `origin-state-${RUN_ID}`,
+    name: "Origin state match",
+    originCity: "Recife",
+    originState: "PE",
+    departureDate: new Date("2026-08-02T03:00:00.000Z"),
+  }),
+  tripFixture({
+    id: `destination-city-${RUN_ID}`,
+    name: "Destination city match",
+    destinationCity: "Campinas",
+    destinationState: "SP",
+    departureDate: new Date("2026-08-03T03:00:00.000Z"),
+  }),
+  tripFixture({
+    id: `destination-state-${RUN_ID}`,
+    name: "Destination state match",
+    destinationCity: "Rio de Janeiro",
+    destinationState: "RJ",
+    departureDate: new Date("2026-08-04T03:00:00.000Z"),
   }),
 ];
 
@@ -242,5 +280,22 @@ describe("GET /trips — real database type/date filtering and pagination", () =
       data: [{ id: `following-day-${RUN_ID}`, name: "On the following day" }],
     });
     expect(page5.body).toMatchObject({ page: 5, data: [] });
+  });
+
+  it("matches location case-insensitively across origin and destination city/state", async () => {
+    const cases = [
+      { location: "cRaTo", id: `origin-city-${RUN_ID}` },
+      { location: "pe", id: `origin-state-${RUN_ID}` },
+      { location: "Campinas", id: `destination-city-${RUN_ID}` },
+      { location: "rj", id: `destination-state-${RUN_ID}` },
+    ];
+
+    for (const testCase of cases) {
+      const response = await request(app).get("/trips").query({ location: testCase.location });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ total: 1, page: 1 });
+      expect(response.body.data.map((trip: { id: string }) => trip.id)).toEqual([testCase.id]);
+    }
   });
 });

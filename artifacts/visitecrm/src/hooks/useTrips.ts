@@ -61,12 +61,20 @@ export function useTrips() {
   const lastObservedSearchStrRef = useRef(searchStr);
   const pendingUrlFiltersRef = useRef<TripFilters | null>(null);
 
-  const [search, setSearch] = useState(initialFilters.search);
+  const [search, setSearchState] = useState(initialFilters.search);
   const [locationFilter, setLocationFilterState] = useState(initialFilters.locationFilter);
-  const [statusFilter, setStatusFilter] = useState(initialFilters.statusFilter);
+  const [statusFilter, setStatusFilterState] = useState(initialFilters.statusFilter);
   const [typeFilter, setTypeFilterState] = useState(initialFilters.typeFilter);
   const [dateFilter, setDateFilterState] = useState(initialFilters.dateFilter);
   const [page, setPage] = useState(initialFilters.page);
+  const setSearch = useCallback((value: string) => {
+    setSearchState(value);
+    setPage(1);
+  }, []);
+  const setStatusFilter = useCallback((value: string) => {
+    setStatusFilterState(value);
+    setPage(1);
+  }, []);
   const setTypeFilter = useCallback((value: string) => {
     setTypeFilterState(value);
     setPage(1);
@@ -93,9 +101,9 @@ export function useTrips() {
         return;
       }
 
-      setSearch(incomingFilters.search);
+      setSearchState(incomingFilters.search);
       setLocationFilterState(incomingFilters.locationFilter);
-      setStatusFilter(incomingFilters.statusFilter);
+      setStatusFilterState(incomingFilters.statusFilter);
       setTypeFilterState(incomingFilters.typeFilter);
       setDateFilterState(incomingFilters.dateFilter);
       setPage(incomingFilters.page);
