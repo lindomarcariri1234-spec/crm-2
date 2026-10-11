@@ -21,6 +21,7 @@ export default defineConfig({
       "src/__tests__/subscription-upgrade-lock.integration.test.ts",
       "src/__tests__/paid-bonus-reversal-integration.test.ts",
       "src/__tests__/referral-payment-concurrency-integration.test.ts",
+      "src/__tests__/club-benefits-idempotency.integration.test.ts",
       "src/__tests__/persist-order-first-purchase-concurrency-integration.test.ts",
       "src/__tests__/reservation-referral-payment-reversal-integration.test.ts",
       "src/__tests__/reservation-boarding-point-roundtrip.integration.test.ts",
