@@ -127,12 +127,21 @@ export async function prepareCheckoutItems(args: {
   }
 
   for (const [tripId, { product, totalQty }] of tripLinkedProducts) {
-    const [trip] = await db.select({ availableSeats: tripsTable.availableSeats })
+    const [trip] = await db.select({
+      availableSeats: tripsTable.availableSeats,
+      status: tripsTable.status,
+    })
       .from(tripsTable)
       .where(and(eq(tripsTable.id, tripId), eq(tripsTable.tenantId, tenantId)))
       .limit(1);
     if (!trip) {
       throw new ValidationError(`Viagem vinculada ao produto "${product.name}" não encontrada`, "TRIP_NOT_FOUND");
+    }
+    if (trip.status === "completed") {
+      throw new ConflictError(
+        `A viagem "${product.name}" já foi realizada e não está mais disponível para compra`,
+        "TRIP_COMPLETED",
+      );
     }
     if (trip.availableSeats < totalQty) {
       throw new ConflictError(`Sem vagas suficientes para "${product.name}". Disponível: ${trip.availableSeats} vaga(s)`, "INSUFFICIENT_SEATS");
