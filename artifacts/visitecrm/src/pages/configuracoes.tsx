@@ -3843,7 +3843,7 @@ interface ClubBenefitAdmin {
   sortOrder: number;
 }
 
-function ClubConfigTab() {
+export function ClubConfigTab() {
   const { toast } = useToast();
   const [clubName, setClubName] = useState("Clube Visite");
   const [clubDescription, setClubDescription] = useState("");
@@ -4070,7 +4070,11 @@ function ClubConfigTab() {
                       <span aria-hidden="true">{tier.icon}</span>
                       <span>{tier.label}</span>
                     </span>
-                    <Badge variant="secondary" className="h-5 min-w-5 justify-center px-1.5 text-[10px]">
+                    <Badge
+                      variant="secondary"
+                      data-testid={`club-tier-count-${tier.value}`}
+                      className="h-5 min-w-5 justify-center px-1.5 text-[10px]"
+                    >
                       {count}
                     </Badge>
                   </TabsTrigger>
