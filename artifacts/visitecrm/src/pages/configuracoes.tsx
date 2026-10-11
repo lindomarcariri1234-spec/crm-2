@@ -3843,8 +3843,33 @@ interface ClubBenefitAdmin {
   sortOrder: number;
 }
 
+type ClubBenefitDraft = { label: string; value: string; description: string };
+type ClubBenefitCreatePayload = {
+  tier: string;
+  benefitKey: string;
+  label: string;
+  description: string | null;
+  value: string | null;
+  sortOrder: number;
+};
+type ClubBenefitCreateAttempt = {
+  fingerprint: string;
+  idempotencyKey: string;
+  payload: ClubBenefitCreatePayload;
+};
+type StoredClubBenefitDraft = {
+  version: 1;
+  tier: string;
+  draft: ClubBenefitDraft;
+  attempt: ClubBenefitCreateAttempt | null;
+};
+
 export function ClubConfigTab() {
   const { toast } = useToast();
+  const { data: me } = useGetMe();
+  const benefitDraftStorageKey = me?.tenantId
+    ? `visitecrm:club-benefit-draft:v1:${me.tenantId}`
+    : null;
   const [clubName, setClubName] = useState("Clube Visite");
   const [clubDescription, setClubDescription] = useState("");
   const [savedClubConfig, setSavedClubConfig] = useState({ clubName: "Clube Visite", clubDescription: "" });
@@ -3855,21 +3880,13 @@ export function ClubConfigTab() {
   const [newLabel, setNewLabel] = useState("");
   const [newValue, setNewValue] = useState("");
   const [newDescription, setNewDescription] = useState("");
-  const benefitDraftRef = useRef({ label: "", value: "", description: "" });
+  const benefitDraftRef = useRef<ClubBenefitDraft>({ label: "", value: "", description: "" });
+  const [benefitDraftStorageReady, setBenefitDraftStorageReady] = useState(false);
+  const [hasRecoveredBenefitDraft, setHasRecoveredBenefitDraft] = useState(false);
   const [addingBenefit, setAddingBenefit] = useState(false);
   const addingBenefitRef = useRef(false);
-  const addAttemptRef = useRef<{
-    fingerprint: string;
-    idempotencyKey: string;
-    payload: {
-      tier: string;
-      benefitKey: string;
-      label: string;
-      description: string | null;
-      value: string | null;
-      sortOrder: number;
-    };
-  } | null>(null);
+  const addAttemptRef = useRef<ClubBenefitCreateAttempt | null>(null);
+  const benefitDraftStorageReadyRef = useRef(false);
   const [deletingBenefitIds, setDeletingBenefitIds] = useState<Set<string>>(() => new Set());
   const deletingBenefitIdsRef = useRef(new Set<string>());
   const benefitsLoadedRef = useRef(false);
@@ -3880,6 +3897,96 @@ export function ClubConfigTab() {
     || clubDescription !== savedClubConfig.clubDescription
     || Boolean(newLabel.trim() || newValue.trim() || newDescription.trim());
   useAgencySettingsDirty("clube", "club-settings", clubSettingsDirty);
+
+  function persistBenefitDraft(
+    draft: ClubBenefitDraft,
+    attempt: ClubBenefitCreateAttempt | null = addAttemptRef.current,
+    tier: string = activeTier,
+  ) {
+    if (!benefitDraftStorageKey || !benefitDraftStorageReadyRef.current) return;
+    try {
+      if (!draft.label && !draft.value && !draft.description && !attempt) {
+        sessionStorage.removeItem(benefitDraftStorageKey);
+      } else {
+        const stored: StoredClubBenefitDraft = { version: 1, tier, draft, attempt };
+        sessionStorage.setItem(benefitDraftStorageKey, JSON.stringify(stored));
+      }
+    } catch {
+      // Storage can be disabled by browser policy; keep the in-memory form usable.
+    }
+  }
+
+  useEffect(() => {
+    const emptyDraft: ClubBenefitDraft = { label: "", value: "", description: "" };
+    benefitDraftRef.current = emptyDraft;
+    addAttemptRef.current = null;
+    setNewLabel("");
+    setNewValue("");
+    setNewDescription("");
+    setHasRecoveredBenefitDraft(false);
+    benefitDraftStorageReadyRef.current = false;
+    setBenefitDraftStorageReady(false);
+    if (!benefitDraftStorageKey) return;
+
+    try {
+      const storedText = sessionStorage.getItem(benefitDraftStorageKey);
+      if (storedText) {
+        const stored = JSON.parse(storedText) as Partial<StoredClubBenefitDraft>;
+        const draft = stored.draft;
+        const attempt = stored.attempt;
+        const draftIsValid = stored.version === 1
+          && CLUB_TIERS.some((tier) => tier.value === stored.tier)
+          && !!draft
+          && typeof draft.label === "string"
+          && typeof draft.value === "string"
+          && typeof draft.description === "string";
+        const attemptIsValid = attempt == null || (
+          typeof attempt.fingerprint === "string"
+          && typeof attempt.idempotencyKey === "string"
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(attempt.idempotencyKey)
+          && !!attempt.payload
+          && CLUB_TIERS.some((tier) => tier.value === attempt.payload.tier)
+          && typeof attempt.payload.benefitKey === "string"
+          && typeof attempt.payload.label === "string"
+          && (attempt.payload.description === null || typeof attempt.payload.description === "string")
+          && (attempt.payload.value === null || typeof attempt.payload.value === "string")
+          && Number.isInteger(attempt.payload.sortOrder)
+        );
+        if (draftIsValid && attemptIsValid) {
+          benefitDraftRef.current = draft;
+          setActiveTier(stored.tier!);
+          setNewLabel(draft.label);
+          setNewValue(draft.value);
+          setNewDescription(draft.description);
+          addAttemptRef.current = attempt ?? null;
+          setHasRecoveredBenefitDraft(Boolean(
+            draft.label || draft.value || draft.description || attempt,
+          ));
+        } else {
+          sessionStorage.removeItem(benefitDraftStorageKey);
+        }
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem(benefitDraftStorageKey);
+      } catch {
+        // Ignore storage cleanup failures.
+      }
+    }
+    benefitDraftStorageReadyRef.current = true;
+    setBenefitDraftStorageReady(true);
+  }, [benefitDraftStorageKey]);
+
+  function discardBenefitDraft() {
+    const emptyDraft: ClubBenefitDraft = { label: "", value: "", description: "" };
+    benefitDraftRef.current = emptyDraft;
+    addAttemptRef.current = null;
+    setNewLabel("");
+    setNewValue("");
+    setNewDescription("");
+    setHasRecoveredBenefitDraft(false);
+    persistBenefitDraft(emptyDraft, null);
+  }
 
   const fetchClubBenefits = useCallback(async (): Promise<ClubBenefitAdmin[]> => {
     const response = await fetch(`${BASE}/api/club/benefits`, { credentials: "include" });
@@ -3995,6 +4102,7 @@ export function ClubConfigTab() {
       };
       addAttemptRef.current = attempt;
     }
+    persistBenefitDraft(benefitDraftRef.current, attempt);
     const requestBenefit = attempt.payload;
     addingBenefitRef.current = true;
     benefitRevisionRef.current += 1;
@@ -4033,6 +4141,8 @@ export function ClubConfigTab() {
         benefitDraftRef.current.description = "";
         setNewDescription("");
       }
+      setHasRecoveredBenefitDraft(false);
+      persistBenefitDraft(benefitDraftRef.current, addAttemptRef.current);
       toast({ title: "Benefício adicionado!" });
     } catch {
       toast({ title: "Erro ao adicionar benefício", variant: "destructive" });
@@ -4155,7 +4265,13 @@ export function ClubConfigTab() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-5 p-4 sm:p-5">
-          <Tabs value={activeTier} onValueChange={setActiveTier}>
+          <Tabs
+            value={activeTier}
+            onValueChange={(tier) => {
+              setActiveTier(tier);
+              persistBenefitDraft(benefitDraftRef.current, addAttemptRef.current, tier);
+            }}
+          >
             <TabsList aria-label="Nível do Clube" className="grid h-auto w-full grid-cols-2 gap-1.5 bg-muted/70 p-1.5 sm:grid-cols-4">
               {CLUB_TIERS.map((tier) => {
                 const count = benefits.filter((benefit) => benefit.tier === tier.value).length;
@@ -4244,6 +4360,11 @@ export function ClubConfigTab() {
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         A nova vantagem será incluída no nível {tier.label}.
                       </p>
+                      {hasRecoveredBenefitDraft && (
+                        <p className="mt-1 text-xs text-primary" role="status">
+                          Rascunho recuperado desta sessão.
+                        </p>
+                      )}
                     </div>
                     <div className="grid gap-2.5 sm:grid-cols-2">
                       <div className="space-y-1.5 sm:col-span-2">
@@ -4254,9 +4375,12 @@ export function ClubConfigTab() {
                           placeholder="Ex.: 5% de desconto em todas as viagens"
                           value={newLabel}
                           onChange={(e) => {
-                            benefitDraftRef.current.label = e.target.value;
+                            const draft = { ...benefitDraftRef.current, label: e.target.value };
+                            benefitDraftRef.current = draft;
                             setNewLabel(e.target.value);
+                            persistBenefitDraft(draft);
                           }}
+                          disabled={!benefitDraftStorageReady}
                           maxLength={200}
                         />
                       </div>
@@ -4268,9 +4392,12 @@ export function ClubConfigTab() {
                           placeholder="Valor ou condição (ex.: 5%)"
                           value={newValue}
                           onChange={(e) => {
-                            benefitDraftRef.current.value = e.target.value;
+                            const draft = { ...benefitDraftRef.current, value: e.target.value };
+                            benefitDraftRef.current = draft;
                             setNewValue(e.target.value);
+                            persistBenefitDraft(draft);
                           }}
+                          disabled={!benefitDraftStorageReady}
                           maxLength={200}
                         />
                       </div>
@@ -4282,9 +4409,12 @@ export function ClubConfigTab() {
                           placeholder="Detalhes adicionais (opcional)"
                           value={newDescription}
                           onChange={(e) => {
-                            benefitDraftRef.current.description = e.target.value;
+                            const draft = { ...benefitDraftRef.current, description: e.target.value };
+                            benefitDraftRef.current = draft;
                             setNewDescription(e.target.value);
+                            persistBenefitDraft(draft);
                           }}
+                          disabled={!benefitDraftStorageReady}
                           maxLength={500}
                         />
                       </div>
@@ -4292,16 +4422,29 @@ export function ClubConfigTab() {
                         <span className="text-xs text-muted-foreground">
                           {tier.icon} Nível selecionado: <strong className="font-medium text-foreground">{tier.label}</strong>
                         </span>
-                        <Button
-                          data-testid="club-add-benefit"
-                          onClick={handleAddBenefit}
-                          disabled={addingBenefit || !newLabel.trim()}
-                          className="sm:min-w-32"
-                        >
-                          {addingBenefit ? (
-                            <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Adicionando...</>
-                          ) : "Adicionar benefício"}
-                        </Button>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          {(newLabel || newValue || newDescription || hasRecoveredBenefitDraft) && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              data-testid="club-discard-benefit-draft"
+                              onClick={discardBenefitDraft}
+                              disabled={addingBenefit || !benefitDraftStorageReady}
+                            >
+                              Descartar rascunho
+                            </Button>
+                          )}
+                          <Button
+                            data-testid="club-add-benefit"
+                            onClick={handleAddBenefit}
+                            disabled={!benefitDraftStorageReady || addingBenefit || !newLabel.trim()}
+                            className="sm:min-w-32"
+                          >
+                            {addingBenefit ? (
+                              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Adicionando...</>
+                            ) : "Adicionar benefício"}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </div>

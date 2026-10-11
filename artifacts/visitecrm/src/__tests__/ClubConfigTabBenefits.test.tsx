@@ -8,6 +8,11 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: mockToast }),
 }));
 
+vi.mock("@workspace/api-client-react", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@workspace/api-client-react")>(),
+  useGetMe: () => ({ data: { tenantId: "club-benefit-test-tenant" } }),
+}));
+
 vi.mock("@/components/ui/tabs", async () => {
   const React = await import("react");
   const TabsContext = React.createContext<{ value: string; onValueChange: (value: string) => void }>({
@@ -60,6 +65,7 @@ vi.mock("@/components/ui/tabs", async () => {
 import { ClubConfigTab } from "../pages/configuracoes.js";
 
 const tiers = ["bronze", "silver", "gold", "diamond"] as const;
+const benefitDraftStorageKey = "visitecrm:club-benefit-draft:v1:club-benefit-test-tenant";
 
 function makeResponse(ok: boolean, body: unknown = {}) {
   return { ok, json: async () => body };
@@ -103,6 +109,7 @@ let benefitsForLoad: Array<{
 
 beforeEach(() => {
   mockToast.mockReset();
+  sessionStorage.removeItem(benefitDraftStorageKey);
   rejectPost = false;
   deferPost = false;
   completePost = null;
@@ -148,6 +155,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await cleanupRoots();
+  sessionStorage.removeItem(benefitDraftStorageKey);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -327,6 +335,123 @@ describe("ClubConfigTab benefit tiers", () => {
       .toContain("Desconto de boas-vindas");
     expectTierCount(container, "bronze", 1);
     expect(container.querySelector('[data-testid="club-empty-tier-bronze"]')).toBeNull();
+  });
+
+  it("restores an uncertain attempt after remount and clears its recovery data on success", async () => {
+    rejectPost = true;
+    const firstMount = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      getTab(firstMount.container, "gold").click();
+    });
+
+    const firstLabelInput = firstMount.container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    const firstValueInput = firstMount.container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-value-input"]',
+    );
+    const firstDescriptionInput = firstMount.container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-description-input"]',
+    );
+    const firstAddButton = firstMount.container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-add-benefit"]',
+    );
+    expect(firstLabelInput).not.toBeNull();
+    expect(firstValueInput).not.toBeNull();
+    expect(firstDescriptionInput).not.toBeNull();
+    expect(firstAddButton).not.toBeNull();
+
+    await act(async () => {
+      setInputValue(firstLabelInput!, "Acesso ao lounge");
+      setInputValue(firstValueInput!, "1 acesso");
+      setInputValue(firstDescriptionInput!, "Apresente o voucher");
+      firstAddButton!.click();
+    });
+
+    const savedRecovery = JSON.parse(sessionStorage.getItem(benefitDraftStorageKey) ?? "null");
+    expect(savedRecovery.draft).toEqual({
+      label: "Acesso ao lounge",
+      value: "1 acesso",
+      description: "Apresente o voucher",
+    });
+    expect(savedRecovery.tier).toBe("gold");
+    const idempotencyKey = savedRecovery.attempt.idempotencyKey as string;
+
+    benefitsForLoad = [{
+      id: "benefit-gold",
+      tier: "gold",
+      benefitKey: "acesso_ao_lounge",
+      label: "Acesso ao lounge",
+      description: "Apresente o voucher",
+      value: "1 acesso",
+      sortOrder: 0,
+    }];
+    await cleanupRoots();
+    rejectPost = false;
+    const restoredMount = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const labelInput = restoredMount.container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    const valueInput = restoredMount.container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-value-input"]',
+    );
+    const descriptionInput = restoredMount.container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-description-input"]',
+    );
+    const addButton = restoredMount.container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-add-benefit"]',
+    );
+    expect(labelInput?.value).toBe("Acesso ao lounge");
+    expect(valueInput?.value).toBe("1 acesso");
+    expect(descriptionInput?.value).toBe("Apresente o voucher");
+    expect(getTab(restoredMount.container, "gold").getAttribute("aria-selected")).toBe("true");
+    expect(restoredMount.container.querySelector('[role="status"]')?.textContent)
+      .toContain("Rascunho recuperado");
+
+    await act(async () => {
+      addButton!.click();
+    });
+
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[1]?.headers).toMatchObject({ "Idempotency-Key": idempotencyKey });
+    expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({ tier: "gold" });
+    expectTierCount(restoredMount.container, "gold", 1);
+    expect(sessionStorage.getItem(benefitDraftStorageKey)).toBeNull();
+  });
+
+  it("removes recoverable draft data when the user discards it", async () => {
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    expect(labelInput).not.toBeNull();
+
+    await act(async () => {
+      setInputValue(labelInput!, "Rascunho descartável");
+    });
+    expect(sessionStorage.getItem(benefitDraftStorageKey)).not.toBeNull();
+
+    const discardButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-discard-benefit-draft"]',
+    );
+    expect(discardButton).not.toBeNull();
+    await act(async () => {
+      discardButton!.click();
+    });
+
+    expect(labelInput!.value).toBe("");
+    expect(sessionStorage.getItem(benefitDraftStorageKey)).toBeNull();
   });
 
   it("sends one creation for repeated clicks and keeps the fields available while pending", async () => {
