@@ -85,10 +85,22 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let rejectPost = false;
+let rejectDelete = false;
+let benefitsForLoad: Array<{
+  id: string;
+  tier: string;
+  benefitKey: string;
+  label: string;
+  description: string | null;
+  value: string | null;
+  sortOrder: number;
+}> = [];
 
 beforeEach(() => {
   mockToast.mockReset();
   rejectPost = false;
+  rejectDelete = false;
+  benefitsForLoad = [];
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -96,7 +108,7 @@ beforeEach(() => {
       return makeResponse(true, { clubName: "Clube de teste", description: null });
     }
     if (url.endsWith("/api/club/benefits") && method === "GET") {
-      return makeResponse(true, { data: [] });
+      return makeResponse(true, { data: benefitsForLoad });
     }
     if (url.endsWith("/api/club/benefits") && method === "POST") {
       const body = JSON.parse(String(init?.body)) as { tier: string };
@@ -104,7 +116,7 @@ beforeEach(() => {
       return makeResponse(true, { id: `benefit-${body.tier}` });
     }
     if (url.includes("/api/club/benefits/") && method === "DELETE") {
-      return makeResponse(true);
+      return makeResponse(!rejectDelete);
     }
     throw new Error(`Unexpected fetch: ${method} ${url}`);
   });
@@ -271,5 +283,54 @@ describe("ClubConfigTab benefit tiers", () => {
       .toContain("Desconto de boas-vindas");
     expectTierCount(container, "bronze", 1);
     expect(container.querySelector('[data-testid="club-empty-tier-bronze"]')).toBeNull();
+  });
+
+  it("keeps the benefit and its count when the server rejects removal", async () => {
+    benefitsForLoad = [{
+      id: "gold-benefit-1",
+      tier: "gold",
+      benefitKey: "airport_transfer",
+      label: "Traslado do aeroporto",
+      description: "Na chegada à cidade",
+      value: "1 traslado",
+      sortOrder: 0,
+    }];
+    rejectDelete = true;
+
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      getTab(container, "gold").click();
+    });
+
+    const benefit = container.querySelector('[data-testid="club-benefit-gold-benefit-1"]');
+    const removeButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-delete-benefit-gold-benefit-1"]',
+    );
+    expect(benefit?.textContent).toContain("Traslado do aeroporto");
+    expectTierCount(container, "gold", 1);
+    expect(removeButton).not.toBeNull();
+
+    await act(async () => {
+      removeButton!.click();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/club/benefits/gold-benefit-1"),
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-1"]')?.textContent)
+      .toContain("Traslado do aeroporto");
+    expectTierCount(container, "gold", 1);
+    expect(removeButton!.disabled).toBe(false);
+    expect(mockToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Erro ao remover benefício",
+        variant: "destructive",
+      }),
+    );
   });
 });
