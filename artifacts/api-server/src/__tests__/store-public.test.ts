@@ -1455,6 +1455,37 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(res.body).not.toHaveProperty("privateValue");
   });
 
+  it("returns a neutral identity conflict without revealing linked account details", async () => {
+    const tripProduct = { ...FAKE_PRODUCT, tripId: "trip-001" };
+    vi.mocked(createReservationsForOrder).mockRejectedValueOnce(
+      new AppError(
+        "O e-mail já está vinculado a outra conta de cliente nesta agência.",
+        409,
+        "CLIENT_EMAIL_ALREADY_LINKED",
+      ),
+    );
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([tripProduct])
+      .mockResolvedValueOnce([{ availableSeats: 10 }])
+      .mockResolvedValueOnce([{ id: "admin-001" }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([FAKE_ORDER])
+      .mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send(VALID_BODY);
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("CHECKOUT_IDENTITY_CONFLICT");
+    expect(res.body.message).toBe(
+      "Não foi possível concluir a reserva com os dados informados. Entre em contato com a agência e informe o protocolo exibido.",
+    );
+    expect(JSON.stringify(res.body)).not.toContain("CLIENT_EMAIL_ALREADY_LINKED");
+    expect(JSON.stringify(res.body)).not.toContain("vinculado a outra conta");
+  });
+
   it("maps an existing active client-trip reservation to a safe conflict", async () => {
     const tripProduct = { ...FAKE_PRODUCT, tripId: "trip-001" };
     vi.mocked(createReservationsForOrder).mockRejectedValueOnce(
