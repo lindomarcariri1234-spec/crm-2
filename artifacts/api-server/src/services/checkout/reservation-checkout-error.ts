@@ -21,9 +21,36 @@ const CUSTOMER_SAFE_RESERVATION_ERROR_CODES = new Set([
 
 const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_SQL_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/;
+const DUPLICATE_RESERVATION_CONSTRAINTS = new Set([
+  "reservations_active_client_trip_unique",
+  "reservations_active_store_order_trip_unique",
+]);
 
 function safeString(value: unknown, pattern: RegExp): string | undefined {
   return typeof value === "string" && pattern.test(value) ? value : undefined;
+}
+
+export function isDuplicateReservationConstraintViolation(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 4 && current && !seen.has(current); depth += 1) {
+    if (typeof current !== "object") break;
+    seen.add(current);
+
+    const item = current as Record<string, unknown>;
+    if (
+      item.code === "23505"
+      && typeof item.constraint === "string"
+      && DUPLICATE_RESERVATION_CONSTRAINTS.has(item.constraint)
+    ) {
+      return true;
+    }
+
+    current = item.cause;
+  }
+
+  return false;
 }
 
 export function toCustomerSafeReservationError(error: unknown): AppError | null {

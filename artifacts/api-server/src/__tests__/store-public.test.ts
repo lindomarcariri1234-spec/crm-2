@@ -1458,9 +1458,11 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
   it("maps an existing active client-trip reservation to a safe conflict", async () => {
     const tripProduct = { ...FAKE_PRODUCT, tripId: "trip-001" };
     vi.mocked(createReservationsForOrder).mockRejectedValueOnce(
-      Object.assign(new Error("duplicate key with private customer details"), {
-        code: "23505",
-        constraint: "reservations_active_client_trip_unique",
+      Object.assign(new Error("wrapped private database detail"), {
+        cause: Object.assign(new Error("duplicate key with private customer details"), {
+          code: "23505",
+          constraint: "reservations_active_client_trip_unique",
+        }),
       }),
     );
     mockLimit

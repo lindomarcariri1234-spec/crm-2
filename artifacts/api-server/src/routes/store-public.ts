@@ -203,6 +203,7 @@ import { extractInfinitePayErrorCode, formatInfinitePayPhoneNumber, parseInfinit
 import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
 import {
   getReservationFailureDiagnostic,
+  isDuplicateReservationConstraintViolation,
   toCustomerSafeReservationError,
 } from "../services/checkout/reservation-checkout-error";
 
@@ -2228,23 +2229,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         // Race condition: two simultaneous checkouts for the same client+trip
         // both passed the order-creation step and raced to insert the reservation.
         // The unique index fires a 23505 — return 409 instead of a generic 500/502.
-        if (
-          reservationErr != null &&
-          typeof reservationErr === "object" &&
-          "code" in reservationErr &&
-          (reservationErr as 
-{
- code: unknown 
-}
-).code === "23505" &&
-          "constraint" in reservationErr &&
-          (reservationErr as 
-{
- constraint: unknown 
-}
-          ).constraint === "reservations_active_client_trip_unique"
-          || (reservationErr as { constraint?: unknown }).constraint === "reservations_active_store_order_trip_unique"
-        ) 
+        if (isDuplicateReservationConstraintViolation(reservationErr))
 {
 
           next(new ConflictError(
