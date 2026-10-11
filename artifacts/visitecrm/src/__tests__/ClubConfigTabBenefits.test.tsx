@@ -97,6 +97,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 let rejectPost = false;
 let deferPost = false;
 let completePost: (() => void) | null = null;
+let rejectPut = false;
 let rejectDelete = false;
 let deferDelete = false;
 let completeDelete: (() => void) | null = null;
@@ -119,6 +120,7 @@ beforeEach(() => {
   rejectPost = false;
   deferPost = false;
   completePost = null;
+  rejectPut = false;
   rejectDelete = false;
   deferDelete = false;
   completeDelete = null;
@@ -142,6 +144,9 @@ beforeEach(() => {
       }
       if (rejectPost) return makeResponse(false, { error: "creation_failed" });
       return makeResponse(true, { id: `benefit-${body.tier}` });
+    }
+    if (url.includes("/api/club/benefits/") && method === "PUT") {
+      return makeResponse(!rejectPut);
     }
     if (url.includes("/api/club/benefits/") && method === "DELETE") {
       if (deferDelete) {
@@ -168,6 +173,106 @@ afterEach(async () => {
 });
 
 describe("ClubConfigTab benefit tiers", () => {
+  it("updates a benefit in place and keeps the saved row when an edit fails", async () => {
+    benefitsForLoad = [
+      {
+        id: "gold-benefit-editable",
+        tier: "gold",
+        benefitKey: "original_key",
+        label: "Benefício original",
+        description: "Descrição original",
+        value: "10%",
+        sortOrder: 0,
+      },
+      {
+        id: "gold-benefit-failure",
+        tier: "gold",
+        benefitKey: "failure_key",
+        label: "Benefício não alterado",
+        description: "Descrição preservada",
+        value: "5%",
+        sortOrder: 1,
+      },
+    ];
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      getTab(container, "gold").click();
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-edit-benefit-gold-benefit-editable"]',
+      )!.click();
+    });
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-label-gold-benefit-editable"]',
+    );
+    const valueInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-value-gold-benefit-editable"]',
+    );
+    const descriptionInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-description-gold-benefit-editable"]',
+    );
+    expect(labelInput?.value).toBe("Benefício original");
+    expect(valueInput?.value).toBe("10%");
+    expect(descriptionInput?.value).toBe("Descrição original");
+
+    await act(async () => {
+      setInputValue(labelInput!, "Benefício atualizado");
+      setInputValue(valueInput!, "15%");
+      setInputValue(descriptionInput!, "Nova descrição");
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-editable"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const successfulUpdate = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(successfulUpdate?.[0]).toContain("/api/club/benefits/gold-benefit-editable");
+    expect(JSON.parse(String(successfulUpdate?.[1]?.body))).toEqual({
+      label: "Benefício atualizado",
+      value: "15%",
+      description: "Nova descrição",
+    });
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-editable"]')?.textContent)
+      .toContain("Benefício atualizado");
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-editable"]')?.textContent)
+      .toContain("Nova descrição");
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-editable"]')?.textContent)
+      .toContain("15%");
+    expect(container.querySelector('[data-testid="club-edit-benefit-label-gold-benefit-editable"]'))
+      .toBeNull();
+
+    rejectPut = true;
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-edit-benefit-gold-benefit-failure"]',
+      )!.click();
+    });
+    const failedLabelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-label-gold-benefit-failure"]',
+    );
+    await act(async () => {
+      setInputValue(failedLabelInput!, "Alteração que falhou");
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-failure"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-failure"]')?.textContent)
+      .toContain("Benefício não alterado");
+    expect(container.querySelector('[data-testid="club-benefit-gold-benefit-failure"]')?.textContent)
+      .toContain("Descrição preservada");
+    expect(container.querySelector('[data-testid="club-edit-benefit-label-gold-benefit-failure"]'))
+      .toBeNull();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Erro ao atualizar benefício",
+      variant: "destructive",
+    }));
+  });
+
   it("keeps each tier's list and count isolated while adding and removing benefits", async () => {
     const { container } = await renderComponent(createElement(ClubConfigTab));
 

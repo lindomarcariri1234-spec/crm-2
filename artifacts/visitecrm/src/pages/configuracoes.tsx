@@ -3649,6 +3649,14 @@ export function ClubConfigTab() {
   const benefitDraftStorageReadableRef = useRef(false);
   const [deletingBenefitIds, setDeletingBenefitIds] = useState<Set<string>>(() => new Set());
   const deletingBenefitIdsRef = useRef(new Set<string>());
+  const [editingBenefitId, setEditingBenefitId] = useState<string | null>(null);
+  const [editingBenefitDraft, setEditingBenefitDraft] = useState<ClubBenefitDraft>({
+    label: "",
+    value: "",
+    description: "",
+  });
+  const [savingEditedBenefit, setSavingEditedBenefit] = useState(false);
+  const savingEditedBenefitRef = useRef(false);
   const benefitsLoadedRef = useRef(false);
   const benefitsRefreshInFlightRef = useRef(false);
   const benefitMutationCountRef = useRef(0);
@@ -3952,6 +3960,53 @@ export function ClubConfigTab() {
     }
   }
 
+  function startEditingBenefit(benefit: ClubBenefitAdmin) {
+    setEditingBenefitId(benefit.id);
+    setEditingBenefitDraft({
+      label: benefit.label,
+      value: benefit.value ?? "",
+      description: benefit.description ?? "",
+    });
+  }
+
+  async function handleUpdateBenefit(benefit: ClubBenefitAdmin) {
+    if (savingEditedBenefitRef.current) return;
+    const updatedFields = {
+      label: editingBenefitDraft.label.trim(),
+      value: editingBenefitDraft.value.trim() || null,
+      description: editingBenefitDraft.description.trim() || null,
+    };
+    if (!updatedFields.label) return;
+
+    savingEditedBenefitRef.current = true;
+    setSavingEditedBenefit(true);
+    benefitRevisionRef.current += 1;
+    benefitMutationCountRef.current += 1;
+    try {
+      const response = await fetch(`${BASE}/api/club/benefits/${benefit.id}`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatedFields),
+      });
+      if (!response.ok) throw new Error("update_benefit_failed");
+
+      setBenefits((previous) => previous.map((item) => (
+        item.id === benefit.id ? { ...item, ...updatedFields } : item
+      )));
+      setEditingBenefitId(null);
+      toast({ title: "Benefício atualizado!" });
+    } catch {
+      // Keep the saved list untouched and return to it when an edit fails.
+      setEditingBenefitId(null);
+      toast({ title: "Erro ao atualizar benefício", variant: "destructive" });
+    } finally {
+      savingEditedBenefitRef.current = false;
+      setSavingEditedBenefit(false);
+      benefitMutationCountRef.current = Math.max(0, benefitMutationCountRef.current - 1);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -4101,30 +4156,119 @@ export function ClubConfigTab() {
                           <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950/30 dark:text-amber-300">
                             <Star className="h-4 w-4" aria-hidden="true" />
                           </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-medium">{benefit.label}</span>
-                              {benefit.value && <Badge variant="outline" className="text-xs">{benefit.value}</Badge>}
+                          {editingBenefitId === benefit.id ? (
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <Label htmlFor={`club-benefit-edit-label-${benefit.id}`} className="sr-only">
+                                Nome do benefício
+                              </Label>
+                              <Input
+                                id={`club-benefit-edit-label-${benefit.id}`}
+                                data-testid={`club-edit-benefit-label-${benefit.id}`}
+                                value={editingBenefitDraft.label}
+                                onChange={(event) => setEditingBenefitDraft((draft) => ({
+                                  ...draft,
+                                  label: event.target.value,
+                                }))}
+                                maxLength={200}
+                                aria-label={`Nome do benefício ${benefit.label}`}
+                              />
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <div>
+                                  <Label htmlFor={`club-benefit-edit-value-${benefit.id}`} className="sr-only">
+                                    Valor ou condição
+                                  </Label>
+                                  <Input
+                                    id={`club-benefit-edit-value-${benefit.id}`}
+                                    data-testid={`club-edit-benefit-value-${benefit.id}`}
+                                    placeholder="Valor ou condição (opcional)"
+                                    value={editingBenefitDraft.value}
+                                    onChange={(event) => setEditingBenefitDraft((draft) => ({
+                                      ...draft,
+                                      value: event.target.value,
+                                    }))}
+                                    maxLength={200}
+                                  />
+                                </div>
+                                <div>
+                                  <Label htmlFor={`club-benefit-edit-description-${benefit.id}`} className="sr-only">
+                                    Descrição do benefício
+                                  </Label>
+                                  <Input
+                                    id={`club-benefit-edit-description-${benefit.id}`}
+                                    data-testid={`club-edit-benefit-description-${benefit.id}`}
+                                    placeholder="Detalhes adicionais (opcional)"
+                                    value={editingBenefitDraft.description}
+                                    onChange={(event) => setEditingBenefitDraft((draft) => ({
+                                      ...draft,
+                                      description: event.target.value,
+                                    }))}
+                                    maxLength={500}
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  data-testid={`club-cancel-edit-benefit-${benefit.id}`}
+                                  onClick={() => setEditingBenefitId(null)}
+                                  disabled={savingEditedBenefit}
+                                >
+                                  Cancelar
+                                </Button>
+                                <Button
+                                  type="button"
+                                  data-testid={`club-save-edit-benefit-${benefit.id}`}
+                                  onClick={() => void handleUpdateBenefit(benefit)}
+                                  disabled={savingEditedBenefit || !editingBenefitDraft.label.trim()}
+                                >
+                                  {savingEditedBenefit ? (
+                                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Salvando...</>
+                                  ) : "Salvar"}
+                                </Button>
+                              </div>
                             </div>
-                            {benefit.description && (
-                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{benefit.description}</p>
-                            )}
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            data-testid={`club-delete-benefit-${benefit.id}`}
-                            aria-label={`Remover benefício ${benefit.label}`}
-                            className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                            onClick={() => handleDeleteBenefit(benefit.id)}
-                            disabled={deletingBenefitIds.has(benefit.id)}
-                          >
-                            {deletingBenefitIds.has(benefit.id) ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
-                          </Button>
+                          ) : (
+                            <>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-sm font-medium">{benefit.label}</span>
+                                  {benefit.value && <Badge variant="outline" className="text-xs">{benefit.value}</Badge>}
+                                </div>
+                                {benefit.description && (
+                                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{benefit.description}</p>
+                                )}
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  data-testid={`club-edit-benefit-${benefit.id}`}
+                                  aria-label={`Editar benefício ${benefit.label}`}
+                                  className="h-8 w-8 text-muted-foreground"
+                                  onClick={() => startEditingBenefit(benefit)}
+                                  disabled={!!editingBenefitId || deletingBenefitIds.has(benefit.id)}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  data-testid={`club-delete-benefit-${benefit.id}`}
+                                  aria-label={`Remover benefício ${benefit.label}`}
+                                  className="h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                  onClick={() => handleDeleteBenefit(benefit.id)}
+                                  disabled={!!editingBenefitId || deletingBenefitIds.has(benefit.id)}
+                                >
+                                  {deletingBenefitIds.has(benefit.id) ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            </>
+                          )}
                         </div>
                       ))}
                     </div>
