@@ -64,6 +64,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
+import { getAgencySettingsAccess } from "@/components/settings/agency-settings-access";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -4841,46 +4842,14 @@ function BackupDataTab() {
 }
 
 /* ──────────────────── Main Settings Page ──────────────────── */
-const SETTINGS_TAB_OPTIONS = [
-  { value: "agency", label: "Agência", icon: Building2 },
-  { value: "plan", label: "Plano", icon: CreditCard },
-  { value: "team", label: "Equipe", icon: Users },
-  { value: "apikeys", label: "Chaves API", icon: Key },
-  { value: "integrations", label: "Integrações", icon: Puzzle },
-  { value: "notifications", label: "Notificações", icon: Bell },
-  { value: "features", label: "Funcionalidades", icon: ToggleLeft },
-  { value: "pipelines", label: "Pipelines", icon: GitBranch },
-  { value: "customization", label: "Personalização", icon: Palette },
-  { value: "clube", label: "Clube", icon: Crown },
-  { value: "backup", label: "Backup de Dados", icon: DatabaseBackup, adminOnly: true },
-  { value: "integrity", label: "Integridade", icon: Wrench, adminOnly: true },
-] as const;
-
-const SETTINGS_NAVIGATION_GROUPS = [
-  { label: "Agência", values: ["agency", "customization"] },
-  { label: "Conta", values: ["plan", "team", "apikeys"] },
-  { label: "Operação", values: ["integrations", "notifications", "features", "pipelines"] },
-  { label: "Relacionamento e dados", values: ["clube", "backup", "integrity"] },
-] as const;
-
 export default function Configuracoes() {
   const { data: me } = useGetMe();
-  const isAgencyAdmin = me?.role === ROLES.AGENCY_ADMIN;
   const requestedTab = new URLSearchParams(window.location.search).get("tab");
-  const availableTabs = new Set([
-    "agency", "plan", "integrations", "notifications", "customization",
-    "team", "apikeys", "features", "clube", "pipelines",
-    ...(isAgencyAdmin ? ["backup", "integrity"] : []),
-  ]);
-  const initialTab = requestedTab && availableTabs.has(requestedTab) ? requestedTab : "agency";
-  const [activeTab, setActiveTab] = useState(initialTab);
-  const visibleTabOptions = SETTINGS_TAB_OPTIONS.filter(
-    (tab) => !("adminOnly" in tab && tab.adminOnly) || isAgencyAdmin,
+  const { isAgencyAdmin, initialTab, navigationGroups } = getAgencySettingsAccess(
+    me?.role,
+    requestedTab,
   );
-  const navigationGroups = SETTINGS_NAVIGATION_GROUPS.map((group) => ({
-    label: group.label,
-    items: visibleTabOptions.filter((tab) => group.values.some((value) => value === tab.value)),
-  }));
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   useEffect(() => {
     if (
