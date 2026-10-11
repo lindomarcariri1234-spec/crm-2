@@ -230,4 +230,85 @@ describe("reconcileLinkedData integrity report", () => {
     expect(replay.repaired).toEqual([]);
     expect(update).not.toHaveBeenCalled();
   });
+
+  it("preserves clean reconciliation totals across a large tenant dataset", async () => {
+    const count = 1_200;
+    const clients = Array.from({ length: count }, (_, index) => ({
+      id: `client-${index}`,
+      tenantId: "tenant-large",
+      email: null,
+      userId: `linked-user-${index}`,
+      totalSpent: "10",
+      outstandingBalance: "2",
+    }));
+    const trips = Array.from({ length: count }, (_, index) => {
+      const pending = index % 2 === 0;
+      const seats = pending ? 2 : 1;
+      return {
+        id: `trip-${index}`,
+        tenantId: "tenant-large",
+        status: "active",
+        totalCapacity: 12,
+        reservedSeats: pending ? seats : 0,
+        confirmedSeats: pending ? 0 : seats,
+        availableSeats: 12 - seats,
+        freePassengers: [],
+      };
+    });
+    const reservations = Array.from({ length: count }, (_, index) => ({
+      id: `reservation-${index}`,
+      tenantId: "tenant-large",
+      tripId: `trip-${index}`,
+      clientId: `client-${index}`,
+      storeOrderId: null,
+      status: index % 2 === 0 ? "pending" : "confirmed",
+      seats: index % 2 === 0 ? ["A", "B"] : ["C"],
+      totalValue: "25",
+    }));
+    const passengers = reservations.flatMap((reservation) =>
+      reservation.seats.map((seatNumber, index) => ({
+        id: `${reservation.id}-passenger-${index}`,
+        reservationId: reservation.id,
+        isPrimary: index === 0,
+        seatNumber,
+      })),
+    );
+    const deals = reservations.map((reservation, index) => ({
+      id: `deal-${index}`,
+      tenantId: "tenant-large",
+      reservationId: reservation.id,
+      clientId: reservation.clientId,
+      tripId: reservation.tripId,
+      value: reservation.totalValue,
+    }));
+    const payments = clients.flatMap((client) => [
+      { tenantId: "tenant-large", clientId: client.id, type: "receivable", status: "paid", amount: "10", isTestMode: false },
+      { tenantId: "tenant-large", clientId: client.id, type: "receivable", status: "pending", amount: "2", isTestMode: false },
+      { tenantId: "tenant-large", clientId: client.id, type: "payable", status: "paid", amount: "999", isTestMode: false },
+    ]);
+    queueSelect([reservations, [], [], deals, clients, payments, trips, [], passengers]);
+
+    const result = await reconcileLinkedData("tenant-large");
+
+    expect(result).toMatchObject({
+      mode: "dry-run",
+      checked: count * 5,
+      repairedCount: 0,
+      issueCount: 0,
+      repaired: [],
+      issues: [],
+      summary: {
+        checked: {
+          "client-financial": count,
+          "trip-seats": count,
+          "reservation-passengers": count,
+          "deal-reservation": count,
+          "pipeline-deal": count,
+        },
+        repaired: {},
+        issues: {},
+      },
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
 });
