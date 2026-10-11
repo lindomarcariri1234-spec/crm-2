@@ -599,6 +599,7 @@ export function StepConfirmation({
                       type="button"
                       size="sm"
                       variant="outline"
+                      data-testid="button-refresh-stripe-payment-status"
                       onClick={() => void refreshOrderStatus(true)}
                       disabled={refreshingOrderStatus}
                     >
@@ -608,7 +609,7 @@ export function StepConfirmation({
                       {refreshingOrderStatus ? "Consultando confirmação..." : "Consultar confirmação"}
                     </Button>
                     {orderStatusRefreshFailed && (
-                      <p role="alert" className="text-xs text-red-700">
+                      <p role="alert" data-testid="status-stripe-check-unavailable" className="text-xs text-red-700">
                         Não foi possível consultar agora. A verificação automática continuará; não faça outro pagamento.
                       </p>
                     )}
