@@ -73,6 +73,7 @@ function tripImportFingerprint(data: { name: string; destination: string; destin
 
 const ListTripsQuery = z.object({
   search: z.string().optional(),
+  location: z.string().trim().max(100).optional(),
   status: z.enum(["draft", "published", "active", "confirmed", "cancelled", "completed"]).optional(),
   type: z.string().optional(),
   date: z.string()
@@ -527,11 +528,21 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
       next(new ValidationError(queryResult.error.errors[0]?.message ?? "Invalid query params", "VALIDATION_ERROR"));
       return;
     }
-    const { search, status, type, date, page: pageNum, limit: limitNum } = queryResult.data;
+    const { search, location, status, type, date, page: pageNum, limit: limitNum } = queryResult.data;
     const offset = (pageNum - 1) * limitNum;
 
     const conditions: ReturnType<typeof eq>[] = [eq(tripsTable.tenantId, me.tenantId)];
     if (search) conditions.push(ilike(tripsTable.name, `%${search}%`) as ReturnType<typeof eq>);
+    if (location) {
+      const pattern = `%${location}%`;
+      conditions.push(or(
+        ilike(tripsTable.destination, pattern),
+        ilike(tripsTable.destinationCity, pattern),
+        ilike(tripsTable.destinationState, pattern),
+        ilike(tripsTable.originCity, pattern),
+        ilike(tripsTable.originState, pattern),
+      )! as ReturnType<typeof eq>);
+    }
     if (status) conditions.push(eq(tripsTable.status, parseTripStatus(status)));
     if (type) conditions.push(eq(tripsTable.type, type) as ReturnType<typeof eq>);
     if (date) {

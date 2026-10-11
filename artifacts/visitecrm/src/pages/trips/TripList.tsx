@@ -36,7 +36,7 @@ export function TripList() {
 
   const {
     trips, exportTrips, isLoading, isError, error, totalPages, upcomingTrips, stats, me,
-    search, setSearch, statusFilter, setStatusFilter,
+    search, setSearch, locationFilter, setLocationFilter, statusFilter, setStatusFilter,
     typeFilter, setTypeFilter, dateFilter, setDateFilter,
     page, setPage, updateTrip, handleDuplicate, handleMarkCompleted,
     hasActiveFilters, clearFilters, refetch,
@@ -196,6 +196,7 @@ export function TripList() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex border rounded-md overflow-hidden w-fit" role="tablist" aria-label="Seção de viagens">
         <Button
           type="button"
@@ -219,34 +220,59 @@ export function TripList() {
         </Button>
       </div>
 
-      <div className="flex flex-wrap gap-3 items-center">
-        <div className="relative flex-1 min-w-[180px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input placeholder="Buscar viagens..." value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} className="pl-9" />
-        </div>
-        <Select value={statusFilter} onValueChange={v => { setStatusFilter(v); setPage(1); }}>
-          <SelectTrigger className="w-36"><SelectValue placeholder="Status" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todos os status</SelectItem>
-            {Object.entries(STATUS_MAP).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-36"><SelectValue placeholder="Tipo" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todos os tipos</SelectItem>
-            {TRIP_TYPES.map(t => <SelectItem key={t} value={t}>{TRIP_TYPE_LABELS[t] ?? t}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Input type="date" value={dateFilter} onChange={e => setDateFilter(e.target.value)} className="w-40" title="Filtrar por data de saída (a partir de)" />
+      <div className="flex border rounded-md overflow-hidden" role="group" aria-label="Modo de visualização">
+        <Button variant={viewMode === "grid" ? "default" : "ghost"} size="icon" className="rounded-none h-9 w-9" data-testid="view-grid" aria-label="Exibir em grade" onClick={() => setViewMode("grid")}><LayoutGrid className="w-4 h-4" /></Button>
+        <Button variant={viewMode === "list" ? "default" : "ghost"} size="icon" className="rounded-none h-9 w-9" data-testid="view-list" aria-label="Exibir em lista" onClick={() => setViewMode("list")}><List className="w-4 h-4" /></Button>
+      </div>
+      </div>
+
+      <div className="rounded-xl border bg-card p-3 sm:p-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(145px,0.8fr)_minmax(140px,0.8fr)_minmax(165px,0.9fr)_auto]">
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Buscar viagem
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" />
+            <Input aria-label="Buscar viagem pelo nome" placeholder="Nome da viagem..." value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} className="pl-9" />
+          </div>
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Localização
+          <div className="relative">
+            <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" />
+            <Input aria-label="Filtrar por origem ou destino" placeholder="Cidade ou estado..." value={locationFilter} onChange={e => setLocationFilter(e.target.value)} className="pl-9" />
+          </div>
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Status
+          <Select value={statusFilter} onValueChange={v => { setStatusFilter(v); setPage(1); }}>
+            <SelectTrigger className="w-full"><SelectValue placeholder="Todos os status" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os status</SelectItem>
+              {Object.entries(STATUS_MAP).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Tipo
+          <Select value={typeFilter} onValueChange={setTypeFilter}>
+            <SelectTrigger className="w-full"><SelectValue placeholder="Todos os tipos" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os tipos</SelectItem>
+              {TRIP_TYPES.map(t => <SelectItem key={t} value={t}>{TRIP_TYPE_LABELS[t] ?? t}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+          Saída a partir de
+          <Input aria-label="Filtrar pela data de saída a partir de" type="date" value={dateFilter} onChange={e => setDateFilter(e.target.value)} className="w-full" />
+        </label>
+        <div className="flex items-end">
         {hasActiveFilters && (
-          <Button variant="ghost" size="sm" onClick={clearFilters}>
-            <X className="w-4 h-4 mr-1" />Limpar
+          <Button variant="ghost" size="sm" className="w-full" onClick={clearFilters}>
+            <X className="w-4 h-4 mr-1" />Limpar filtros
           </Button>
         )}
-        <div className="flex border rounded-md overflow-hidden ml-auto">
-          <Button variant={viewMode === "grid" ? "default" : "ghost"} size="icon" className="rounded-none h-9 w-9" data-testid="view-grid" onClick={() => setViewMode("grid")}><LayoutGrid className="w-4 h-4" /></Button>
-          <Button variant={viewMode === "list" ? "default" : "ghost"} size="icon" className="rounded-none h-9 w-9" data-testid="view-list" onClick={() => setViewMode("list")}><List className="w-4 h-4" /></Button>
+        </div>
         </div>
       </div>
 

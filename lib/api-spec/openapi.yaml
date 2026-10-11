@@ -1466,6 +1466,12 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: location
+          in: query
+          description: Case-insensitive match across trip origin and destination city/state (maximum 100 characters).
+          schema:
+            type: string
+            maxLength: 100
         - name: status
           in: query
           schema:

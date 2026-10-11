@@ -3122,6 +3122,7 @@ export const listTripsQueryLimitDefault = 20;
 
 export const ListTripsQueryParams = zod.object({
   search: zod.coerce.string().nullish(),
+  location: zod.coerce.string().max(100).optional(),
   status: zod.coerce.string().nullish(),
   type: zod.coerce.string().optional(),
   date: zod.coerce

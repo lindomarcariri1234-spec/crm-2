@@ -13,6 +13,7 @@ type ExportTripsBatchHandler = (trips: Trip[]) => void;
 
 interface TripFilters {
   search: string;
+  locationFilter: string;
   statusFilter: string;
   typeFilter: string;
   dateFilter: string;
@@ -23,6 +24,7 @@ function parseTripFilters(searchStr: string): TripFilters {
   const params = new URLSearchParams(searchStr);
   return {
     search: params.get("q") ?? "",
+    locationFilter: params.get("location") ?? "",
     statusFilter: params.get("status") ?? "all",
     typeFilter: params.get("type") ?? "all",
     dateFilter: params.get("date") ?? "",
@@ -32,6 +34,7 @@ function parseTripFilters(searchStr: string): TripFilters {
 
 function tripFiltersMatch(left: TripFilters, right: TripFilters): boolean {
   return left.search === right.search
+    && left.locationFilter === right.locationFilter
     && left.statusFilter === right.statusFilter
     && left.typeFilter === right.typeFilter
     && left.dateFilter === right.dateFilter
@@ -41,6 +44,7 @@ function tripFiltersMatch(left: TripFilters, right: TripFilters): boolean {
 function serializeTripFilters(filters: TripFilters): string {
   const params = new URLSearchParams();
   if (filters.search) params.set("q", filters.search);
+  if (filters.locationFilter) params.set("location", filters.locationFilter);
   if (filters.statusFilter !== "all") params.set("status", filters.statusFilter);
   if (filters.typeFilter !== "all") params.set("type", filters.typeFilter);
   if (filters.dateFilter) params.set("date", filters.dateFilter);
@@ -58,6 +62,7 @@ export function useTrips() {
   const pendingUrlFiltersRef = useRef<TripFilters | null>(null);
 
   const [search, setSearch] = useState(initialFilters.search);
+  const [locationFilter, setLocationFilterState] = useState(initialFilters.locationFilter);
   const [statusFilter, setStatusFilter] = useState(initialFilters.statusFilter);
   const [typeFilter, setTypeFilterState] = useState(initialFilters.typeFilter);
   const [dateFilter, setDateFilterState] = useState(initialFilters.dateFilter);
@@ -70,9 +75,13 @@ export function useTrips() {
     setDateFilterState(value);
     setPage(1);
   }, []);
+  const setLocationFilter = useCallback((value: string) => {
+    setLocationFilterState(value);
+    setPage(1);
+  }, []);
 
   useEffect(() => {
-    const currentFilters = { search, statusFilter, typeFilter, dateFilter, page };
+    const currentFilters = { search, locationFilter, statusFilter, typeFilter, dateFilter, page };
 
     if (lastObservedSearchStrRef.current !== searchStr) {
       lastObservedSearchStrRef.current = searchStr;
@@ -85,6 +94,7 @@ export function useTrips() {
       }
 
       setSearch(incomingFilters.search);
+      setLocationFilterState(incomingFilters.locationFilter);
       setStatusFilter(incomingFilters.statusFilter);
       setTypeFilterState(incomingFilters.typeFilter);
       setDateFilterState(incomingFilters.dateFilter);
@@ -103,12 +113,13 @@ export function useTrips() {
     const qs = serializeTripFilters(currentFilters);
     if (new URLSearchParams(searchStr).toString() === qs) return;
     navigate(qs ? `?${qs}` : window.location.pathname, { replace: true });
-  }, [search, statusFilter, typeFilter, dateFilter, page, searchStr, navigate]);
+  }, [search, locationFilter, statusFilter, typeFilter, dateFilter, page, searchStr, navigate]);
 
-  const hasActiveFilters = !!(search || statusFilter !== "all" || typeFilter !== "all" || dateFilter);
+  const hasActiveFilters = !!(search || locationFilter || statusFilter !== "all" || typeFilter !== "all" || dateFilter);
 
   const clearFilters = () => {
     setSearch("");
+    setLocationFilterState("");
     setStatusFilter("all");
     setTypeFilter("all");
     setDateFilter("");
@@ -120,6 +131,7 @@ export function useTrips() {
 
   const { data: tripsData, isLoading, isError, error, refetch } = useListTrips({
     search: search || undefined,
+    location: locationFilter.trim() || undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
     type: typeFilter !== "all" ? typeFilter : undefined,
     date: dateFilter || undefined,
@@ -232,6 +244,7 @@ export function useTrips() {
   return {
     trips, exportTrips, isLoading, isError, error, totalPages, upcomingTrips, stats, me, isVendedor,
     search, setSearch,
+    locationFilter, setLocationFilter,
     statusFilter, setStatusFilter,
     typeFilter, setTypeFilter,
     dateFilter, setDateFilter,

@@ -11,6 +11,7 @@ export type ListTripsParams = {
    * @nullable
    */
   search?: string | null;
+  location?: string;
   /**
    * @nullable
    */
