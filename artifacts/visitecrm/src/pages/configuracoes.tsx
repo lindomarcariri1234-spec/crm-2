@@ -4295,6 +4295,7 @@ export function ClubConfigTab() {
                                               type="button"
                                               size="sm"
                                               variant={editingBenefitConflictChoices[field] === "latest" ? "outline" : "secondary"}
+                                              className="club-benefit-conflict-choice"
                                               aria-label={`${title}: manter meu rascunho`}
                                               aria-pressed={editingBenefitConflictChoices[field] !== "latest"}
                                               data-testid={`club-benefit-conflict-choice-draft-${field}-${benefit.id}`}
@@ -4312,6 +4313,7 @@ export function ClubConfigTab() {
                                               type="button"
                                               size="sm"
                                               variant={editingBenefitConflictChoices[field] === "latest" ? "secondary" : "outline"}
+                                              className="club-benefit-conflict-choice"
                                               aria-label={`${title}: usar valor salvo`}
                                               aria-pressed={editingBenefitConflictChoices[field] === "latest"}
                                               data-testid={`club-benefit-conflict-choice-latest-${field}-${benefit.id}`}

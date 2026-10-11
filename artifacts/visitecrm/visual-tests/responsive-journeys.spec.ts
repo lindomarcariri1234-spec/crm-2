@@ -338,6 +338,100 @@ test("club benefit conflict choices remain usable on a phone and at 200% zoom", 
   }
 });
 
+test("club benefit conflict choices remain distinguishable in high-contrast mode", async ({ page }) => {
+  await page.emulateMedia({ forcedColors: "active" });
+  await openFixture(page, "club-benefit-conflict-keyboard", 1280, 900);
+  await expect.poll(() => page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
+  await page.getByTestId("club-tier-tab-gold").click();
+  await page.getByTestId("club-edit-benefit-visual-benefit-keyboard").click();
+
+  const labelInput = page.getByTestId("club-edit-benefit-label-visual-benefit-keyboard");
+  await labelInput.fill("Rascunho da equipe");
+  await page.getByTestId("club-save-edit-benefit-visual-benefit-keyboard").click();
+  await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toBeVisible();
+
+  const fields = [
+    ["label", "Nome"],
+    ["value", "Valor"],
+    ["description", "Descrição"],
+  ] as const;
+  const choices = fields.flatMap(([field, title]) => [
+    {
+      locator: page.getByTestId(`club-benefit-conflict-choice-draft-${field}-visual-benefit-keyboard`),
+      name: `${title}: manter meu rascunho`,
+      pressed: "true",
+    },
+    {
+      locator: page.getByTestId(`club-benefit-conflict-choice-latest-${field}-visual-benefit-keyboard`),
+      name: `${title}: usar valor salvo`,
+      pressed: "false",
+    },
+  ]);
+  for (const { locator, name, pressed } of choices) {
+    await expect(locator).toBeVisible();
+    await expect(locator).toHaveAccessibleName(name);
+    await expect(locator).toHaveAttribute("aria-pressed", pressed);
+  }
+
+  for (const [field] of fields) {
+    const draft = page.getByTestId(`club-benefit-conflict-choice-draft-${field}-visual-benefit-keyboard`);
+    const latest = page.getByTestId(`club-benefit-conflict-choice-latest-${field}-visual-benefit-keyboard`);
+    const [draftStyle, latestStyle] = await Promise.all([draft, latest].map((locator) =>
+      locator.evaluate((button) => {
+        const style = getComputedStyle(button);
+        return {
+          background: style.backgroundColor,
+          color: style.color,
+          borderColor: style.borderColor,
+          borderWidth: style.borderWidth,
+        };
+      }),
+    ));
+    expect(
+      draftStyle,
+      `${field}: pressed and unpressed options should have different visible styling`,
+    ).not.toEqual(latestStyle);
+  }
+
+  const refresh = page.getByTestId("club-refresh-edit-benefit-visual-benefit-keyboard");
+  await refresh.focus();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await expect(choices[0].locator).toBeFocused();
+  for (const [index, { locator }] of choices.entries()) {
+    if (index > 0) await page.keyboard.press("Tab");
+    await expect(locator, `choice ${index + 1} should receive keyboard focus`).toBeFocused();
+    const focusStyle = await locator.evaluate((button) => {
+      const style = getComputedStyle(button);
+      return {
+        focusVisible: button.matches(":focus-visible"),
+        outlineVisible: style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0,
+        shadowVisible: style.boxShadow !== "none",
+      };
+    });
+    expect(focusStyle.focusVisible).toBe(true);
+    expect(
+      focusStyle.outlineVisible || focusStyle.shadowVisible,
+      `choice ${index + 1} should have a visible focus indicator`,
+    ).toBe(true);
+  }
+
+  await page.getByTestId("club-benefit-conflict-choice-draft-label-visual-benefit-keyboard").focus();
+  await page.keyboard.press("Space");
+  await page.getByTestId("club-benefit-conflict-choice-latest-value-visual-benefit-keyboard").focus();
+  await page.keyboard.press("Enter");
+  await page.getByTestId("club-benefit-conflict-choice-draft-description-visual-benefit-keyboard").focus();
+  await page.keyboard.press("Space");
+  await refresh.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toHaveCount(0);
+  await expect(labelInput).toBeFocused();
+  await expect(labelInput).toHaveValue("Rascunho da equipe");
+  await expect(page.getByTestId("club-edit-benefit-value-visual-benefit-keyboard")).toHaveValue("8%");
+  await expect(page.getByTestId("club-edit-benefit-description-visual-benefit-keyboard"))
+    .toHaveValue("Descrição do rascunho");
+});
+
 for (const viewport of widths) {
   test(`portal tabs stay navigable at ${viewport.label} width`, async ({ page }) => {
     await openFixture(page, "perfil", viewport.width, viewport.height);
