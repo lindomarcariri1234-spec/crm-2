@@ -383,10 +383,11 @@ describe("applyGatewayPayment", () => {
   });
 
   it("keeps InfinitePay duplicate transaction handling idempotent", async () => {
+    const tx = makeTx();
     selectResults = [[ORDER]];
     mockPaymentExists.mockResolvedValue(true);
 
-    const result = await callApply({ ...BASE_ARGS, gateway: "infinitepay" } as any);
+    const result = await applyGatewayPayment(tx as any, { ...BASE_ARGS, gateway: "infinitepay" } as any);
 
     expect(mockPaymentExists).toHaveBeenCalledWith("tenant-1", "infinitepay", "tx-1", expect.anything());
     expect(result).toEqual(expect.objectContaining({
@@ -397,6 +398,8 @@ describe("applyGatewayPayment", () => {
       retryDeferredOnly: true,
     }));
     expect(mockCreateReservationsForOrder).not.toHaveBeenCalled();
+    expect(tx.insertedValues).toHaveLength(0);
+    expect(mockRecordOrderPaymentSettlement).not.toHaveBeenCalled();
   });
 
   it("returns null when no matching order exists", async () => {
