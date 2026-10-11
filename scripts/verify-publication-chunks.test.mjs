@@ -769,6 +769,8 @@ function fakeBrowserFactory({
   inPageHistoryChangesByPath = {},
   inPageAssetRequestsByPath = {},
   inPageFailedAssetRequestsByPath = {},
+  routeSpecificAssetRequestsByPath = {},
+  sharedAssetRequestsByRoute = {},
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
@@ -778,6 +780,8 @@ function fakeBrowserFactory({
   const navigationEvents = [];
   const runtimeExceptionEvents = [];
   const loadingFailedEvents = [];
+  const scriptResponseEvents = [];
+  const pendingSharedAssetResponses = [];
   const executionContextIdByPath = new Map();
   const sessionStateReadsByPath = new Map();
   function emitScriptRequest({ requestId, url }) {
@@ -793,11 +797,13 @@ function fakeBrowserFactory({
     status = 200,
     mimeType = "application/javascript",
   }) {
-    listeners.get("Network.responseReceived")?.({
+    const event = {
       requestId,
       type: "Script",
       response: { url, status, mimeType },
-    });
+    };
+    scriptResponseEvents.push({ ...event, navigationNumber });
+    listeners.get("Network.responseReceived")?.(event);
   }
   function emitScriptLoadingFailed({ requestId, errorText }) {
     const event = { requestId, errorText };
@@ -832,6 +838,7 @@ function fakeBrowserFactory({
     navigationEvents,
     runtimeExceptionEvents,
     loadingFailedEvents,
+    scriptResponseEvents,
     factory: async ({ headers, profileName }) => {
       const browserCall = { headers, navigations: [] };
       calls.push(browserCall);
@@ -895,6 +902,25 @@ function fakeBrowserFactory({
                 mimeType: contentType,
               },
             });
+            const routeAsset = routeSpecificAssetRequestsByPath[pathname];
+            if (routeAsset) {
+              emitScriptRequest(routeAsset);
+              emitScriptResponse(routeAsset);
+            }
+            const sharedAsset = sharedAssetRequestsByRoute[pathname];
+            if (sharedAsset) {
+              emitScriptRequest(sharedAsset);
+              pendingSharedAssetResponses.push(sharedAsset);
+              if (
+                pendingSharedAssetResponses.length ===
+                Object.keys(sharedAssetRequestsByRoute).length
+              ) {
+                for (const delayedAsset of [...pendingSharedAssetResponses].reverse()) {
+                  emitScriptResponse(delayedAsset);
+                }
+                pendingSharedAssetResponses.length = 0;
+              }
+            }
           }
           if (method === "Runtime.evaluate") {
             if (params.expression?.includes("clerk.client.signIn.create")) {
@@ -1405,6 +1431,78 @@ test("keeps script requests attributed to their route across in-page navigation"
   assert.ok(destinationResult.assets.includes(destinationAsset.url));
   assert.ok(!destinationResult.assets.includes(originAsset.url));
   assert.ok(!originResult.assets.includes(destinationAsset.url));
+});
+
+test("lists a delayed shared chunk on every protected route that requested it", async () => {
+  const sharedUrl = "https://visitecrm.com/assets/shared-dashboard.js";
+  const sharedRequests = {
+    "/meu-painel": {
+      requestId: "dashboard-shared-request",
+      url: sharedUrl,
+    },
+    "/vouchers": {
+      requestId: "vouchers-shared-request",
+      url: sharedUrl,
+    },
+  };
+  const originAsset = {
+    requestId: "dashboard-only-request",
+    url: "https://visitecrm.com/assets/dashboard-only.js",
+  };
+  const destinationAsset = {
+    requestId: "vouchers-only-request",
+    url: "https://visitecrm.com/assets/vouchers-only.js",
+    status: 404,
+    mimeType: "text/html",
+  };
+  const browser = fakeBrowserFactory({
+    routeSpecificAssetRequestsByPath: {
+      "/meu-painel": originAsset,
+      "/vouchers": destinationAsset,
+    },
+    sharedAssetRequestsByRoute: sharedRequests,
+  });
+  const results = await verifyPublishedInteractions({
+    publicUrl: "https://visitecrm.com",
+    protectedProfiles: [
+      {
+        name: "seller",
+        label: "vendedor",
+        paths: ["/meu-painel", "/vouchers"],
+        headers: { Cookie: "seller-private-session" },
+      },
+    ],
+    interactionSelectors: [],
+    browserFactory: browser.factory,
+    timeoutMs: 1,
+  });
+
+  const originResult = results.find((result) => result.route === "/meu-painel");
+  const destinationResult = results.find((result) => result.route === "/vouchers");
+  assert.ok(originResult);
+  assert.ok(destinationResult);
+  assert.equal(originResult.ok, true);
+  assert.equal(destinationResult.ok, false);
+  assert.ok(originResult.assets.includes(sharedUrl));
+  assert.ok(destinationResult.assets.includes(sharedUrl));
+  assert.ok(originResult.assets.includes(originAsset.url));
+  assert.ok(!originResult.assets.includes(destinationAsset.url));
+  assert.deepEqual(originResult.failures, []);
+  assert.ok(destinationResult.assets.includes(destinationAsset.url));
+  assert.ok(!destinationResult.assets.includes(originAsset.url));
+  assert.match(
+    destinationResult.failures.join("\n"),
+    /\/vouchers: JavaScript asset https:\/\/visitecrm\.com\/assets\/vouchers-only\.js failed: HTTP 404/,
+  );
+  assert.deepEqual(
+    browser.scriptResponseEvents
+      .filter((event) => event.response.url === sharedUrl)
+      .map(({ requestId, navigationNumber }) => ({ requestId, navigationNumber })),
+    [
+      { requestId: "vouchers-shared-request", navigationNumber: 2 },
+      { requestId: "dashboard-shared-request", navigationNumber: 2 },
+    ],
+  );
 });
 
 test("keeps a late script-load failure on its origin route without exposing browser details", async () => {
