@@ -3857,36 +3857,81 @@ export function ClubConfigTab() {
   const [newDescription, setNewDescription] = useState("");
   const [addingBenefit, setAddingBenefit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const benefitsLoadedRef = useRef(false);
+  const benefitsRefreshInFlightRef = useRef(false);
+  const benefitMutationCountRef = useRef(0);
+  const benefitRevisionRef = useRef(0);
   const clubSettingsDirty = clubName !== savedClubConfig.clubName
     || clubDescription !== savedClubConfig.clubDescription
     || Boolean(newLabel.trim() || newValue.trim() || newDescription.trim());
   useAgencySettingsDirty("clube", "club-settings", clubSettingsDirty);
 
+  const fetchClubBenefits = useCallback(async (): Promise<ClubBenefitAdmin[]> => {
+    const response = await fetch(`${BASE}/api/club/benefits`, { credentials: "include" });
+    if (!response.ok) throw new Error("load_benefits_failed");
+    const result = await response.json() as { data?: ClubBenefitAdmin[] };
+    if (!Array.isArray(result.data)) throw new Error("invalid_benefits_response");
+    return result.data;
+  }, []);
+
+  const refreshClubBenefits = useCallback(async () => {
+    if (!benefitsLoadedRef.current
+      || benefitsRefreshInFlightRef.current
+      || benefitMutationCountRef.current > 0) return;
+
+    const revision = benefitRevisionRef.current;
+    benefitsRefreshInFlightRef.current = true;
+    try {
+      const refreshedBenefits = await fetchClubBenefits();
+      if (benefitRevisionRef.current === revision && benefitMutationCountRef.current === 0) {
+        setBenefits(refreshedBenefits);
+      }
+    } catch {
+      // Transient background refresh failures leave the current list intact and retry later.
+    } finally {
+      benefitsRefreshInFlightRef.current = false;
+    }
+  }, [fetchClubBenefits]);
+
   useEffect(() => {
     async function load() {
       try {
-        const [cfgRes, bnfRes] = await Promise.all([
+        const [cfgRes, initialBenefits] = await Promise.all([
           fetch(`${BASE}/api/club/config`, { credentials: "include" }),
-          fetch(`${BASE}/api/club/benefits`, { credentials: "include" }),
+          fetchClubBenefits(),
         ]);
-        if (!cfgRes.ok || !bnfRes.ok) throw new Error("load_failed");
+        if (!cfgRes.ok) throw new Error("load_failed");
         const cfg = await cfgRes.json() as { clubName: string; description: string | null };
-        const bnf = await bnfRes.json() as { data: ClubBenefitAdmin[] };
         setClubName(cfg.clubName ?? "Clube Visite");
         setClubDescription(cfg.description ?? "");
         setSavedClubConfig({
           clubName: cfg.clubName ?? "Clube Visite",
           clubDescription: cfg.description ?? "",
         });
-        setBenefits(bnf.data ?? []);
+        setBenefits(initialBenefits);
       } catch {
         toast({ title: "Erro ao carregar configurações do clube", variant: "destructive" });
       } finally {
+        benefitsLoadedRef.current = true;
         setLoading(false);
       }
     }
     void load();
-  }, []);
+  }, [fetchClubBenefits, toast]);
+
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshClubBenefits();
+    };
+    const intervalId = window.setInterval(refreshWhenVisible, 30_000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [refreshClubBenefits]);
 
   async function handleSaveConfig() {
     setSavingConfig(true);
@@ -3909,6 +3954,8 @@ export function ClubConfigTab() {
 
   async function handleAddBenefit() {
     if (!newLabel.trim()) return;
+    benefitRevisionRef.current += 1;
+    benefitMutationCountRef.current += 1;
     setAddingBenefit(true);
     try {
       const res = await fetch(`${BASE}/api/club/benefits`, {
@@ -3945,11 +3992,14 @@ export function ClubConfigTab() {
     } catch {
       toast({ title: "Erro ao adicionar benefício", variant: "destructive" });
     } finally {
+      benefitMutationCountRef.current = Math.max(0, benefitMutationCountRef.current - 1);
       setAddingBenefit(false);
     }
   }
 
   async function handleDeleteBenefit(id: string) {
+    benefitRevisionRef.current += 1;
+    benefitMutationCountRef.current += 1;
     setDeletingId(id);
     try {
       const response = await fetch(`${BASE}/api/club/benefits/${id}`, {
@@ -3962,6 +4012,7 @@ export function ClubConfigTab() {
     } catch {
       toast({ title: "Erro ao remover benefício", variant: "destructive" });
     } finally {
+      benefitMutationCountRef.current = Math.max(0, benefitMutationCountRef.current - 1);
       setDeletingId(null);
     }
   }

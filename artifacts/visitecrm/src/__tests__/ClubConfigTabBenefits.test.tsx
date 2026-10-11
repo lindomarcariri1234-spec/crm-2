@@ -108,7 +108,7 @@ beforeEach(() => {
       return makeResponse(true, { clubName: "Clube de teste", description: null });
     }
     if (url.endsWith("/api/club/benefits") && method === "GET") {
-      return makeResponse(true, { data: benefitsForLoad });
+      return makeResponse(true, { data: benefitsForLoad.map((benefit) => ({ ...benefit })) });
     }
     if (url.endsWith("/api/club/benefits") && method === "POST") {
       const body = JSON.parse(String(init?.body)) as { tier: string };
@@ -126,6 +126,7 @@ beforeEach(() => {
 afterEach(async () => {
   await cleanupRoots();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("ClubConfigTab benefit tiers", () => {
@@ -332,5 +333,106 @@ describe("ClubConfigTab benefit tiers", () => {
         variant: "destructive",
       }),
     );
+  });
+
+  it("refreshes remote benefit changes without clearing the in-progress form draft", async () => {
+    benefitsForLoad = [{
+      id: "bronze-existing",
+      tier: "bronze",
+      benefitKey: "existing",
+      label: "Benefício já cadastrado",
+      description: null,
+      value: null,
+      sortOrder: 0,
+    }];
+    let pollBenefits: (() => void) | undefined;
+    vi.spyOn(window, "setInterval").mockImplementation(((callback: TimerHandler, delay?: number) => {
+      expect(delay).toBe(30_000);
+      pollBenefits = callback as () => void;
+      return 1;
+    }) as typeof window.setInterval);
+
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    const valueInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-value-input"]',
+    );
+    const descriptionInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-description-input"]',
+    );
+    expect(labelInput).not.toBeNull();
+    expect(valueInput).not.toBeNull();
+    expect(descriptionInput).not.toBeNull();
+
+    await act(async () => {
+      setInputValue(labelInput!, "Rascunho do atendente");
+      setInputValue(valueInput!, "15%");
+      setInputValue(descriptionInput!, "Válido para o cliente");
+    });
+
+    benefitsForLoad.push({
+      id: "silver-created-elsewhere",
+      tier: "silver",
+      benefitKey: "remote_benefit",
+      label: "Criado por outra pessoa",
+      description: null,
+      value: "Cortesia",
+      sortOrder: 0,
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      getTab(container, "silver").click();
+    });
+    expect(container.querySelector('[data-testid="club-benefit-silver-created-elsewhere"]')?.textContent)
+      .toContain("Criado por outra pessoa");
+    expectTierCount(container, "bronze", 1);
+    expectTierCount(container, "silver", 1);
+    await act(async () => {
+      getTab(container, "bronze").click();
+    });
+    expect(labelInput!.value).toBe("Rascunho do atendente");
+    expect(valueInput!.value).toBe("15%");
+    expect(descriptionInput!.value).toBe("Válido para o cliente");
+
+    benefitsForLoad.push({
+      id: "diamond-created-by-poll",
+      tier: "diamond",
+      benefitKey: "remote_poll",
+      label: "Atualizado pela consulta periódica",
+      description: null,
+      value: null,
+      sortOrder: 0,
+    });
+    expect(pollBenefits).toBeDefined();
+    await act(async () => {
+      pollBenefits?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      getTab(container, "diamond").click();
+    });
+    expect(container.querySelector('[data-testid="club-benefit-diamond-created-by-poll"]')?.textContent)
+      .toContain("Atualizado pela consulta periódica");
+    expectTierCount(container, "diamond", 1);
+    await act(async () => {
+      getTab(container, "bronze").click();
+    });
+    expect(labelInput!.value).toBe("Rascunho do atendente");
+    expect(valueInput!.value).toBe("15%");
+    expect(descriptionInput!.value).toBe("Válido para o cliente");
+    expect(fetchMock.mock.calls.filter(([, init]) => !init?.method || init.method === "GET")
+      .filter(([url]) => String(url).endsWith("/api/club/benefits"))).toHaveLength(3);
   });
 });
