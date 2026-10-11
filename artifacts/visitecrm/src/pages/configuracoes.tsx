@@ -4212,6 +4212,11 @@ export function ClubConfigTab() {
                                     variant="outline"
                                     data-testid={`club-refresh-edit-benefit-${benefit.id}`}
                                     onClick={() => {
+                                      setEditingBenefitOriginal({
+                                        label: benefit.label,
+                                        value: benefit.value ?? "",
+                                        description: benefit.description ?? "",
+                                      });
                                       setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
                                       setEditingBenefitConflict(false);
                                       setEditingBenefitConflictChoices({});

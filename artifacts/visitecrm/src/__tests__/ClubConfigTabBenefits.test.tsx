@@ -100,6 +100,7 @@ let completePost: (() => void) | null = null;
 let rejectPut = false;
 let conflictPut = false;
 let conflictBenefit: Record<string, unknown> | null = null;
+let conflictBenefitQueue: Array<Record<string, unknown>> = [];
 let rejectDelete = false;
 let deferDelete = false;
 let completeDelete: (() => void) | null = null;
@@ -125,6 +126,7 @@ beforeEach(() => {
   rejectPut = false;
   conflictPut = false;
   conflictBenefit = null;
+  conflictBenefitQueue = [];
   rejectDelete = false;
   deferDelete = false;
   completeDelete = null;
@@ -159,6 +161,12 @@ beforeEach(() => {
       });
     }
     if (url.includes("/api/club/benefits/") && method === "PUT") {
+      if (conflictBenefitQueue.length > 0) {
+        return makeResponse(false, {
+          error: "benefit_changed",
+          current: conflictBenefitQueue.shift(),
+        }, 409);
+      }
       if (conflictPut) {
         conflictPut = false;
         return makeResponse(false, { error: "benefit_changed", current: conflictBenefit }, 409);
@@ -509,6 +517,115 @@ describe("ClubConfigTab benefit tiers", () => {
     )?.value).toBe("Nome atualizado por outra pessoa");
     expect(container.querySelector('[data-testid="club-edit-benefit-conflict-gold-benefit-one-field-conflict"]'))
       .toBeNull();
+  });
+
+  it("compares a second conflict with the refreshed baseline and keeps retry blocked", async () => {
+    benefitsForLoad = [{
+      id: "gold-benefit-repeat-conflict",
+      tier: "gold",
+      benefitKey: "repeat_conflict",
+      label: "Nome inicial",
+      description: "Descrição inicial",
+      value: "5%",
+      sortOrder: 0,
+    }];
+    const secondVersion = {
+      ...benefitsForLoad[0],
+      label: "Nome salvo na versão 2",
+      description: "Descrição salva na versão 2",
+      updatedAt: "2026-02-04T00:00:00.000Z",
+    };
+    const thirdVersion = {
+      ...secondVersion,
+      description: "Descrição salva na versão 3",
+      updatedAt: "2026-02-05T00:00:00.000Z",
+    };
+    conflictBenefitQueue = [secondVersion, thirdVersion];
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      getTab(container, "gold").click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-edit-benefit-gold-benefit-repeat-conflict"]',
+      )!.click();
+    });
+    const labelInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-label-gold-benefit-repeat-conflict"]',
+    )!;
+    const descriptionInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="club-edit-benefit-description-gold-benefit-repeat-conflict"]',
+    )!;
+    await act(async () => {
+      setInputValue(labelInput, "Meu rascunho");
+      setInputValue(descriptionInput, "Minha descrição");
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-repeat-conflict"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-refresh-edit-benefit-gold-benefit-repeat-conflict"]',
+      )!.click();
+    });
+    expect(labelInput.value).toBe("Meu rascunho");
+    expect(descriptionInput.value).toBe("Minha descrição");
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-repeat-conflict"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const conflictDetails = container.querySelector(
+      '[data-testid="club-edit-benefit-conflict-gold-benefit-repeat-conflict"]',
+    );
+    expect(conflictDetails?.querySelector(
+      '[data-testid="club-benefit-conflict-field-label-gold-benefit-repeat-conflict"]',
+    )).toBeNull();
+    expect(conflictDetails?.querySelector(
+      '[data-testid="club-benefit-conflict-field-description-gold-benefit-repeat-conflict"]',
+    )?.textContent).toContain("Antes: Descrição salva na versão 2");
+    expect(conflictDetails?.querySelector(
+      '[data-testid="club-benefit-conflict-field-description-gold-benefit-repeat-conflict"]',
+    )?.textContent).toContain("Salvo agora: Descrição salva na versão 3");
+    expect(labelInput.value).toBe("Meu rascunho");
+    expect(labelInput.disabled).toBe(true);
+
+    const saveButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-save-edit-benefit-gold-benefit-repeat-conflict"]',
+    )!;
+    expect(saveButton.disabled).toBe(true);
+    const putCalls = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT");
+    expect(putCalls()).toHaveLength(2);
+    await act(async () => {
+      saveButton.click();
+    });
+    expect(putCalls()).toHaveLength(2);
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-refresh-edit-benefit-gold-benefit-repeat-conflict"]',
+      )!.click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="club-save-edit-benefit-gold-benefit-repeat-conflict"]',
+      )!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(putCalls()).toHaveLength(3);
+    expect(JSON.parse(String(putCalls()[1]?.[1]?.body))).toMatchObject({
+      label: "Meu rascunho",
+      expectedUpdatedAt: "2026-02-04T00:00:00.000Z",
+    });
+    expect(JSON.parse(String(putCalls()[2]?.[1]?.body))).toMatchObject({
+      label: "Meu rascunho",
+      expectedUpdatedAt: "2026-02-05T00:00:00.000Z",
+    });
   });
 
   it("keeps draft fields that were not changed remotely when choosing the saved value for another field", async () => {
