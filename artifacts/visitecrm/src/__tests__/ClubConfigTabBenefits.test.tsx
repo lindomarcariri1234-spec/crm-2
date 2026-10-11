@@ -2,7 +2,10 @@ import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupRoots, renderComponent } from "./eventSourceHarness.js";
 
-const mockToast = vi.hoisted(() => vi.fn());
+const { mockToast, mockTenantId } = vi.hoisted(() => ({
+  mockToast: vi.fn(),
+  mockTenantId: { value: "club-benefit-test-tenant" },
+}));
 
 vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: mockToast }),
@@ -10,7 +13,7 @@ vi.mock("@/hooks/use-toast", () => ({
 
 vi.mock("@workspace/api-client-react", async (importOriginal) => ({
   ...await importOriginal<typeof import("@workspace/api-client-react")>(),
-  useGetMe: () => ({ data: { tenantId: "club-benefit-test-tenant" } }),
+  useGetMe: () => ({ data: { tenantId: mockTenantId.value } }),
 }));
 
 vi.mock("@/components/ui/tabs", async () => {
@@ -66,6 +69,7 @@ import { ClubConfigTab } from "../pages/configuracoes.js";
 
 const tiers = ["bronze", "silver", "gold", "diamond"] as const;
 const benefitDraftStorageKey = "visitecrm:club-benefit-draft:v1:club-benefit-test-tenant";
+const otherTenantBenefitDraftStorageKey = "visitecrm:club-benefit-draft:v1:club-benefit-other-tenant";
 
 function makeResponse(ok: boolean, body: unknown = {}) {
   return { ok, json: async () => body };
@@ -109,7 +113,9 @@ let benefitsForLoad: Array<{
 
 beforeEach(() => {
   mockToast.mockReset();
+  mockTenantId.value = "club-benefit-test-tenant";
   sessionStorage.removeItem(benefitDraftStorageKey);
+  sessionStorage.removeItem(otherTenantBenefitDraftStorageKey);
   rejectPost = false;
   deferPost = false;
   completePost = null;
@@ -156,6 +162,7 @@ beforeEach(() => {
 afterEach(async () => {
   await cleanupRoots();
   sessionStorage.removeItem(benefitDraftStorageKey);
+  sessionStorage.removeItem(otherTenantBenefitDraftStorageKey);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -425,6 +432,88 @@ describe("ClubConfigTab benefit tiers", () => {
     expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({ tier: "gold" });
     expectTierCount(restoredMount.container, "gold", 1);
     expect(sessionStorage.getItem(benefitDraftStorageKey)).toBeNull();
+  });
+
+  it("keeps benefit drafts and retry keys separate when the same tab switches agencies", async () => {
+    rejectPost = true;
+    const mount = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      getTab(mount.container, "gold").click();
+    });
+
+    const fillDraft = async (container: HTMLElement) => {
+      const label = container.querySelector<HTMLInputElement>('[data-testid="club-benefit-label-input"]');
+      const value = container.querySelector<HTMLInputElement>('[data-testid="club-benefit-value-input"]');
+      const description = container.querySelector<HTMLInputElement>('[data-testid="club-benefit-description-input"]');
+      const add = container.querySelector<HTMLButtonElement>('[data-testid="club-add-benefit"]');
+      expect(label).not.toBeNull();
+      expect(value).not.toBeNull();
+      expect(description).not.toBeNull();
+      expect(add).not.toBeNull();
+      await act(async () => {
+        setInputValue(label!, "Acesso ao lounge");
+        setInputValue(value!, "1 acesso");
+        setInputValue(description!, "Apresente o voucher");
+        add!.click();
+      });
+    };
+
+    await fillDraft(mount.container);
+    const tenantAPost = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")[0];
+    const tenantAKey = (tenantAPost?.[1]?.headers as Record<string, string>)?.["Idempotency-Key"];
+    expect(tenantAKey).toMatch(/^[0-9a-f-]{36}$/i);
+
+    mockTenantId.value = "club-benefit-other-tenant";
+    await mount.rerender(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const tenantBLabel = mount.container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    );
+    expect(tenantBLabel?.value).toBe("");
+    expect(mount.container.querySelector('[role="status"]')?.textContent ?? "")
+      .not.toContain("Rascunho recuperado");
+    expect(sessionStorage.getItem(otherTenantBenefitDraftStorageKey)).toBeNull();
+    expect(JSON.parse(sessionStorage.getItem(benefitDraftStorageKey) ?? "null").attempt.idempotencyKey)
+      .toBe(tenantAKey);
+
+    await fillDraft(mount.container);
+    const tenantBPosts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+    const tenantBKey = (tenantBPosts[1]?.[1]?.headers as Record<string, string>)?.["Idempotency-Key"];
+    expect(tenantBKey).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(tenantBKey).not.toBe(tenantAKey);
+    expect(JSON.parse(sessionStorage.getItem(otherTenantBenefitDraftStorageKey) ?? "null")
+      .attempt.idempotencyKey).toBe(tenantBKey);
+    expect(JSON.parse(sessionStorage.getItem(benefitDraftStorageKey) ?? "null")
+      .attempt.idempotencyKey).toBe(tenantAKey);
+
+    mockTenantId.value = "club-benefit-test-tenant";
+    await mount.rerender(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mount.container.querySelector<HTMLInputElement>(
+      '[data-testid="club-benefit-label-input"]',
+    )?.value).toBe("Acesso ao lounge");
+    expect(mount.container.querySelector('[role="status"]')?.textContent)
+      .toContain("Rascunho recuperado");
+
+    rejectPost = false;
+    const retryButton = mount.container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-add-benefit"]',
+    );
+    expect(retryButton).not.toBeNull();
+    await act(async () => {
+      retryButton!.click();
+    });
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts[2]?.[1]?.headers).toMatchObject({ "Idempotency-Key": tenantAKey });
   });
 
   it("removes recoverable draft data when the user discards it", async () => {
