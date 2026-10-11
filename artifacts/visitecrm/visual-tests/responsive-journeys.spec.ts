@@ -346,7 +346,11 @@ test("club benefit conflict choices remain distinguishable in high-contrast mode
   await page.getByTestId("club-edit-benefit-visual-benefit-keyboard").click();
 
   const labelInput = page.getByTestId("club-edit-benefit-label-visual-benefit-keyboard");
+  const valueInput = page.getByTestId("club-edit-benefit-value-visual-benefit-keyboard");
+  const descriptionInput = page.getByTestId("club-edit-benefit-description-visual-benefit-keyboard");
   await labelInput.fill("Rascunho da equipe");
+  await valueInput.fill("6%");
+  await descriptionInput.fill("Descrição do rascunho");
   await page.getByTestId("club-save-edit-benefit-visual-benefit-keyboard").click();
   await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toBeVisible();
 
@@ -427,9 +431,8 @@ test("club benefit conflict choices remain distinguishable in high-contrast mode
   await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toHaveCount(0);
   await expect(labelInput).toBeFocused();
   await expect(labelInput).toHaveValue("Rascunho da equipe");
-  await expect(page.getByTestId("club-edit-benefit-value-visual-benefit-keyboard")).toHaveValue("8%");
-  await expect(page.getByTestId("club-edit-benefit-description-visual-benefit-keyboard"))
-    .toHaveValue("Descrição do rascunho");
+  await expect(valueInput).toHaveValue("8%");
+  await expect(descriptionInput).toHaveValue("Descrição do rascunho");
 });
 
 for (const viewport of widths) {
