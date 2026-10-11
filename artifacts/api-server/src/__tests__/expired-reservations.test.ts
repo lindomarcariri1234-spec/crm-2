@@ -59,7 +59,11 @@ function makeClient(overrides: Partial<InsertClient> = {}): InsertClient {
   } as InsertClient;
 }
 
-function makeReservation(fields: Pick<InsertReservation, "id" | "seats" | "totalValue" | "balance" | "voucherCode" | "qrCode" | "status"> & { clientId?: string; storeOrderId?: string }): InsertReservation {
+function makeReservation(fields: Pick<InsertReservation, "id" | "seats" | "totalValue" | "balance" | "voucherCode" | "qrCode" | "status"> & {
+  clientId?: string;
+  storeOrderId?: string;
+  depositAmount?: string | null;
+}): InsertReservation {
   return {
     tenantId: TENANT_ID, tripId: TRIP_ID, clientId: CLIENT_ID, createdById: USER_ID,
     ...fields,
@@ -188,13 +192,14 @@ describe("runExpiredReservationsCron()", () => {
     expect(await readAvailableSeats()).toBe(INITIAL_SEATS);
   });
 
-  it("does not cancel an expired reservation after a receivable payment is paid", async () => {
+  it("does not cancel an expired reservation after paid receipts reach the required deposit", async () => {
     const order = await createPendingOrder(`ORD-${RUN}-paid`);
     await db.insert(reservationsTable).values(makeReservation({
       id: resId("payment-paid"),
       seats: ["E1"],
       totalValue: "300",
       balance: "300",
+      depositAmount: "100",
       voucherCode: `VCH-${RUN}-P-PAID`,
       qrCode: "qr-p-paid",
       status: "pending",
@@ -211,7 +216,7 @@ describe("runExpiredReservationsCron()", () => {
       orderId: order.id,
       type: PAYMENT_TYPE.RECEIVABLE,
       category: "reservation",
-      amount: "300",
+      amount: "100",
       paymentMethod: "pix",
       dueDate: new Date(),
       paidAt: new Date(),
@@ -222,5 +227,74 @@ describe("runExpiredReservationsCron()", () => {
 
     expect((await readReservation(resId("payment-paid")))?.status).toBe("pending");
     expect(await readAvailableSeats()).toBe(INITIAL_SEATS - 1);
+  });
+
+  it("expires a reservation when paid receipts are below the required deposit", async () => {
+    const order = await createPendingOrder(`ORD-${RUN}-partial`);
+    await db.insert(reservationsTable).values(makeReservation({
+      id: resId("payment-partial"),
+      seats: ["F1"],
+      totalValue: "300",
+      balance: "275",
+      depositAmount: "100",
+      voucherCode: `VCH-${RUN}-P-PARTIAL`,
+      qrCode: "qr-p-partial",
+      status: "pending",
+      storeOrderId: order.orderNumber,
+    }));
+    await setExpiresAt(resId("payment-partial"), new Date(Date.now() - 60_000));
+    await db.update(tripsTable).set({ availableSeats: INITIAL_SEATS - 1, reservedSeats: 1 }).where(eq(tripsTable.id, TRIP_ID));
+    await db.insert(paymentsTable).values({
+      id: `tstp-${RUN}-partial`,
+      tenantId: TENANT_ID,
+      reservationId: null,
+      orderId: order.id,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "reservation",
+      amount: "25.00",
+      paymentMethod: "pix",
+      dueDate: new Date(),
+      paidAt: new Date(),
+      status: PAYMENT_STATUS.PAID,
+    });
+
+    await runExpiredReservationsCron();
+
+    expect((await readReservation(resId("payment-partial")))?.status).toBe("cancelled");
+    expect(await readAvailableSeats()).toBe(INITIAL_SEATS);
+  });
+
+  it("uses the full reservation value as the threshold when no deposit is configured", async () => {
+    const order = await createPendingOrder(`ORD-${RUN}-underpaid`);
+    await db.insert(reservationsTable).values(makeReservation({
+      id: resId("payment-underpaid"),
+      seats: ["G1"],
+      totalValue: "300",
+      balance: "250",
+      voucherCode: `VCH-${RUN}-P-UNDERPAID`,
+      qrCode: "qr-p-underpaid",
+      status: "pending",
+      storeOrderId: order.orderNumber,
+    }));
+    await setExpiresAt(resId("payment-underpaid"), new Date(Date.now() - 60_000));
+    await db.update(tripsTable).set({ availableSeats: INITIAL_SEATS - 1, reservedSeats: 1 }).where(eq(tripsTable.id, TRIP_ID));
+    await db.insert(paymentsTable).values({
+      id: `tstp-${RUN}-underpaid`,
+      tenantId: TENANT_ID,
+      reservationId: resId("payment-underpaid"),
+      orderId: order.id,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "reservation",
+      amount: "50.00",
+      paymentMethod: "pix",
+      dueDate: new Date(),
+      paidAt: new Date(),
+      status: PAYMENT_STATUS.PAID,
+    });
+
+    await runExpiredReservationsCron();
+
+    expect((await readReservation(resId("payment-underpaid")))?.status).toBe("cancelled");
+    expect(await readAvailableSeats()).toBe(INITIAL_SEATS);
   });
 });

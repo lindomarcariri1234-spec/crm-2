@@ -407,6 +407,41 @@ describe("applyGatewayPayment", () => {
     expect(result).toBeNull();
   });
 
+  it("records a confirmed gateway payment for a cancelled order without reactivating its reservation", async () => {
+    const tx = makeTx();
+    selectResults = [[{ ...ORDER, status: "cancelled" }]];
+
+    const result = await applyGatewayPayment(tx as any, { ...BASE_ARGS, amount: 30 } as any);
+
+    expect(result).toBeNull();
+    expect(tx.insertedValues).toHaveLength(1);
+    expect(tx.insertedValues[0]).toMatchObject({
+      reservationId: null,
+      orderId: "order-1",
+      type: "receivable",
+      category: "store_order",
+      amount: "30.00",
+      status: "paid",
+      gateway: "stripe",
+      transactionId: "tx-1",
+      notes: expect.stringContaining("reembolsar manualmente"),
+    });
+    expect(mockCreateReservationsForOrder).not.toHaveBeenCalled();
+    expect(mockSyncReservationPaymentStatus).not.toHaveBeenCalled();
+    expect(mockRecordOrderPaymentSettlement).not.toHaveBeenCalled();
+  });
+
+  it("does not record a duplicate late payment twice", async () => {
+    selectResults = [[{ ...ORDER, status: "cancelled" }]];
+    mockPaymentExists.mockResolvedValue(true);
+
+    const result = await callApply();
+
+    expect(result).toBeNull();
+    expect(mockPaymentExists).toHaveBeenCalledWith("tenant-1", "stripe", "tx-1", expect.anything());
+    expect(mockCreateReservationsForOrder).not.toHaveBeenCalled();
+  });
+
   it("returns null for a non-positive amount without touching the database", async () => {
     const tx = makeTx();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

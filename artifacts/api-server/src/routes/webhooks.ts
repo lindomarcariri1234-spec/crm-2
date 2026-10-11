@@ -881,13 +881,12 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     logger.info({ paymentIntentId, gateway, slug: store.slug }, "[webhooks] No matching order for paymentIntentId");
     return null;
   }
-  if (order.status === STORE_ORDER_STATUS.CANCELLED) {
-    logger.warn({ orderId: order.id, gateway, transactionId }, "[webhooks] Ignoring payment for cancelled/expired order");
-    return null;
-  }
-
   // Idempotency: if we already recorded this exact gateway transaction, stop.
   if (await paymentExistsForGatewayTx(order.tenantId, gateway, transactionId, tx)) {
+    if (order.status === STORE_ORDER_STATUS.CANCELLED) {
+      logger.info({ orderId: order.id, gateway, transactionId }, "[webhooks] Duplicate late payment already recorded");
+      return null;
+    }
     if (gateway === "stripe" && typeof stripeLivemode === "boolean") {
       await tx.update(storeOrdersTable)
         .set({ stripeLivemode })
@@ -910,6 +909,36 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       retryDeferredOnly: true,
       ...(order.paymentStatus !== STORE_PAYMENT_STATUS.PAID ? { partialPayment: true } : {}),
     };
+  }
+
+  if (order.status === STORE_ORDER_STATUS.CANCELLED) {
+    const receivedAmount = roundMoney(amount);
+    await tx.insert(paymentsTable).values({
+      id: generateId(),
+      tenantId: order.tenantId,
+      reservationId: null,
+      clientId: order.clientId ?? null,
+      orderId: order.id,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "store_order",
+      amount: receivedAmount.toFixed(2),
+      paymentMethod: order.paymentMethod ?? gateway,
+      installmentNumber: 1,
+      totalInstallments: 1,
+      dueDate: paidAt,
+      paidAt,
+      status: PAYMENT_STATUS.PAID,
+      gateway,
+      transactionId,
+      isTestMode,
+      description: "Pagamento recebido após o cancelamento do pedido. Reserva não reativada; revisar e reembolsar manualmente.",
+      notes: "Pagamento tardio confirmado pelo provedor. O pedido e a reserva permanecem cancelados para evitar vender uma vaga já liberada. Revisar e reembolsar manualmente.",
+    });
+    logger.error(
+      { orderId: order.id, gateway, transactionId, amount: receivedAmount },
+      "[webhooks] Late payment recorded for cancelled order; manual refund review required",
+    );
+    return null;
   }
 
   // Reservations are normally already pending from checkout. The call remains
