@@ -199,7 +199,7 @@ import
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
 import { runDeferredOrderAccounting } from "../services/checkout/post-booking";
 import { applyGatewayPayment } from "./webhooks";
-import { parseInfinitePayCheckResult } from "../lib/infinitepay";
+import { extractInfinitePayErrorCode, parseInfinitePayCheckResult } from "../lib/infinitepay";
 import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
 import {
   getReservationFailureDiagnostic,
@@ -3450,6 +3450,18 @@ router.post("/public/store/:slug/infinitepay/checkout", async (req, res, next: N
       signal: AbortSignal.timeout(10_000),
     });
     if (!apiResponse.ok) {
+      // Never log the response body: provider errors may echo customer or
+      // checkout data. Keep only an HTTP status and a validated error code.
+      const providerErrorPayload = await apiResponse.clone().json().catch(() => undefined);
+      const providerErrorCode = extractInfinitePayErrorCode(providerErrorPayload);
+      logger.warn(
+        {
+          requestId: req.id ?? "unknown",
+          providerStatusCode: apiResponse.status,
+          ...(providerErrorCode ? { providerErrorCode } : {}),
+        },
+        "InfinitePay link API rejected checkout",
+      );
       await db.update(storeOrdersTable).set({ paymentIntentId: null })
         .where(and(eq(storeOrdersTable.id, order.id), eq(storeOrdersTable.paymentIntentId, creatingMarker)));
       throw new AppError("InfinitePay checkout creation failed", 502, "INFINITEPAY_CHECKOUT_FAILED");
