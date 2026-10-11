@@ -19,8 +19,7 @@
 - [Calendar trip-event concurrency](calendar-trip-concurrency.md) — serialize trip event lookup, Google call, and persistence by tenant+trip+user; leave other event types unchanged.
 - [Migration journal timestamps](migration-journal-timestamps.md) — reconcile live-only columns with additive DDL above both watermarks; never replay historical backfills over populated data.
 - [Host-header token links](host-header-token-links.md) — public/anonymous email links carrying secret tokens must use trusted `STORE_PUBLIC_BASE`, never req Host header (phishing/token-capture).
-- [Brazil timezone formatting patterns](brazil-tz-patterns.md) — canonical patterns for Brazil date display: frontend uses Intl.DateTimeFormat+America/Sao_Paulo; backend uses formatDateBRServer helper; day-window queries use brazilDayWindow(n) for UTC-correct midnight boundaries; never toISOString().slice or toLocaleDateString on server.
-- [Vitrine local date](vitrine-local-date.md) — Brazil-facing storefront "today" must use local Y-M-D (getFullYear/Month/Date), never toISOString().slice(0,10) (UTC → off-by-one at night).
+- [Brazil date handling](brazil-tz-patterns.md) — timezone-safe server/client date formatting; see [storefront local day](vitrine-local-date.md) for storefront-specific rules.
 - [Vitrine preview & screenshot quirks](vitrine-preview-screenshots.md) — app_preview loads localhost:5000 (not public domain); vite needs an /api→8080 proxy or storefront 404s; Clerk CORS noise is expected for public pages.
 - [Vitrine per-tenant theming](vitrine-theming.md) — storefront re-skins via VitrineThemeProvider CSS vars; Cariri palette fallback when store colors == DB defaults; theme inline colors via useVitrineTheme().colors, never raw store.primaryColor.
 - [Referral email status lookup](referral-email-status-lookup.md) — expiry/bonus-release email delivery status filters email_logs by referralId + subject ILIKE (no email-type column); fragile to subject/locale changes; add a type column when schema next changes.
@@ -157,3 +156,4 @@
 - [InfinitePay hosted checkout](infinitepay-hosted-checkout.md) — treat redirects/webhooks as untrusted; confirm via payment_check; do not infer fees, settlement, refunds, or signature support.
 - [CRM settings route scope](crm-settings-route-scope.md) — keep `/configuracoes` focused on general agency and tourism-operation setup; specialized settings remain elsewhere.
 - [Club benefit edit versions](club-benefit-edit-versions.md) — every benefit mutation must strictly advance `updatedAt`, which the editor uses as its optimistic concurrency token.
+- [Playwright WebKit on Nix](playwright-webkit-nix-runtime.md) — Linux WebKit may fail on Nix with Ubuntu ABI gaps; require a real passing run instead of adding one-off browser libraries.
