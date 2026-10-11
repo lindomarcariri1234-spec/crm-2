@@ -227,6 +227,7 @@ import { getTenantUser } from "../lib/tenant.js";
 import { generatePixQrCodeUrl } from "../lib/pix.js";
 import { AppError } from "../lib/errors.js";
 import { createReservationsForOrder } from "../services/checkout/create-reservations.js";
+import { ne } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Minimal Express app
@@ -1542,6 +1543,54 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(res.body.code).toBe("RESERVATION_SYNC_FAILED");
     expect(res.body.error).not.toContain("customer@example.com");
     expect(res.body).not.toHaveProperty("constraint");
+  });
+});
+
+describe("GET /api/public/store/:slug/products/:productSlug — completed trips", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLimit.mockReset();
+    mockOrderBy.mockReset();
+    mockOrderBy.mockReturnValue(Object.assign(Promise.resolve([]), { limit: mockLimit }));
+    const whereResult = Object.assign(Promise.resolve([]), {
+      limit: mockLimit,
+      orderBy: mockOrderBy,
+      for: vi.fn(),
+    });
+    whereResult.for.mockReturnValue(whereResult);
+    mockWhere.mockReturnValue(whereResult);
+    const fromResult = {
+      where: mockWhere,
+      limit: mockLimit,
+      orderBy: mockOrderBy,
+      leftJoin: vi.fn(),
+    };
+    fromResult.leftJoin.mockReturnValue(fromResult);
+    mockFrom.mockReturnValue(fromResult as unknown as { where: typeof mockWhere; limit: typeof mockLimit; orderBy: typeof mockOrderBy });
+    mockSelect.mockReturnValue({ from: mockFrom });
+  });
+
+  it("excludes completed trip-linked products from direct public product access", async () => {
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([]);
+
+    const response = await request(buildApp())
+      .get("/api/public/store/minha-loja/products/completed-trip");
+
+    expect(response.status).toBe(404);
+    expect(ne).toHaveBeenCalledWith(undefined, "completed");
+  });
+
+  it("applies the completed-trip exclusion to storefront catalog results", async () => {
+    mockLimit.mockResolvedValueOnce([FAKE_STORE]);
+
+    const response = await request(buildApp())
+      .get("/api/public/store/minha-loja/products");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual([]);
+    expect(ne).toHaveBeenCalledWith(undefined, "completed");
   });
 });
 

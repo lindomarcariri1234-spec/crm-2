@@ -107,7 +107,7 @@ import
 
 import 
 {
- eq, and, desc, asc, ilike, or, sql, inArray, ne 
+ eq, and, desc, asc, ilike, or, sql, inArray, ne, isNull
 }
  from "drizzle-orm"
 ;
@@ -682,6 +682,7 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
     const conditions = [
       eq(storeProductsTable.storeId, store.id),
       eq(storeProductsTable.status, "active"),
+      or(isNull(tripsTable.id), ne(tripsTable.status, "completed"))!,
     ]
 ;
 
@@ -911,6 +912,7 @@ router.get("/public/store/:slug/products/:productSlug", async (req, res, next: N
         eq(storeProductsTable.storeId, store.id),
         eq(storeProductsTable.slug, req.params.productSlug),
         eq(storeProductsTable.status, "active"),
+        or(isNull(tripsTable.id), ne(tripsTable.status, "completed")),
       )).limit(1);
     if (!row) { next(new NotFoundError("Product not found", "NOT_FOUND")); return; }
     await db.update(storeProductsTable)
@@ -960,10 +962,12 @@ router.get("/public/store/:slug/products/:productSlug/partner-info", async (req,
       id: storeProductsTable.id,
       partnerProductId: storeProductsTable.partnerProductId,
     }).from(storeProductsTable)
+      .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
       .where(and(
         eq(storeProductsTable.storeId, store.id),
         eq(storeProductsTable.slug, req.params.productSlug!),
         eq(storeProductsTable.status, "active"),
+        or(isNull(tripsTable.id), ne(tripsTable.status, "completed")),
       )).limit(1);
 
     if (!product?.partnerProductId) { res.json({ hasPartner: false }); return; }
@@ -1095,10 +1099,12 @@ router.get("/public/store/:slug/products/:productSlug/recommendations", async (r
       name: storeProductsTable.name,
     })
       .from(storeProductsTable)
+      .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
       .where(and(
         eq(storeProductsTable.storeId, store.id),
         eq(storeProductsTable.slug, req.params.productSlug),
         eq(storeProductsTable.status, "active"),
+        or(isNull(tripsTable.id), ne(tripsTable.status, "completed")),
       )).limit(1);
     // Best-effort: an unknown product yields an empty list rather than a 404.
     if (!current) { res.json({ data: [] }); return; }
@@ -1142,6 +1148,7 @@ router.get("/public/store/:slug/products/:productSlug/recommendations", async (r
         eq(storeProductsTable.storeId, store.id),
         eq(storeProductsTable.status, "active"),
         ne(storeProductsTable.id, current.id),
+        or(isNull(tripsTable.id), ne(tripsTable.status, "completed")),
       ))
       .orderBy(desc(storeProductsTable.salesCount))
       .limit(24);
