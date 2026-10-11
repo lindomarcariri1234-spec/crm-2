@@ -3856,7 +3856,7 @@ export function ClubConfigTab() {
   const [newValue, setNewValue] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [addingBenefit, setAddingBenefit] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingBenefitIds, setDeletingBenefitIds] = useState<Set<string>>(() => new Set());
   const deletingBenefitIdsRef = useRef(new Set<string>());
   const benefitsLoadedRef = useRef(false);
   const benefitsRefreshInFlightRef = useRef(false);
@@ -4001,9 +4001,9 @@ export function ClubConfigTab() {
   async function handleDeleteBenefit(id: string) {
     if (deletingBenefitIdsRef.current.has(id)) return;
     deletingBenefitIdsRef.current.add(id);
+    setDeletingBenefitIds(new Set(deletingBenefitIdsRef.current));
     benefitRevisionRef.current += 1;
     benefitMutationCountRef.current += 1;
-    setDeletingId(id);
     try {
       const response = await fetch(`${BASE}/api/club/benefits/${id}`, {
         method: "DELETE",
@@ -4016,8 +4016,8 @@ export function ClubConfigTab() {
       toast({ title: "Erro ao remover benefício", variant: "destructive" });
     } finally {
       deletingBenefitIdsRef.current.delete(id);
+      setDeletingBenefitIds(new Set(deletingBenefitIdsRef.current));
       benefitMutationCountRef.current = Math.max(0, benefitMutationCountRef.current - 1);
-      setDeletingId(null);
     }
   }
 
@@ -4180,9 +4180,9 @@ export function ClubConfigTab() {
                             aria-label={`Remover benefício ${benefit.label}`}
                             className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                             onClick={() => handleDeleteBenefit(benefit.id)}
-                            disabled={deletingId === benefit.id}
+                            disabled={deletingBenefitIds.has(benefit.id)}
                           >
-                            {deletingId === benefit.id ? (
+                            {deletingBenefitIds.has(benefit.id) ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
                             ) : (
                               <Trash2 className="h-4 w-4" />

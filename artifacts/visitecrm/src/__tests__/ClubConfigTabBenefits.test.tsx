@@ -88,6 +88,7 @@ let rejectPost = false;
 let rejectDelete = false;
 let deferDelete = false;
 let completeDelete: (() => void) | null = null;
+let completeDeletes = new Map<string, (ok?: boolean) => void>();
 let benefitsForLoad: Array<{
   id: string;
   tier: string;
@@ -104,6 +105,7 @@ beforeEach(() => {
   rejectDelete = false;
   deferDelete = false;
   completeDelete = null;
+  completeDeletes = new Map();
   benefitsForLoad = [];
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -122,7 +124,10 @@ beforeEach(() => {
     if (url.includes("/api/club/benefits/") && method === "DELETE") {
       if (deferDelete) {
         return new Promise((resolve) => {
-          completeDelete = () => resolve(makeResponse(true));
+          const id = url.slice(url.lastIndexOf("/") + 1);
+          const complete = (ok = true) => resolve(makeResponse(ok));
+          completeDeletes.set(id, complete);
+          completeDelete = () => complete();
         });
       }
       return makeResponse(!rejectDelete);
@@ -491,5 +496,80 @@ describe("ClubConfigTab benefit tiers", () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
     expect(container.querySelector('[data-testid="club-benefit-gold-pending"]')).toBeNull();
     expectTierCount(container, "gold", 0);
+  });
+
+  it("keeps each removal busy until its own request finishes", async () => {
+    benefitsForLoad = [
+      {
+        id: "gold-first",
+        tier: "gold",
+        benefitKey: "first",
+        label: "Primeiro benefício",
+        description: null,
+        value: null,
+        sortOrder: 0,
+      },
+      {
+        id: "gold-second",
+        tier: "gold",
+        benefitKey: "second",
+        label: "Segundo benefício",
+        description: null,
+        value: null,
+        sortOrder: 1,
+      },
+    ];
+    deferDelete = true;
+
+    const { container } = await renderComponent(createElement(ClubConfigTab));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      getTab(container, "gold").click();
+    });
+
+    const firstButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-delete-benefit-gold-first"]',
+    );
+    const secondButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="club-delete-benefit-gold-second"]',
+    );
+    expect(firstButton).not.toBeNull();
+    expect(secondButton).not.toBeNull();
+
+    await act(async () => {
+      firstButton!.click();
+      secondButton!.click();
+      await Promise.resolve();
+    });
+
+    expect(firstButton!.disabled).toBe(true);
+    expect(secondButton!.disabled).toBe(true);
+    expect(firstButton!.querySelector("svg")?.classList.contains("animate-spin")).toBe(true);
+    expect(secondButton!.querySelector("svg")?.classList.contains("animate-spin")).toBe(true);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(2);
+    expect(completeDeletes.size).toBe(2);
+
+    await act(async () => {
+      completeDeletes.get("gold-first")?.(false);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.querySelector('[data-testid="club-benefit-gold-first"]')).not.toBeNull();
+    expect(firstButton!.disabled).toBe(false);
+    expect(secondButton!.disabled).toBe(true);
+    expect(secondButton!.querySelector("svg")?.classList.contains("animate-spin")).toBe(true);
+    expectTierCount(container, "gold", 2);
+
+    await act(async () => {
+      completeDeletes.get("gold-second")?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.querySelector('[data-testid="club-benefit-gold-second"]')).toBeNull();
+    expect(container.querySelector('[data-testid="club-benefit-gold-first"]')).not.toBeNull();
+    expect(firstButton!.disabled).toBe(false);
+    expectTierCount(container, "gold", 1);
   });
 });
