@@ -12,7 +12,7 @@ import {
   setStorefrontReferralCode,
 } from "@/lib/storefrontAttribution";
 import type { LayoutSeatMap, Step } from "./constants";
-import { CLICKABLE_SEAT_TYPES, STEP_ORDER } from "./constants";
+import { CLICKABLE_SEAT_TYPES, isPaymentMethodAvailable, STEP_ORDER } from "./constants";
 import type { FinancialSummary } from "@/lib/linked-data";
 import { isUnpaidStripeFailure } from "./stripe-payment-status";
 
@@ -671,13 +671,12 @@ export function useWizardState({
   }
 
   function canProceedFromPagamento() {
-    if (
-      (form.paymentMethod === "credit_card" || form.paymentMethod === "debit_card") &&
-      !store.stripeEnabled
-    ) {
-      return false;
-    }
-    return !!form.paymentMethod;
+    return !!form.paymentMethod && isPaymentMethodAvailable(
+      form.paymentMethod,
+      form.paymentProvider,
+      store.stripeEnabled,
+      store.infinitePayEnabled,
+    );
   }
 
   function getCheckoutIdempotencyKey(): string {
