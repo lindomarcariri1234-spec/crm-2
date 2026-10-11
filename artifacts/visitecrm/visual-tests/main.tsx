@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "../src/index.css";
 import PerfilPage from "../src/pages/perfil";
+import { ClubConfigTab } from "../src/pages/configuracoes";
 import VitrineCatalog from "../src/pages/vitrine/catalog";
 import VitrineCalendar from "../src/pages/vitrine/calendar";
 import VitrineProduct from "../src/pages/vitrine/product";
@@ -28,6 +29,8 @@ import {
 } from "./fixtures";
 
 const profileReferrals = { data: [visualReferral] };
+const isClubBenefitConflictKeyboardScenario = () =>
+  new URLSearchParams(window.location.search).get("scenario") === "club-benefit-conflict-keyboard";
 const favorites = {
   trips: [],
   products: [
@@ -229,6 +232,18 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
     };
   }
   if (pathname === "/api/club/config") return { clubName: "Clube de Viagens", description: "Benefícios para viajantes." };
+  if (pathname === "/api/club/benefits" && isClubBenefitConflictKeyboardScenario()) {
+    return { data: [{
+      id: "visual-benefit-keyboard",
+      tier: "gold",
+      benefitKey: "keyboard_conflict",
+      label: "Nome inicial",
+      description: "Descrição inicial",
+      value: "5%",
+      sortOrder: 0,
+      updatedAt: "2026-02-01T00:00:00.000Z",
+    }] };
+  }
   if (pathname === "/api/club/benefits") {
     return { data: [{ id: "visual-benefit", title: "Condições especiais", description: "Ofertas para associados.", active: true }] };
   }
@@ -242,6 +257,15 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
     };
   }
   if (pathname === "/api/users/me" || pathname === "/api/auth/me") {
+    if (isClubBenefitConflictKeyboardScenario()) {
+      return {
+        id: "visual-agency-user",
+        tenantId: "visual-agency-tenant",
+        role: "admin",
+        name: "Pessoa da Agência",
+        email: "agencia@example.invalid",
+      };
+    }
     return {
       id: "visual-user-fixture",
       role: "client",
@@ -350,6 +374,32 @@ function installFixtureFetch() {
     if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
       const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
       let requestBody: unknown;
+      if (
+        isClubBenefitConflictKeyboardScenario() &&
+        url.pathname === "/api/club/benefits/visual-benefit-keyboard" &&
+        method === "PUT"
+      ) {
+        const conflictKey = "visual-test:club-benefit-conflict-sent";
+        const current = {
+          id: "visual-benefit-keyboard",
+          tier: "gold",
+          benefitKey: "keyboard_conflict",
+          label: "Nome salvo por outra pessoa",
+          description: "Descrição salva por outra pessoa",
+          value: "8%",
+          sortOrder: 0,
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        };
+        if (window.sessionStorage.getItem(conflictKey) !== "true") {
+          window.sessionStorage.setItem(conflictKey, "true");
+          return new Response(JSON.stringify({ error: "benefit_changed", current }), {
+            status: 409,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        requestBody = await readJsonRequestBody(input, init);
+        return jsonResponse({ ...current, ...requestBody, updatedAt: "2026-02-03T00:00:00.000Z" });
+      }
       const orderLookupsKey = "visual-test:3ds-order-lookup-count";
       if (
         method === "GET" &&
@@ -397,6 +447,7 @@ function installFixtureFetch() {
 
 function scenarioElement(scenario: string) {
   if (scenario === "perfil") return createElement(PerfilPage);
+  if (scenario === "club-benefit-conflict-keyboard") return createElement(ClubConfigTab);
   if (scenario === "catalogo") return createElement(VitrineCatalog, { slug: visualStore.slug, store: visualStore });
   if (scenario === "calendario") return createElement(VitrineCalendar, { slug: visualStore.slug, store: visualStore });
   if (scenario === "produto") return createElement(VitrineProduct, { slug: visualStore.slug, productSlug: visualProduct.slug, store: visualStore });
@@ -473,7 +524,9 @@ createRoot(rootElement).render(
     createElement(
       QueryClientProvider,
       { client: queryClient },
-      scenario === "perfil" ? scenarioElement(scenario) : storePage,
+      scenario === "perfil" || scenario === "club-benefit-conflict-keyboard"
+        ? scenarioElement(scenario)
+        : storePage,
     ),
   ),
 );

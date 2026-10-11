@@ -3638,6 +3638,8 @@ export function ClubConfigTab() {
     value: "",
     description: "",
   });
+  const editingBenefitLabelInputRef = useRef<HTMLInputElement | null>(null);
+  const focusBenefitLabelAfterConflictRef = useRef(false);
   const [editingBenefitExpectedUpdatedAt, setEditingBenefitExpectedUpdatedAt] = useState("");
   const [editingBenefitOriginal, setEditingBenefitOriginal] = useState<ClubBenefitDraft>({
     label: "",
@@ -3659,6 +3661,13 @@ export function ClubConfigTab() {
     || clubDescription !== savedClubConfig.clubDescription
     || Boolean(newLabel.trim() || newValue.trim() || newDescription.trim());
   useAgencySettingsDirty("clube", "club-settings", clubSettingsDirty);
+
+  useEffect(() => {
+    if (!editingBenefitConflict && focusBenefitLabelAfterConflictRef.current) {
+      focusBenefitLabelAfterConflictRef.current = false;
+      editingBenefitLabelInputRef.current?.focus();
+    }
+  }, [editingBenefitConflict]);
 
   function persistBenefitDraft(
     draft: ClubBenefitDraft,
@@ -4212,6 +4221,7 @@ export function ClubConfigTab() {
                                     variant="outline"
                                     data-testid={`club-refresh-edit-benefit-${benefit.id}`}
                                     onClick={() => {
+                                      focusBenefitLabelAfterConflictRef.current = true;
                                       setEditingBenefitOriginal({
                                         label: benefit.label,
                                         value: benefit.value ?? "",
@@ -4271,6 +4281,7 @@ export function ClubConfigTab() {
                                               type="button"
                                               size="sm"
                                               variant={editingBenefitConflictChoices[field] === "latest" ? "outline" : "secondary"}
+                                              aria-label={`${title}: manter meu rascunho`}
                                               aria-pressed={editingBenefitConflictChoices[field] !== "latest"}
                                               data-testid={`club-benefit-conflict-choice-draft-${field}-${benefit.id}`}
                                               onClick={() => {
@@ -4287,6 +4298,7 @@ export function ClubConfigTab() {
                                               type="button"
                                               size="sm"
                                               variant={editingBenefitConflictChoices[field] === "latest" ? "secondary" : "outline"}
+                                              aria-label={`${title}: usar valor salvo`}
                                               aria-pressed={editingBenefitConflictChoices[field] === "latest"}
                                               data-testid={`club-benefit-conflict-choice-latest-${field}-${benefit.id}`}
                                               onClick={() => {
@@ -4306,6 +4318,7 @@ export function ClubConfigTab() {
                                 Nome do benefício
                               </Label>
                               <Input
+                                ref={editingBenefitLabelInputRef}
                                 id={`club-benefit-edit-label-${benefit.id}`}
                                 data-testid={`club-edit-benefit-label-${benefit.id}`}
                                 value={editingBenefitDraft.label}

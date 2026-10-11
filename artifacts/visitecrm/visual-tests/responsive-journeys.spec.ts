@@ -170,6 +170,83 @@ async function assertReachable(locator: Locator, page: Page, label: string) {
   await expect(locator, `${label} should be keyboard reachable`).toBeFocused();
 }
 
+test("club benefit conflict choices can be selected with the keyboard", async ({ page }) => {
+  await openFixture(page, "club-benefit-conflict-keyboard", 1280, 900);
+  await page.getByTestId("club-tier-tab-gold").click();
+  await page.getByTestId("club-edit-benefit-visual-benefit-keyboard").click();
+
+  const labelInput = page.getByTestId("club-edit-benefit-label-visual-benefit-keyboard");
+  const valueInput = page.getByTestId("club-edit-benefit-value-visual-benefit-keyboard");
+  const descriptionInput = page.getByTestId("club-edit-benefit-description-visual-benefit-keyboard");
+  await labelInput.fill("Rascunho da equipe");
+  await valueInput.fill("6%");
+  await descriptionInput.fill("Descrição do rascunho");
+  await page.getByTestId("club-save-edit-benefit-visual-benefit-keyboard").click();
+  await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toBeVisible();
+
+  const draftLabel = page.getByTestId("club-benefit-conflict-choice-draft-label-visual-benefit-keyboard");
+  const latestLabel = page.getByTestId("club-benefit-conflict-choice-latest-label-visual-benefit-keyboard");
+  const draftValue = page.getByTestId("club-benefit-conflict-choice-draft-value-visual-benefit-keyboard");
+  const latestValue = page.getByTestId("club-benefit-conflict-choice-latest-value-visual-benefit-keyboard");
+  const draftDescription = page.getByTestId("club-benefit-conflict-choice-draft-description-visual-benefit-keyboard");
+  const latestDescription = page.getByTestId("club-benefit-conflict-choice-latest-description-visual-benefit-keyboard");
+  const choices = [draftLabel, latestLabel, draftValue, latestValue, draftDescription, latestDescription];
+  for (const choice of choices) {
+    await expect(choice).toHaveRole("button");
+    await expect(choice).toHaveAttribute("type", "button");
+  }
+  await expect(draftLabel).toHaveAccessibleName("Nome: manter meu rascunho");
+  await expect(latestLabel).toHaveAccessibleName("Nome: usar valor salvo");
+  await expect(latestValue).toHaveAccessibleName("Valor: usar valor salvo");
+  await expect(draftDescription).toHaveAccessibleName("Descrição: manter meu rascunho");
+  await expect(draftLabel).toHaveAttribute("aria-pressed", "true");
+  await expect(latestLabel).toHaveAttribute("aria-pressed", "false");
+
+  await draftLabel.focus();
+  await expect(draftLabel).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(latestLabel).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(latestLabel).toHaveAttribute("aria-pressed", "true");
+  await expect(draftLabel).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("Shift+Tab");
+  await expect(draftLabel).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(draftLabel).toHaveAttribute("aria-pressed", "true");
+
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await expect(draftValue).toBeFocused();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await expect(latestValue).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(latestValue).toHaveAttribute("aria-pressed", "true");
+  await expect(draftValue).toHaveAttribute("aria-pressed", "false");
+
+  await page.keyboard.press("Tab");
+  await expect(draftDescription).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(draftDescription).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Tab");
+  await expect(latestDescription).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(latestDescription).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Space");
+  await expect(draftDescription).toHaveAttribute("aria-pressed", "true");
+  await expect(latestDescription).toHaveAttribute("aria-pressed", "false");
+
+  const refresh = page.getByTestId("club-refresh-edit-benefit-visual-benefit-keyboard");
+  await refresh.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("club-edit-benefit-conflict-visual-benefit-keyboard")).toHaveCount(0);
+  await expect(labelInput).toBeFocused();
+  await expect(labelInput).toHaveValue("Rascunho da equipe");
+  await expect(valueInput).toHaveValue("8%");
+  await expect(descriptionInput).toHaveValue("Descrição do rascunho");
+});
+
 for (const viewport of widths) {
   test(`portal tabs stay navigable at ${viewport.label} width`, async ({ page }) => {
     await openFixture(page, "perfil", viewport.width, viewport.height);

@@ -1,6 +1,6 @@
 ---
 name: Testing harness gotchas
-description: Index of project-specific Vitest mock, integration-database, and validation pitfalls.
+description: Index of project-specific Vitest, browser-test, integration-database, and validation pitfalls.
 ---
 
 Detailed notes by failure mode:
@@ -24,6 +24,7 @@ Detailed notes by failure mode:
 - [Vitest 4 constructor mocks](vitest4-constructor-mocks.md)
 - [Local PostgreSQL integration setup](local-postgres-integration.md)
 - [PostgreSQL lock-barrier visibility](postgres-lock-barrier-visibility.md)
+- [Browser keyboard verification](browser-keyboard-verification.md)
 
 ## GitHub Actions PostgreSQL isolation
 
