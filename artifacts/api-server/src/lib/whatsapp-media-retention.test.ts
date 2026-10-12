@@ -49,13 +49,27 @@ describe("runWhatsAppInboundMediaRetentionCleanup", () => {
   });
 
   it("reports database failures without preventing the orphan cleanup from running", async () => {
-    mockDbExecute.mockRejectedValueOnce(new Error("database unavailable"));
+    const privateMarkers = [
+      "customer message body",
+      "https://utfs.io/f/private-media-key",
+      "private-media-key",
+    ];
+    mockDbExecute.mockRejectedValueOnce(
+      new Error(`database unavailable ${privateMarkers.join(" ")}`),
+    );
 
     const result = await runWhatsAppInboundMediaRetentionCleanup(
       new Date("2026-10-04T12:00:00.000Z"),
     );
 
     expect(result).toEqual({ expiredMessages: 0, errors: 1 });
-    expect(mockLogError).toHaveBeenCalledOnce();
+    expect(mockLogError).toHaveBeenCalledWith(
+      { error: { kind: "Error" }, expiredMessages: 0 },
+      expect.stringContaining("remaining messages will be retried"),
+    );
+    const serializedLogs = JSON.stringify(mockLogError.mock.calls);
+    for (const marker of privateMarkers) {
+      expect(serializedLogs).not.toContain(marker);
+    }
   });
 });
