@@ -38,6 +38,7 @@ export default defineConfig({
       "src/__tests__/dashboard-summary.integration.test.ts",
       "src/__tests__/tenant-id-envelope.integration.test.ts",
       "src/__tests__/whatsapp-media-retention.integration.test.ts",
+      "src/__tests__/trip-financial-report.integration.test.ts",
     ],
   },
 });
