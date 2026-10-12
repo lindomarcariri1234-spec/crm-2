@@ -60,6 +60,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Plus,
   Send,
@@ -83,6 +84,8 @@ import {
   ArrowLeft,
   MessageCircle,
   Mail as MailIcon,
+  Instagram,
+  Phone,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -131,6 +134,11 @@ import {
   type AiInboxChannelFilter,
   type AiInboxStatusFilter,
 } from "./communication/aiInboxFilters";
+import {
+  getAiInboxChannelIdentifier,
+  getAiInboxDisplayName,
+  getAiInboxInitials,
+} from "./communication/aiInboxContactInfo";
 import {
   getInstagramIdentity,
   getInstagramProfileUrl,
@@ -552,6 +560,10 @@ export default function Communication() {
       enabled: tab === "email-logs" || tab === "ai-inbox",
     },
   });
+  const aiInboxClientsById = useMemo(
+    () => new Map((clients?.data ?? []).map((client) => [client.id, client])),
+    [clients?.data],
+  );
   const selectedAiClient = (clients?.data ?? []).find(
     (client) => client.id === selectedAiConversation?.clientId,
   );
@@ -1624,44 +1636,85 @@ export default function Communication() {
                         </>
                       )}
                     </div>
-                  ) : visibleAiConversations.map((conversation) => (
-                    <button
-                      key={conversation.id}
-                      data-testid={`button-ai-inbox-conversation-${conversation.id}`}
-                      type="button"
-                      aria-pressed={selectedAiConversationId === conversation.id}
-                      onClick={() => selectAiConversation(conversation.id)}
-                      className={`relative w-full p-3.5 text-left transition-colors hover:bg-secondary/45 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selectedAiConversationId === conversation.id ? "bg-primary/[0.07] before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:bg-primary" : ""}`}
-                    >
-                      <div className="flex min-w-0 items-start gap-3">
-                        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${selectedAiConversationId === conversation.id ? "bg-primary text-primary-foreground" : "bg-accent text-accent-foreground"}`} aria-hidden="true">
-                          {getInstagramIdentity(conversation).slice(0, 2).toLocaleUpperCase("pt-BR")}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="min-w-0 truncate text-sm font-semibold">
-                              {getInstagramIdentity(conversation)}
+                  ) : visibleAiConversations.map((conversation) => {
+                    const client = conversation.clientId
+                      ? aiInboxClientsById.get(conversation.clientId)
+                      : undefined;
+                    const displayName = getAiInboxDisplayName(conversation, client);
+                    const channelIdentifier = getAiInboxChannelIdentifier(conversation, client);
+                    const clientTags = (client?.tags ?? []).filter(Boolean);
+                    return (
+                      <button
+                        key={conversation.id}
+                        data-testid={`button-ai-inbox-conversation-${conversation.id}`}
+                        type="button"
+                        aria-pressed={selectedAiConversationId === conversation.id}
+                        onClick={() => selectAiConversation(conversation.id)}
+                        className={`relative w-full p-3.5 text-left transition-colors hover:bg-secondary/45 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selectedAiConversationId === conversation.id ? "bg-primary/[0.07] before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:bg-primary" : ""}`}
+                      >
+                        <div className="flex min-w-0 items-start gap-3">
+                          <Avatar className={`h-10 w-10 shrink-0 ${selectedAiConversationId === conversation.id ? "ring-2 ring-primary ring-offset-2" : ""}`} aria-hidden="true">
+                            <AvatarImage src={client?.photoUrl ?? undefined} alt="" />
+                            <AvatarFallback className="bg-accent text-xs font-semibold text-accent-foreground">
+                              {getAiInboxInitials(displayName)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 items-start justify-between gap-2">
+                              <p className="min-w-0 truncate text-sm font-semibold">
+                                {displayName}
+                              </p>
+                              <Badge className="h-5 shrink-0 rounded-md px-1.5 text-[10px]" variant={conversation.status === "human_handoff" ? "default" : "secondary"}>
+                                {conversation.status === "human_handoff"
+                                  ? "Humano"
+                                  : conversation.status === "opted_out"
+                                    ? "Opt-out"
+                                    : "Automação"}
+                              </Badge>
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                              {conversation.lastMessageRole === "assistant" && <span className="font-medium text-foreground/70">{conversation.lastMessageIsBot ? "IA: " : "Equipe: "}</span>}
+                              {conversation.lastMessageContent || "Atendimento iniciado"}
                             </p>
-                            <Badge className="h-5 shrink-0 rounded-md px-1.5 text-[10px]" variant={conversation.status === "human_handoff" ? "default" : "secondary"}>
-                          {conversation.channel === "instagram"
-                            ? conversation.status === "human_handoff" ? "Humano" : "Direct"
-                            : conversation.status === "human_handoff" ? "Humano" : conversation.status === "opted_out" ? "Opt-out" : "IA"}
-                            </Badge>
+                            <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                              <span className={`inline-flex shrink-0 items-center gap-1 font-medium ${conversation.channel === "instagram" ? "text-pink-700 dark:text-pink-300" : "text-emerald-700 dark:text-emerald-300"}`}>
+                                {conversation.channel === "instagram"
+                                  ? <Instagram className="h-3 w-3" aria-hidden="true" />
+                                  : <MessageCircle className="h-3 w-3" aria-hidden="true" />}
+                                {conversation.channel === "instagram" ? "Instagram Direct" : "WhatsApp"}
+                              </span>
+                              {channelIdentifier && (
+                                <span className="inline-flex min-w-0 items-center gap-1 truncate" title={channelIdentifier}>
+                                  {conversation.channel === "instagram"
+                                    ? <Instagram className="h-3 w-3 shrink-0" aria-hidden="true" />
+                                    : <Phone className="h-3 w-3 shrink-0" aria-hidden="true" />}
+                                  <span className="truncate">{channelIdentifier}</span>
+                                </span>
+                              )}
+                              <span className="shrink-0 tabular-nums" title={new Date(conversation.lastMessageAt ?? conversation.createdAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}>
+                                {new Date(conversation.lastMessageAt ?? conversation.createdAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                                <span aria-hidden="true"> · </span>{conversation.messageCount} mensagens
+                              </span>
+                            </div>
+                            {clientTags.length > 0 && (
+                              <div className="mt-1.5 flex flex-wrap gap-1">
+                                {clientTags.slice(0, 2).map((tag) => (
+                                  <span key={tag} className="max-w-28 truncate rounded-full bg-secondary px-1.5 py-0.5 text-[10px] leading-none text-secondary-foreground" title={tag}>
+                                    {tag}
+                                  </span>
+                                ))}
+                                {clientTags.length > 2 && (
+                                  <span className="text-[10px] leading-tight text-muted-foreground">
+                                    +{clientTags.length - 2}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                            {conversation.lastMessageRole === "assistant" && <span className="font-medium text-foreground/70">{conversation.lastMessageIsBot ? "IA: " : "Equipe: "}</span>}
-                            {conversation.lastMessageContent || "Atendimento iniciado"}
-                          </p>
-                          <p className="mt-1.5 text-[11px] tabular-nums text-muted-foreground">
-                            {conversation.channel === "instagram" ? "Instagram Direct" : "WhatsApp"}
-                            <span aria-hidden="true"> · </span>
-                            {new Date(conversation.lastMessageAt ?? conversation.createdAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                            <span aria-hidden="true"> · </span>{conversation.messageCount} mensagens
-                          </p>
                         </div>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
               </section>
               <section aria-label={selectedAiConversationId ? "Histórico do atendimento selecionado" : "Atendimento selecionado"} className={`min-h-[70dvh] min-w-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm md:min-h-0 ${selectedAiConversationId ? "flex" : "hidden md:flex"}`}>
