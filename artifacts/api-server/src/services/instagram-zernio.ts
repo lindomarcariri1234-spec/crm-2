@@ -11,6 +11,58 @@ import { logger } from "../lib/logger";
 
 export const INSTAGRAM_ZERNIO_TYPE = "instagram_zernio";
 
+export class ZernioInstagramSendError extends Error {
+  constructor(
+    readonly kind: "rejected" | "unknown",
+    readonly httpStatus?: number,
+  ) {
+    super("Zernio Instagram message send failed");
+    this.name = "ZernioInstagramSendError";
+  }
+}
+
+export async function sendZernioInstagramText(
+  apiKey: string,
+  accountId: string,
+  conversationId: string,
+  content: string,
+  idempotencyKey: string,
+): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://zernio.com/api/v1/inbox/conversations/${encodeURIComponent(conversationId)}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({ accountId, message: content }),
+        signal: AbortSignal.timeout(12000),
+      },
+    );
+  } catch {
+    throw new ZernioInstagramSendError("unknown");
+  }
+
+  if (!response.ok) {
+    throw new ZernioInstagramSendError(response.status >= 500 ? "unknown" : "rejected", response.status);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new ZernioInstagramSendError("unknown", response.status);
+  }
+  const data = asObject(asObject(payload)?.data);
+  const messageId = nonEmptyString(data?.messageId);
+  if (!messageId) throw new ZernioInstagramSendError("unknown", response.status);
+  return messageId;
+}
+
 type JsonObject = Record<string, unknown>;
 
 export interface ZernioInstagramMessage {
@@ -234,7 +286,7 @@ export async function processZernioInstagramWebhook(payload: unknown): Promise<n
       id: generateId(),
       tenantId: integration.tenantId,
       conversationId: conversation.id,
-      sourceMessageId: `zernio:${sent.messageId}`,
+      providerMessageId: sent.messageId,
       role: "assistant",
       content: sent.content,
       sentAt: sent.sentAt,
@@ -271,7 +323,7 @@ export async function processZernioInstagramWebhook(payload: unknown): Promise<n
       .where(and(
         eq(chatbotMessagesTable.tenantId, integration.tenantId),
         eq(chatbotMessagesTable.conversationId, conversation.id),
-        eq(chatbotMessagesTable.sourceMessageId, `zernio:${status.messageId}`),
+        eq(chatbotMessagesTable.providerMessageId, status.messageId),
         eq(chatbotMessagesTable.role, "assistant"),
       ))
       .returning({ id: chatbotMessagesTable.id });

@@ -153,6 +153,7 @@ export const chatbotMessagesTable = pgTable(
     // Provider message IDs are the idempotency key for inbound WhatsApp
     // deliveries, which Evolution may replay after a timeout.
     sourceMessageId: text("source_message_id"),
+    providerMessageId: text("provider_message_id"),
     deliveryStatus: text("delivery_status").notNull().default("sent"),
     deliveryAttempts: integer("delivery_attempts").notNull().default(0),
     deliveryUpdatedAt: timestamp("delivery_updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -173,6 +174,9 @@ export const chatbotMessagesTable = pgTable(
     index("chatbot_messages_ticket_sent_idx").on(table.ticketId, table.sentAt),
     uniqueIndex("chatbot_messages_tenant_source_message_unique")
       .on(table.tenantId, table.sourceMessageId),
+    uniqueIndex("chatbot_messages_tenant_provider_message_unique")
+      .on(table.tenantId, table.providerMessageId)
+      .where(sql`${table.providerMessageId} IS NOT NULL`),
   ],
 );
 

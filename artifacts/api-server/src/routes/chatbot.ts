@@ -11,6 +11,7 @@ import {
 import { eq, and, desc, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
+import { decryptCredential } from "../lib/crypto";
 import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
@@ -23,6 +24,11 @@ import {
   readInstagramAccessToken,
   sendInstagramText,
 } from "../services/instagram-messaging";
+import {
+  INSTAGRAM_ZERNIO_TYPE,
+  sendZernioInstagramText,
+  ZernioInstagramSendError,
+} from "../services/instagram-zernio.js";
 import { recomputeClientClassification, recordClientClassificationEvent } from "../services/client-classification.js";
 import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
 import { extractVerifiedUploadThingKey, utapi } from "../lib/uploadthing";
@@ -33,6 +39,18 @@ import { broadcastSupportTicketUpdate } from "../lib/realtime.js";
 
 const router = Router();
 const DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
+
+function readZernioApiKey(encrypted: string | null | undefined): string | null {
+  if (!encrypted) return null;
+  try {
+    const parsed: unknown = JSON.parse(decryptCredential(encrypted));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const apiKey = (parsed as Record<string, unknown>)["apiKey"];
+    return typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 const CreateConversationBody = z.object({
   clientId: z.string().optional(),
@@ -495,6 +513,10 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         && !Array.isArray(conversation.metadata)
         ? conversation.metadata as Record<string, unknown>
         : {};
+      const provider = metadata["provider"] === "zernio" ? "zernio" : "meta";
+      const integrationType = provider === "zernio"
+        ? INSTAGRAM_ZERNIO_TYPE
+        : INSTAGRAM_MESSAGING_TYPE;
       const integrationId = typeof metadata["instagramIntegrationId"] === "string"
         ? metadata["instagramIntegrationId"]
         : null;
@@ -503,7 +525,7 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
           .where(and(
             eq(tenantIntegrationsTable.id, integrationId),
             eq(tenantIntegrationsTable.tenantId, me.tenantId),
-            eq(tenantIntegrationsTable.type, INSTAGRAM_MESSAGING_TYPE),
+            eq(tenantIntegrationsTable.type, integrationType),
             eq(tenantIntegrationsTable.enabled, true),
             eq(tenantIntegrationsTable.status, "connected"),
           ))
@@ -513,6 +535,28 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         res.status(409).json({
           code: "INSTAGRAM_CONNECTION_UNAVAILABLE",
           error: "A conta do Instagram não está conectada. Reconecte-a nas configurações.",
+        });
+        return;
+      }
+      const zernioConfig = provider === "zernio"
+        ? (integration.config ?? {}) as Record<string, string>
+        : null;
+      const zernioApiKey = provider === "zernio"
+        ? readZernioApiKey(integration.secretsEncrypted)
+        : null;
+      if (
+        provider === "zernio" &&
+        (
+          !zernioApiKey ||
+          !zernioConfig?.accountId ||
+          zernioConfig.accountId !== metadata["zernioAccountId"] ||
+          zernioConfig.profileId !== metadata["zernioProfileId"] ||
+          typeof metadata["zernioConversationId"] !== "string"
+        )
+      ) {
+        res.status(409).json({
+          code: "ZERNIO_SEND_CONFIGURATION_INCOMPLETE",
+          error: "Configure a chave de API da Zernio e confira o vínculo da conta antes de enviar.",
         });
         return;
       }
@@ -572,27 +616,47 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
       }
 
       try {
-        const meta = getInstagramMetaConfig();
-        if (!meta.appConfigured) throw new InstagramProviderError("rejected");
-        const integrationConfig = (integration.config ?? {}) as Record<string, string>;
-        const instagramUserId = integrationConfig["instagramUserId"];
-        if (!instagramUserId) throw new InstagramProviderError("rejected");
-        await sendInstagramText(
-          meta,
-          readInstagramAccessToken(integration),
-          instagramUserId,
-          conversation.sessionId,
-          parsed.data.content,
-        );
-        await db.update(chatbotMessagesTable).set({
-          deliveryStatus: "sent",
-          deliveryAttempts: 1,
-          deliveryUpdatedAt: new Date(),
-          lastDeliveryError: null,
-        }).where(and(
-          eq(chatbotMessagesTable.id, id),
-          eq(chatbotMessagesTable.tenantId, me.tenantId),
-        ));
+        if (provider === "zernio") {
+          const providerMessageId = await sendZernioInstagramText(
+            zernioApiKey!,
+            zernioConfig!.accountId!,
+            metadata["zernioConversationId"] as string,
+            parsed.data.content,
+            parsed.data.idempotencyKey,
+          );
+          await db.update(chatbotMessagesTable).set({
+            providerMessageId,
+            deliveryStatus: "sent",
+            deliveryAttempts: 1,
+            deliveryUpdatedAt: new Date(),
+            lastDeliveryError: null,
+          }).where(and(
+            eq(chatbotMessagesTable.id, id),
+            eq(chatbotMessagesTable.tenantId, me.tenantId),
+          ));
+        } else {
+          const meta = getInstagramMetaConfig();
+          if (!meta.appConfigured) throw new InstagramProviderError("rejected");
+          const integrationConfig = (integration.config ?? {}) as Record<string, string>;
+          const instagramUserId = integrationConfig["instagramUserId"];
+          if (!instagramUserId) throw new InstagramProviderError("rejected");
+          await sendInstagramText(
+            meta,
+            readInstagramAccessToken(integration),
+            instagramUserId,
+            conversation.sessionId,
+            parsed.data.content,
+          );
+          await db.update(chatbotMessagesTable).set({
+            deliveryStatus: "sent",
+            deliveryAttempts: 1,
+            deliveryUpdatedAt: new Date(),
+            lastDeliveryError: null,
+          }).where(and(
+            eq(chatbotMessagesTable.id, id),
+            eq(chatbotMessagesTable.tenantId, me.tenantId),
+          ));
+        }
         await db.update(chatbotConversationsTable)
           .set({ status: "human_handoff", assignedUserId: me.id })
           .where(and(
@@ -605,17 +669,20 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         res.status(201).json(message);
       } catch (error) {
         const providerError = error instanceof InstagramProviderError ? error : null;
-        const outcomeUnknown = providerError?.kind === "unknown";
+        const zernioError = error instanceof ZernioInstagramSendError ? error : null;
+        const outcomeUnknown = providerError?.kind === "unknown" || zernioError?.kind === "unknown";
         await db.update(chatbotMessagesTable).set({
           deliveryStatus: outcomeUnknown ? "unknown" : "failed",
           deliveryAttempts: 1,
           deliveryUpdatedAt: new Date(),
-          lastDeliveryError: outcomeUnknown ? "instagram-outcome-unknown" : "instagram-provider-rejected",
+          lastDeliveryError: outcomeUnknown
+            ? `${provider}-outcome-unknown`
+            : `${provider}-provider-rejected`,
         }).where(and(
           eq(chatbotMessagesTable.id, id),
           eq(chatbotMessagesTable.tenantId, me.tenantId),
         ));
-        if (providerError?.httpStatus === 401) {
+        if (provider === "meta" && providerError?.httpStatus === 401) {
           await db.update(tenantIntegrationsTable).set({
             enabled: false,
             status: "error",
@@ -626,10 +693,14 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
           ));
         }
         res.status(outcomeUnknown ? 502 : 422).json({
-          code: outcomeUnknown ? "INSTAGRAM_DELIVERY_UNKNOWN" : "INSTAGRAM_DELIVERY_FAILED",
+          code: outcomeUnknown
+            ? "INSTAGRAM_DELIVERY_UNKNOWN"
+            : provider === "zernio" ? "ZERNIO_DELIVERY_FAILED" : "INSTAGRAM_DELIVERY_FAILED",
           error: outcomeUnknown
-            ? "A Meta não confirmou o resultado do envio. Verifique a conversa antes de tentar novamente."
-            : "A Meta recusou o envio. Revise a conexão e as permissões do Instagram.",
+            ? `A ${provider === "zernio" ? "Zernio" : "Meta"} não confirmou o resultado do envio. Verifique a conversa antes de tentar novamente.`
+            : provider === "zernio"
+              ? "A Zernio recusou o envio. Confira a chave de API e as permissões de mensagens."
+              : "A Meta recusou o envio. Revise a conexão e as permissões do Instagram.",
         });
       }
       return;

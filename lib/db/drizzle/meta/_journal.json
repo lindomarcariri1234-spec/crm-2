@@ -806,6 +806,13 @@
       "when": 1809960015000,
       "tag": "0115_club_benefit_idempotency",
       "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1809960016000,
+      "tag": "0116_chatbot_provider_message_id",
+      "breakpoints": true
     }
   ]
 }

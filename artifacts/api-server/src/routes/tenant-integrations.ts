@@ -469,6 +469,13 @@ const REGISTRY: Record<string, RegistryEntry> = {
         description: "ID exato recebido em account.profileId. Necessário para associar eventos ao perfil correto.",
         secret: false,
       },
+      {
+        key: "apiKey",
+        label: "Chave de API da Zernio",
+        description: "Necessária para enviar respostas do CRM. A chave precisa ter permissão para mensagens (messages).",
+        secret: true,
+        optional: true,
+      },
     ],
     async testConnection(config) {
       const accountId = config.accountId?.trim();
