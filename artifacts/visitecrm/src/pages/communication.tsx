@@ -126,6 +126,12 @@ import {
 import { useConversationAiMessages } from "./communication/useConversationAiMessages";
 import { submitInboxMessage } from "./communication/submitInboxMessage";
 import {
+  filterAiInboxConversations,
+  getAiInboxStatusCounts,
+  type AiInboxChannelFilter,
+  type AiInboxStatusFilter,
+} from "./communication/aiInboxFilters";
+import {
   getInstagramIdentity,
   getInstagramProfileUrl,
   getWhatsAppDirectUrl,
@@ -247,7 +253,8 @@ export default function Communication() {
   const [inboxChannel, setInboxChannel] = useState<"whatsapp" | "email">("whatsapp");
   const [inboxMessage, setInboxMessage] = useState("");
   const [aiConversations, setAiConversations] = useState<AiConversation[]>([]);
-  const [aiInboxChannelFilter, setAiInboxChannelFilter] = useState<"all" | "whatsapp" | "instagram">("all");
+  const [aiInboxChannelFilter, setAiInboxChannelFilter] = useState<AiInboxChannelFilter>("all");
+  const [aiInboxStatusFilter, setAiInboxStatusFilter] = useState<AiInboxStatusFilter>("all");
   const [aiInboxSearch, setAiInboxSearch] = useState("");
   const [selectedAiConversationId, setSelectedAiConversationId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
@@ -268,25 +275,23 @@ export default function Communication() {
   });
   const [aiInboxError, setAiInboxError] = useState<string | null>(null);
   const [aiReply, setAiReply] = useState("");
-  const visibleAiConversations = useMemo(() => {
-    const query = aiInboxSearch.trim().toLocaleLowerCase("pt-BR");
-    return aiConversations
-      .filter((conversation) => {
-        const supportedChannel = conversation.channel === "whatsapp" || conversation.channel === "instagram";
-        const matchesChannel = aiInboxChannelFilter === "all" || conversation.channel === aiInboxChannelFilter;
-        const searchable = [
-          getInstagramIdentity(conversation),
-          conversation.clientName,
-          conversation.sessionId,
-          conversation.lastMessageContent,
-          conversation.channel,
-        ].filter(Boolean).join(" ").toLocaleLowerCase("pt-BR");
-        return supportedChannel && matchesChannel && (!query || searchable.includes(query));
-      })
-      .sort((a, b) =>
-        Date.parse(b.lastMessageAt ?? b.createdAt) - Date.parse(a.lastMessageAt ?? a.createdAt),
-      );
-  }, [aiConversations, aiInboxChannelFilter, aiInboxSearch]);
+  const aiInboxStatusCounts = useMemo(
+    () => getAiInboxStatusCounts(aiConversations, aiInboxChannelFilter),
+    [aiConversations, aiInboxChannelFilter],
+  );
+  const visibleAiConversations = useMemo(
+    () =>
+      filterAiInboxConversations(
+        aiConversations,
+        {
+          channel: aiInboxChannelFilter,
+          status: aiInboxStatusFilter,
+          search: aiInboxSearch,
+        },
+        getInstagramIdentity,
+      ),
+    [aiConversations, aiInboxChannelFilter, aiInboxStatusFilter, aiInboxSearch],
+  );
   const selectedAiConversation = aiConversations.find(
     (conversation) => conversation.id === selectedAiConversationId,
   );
@@ -1437,7 +1442,7 @@ export default function Communication() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="w-full justify-start overflow-x-auto">
-          <TabsTrigger value="conversations">Mensagens por cliente</TabsTrigger>
+          <TabsTrigger value="conversations">Histórico por cliente</TabsTrigger>
           <TabsTrigger value="ai-inbox" className="flex items-center gap-1">
             <MessageSquare className="w-3.5 h-3.5" /> Atendimento multicanal
           </TabsTrigger>
@@ -1518,25 +1523,56 @@ export default function Communication() {
                 <div className="space-y-3 border-b bg-secondary/35 px-4 py-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">Atendimento multicanal</p>
-                    <h2 className="mt-0.5 text-base font-semibold tracking-tight">Conversas</h2>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">Atendimento multicanal</p>
+                      <h2 className="mt-0.5 text-base font-semibold tracking-tight">Caixa de entrada</h2>
+                    </div>
+                    <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-card px-2 text-xs font-semibold tabular-nums ring-1 ring-border/70" aria-label={`${visibleAiConversations.length} atendimentos no filtro atual`}>
+                      {visibleAiConversations.length}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-card px-2 text-xs font-semibold tabular-nums ring-1 ring-border/70">{visibleAiConversations.length}</span>
-                    <Select
-                      value={aiInboxChannelFilter}
-                      onValueChange={(value) => setAiInboxChannelFilter(value as "all" | "whatsapp" | "instagram")}
-                    >
-                    <SelectTrigger data-testid="select-ai-inbox-channel-filter" aria-label="Filtrar conversas por canal" className="h-8 w-[122px] text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Todos</SelectItem>
-                        <SelectItem value="whatsapp">WhatsApp</SelectItem>
-                        <SelectItem value="instagram">Instagram</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Filtrar conversas por canal">
+                      {([
+                        { value: "all", label: "Todos" },
+                        { value: "whatsapp", label: "WhatsApp" },
+                        { value: "instagram", label: "Instagram" },
+                      ] as const).map((option) => (
+                        <Button
+                          key={option.value}
+                          type="button"
+                          size="sm"
+                          variant={aiInboxChannelFilter === option.value ? "secondary" : "ghost"}
+                          aria-pressed={aiInboxChannelFilter === option.value}
+                          data-testid={`button-ai-inbox-channel-${option.value}`}
+                          className="h-7 rounded-full px-2.5 text-xs"
+                          onClick={() => setAiInboxChannelFilter(option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filtrar conversas por situação">
+                      {([
+                        { value: "all", label: "Todas", count: aiInboxStatusCounts.all },
+                        { value: "human", label: "Com equipe", count: aiInboxStatusCounts.human },
+                        { value: "automation", label: "Automação", count: aiInboxStatusCounts.automation },
+                        { value: "opted_out", label: "Opt-out", count: aiInboxStatusCounts.opted_out },
+                      ] as const).map((option) => (
+                        <Button
+                          key={option.value}
+                          type="button"
+                          size="sm"
+                          variant={aiInboxStatusFilter === option.value ? "default" : "outline"}
+                          aria-pressed={aiInboxStatusFilter === option.value}
+                          data-testid={`button-ai-inbox-status-${option.value}`}
+                          className="h-7 rounded-full px-2.5 text-xs"
+                          onClick={() => setAiInboxStatusFilter(option.value)}
+                        >
+                          {option.label}
+                          <span className="ml-1 tabular-nums opacity-75">{option.count}</span>
+                        </Button>
+                      ))}
+                    </div>
                   </div>
                   <label className="relative block">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
@@ -1553,13 +1589,24 @@ export default function Communication() {
                 <div className="min-h-0 flex-1 divide-y overflow-y-auto">
                   {visibleAiConversations.length === 0 ? (
                     <div className="flex min-h-40 flex-col items-center justify-center px-5 text-center text-muted-foreground">
-                      {aiInboxSearch.trim() ? (
+                      {aiInboxSearch.trim() || aiInboxStatusFilter !== "all" ? (
                         <>
                           <Search className="mb-2 h-4 w-4" aria-hidden="true" />
-                          <p className="text-sm font-medium text-foreground">Nenhuma conversa encontrada</p>
-                          <p className="mt-1 text-xs">Tente outro nome, @ ou trecho da mensagem.</p>
-                          <Button type="button" variant="link" size="sm" className="mt-1" data-testid="button-clear-ai-inbox-search" onClick={() => setAiInboxSearch("")}>
-                            Limpar busca
+                          <p className="text-sm font-medium text-foreground">Nenhum atendimento neste filtro</p>
+                          <p className="mt-1 text-xs">Ajuste ou limpe os filtros para ver outras conversas.</p>
+                          <Button
+                            type="button"
+                            variant="link"
+                            size="sm"
+                            className="mt-1"
+                            data-testid="button-clear-ai-inbox-filters"
+                            onClick={() => {
+                              setAiInboxSearch("");
+                              setAiInboxStatusFilter("all");
+                              setAiInboxChannelFilter("all");
+                            }}
+                          >
+                            Limpar filtros
                           </Button>
                         </>
                       ) : (
