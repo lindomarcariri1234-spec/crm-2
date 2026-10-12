@@ -456,23 +456,32 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       expect(mockListFiles).toHaveBeenNthCalledWith(2, { limit: 500, offset: 500 });
     });
 
-    it("aborts scan and stages any found candidates when listFiles throws mid-pagination", async () => {
-      const KEY = "key-before-error";
+    it("preserves existing staging and skips deletion when listFiles throws mid-pagination", async () => {
+      const visibleKey = "already-staged-visible-key";
+      const unseenKey = "already-staged-unseen-key";
+      const stagedAt = Date.now() - GRACE_MS - 1000;
       const marker = "SYNTHETIC_UPLOADTHING_LIST_SECRET_418";
       const secretMarker = "uploadthing-test-secret-not-for-logs";
       const providerError = Object.assign(new Error(`UploadThing API unreachable ${marker}`), {
         request: { headers: { "x-uploadthing-api-key": secretMarker } },
       });
-      mockStagingEmpty();
+      mockStaging([
+        { key: visibleKey, stagedAt },
+        { key: unseenKey, stagedAt },
+      ]);
       mockListFiles
-        .mockResolvedValueOnce(buildPage([KEY], /* hasMore= */ true))
+        .mockResolvedValueOnce(buildPage([visibleKey], /* hasMore= */ true))
         .mockRejectedValueOnce(providerError);
 
       const result = await runUploadThingOrphanCleanup();
 
       expect(result.scanned).toBe(1);
-      expect(result.newlyStaged).toBe(1);
+      expect(result.newlyStaged).toBe(0);
+      expect(result.deleted).toBe(0);
+      expect(result.errors).toBe(1);
       expect(mockDeleteFiles).not.toHaveBeenCalled();
+      expect(mockDbUpdate).not.toHaveBeenCalled();
+      expect(mockDbInsert).not.toHaveBeenCalled();
       expect(mockLogError).toHaveBeenCalledTimes(1);
       expect(mockLogError).toHaveBeenCalledWith(
         expect.objectContaining({

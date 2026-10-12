@@ -921,4 +921,66 @@ describe("WhatsApp media retention with PostgreSQL", () => {
       .limit(1);
     expect(JSON.parse(stagingAfterRetry?.value ?? "[]")).toEqual([]);
   }, 30_000);
+
+  it("preserves staged candidates across an interrupted listing and deletes them after a complete retry", async () => {
+    const stagedAt = Date.now() - ORPHAN_GRACE_MS - 5_000;
+    const visibleKey = `wa-retention-pagination-visible-${RUN_ID}`;
+    const unseenKey = `wa-retention-pagination-unseen-${RUN_ID}`;
+    const stagedCandidates = [
+      { key: visibleKey, stagedAt },
+      { key: unseenKey, stagedAt },
+    ];
+    await db
+      .update(platformSettingsTable)
+      .set({ value: JSON.stringify(stagedCandidates) })
+      .where(eq(platformSettingsTable.key, STAGING_KEY));
+
+    mockListFiles
+      .mockReset()
+      .mockResolvedValueOnce({
+        files: [{ key: visibleKey, name: "pagination.jpg", size: 100 }],
+        hasMore: true,
+      })
+      .mockRejectedValueOnce(new Error("Simulated UploadThing page failure"));
+    mockDeleteFiles.mockReset().mockResolvedValue({ deletedCount: 1 });
+
+    const incompleteResult = await runUploadThingOrphanCleanup();
+
+    expect(incompleteResult.scanned).toBe(1);
+    expect(incompleteResult.errors).toBe(1);
+    expect(incompleteResult.newlyStaged).toBe(0);
+    expect(incompleteResult.deleted).toBe(0);
+    expect(mockDeleteFiles).not.toHaveBeenCalled();
+    const [stagingAfterIncomplete] = await db
+      .select({ value: platformSettingsTable.value })
+      .from(platformSettingsTable)
+      .where(eq(platformSettingsTable.key, STAGING_KEY))
+      .limit(1);
+    expect(JSON.parse(stagingAfterIncomplete?.value ?? "[]")).toEqual(stagedCandidates);
+
+    mockListFiles
+      .mockReset()
+      .mockResolvedValueOnce({
+        files: [{ key: visibleKey, name: "pagination.jpg", size: 100 }],
+        hasMore: true,
+      })
+      .mockResolvedValueOnce({
+        files: [{ key: unseenKey, name: "pagination.jpg", size: 100 }],
+        hasMore: false,
+      });
+    mockDeleteFiles.mockReset().mockResolvedValueOnce({ deletedCount: 2 });
+
+    const recoveredResult = await runUploadThingOrphanCleanup();
+
+    expect(recoveredResult.errors).toBe(0);
+    expect(recoveredResult.deleted).toBe(2);
+    expect(mockDeleteFiles).toHaveBeenCalledOnce();
+    expect(mockDeleteFiles).toHaveBeenCalledWith([visibleKey, unseenKey]);
+    const [stagingAfterRecovery] = await db
+      .select({ value: platformSettingsTable.value })
+      .from(platformSettingsTable)
+      .where(eq(platformSettingsTable.key, STAGING_KEY))
+      .limit(1);
+    expect(JSON.parse(stagingAfterRecovery?.value ?? "[]")).toEqual([]);
+  }, 30_000);
 });

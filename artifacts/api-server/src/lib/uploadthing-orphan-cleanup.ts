@@ -172,12 +172,15 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     // ── Step 2: Page through UploadThing and identify current orphans ─────────
     const currentOrphanKeys = new Set<string>();
     let offset = 0;
+    let listingComplete = true;
 
     while (true) {
       let page: Awaited<ReturnType<typeof utapi.listFiles>>;
       try {
         page = await utapi.listFiles({ limit: PAGE_SIZE, offset });
       } catch (listErr) {
+        listingComplete = false;
+        result.errors++;
         logger.error(
           { providerError: safeErrorLogFields(listErr), offset },
           "[uploadthing-orphan] Failed to list files from UploadThing — aborting scan",
@@ -197,26 +200,36 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     }
 
     logger.info(
-      { scanned: result.scanned, currentOrphans: currentOrphanKeys.size },
-      "[uploadthing-orphan] Scan complete",
+      {
+        scanned: result.scanned,
+        currentOrphans: currentOrphanKeys.size,
+        listingComplete,
+      },
+      listingComplete
+        ? "[uploadthing-orphan] Scan complete"
+        : "[uploadthing-orphan] Scan incomplete — preserving existing staging",
     );
 
     // ── Step 3: Separate into "ready to delete" vs "newly staged" ────────────
     const toDelete: string[] = [];
-    const updatedStaging: StagedCandidate[] = [];
+    const updatedStaging: StagedCandidate[] = listingComplete
+      ? []
+      : [...existingStaged];
 
-    for (const key of currentOrphanKeys) {
-      const stagedAt = existingStagedMap.get(key);
-      if (stagedAt !== undefined && now - stagedAt >= GRACE_MS) {
-        // Candidate has been an orphan for the full grace period → eligible for deletion
-        toDelete.push(key);
-      } else if (stagedAt === undefined) {
-        // First time we've seen this key as an orphan → stage it
-        updatedStaging.push({ key, stagedAt: now });
-        result.newlyStaged++;
-      } else {
-        // Still within grace period → keep staged
-        updatedStaging.push({ key, stagedAt });
+    if (listingComplete) {
+      for (const key of currentOrphanKeys) {
+        const stagedAt = existingStagedMap.get(key);
+        if (stagedAt !== undefined && now - stagedAt >= GRACE_MS) {
+          // Candidate has been an orphan for the full grace period → eligible for deletion
+          toDelete.push(key);
+        } else if (stagedAt === undefined) {
+          // First time we've seen this key as an orphan → stage it
+          updatedStaging.push({ key, stagedAt: now });
+          result.newlyStaged++;
+        } else {
+          // Still within grace period → keep staged
+          updatedStaging.push({ key, stagedAt });
+        }
       }
     }
     // Keys in existingStaged that are no longer orphans (now in DB) are intentionally
@@ -228,7 +241,7 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     );
 
     // ── Step 4: Delete eligible candidates in batches, with per-batch re-check ─
-    if (toDelete.length > 0) {
+    if (listingComplete && toDelete.length > 0) {
       for (let i = 0; i < toDelete.length; i += DELETE_BATCH_SIZE) {
         const batch = toDelete.slice(i, i + DELETE_BATCH_SIZE);
 
@@ -314,13 +327,15 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     }
 
     // ── Step 5: Persist updated staging ──────────────────────────────────────
-    try {
-      await writeStagedCandidates(updatedStaging);
-    } catch (writeErr) {
-      logger.error(
-        { error: safeErrorLogFields(writeErr) },
-        "[uploadthing-orphan] Failed to persist updated staging — next run will re-discover candidates",
-      );
+    if (listingComplete) {
+      try {
+        await writeStagedCandidates(updatedStaging);
+      } catch (writeErr) {
+        logger.error(
+          { error: safeErrorLogFields(writeErr) },
+          "[uploadthing-orphan] Failed to persist updated staging — next run will re-discover candidates",
+        );
+      }
     }
 
   } catch (err) {
