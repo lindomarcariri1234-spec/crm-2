@@ -23,6 +23,24 @@ export interface ZernioInstagramMessage {
   sentAt: Date;
 }
 
+export interface ZernioInstagramMessageStatus {
+  accountId: string;
+  profileId: string | null;
+  conversationId: string;
+  messageId: string;
+  status: "delivered" | "read";
+  statusAt: Date;
+}
+
+interface ZernioInstagramSentMessage {
+  accountId: string;
+  profileId: string | null;
+  conversationId: string;
+  messageId: string;
+  content: string;
+  sentAt: Date;
+}
+
 function asObject(value: unknown): JsonObject | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as JsonObject
@@ -84,11 +102,182 @@ export function parseZernioInstagramMessage(payload: unknown): ZernioInstagramMe
   };
 }
 
+export function parseZernioInstagramMessageStatus(
+  payload: unknown,
+): ZernioInstagramMessageStatus | null {
+  const event = asObject(payload);
+  if (event?.event !== "message.delivered" && event?.event !== "message.read") {
+    return null;
+  }
+  const account = asObject(event.account);
+  const message = asObject(event.message);
+  if (
+    !message ||
+    message.platform !== "instagram" ||
+    message.direction !== "outgoing"
+  ) {
+    return null;
+  }
+
+  const accountId = nonEmptyString(account?.accountId) ?? nonEmptyString(account?.id);
+  const profileId = nonEmptyString(account?.profileId);
+  const conversationId = nonEmptyString(message.conversationId);
+  const messageId = nonEmptyString(message.id) ?? nonEmptyString(message.platformMessageId);
+  const statusAtValue = event.statusAt;
+  const statusAt = typeof statusAtValue === "string" ? new Date(statusAtValue) : null;
+  if (
+    !accountId ||
+    !conversationId ||
+    !messageId ||
+    !statusAt ||
+    Number.isNaN(statusAt.getTime())
+  ) {
+    return null;
+  }
+
+  return {
+    accountId,
+    profileId,
+    conversationId,
+    messageId,
+    status: event.event === "message.read" ? "read" : "delivered",
+    statusAt,
+  };
+}
+
+export function parseZernioInstagramSentMessage(payload: unknown): ZernioInstagramSentMessage | null {
+  const event = asObject(payload);
+  if (event?.event !== "message.sent") return null;
+  const account = asObject(event.account);
+  const message = asObject(event.message);
+  if (
+    !message ||
+    message.platform !== "instagram" ||
+    message.direction !== "outgoing"
+  ) {
+    return null;
+  }
+  const accountId = nonEmptyString(account?.accountId) ?? nonEmptyString(account?.id);
+  const profileId = nonEmptyString(account?.profileId);
+  const conversationId = nonEmptyString(message.conversationId);
+  const messageId = nonEmptyString(message.id) ?? nonEmptyString(message.platformMessageId);
+  const timestampValue = event.timestamp ?? message.timestamp;
+  const sentAt = typeof timestampValue === "string" || typeof timestampValue === "number"
+    ? new Date(timestampValue)
+    : new Date();
+  if (
+    !accountId ||
+    !conversationId ||
+    !messageId ||
+    Number.isNaN(sentAt.getTime())
+  ) {
+    return null;
+  }
+  return {
+    accountId,
+    profileId,
+    conversationId,
+    messageId,
+    content: nonEmptyString(message.text) ?? "Mídia enviada pelo Instagram",
+    sentAt,
+  };
+}
+
 function integrationConfig(value: unknown): JsonObject {
   return asObject(value) ?? {};
 }
 
+async function resolveZernioIntegration(
+  accountId: string,
+  profileId: string | null,
+) {
+  const integrations = await db.select().from(tenantIntegrationsTable)
+    .where(and(
+      eq(tenantIntegrationsTable.type, INSTAGRAM_ZERNIO_TYPE),
+      eq(tenantIntegrationsTable.enabled, true),
+      eq(tenantIntegrationsTable.status, "connected"),
+    ));
+  const matches = integrations.filter((integration) => {
+    const config = integrationConfig(integration.config);
+    return config["accountId"] === accountId
+      && (!profileId || config["profileId"] === profileId);
+  });
+  if (matches.length !== 1) {
+    logger.warn({
+      accountId,
+      profileId,
+      matchCount: matches.length,
+    }, "[instagram-zernio] Ignored event for an unmapped or ambiguous account");
+    return null;
+  }
+  return matches[0]!;
+}
+
 export async function processZernioInstagramWebhook(payload: unknown): Promise<number> {
+  const sent = parseZernioInstagramSentMessage(payload);
+  if (sent) {
+    const integration = await resolveZernioIntegration(sent.accountId, sent.profileId);
+    if (!integration) return 0;
+    const [conversation] = await db.select({ id: chatbotConversationsTable.id })
+      .from(chatbotConversationsTable)
+      .where(and(
+        eq(chatbotConversationsTable.tenantId, integration.tenantId),
+        eq(chatbotConversationsTable.channel, "instagram"),
+        sql`${chatbotConversationsTable.metadata}->>'provider' = 'zernio'`,
+        sql`${chatbotConversationsTable.metadata}->>'instagramIntegrationId' = ${integration.id}`,
+        sql`${chatbotConversationsTable.metadata}->>'zernioAccountId' = ${sent.accountId}`,
+        sql`${chatbotConversationsTable.metadata}->>'zernioConversationId' = ${sent.conversationId}`,
+      ))
+      .limit(1);
+    if (!conversation) return 0;
+    const [created] = await db.insert(chatbotMessagesTable).values({
+      id: generateId(),
+      tenantId: integration.tenantId,
+      conversationId: conversation.id,
+      sourceMessageId: `zernio:${sent.messageId}`,
+      role: "assistant",
+      content: sent.content,
+      sentAt: sent.sentAt,
+      isBot: false,
+      deliveryStatus: "sent",
+    }).onConflictDoNothing().returning({ id: chatbotMessagesTable.id });
+    return created ? 1 : 0;
+  }
+
+  const status = parseZernioInstagramMessageStatus(payload);
+  if (status) {
+    const integration = await resolveZernioIntegration(status.accountId, status.profileId);
+    if (!integration) return 0;
+    const [conversation] = await db.select({ id: chatbotConversationsTable.id })
+      .from(chatbotConversationsTable)
+      .where(and(
+        eq(chatbotConversationsTable.tenantId, integration.tenantId),
+        eq(chatbotConversationsTable.channel, "instagram"),
+        sql`${chatbotConversationsTable.metadata}->>'provider' = 'zernio'`,
+        sql`${chatbotConversationsTable.metadata}->>'instagramIntegrationId' = ${integration.id}`,
+        sql`${chatbotConversationsTable.metadata}->>'zernioAccountId' = ${status.accountId}`,
+        sql`${chatbotConversationsTable.metadata}->>'zernioConversationId' = ${status.conversationId}`,
+      ))
+      .limit(1);
+    if (!conversation) return 0;
+
+    const updated = await db.update(chatbotMessagesTable)
+      .set({
+        deliveryStatus: status.status === "read"
+          ? "read"
+          : sql`CASE WHEN ${chatbotMessagesTable.deliveryStatus} = 'read' THEN 'read' ELSE 'delivered' END`,
+        deliveryUpdatedAt: sql`GREATEST(${chatbotMessagesTable.deliveryUpdatedAt}, ${status.statusAt})`,
+      })
+      .where(and(
+        eq(chatbotMessagesTable.tenantId, integration.tenantId),
+        eq(chatbotMessagesTable.conversationId, conversation.id),
+        eq(chatbotMessagesTable.sourceMessageId, `zernio:${status.messageId}`),
+        eq(chatbotMessagesTable.role, "assistant"),
+      ))
+      .returning({ id: chatbotMessagesTable.id });
+    return updated.length;
+  }
+
   const message = parseZernioInstagramMessage(payload);
   if (!message) return 0;
 

@@ -88,6 +88,52 @@ describe("Zernio Instagram webhook", () => {
     })).toBeNull();
   });
 
+  it("parses outgoing delivery and read status events without accepting inbound messages", () => {
+    const deliveredEvent = {
+      ...event,
+      event: "message.delivered",
+      statusAt: "2026-10-11T12:05:00.000Z",
+      message: {
+        ...event.message,
+        direction: "outgoing",
+      },
+    };
+    expect(zernioService.parseZernioInstagramMessageStatus(deliveredEvent)).toMatchObject({
+      accountId: "account_123",
+      profileId: "profile_123",
+      conversationId: "conv_123",
+      messageId: "msg_123",
+      status: "delivered",
+      statusAt: new Date("2026-10-11T12:05:00.000Z"),
+    });
+    expect(zernioService.parseZernioInstagramMessageStatus({
+      ...deliveredEvent,
+      event: "message.read",
+    })).toMatchObject({ status: "read" });
+    expect(zernioService.parseZernioInstagramMessageStatus(event)).toBeNull();
+    expect(zernioService.parseZernioInstagramMessageStatus({
+      ...deliveredEvent,
+      statusAt: "not-a-date",
+    })).toBeNull();
+  });
+
+  it("parses sent Instagram messages so later status events can find the stored provider id", () => {
+    const sentEvent = {
+      ...event,
+      event: "message.sent",
+      message: { ...event.message, direction: "outgoing" },
+    };
+    expect(zernioService.parseZernioInstagramSentMessage(sentEvent)).toMatchObject({
+      accountId: "account_123",
+      profileId: "profile_123",
+      conversationId: "conv_123",
+      messageId: "msg_123",
+      content: "Olá",
+      sentAt: new Date("2026-10-11T12:00:00.000Z"),
+    });
+    expect(zernioService.parseZernioInstagramSentMessage(event)).toBeNull();
+  });
+
   it("verifies the raw-body signature and processes a matching event", async () => {
     vi.stubEnv("ZERNIO_WEBHOOK_SECRET", secret);
 
@@ -96,6 +142,21 @@ describe("Zernio Instagram webhook", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ received: true, stored: 1 });
     expect(zernioService.processZernioInstagramWebhook).toHaveBeenCalledWith(event);
+  });
+
+  it("accepts a signed read-status event and forwards it for processing", async () => {
+    vi.stubEnv("ZERNIO_WEBHOOK_SECRET", secret);
+    const readEvent = {
+      ...event,
+      event: "message.read",
+      statusAt: "2026-10-11T12:05:00.000Z",
+      message: { ...event.message, direction: "outgoing" },
+    };
+
+    const response = await signedRequest(readEvent);
+
+    expect(response.status).toBe(200);
+    expect(zernioService.processZernioInstagramWebhook).toHaveBeenCalledWith(readEvent);
   });
 
   it("rejects an invalid signature without processing the event", async () => {
