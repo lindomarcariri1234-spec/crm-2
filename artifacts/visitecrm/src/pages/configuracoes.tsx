@@ -1011,6 +1011,7 @@ function StatusBadge({ status }: { status: string }) {
 interface IntegrationFieldDef {
   key: string;
   label: string;
+  description?: string;
   secret: boolean;
   optional?: boolean;
 }
@@ -1405,6 +1406,9 @@ function IntegrationCard({
                     setDirty(true);
                   }}
                 />
+                {f.description && (
+                  <p className="text-[11px] text-muted-foreground">{f.description}</p>
+                )}
               </div>
             ))}
 
@@ -1704,6 +1708,16 @@ function IntegrationsTab() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <WhatsAppIntegrationCards />
         <InstagramDirectIntegrationCard />
+        <Card className="md:col-span-2 border-pink-200 bg-pink-50/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Instagram Direct pela Zernio</CardTitle>
+            <CardDescription>
+              Este vínculo associa os eventos da Zernio à agência. Configure a URL, a assinatura e os eventos no painel da Zernio;
+              o status aqui valida os IDs informados, não a entrega do webhook.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+        <IntegrationCard type="instagram_zernio" />
         <IntegrationCard type="mercadopago" />
         <IntegrationCard type="google_analytics" />
         <IntegrationCard type="distribution_reference" />

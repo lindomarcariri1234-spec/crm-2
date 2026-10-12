@@ -191,6 +191,7 @@ async function requireIntegrationAdmin(
 interface FieldDef {
   key: string;
   label: string;
+  description?: string;
   secret: boolean;
   ssrfCheck?: boolean; // must pass assertSafeUrl before being stored
   optional?: boolean;
@@ -452,6 +453,38 @@ const REGISTRY: Record<string, RegistryEntry> = {
       return { ok: true, message: "Configuração do Google Analytics válida." };
     },
   },
+
+  instagram_zernio: {
+    label: "Instagram Direct (Zernio)",
+    fields: [
+      {
+        key: "accountId",
+        label: "Account ID da Zernio",
+        description: "ID exato recebido em account.accountId no evento do webhook; não use o @ do Instagram.",
+        secret: false,
+      },
+      {
+        key: "profileId",
+        label: "Profile ID da Zernio",
+        description: "ID exato recebido em account.profileId. Necessário para associar eventos ao perfil correto.",
+        secret: false,
+      },
+    ],
+    async testConnection(config) {
+      const accountId = config.accountId?.trim();
+      const profileId = config.profileId?.trim();
+      if (!accountId || !profileId) {
+        return {
+          ok: false,
+          message: "Informe o Account ID e o Profile ID da conta Zernio.",
+        };
+      }
+      return {
+        ok: true,
+        message: "Mapeamento da conta e do perfil Zernio validado.",
+      };
+    },
+  },
 };
 
 const ALLOWED_TYPES = Object.keys(REGISTRY);
@@ -625,6 +658,7 @@ router.get("/integrations/:type", async (req, res, next: NextFunction): Promise<
       fieldDefs: entry.fields.map((f) => ({
         key: f.key,
         label: f.label,
+        ...(f.description ? { description: f.description } : {}),
         secret: f.secret,
         optional: f.optional ?? false,
       })),

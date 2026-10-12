@@ -306,7 +306,7 @@ describe("GET /api/integrations — list all integration types", () => {
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(5);
+    expect(res.body).toHaveLength(6);
 
     const types = res.body.map((r: { type: string }) => r.type);
     expect(types).toContain("whatsapp_evolution");
@@ -314,6 +314,7 @@ describe("GET /api/integrations — list all integration types", () => {
     expect(types).toContain("mercadopago");
     expect(types).toContain("google_analytics");
     expect(types).toContain("distribution_reference");
+    expect(types).toContain("instagram_zernio");
   });
 
   it("response items include type, label, status, and enabled — no secret fields", async () => {
@@ -331,6 +332,27 @@ describe("GET /api/integrations — list all integration types", () => {
       expect(item).not.toHaveProperty("secretsEncrypted");
       expect(item).not.toHaveProperty("maskedSecrets");
     }
+  });
+
+  it("exposes both identifiers needed to map an Instagram Zernio account", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([]);
+
+    const res = await request(buildApp()).get("/api/integrations/instagram_zernio");
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.fieldDefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: "accountId",
+        label: "Account ID da Zernio",
+        secret: false,
+      }),
+      expect.objectContaining({
+        key: "profileId",
+        label: "Profile ID da Zernio",
+        secret: false,
+      }),
+    ]));
   });
 
   it("reflects stored status for a connected integration", async () => {
@@ -589,6 +611,53 @@ describe("PUT /api/integrations/:type — save configuration", () => {
       (c: unknown[]) => (c[0] as Record<string, unknown>).status === "connected",
     );
     expect(statusUpdate).toBeDefined();
+  });
+
+  it("saves and activates an Instagram Zernio account mapping", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/instagram_zernio")
+      .send({
+        name: "Instagram Zernio",
+        enabled: true,
+        config: {
+          accountId: "zernio-account-123",
+          profileId: "zernio-profile-456",
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      type: "instagram_zernio",
+      tenantId: TENANT_ID,
+      enabled: true,
+      config: {
+        accountId: "zernio-account-123",
+        profileId: "zernio-profile-456",
+      },
+    }));
+    expect(mockUpdateSet.mock.calls.some(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).status === "connected",
+    )).toBe(true);
+  });
+
+  it("does not mark an incomplete Instagram Zernio mapping connected", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/instagram_zernio")
+      .send({
+        enabled: true,
+        config: { accountId: "zernio-account-123" },
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockUpdateSet.mock.calls.some(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).status === "error",
+    )).toBe(true);
   });
 
   it("configures authenticated Evolution receive events when the integration is saved", async () => {
@@ -993,8 +1062,15 @@ describe("POST /api/integrations/:type/revoke — clear credentials", () => {
     expect(logValues).toBeDefined();
   });
 
-  it("works for all 4 integration types", async () => {
-    const types = ["whatsapp_evolution", "stripe_account", "mercadopago", "google_analytics"];
+  it("works for all registered integration types", async () => {
+    const types = [
+      "whatsapp_evolution",
+      "stripe_account",
+      "mercadopago",
+      "google_analytics",
+      "distribution_reference",
+      "instagram_zernio",
+    ];
 
     for (const type of types) {
       vi.clearAllMocks();
