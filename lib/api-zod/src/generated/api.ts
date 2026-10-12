@@ -5787,6 +5787,16 @@ export const ListExpensesQueryParams = zod.object({
   status: zod.coerce.string().nullish(),
   category: zod.coerce.string().nullish(),
   supplierId: zod.coerce.string().nullish(),
+  sourceId: zod.coerce
+    .string()
+    .nullish()
+    .describe(
+      "Exact source record ID for opening one operational cost from its linked payable.",
+    ),
+  sourceType: zod
+    .enum(["agency", "trip"])
+    .optional()
+    .describe("Source record type; required together with sourceId."),
   dateFrom: zod.coerce.string().nullish(),
   dateTo: zod.coerce.string().nullish(),
   includeTripCosts: zod.coerce

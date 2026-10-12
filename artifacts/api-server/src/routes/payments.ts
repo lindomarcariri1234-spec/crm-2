@@ -1930,7 +1930,7 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
 
     const {
       tripId, status, category, supplierId, dateFrom, dateTo,
-      page = "1", limit = "20", includeTripCosts, summaryPeriod = "all",
+      sourceId, sourceType, page = "1", limit = "20", includeTripCosts, summaryPeriod = "all",
     } = req.query as Record<string, string>;
     const parsedPage = Number.parseInt(page, 10);
     const parsedLimit = Number.parseInt(limit, 10);
@@ -1941,10 +1941,20 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
       next(new ValidationError("O deslocamento da paginação é muito grande"));
       return;
     }
-    const shouldIncludeTripCosts = includeTripCosts === "true";
+    if ((sourceId && !sourceType) || (!sourceId && sourceType)) {
+      next(new ValidationError("sourceId e sourceType devem ser informados juntos", "VALIDATION_ERROR"));
+      return;
+    }
+    if (sourceType && sourceType !== "agency" && sourceType !== "trip") {
+      next(new ValidationError("sourceType deve ser agency ou trip", "VALIDATION_ERROR"));
+      return;
+    }
+    const shouldIncludeTripCosts = includeTripCosts === "true" || sourceType === "trip";
 
     const conditions: ReturnType<typeof eq>[] = [eq(expensesTable.tenantId, me.tenantId)];
     if (tripId) conditions.push(eq(expensesTable.tripId, tripId));
+    if (sourceType === "agency" && sourceId) conditions.push(eq(expensesTable.id, sourceId));
+    if (sourceType === "trip") conditions.push(sql`FALSE` as ReturnType<typeof eq>);
     if (status) conditions.push(eq(expensesTable.status, parseExpenseStatus(status)));
     if (category) conditions.push(eq(expensesTable.category, category));
     if (supplierId) conditions.push(eq(expensesTable.supplierId, supplierId));
@@ -1958,6 +1968,8 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
 
     if (shouldIncludeTripCosts) {
       const tripCostConditions: ReturnType<typeof eq>[] = [eq(tripCostsTable.tenantId, me.tenantId)];
+      if (sourceType === "trip" && sourceId) tripCostConditions.push(eq(tripCostsTable.id, sourceId));
+      if (sourceType === "agency") tripCostConditions.push(sql`FALSE` as ReturnType<typeof eq>);
       const tripCostDueDate = sql`COALESCE(
         ${tripCostsTable.dueDate},
         date_trunc('day', ${tripCostsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'UTC'
@@ -1969,12 +1981,14 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
       if (fromDate && !Number.isNaN(fromDate.getTime())) tripCostConditions.push(gte(tripCostDueDate, fromDate));
       if (toDate && !Number.isNaN(toDate.getTime())) tripCostConditions.push(lt(tripCostDueDate, toDate));
 
-      const unlinkedTripCostCondition = sql`NOT EXISTS (
-        SELECT 1
-        FROM ${expensesTable}
-        WHERE ${expensesTable.linkedTripCostId} = ${tripCostsTable.id}
-          AND ${expensesTable.tenantId} = ${me.tenantId}
-      )`;
+      const unlinkedTripCostCondition = sourceType === "trip"
+        ? sql`TRUE`
+        : sql`NOT EXISTS (
+          SELECT 1
+          FROM ${expensesTable}
+          WHERE ${expensesTable.linkedTripCostId} = ${tripCostsTable.id}
+            AND ${expensesTable.tenantId} = ${me.tenantId}
+        )`;
       const tripCostWhere = and(...tripCostConditions, unlinkedTripCostCondition);
       const validatedSummaryPeriod = ["all", "month", "quarter", "year"].includes(summaryPeriod)
         ? summaryPeriod

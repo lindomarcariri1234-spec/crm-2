@@ -2449,6 +2449,17 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: sourceId
+          in: query
+          description: Exact source record ID for opening one operational cost from its linked payable.
+          schema:
+            type: ["string", "null"]
+        - name: sourceType
+          in: query
+          description: Source record type; required together with sourceId.
+          schema:
+            type: string
+            enum: [agency, trip]
         - name: dateFrom
           in: query
           schema:

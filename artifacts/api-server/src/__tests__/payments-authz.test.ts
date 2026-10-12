@@ -22,7 +22,7 @@ import pino from "pino";
 
 import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, ROLES } from "@workspace/permissions";
 import { paymentsTable } from "@workspace/db";
-import { eq, gte, lt } from "drizzle-orm";
+import { eq, gte, lt, sql } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
@@ -761,6 +761,29 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
         { category: "transporte", total: 750, paid: 0, open: 750 },
       ]),
     });
+  });
+
+  it("filters an agency-source deep link to its exact expense ID", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.executeRowsQueue = [[]];
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/expenses?includeTripCosts=true&sourceType=agency&sourceId=agency-expense-focus");
+
+    expect(res.status).toBe(200);
+    expect(eq).toHaveBeenCalledWith(mockExpensesTable.id, "agency-expense-focus");
+  });
+
+  it("keeps an exact trip-cost deep link visible even when it is linked to an agency expense", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.executeRowsQueue = [[]];
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/expenses?sourceType=trip&sourceId=trip-cost-focus");
+
+    expect(res.status).toBe(200);
+    expect(eq).toHaveBeenCalledWith(mockTripCostsTable.id, "trip-cost-focus");
+    expect(vi.mocked(sql).mock.calls.some(([parts]) => parts.join("").includes("NOT EXISTS"))).toBe(false);
   });
 
   it("GET /expenses?includeTripCosts=true keeps a fallback due date on the Sao Paulo creation day", async () => {

@@ -6083,6 +6083,15 @@ export type ListExpensesParams = {
    */
   supplierId?: string | null;
   /**
+   * Exact source record ID for opening one operational cost from its linked payable.
+   * @nullable
+   */
+  sourceId?: string | null;
+  /**
+   * Source record type; required together with sourceId.
+   */
+  sourceType?: ListExpensesSourceType;
+  /**
    * @nullable
    */
   dateFrom?: string | null;
@@ -6101,6 +6110,14 @@ export type ListExpensesParams = {
   page?: number;
   limit?: number;
 };
+
+export type ListExpensesSourceType =
+  (typeof ListExpensesSourceType)[keyof typeof ListExpensesSourceType];
+
+export const ListExpensesSourceType = {
+  agency: "agency",
+  trip: "trip",
+} as const;
 
 export type ListExpensesSummaryPeriod =
   (typeof ListExpensesSummaryPeriod)[keyof typeof ListExpensesSummaryPeriod];

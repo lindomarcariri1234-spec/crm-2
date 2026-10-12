@@ -247,6 +247,7 @@ export * from "./listChatbotMessagesParams";
 export * from "./listClientsParams";
 export * from "./listDealsParams";
 export * from "./listExpensesParams";
+export * from "./listExpensesSourceType";
 export * from "./listExpensesSummaryPeriod";
 export * from "./listMessagesParams";
 export * from "./listNpsResponsesParams";
