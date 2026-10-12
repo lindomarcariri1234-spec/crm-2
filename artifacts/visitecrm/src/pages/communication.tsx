@@ -41,6 +41,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -67,6 +76,8 @@ import {
   AlertTriangle,
   Download,
   TicketCheck,
+  ChevronsUpDown,
+  MapPin,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -264,6 +275,7 @@ export default function Communication() {
   const [loadingAiInbox, setLoadingAiInbox] = useState(false);
   const [sendingAiReply, setSendingAiReply] = useState(false);
   const [associatingAiConversationId, setAssociatingAiConversationId] = useState<string | null>(null);
+  const [aiClientPickerOpen, setAiClientPickerOpen] = useState(false);
   const aiReplyKey = useRef<string | null>(null);
   const aiConversationRequestId = useRef(0);
   const aiInboxRequestId = useRef(0);
@@ -513,6 +525,9 @@ export default function Communication() {
       enabled: tab === "email-logs" || tab === "ai-inbox",
     },
   });
+  const selectedAiClient = (clients?.data ?? []).find(
+    (client) => client.id === selectedAiConversation?.clientId,
+  );
   const { data: messageClients } = useListClients({
     ...messageClientsParams,
   }, {
@@ -1550,21 +1565,96 @@ export default function Communication() {
                           <p className="text-xs text-muted-foreground">{selectedAiConversation?.channel === "instagram" ? "Instagram Direct" : "Atendimento WhatsApp"}</p>
                         </div>
                       </div>
-                      <Select
-                        value={selectedAiConversation?.clientId ?? NO_ASSOCIATED_CLIENT}
-                        onValueChange={handleAssociateAiClient}
-                        disabled={associatingAiConversationId === selectedAiConversationId}
-                      >
-                        <SelectTrigger aria-label="Associar atendimento a cliente" className="w-full sm:w-64">
-                          <SelectValue placeholder="Associar cliente" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={NO_ASSOCIATED_CLIENT}>Sem cliente associado</SelectItem>
-                          {(clients?.data ?? []).map((client) => (
-                            <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <Popover open={aiClientPickerOpen} onOpenChange={setAiClientPickerOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            role="combobox"
+                            aria-label="Associar atendimento a cliente"
+                            aria-expanded={aiClientPickerOpen}
+                            data-testid="button-associar-atendimento-cliente"
+                            disabled={associatingAiConversationId === selectedAiConversationId}
+                            className="h-auto min-h-10 w-full justify-between gap-3 px-3 py-2 text-left font-normal sm:w-72"
+                          >
+                            <span className="flex min-w-0 flex-col items-start">
+                              <span className="truncate text-sm">
+                                {selectedAiClient?.name ?? "Sem cliente associado"}
+                              </span>
+                              <span className="flex max-w-full items-center gap-1 truncate text-xs text-muted-foreground">
+                                {selectedAiClient
+                                  ? [selectedAiClient.addressCity, selectedAiClient.addressState].filter(Boolean).join("/")
+                                    || "Localidade não informada"
+                                  : "Buscar por nome, Instagram ou cidade"}
+                              </span>
+                            </span>
+                            <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          align="end"
+                          side="bottom"
+                          className="w-[min(26rem,calc(100vw-2rem))] p-0"
+                        >
+                          <Command>
+                            <CommandInput
+                              data-testid="input-buscar-cliente-associacao"
+                              placeholder="Buscar por nome, Instagram ou cidade..."
+                            />
+                            <CommandList className="max-h-[min(22rem,calc(100dvh-10rem))]">
+                              <CommandEmpty>Nenhum cliente encontrado.</CommandEmpty>
+                              <CommandGroup heading="Vínculo do atendimento">
+                                <CommandItem
+                                  value="sem cliente associado remover vínculo"
+                                  data-testid="option-sem-cliente-associado"
+                                  onSelect={() => {
+                                    setAiClientPickerOpen(false);
+                                    void handleAssociateAiClient(NO_ASSOCIATED_CLIENT);
+                                  }}
+                                >
+                                  <Check className={`mr-2 h-4 w-4 ${selectedAiConversation?.clientId ? "opacity-0" : "opacity-100"}`} />
+                                  <span>Sem cliente associado</span>
+                                </CommandItem>
+                              </CommandGroup>
+                              <CommandGroup heading="Clientes">
+                                {(clients?.data ?? []).map((client) => {
+                                  const location = [client.addressCity, client.addressState]
+                                    .filter(Boolean)
+                                    .join("/") || "Localidade não informada";
+                                  const instagram = client.instagram?.trim();
+                                  const instagramLabel = instagram
+                                    ? `@${instagram.replace(/^@+/, "")}`
+                                    : null;
+                                  return (
+                                    <CommandItem
+                                      key={client.id}
+                                      value={`${client.name} ${instagram ?? ""} ${location}`}
+                                      data-testid={`option-cliente-associacao-${client.id}`}
+                                      onSelect={() => {
+                                        setAiClientPickerOpen(false);
+                                        void handleAssociateAiClient(client.id);
+                                      }}
+                                      className="items-start py-2.5"
+                                    >
+                                      <Check className={`mr-2 mt-0.5 h-4 w-4 shrink-0 ${selectedAiConversation?.clientId === client.id ? "opacity-100" : "opacity-0"}`} />
+                                      <span className="min-w-0 flex-1">
+                                        <span className="block truncate text-sm font-medium">{client.name}</span>
+                                        <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                          {instagramLabel && <span className="truncate">{instagramLabel}</span>}
+                                          <span className="inline-flex min-w-0 items-center gap-1">
+                                            <MapPin className="h-3 w-3 shrink-0" aria-hidden="true" />
+                                            <span className="truncate">{location}</span>
+                                          </span>
+                                        </span>
+                                      </span>
+                                    </CommandItem>
+                                  );
+                                })}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
                     </div>
                     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background/55 px-3 py-4 sm:px-5" aria-label="Mensagens do atendimento" role="log" aria-live="polite">
                       {loadingAiMessages ? (
