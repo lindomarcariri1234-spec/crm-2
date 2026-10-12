@@ -22,6 +22,7 @@ vi.mock("@/lib/storeApi", () => ({
 
 vi.mock("wouter", () => ({
   useLocation: () => ["/loja/configuracoes", vi.fn()],
+  useSearch: () => "",
 }));
 
 vi.mock("@clerk/react", () => ({
