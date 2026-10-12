@@ -35,6 +35,7 @@ const {
   mockTransaction,
   mockAssertSafeUrl,
   mockSsrfFetch,
+  mockImportZernioInstagramHistory,
 } = vi.hoisted(() => {
   const mockUpdateWhere = vi.fn();
   const mockUpdateSet = vi.fn();
@@ -49,6 +50,7 @@ const {
   const mockRequireAuth = vi.fn();
   const mockAssertSafeUrl = vi.fn();
   const mockSsrfFetch = vi.fn();
+  const mockImportZernioInstagramHistory = vi.fn();
 
   return {
     mockLimit,
@@ -64,6 +66,7 @@ const {
     mockTransaction,
     mockAssertSafeUrl,
     mockSsrfFetch,
+    mockImportZernioInstagramHistory,
   };
 });
 
@@ -115,6 +118,11 @@ vi.mock("../lib/crypto.js", () => ({
 vi.mock("../lib/ssrf.js", () => ({
   assertSafeUrl: mockAssertSafeUrl,
   ssrfSafeFetchBounded: mockSsrfFetch,
+}));
+
+vi.mock("../services/instagram-zernio.js", () => ({
+  INSTAGRAM_ZERNIO_TYPE: "instagram_zernio",
+  importZernioInstagramHistory: mockImportZernioInstagramHistory,
 }));
 
 // ---------------------------------------------------------------------------
@@ -467,6 +475,41 @@ describe("GET /api/integrations/:type — single integration detail", () => {
     const res = await request(buildApp()).get("/api/integrations/stripe_account");
 
     expect(res.status).toBe(403);
+  });
+
+  it("imports Zernio history only from the authenticated agency's connected integration", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([{
+      id: "zernio-integration-1",
+      tenantId: TENANT_ID,
+      type: "instagram_zernio",
+      config: { accountId: "account-1", profileId: "profile-1" },
+      secretsEncrypted: JSON.stringify({ apiKey: "private-api-key" }),
+      enabled: true,
+      status: "connected",
+    }]);
+    mockImportZernioInstagramHistory.mockResolvedValueOnce({
+      conversationsFound: 2,
+      conversationsProcessed: 2,
+      messagesImported: 8,
+      messagesAlreadyPresent: 3,
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/instagram_zernio/import-history")
+      .send({ integrationId: "zernio-integration-1" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ messagesImported: 8, conversationsProcessed: 2 });
+    expect(JSON.stringify(res.body)).not.toContain("private-api-key");
+    expect(mockImportZernioInstagramHistory).toHaveBeenCalledWith(
+      "private-api-key",
+      "account-1",
+      "profile-1",
+      "zernio-integration-1",
+      expect.any(Function),
+    );
+    expect(mockWhere).toHaveBeenCalled();
   });
 });
 

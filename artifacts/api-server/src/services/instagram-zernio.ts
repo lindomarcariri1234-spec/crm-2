@@ -265,12 +265,14 @@ function integrationConfig(value: unknown): JsonObject {
 async function resolveZernioIntegration(
   accountId: string,
   profileId: string | null,
+  integrationId?: string,
 ) {
   const integrations = await db.select().from(tenantIntegrationsTable)
     .where(and(
       eq(tenantIntegrationsTable.type, INSTAGRAM_ZERNIO_TYPE),
       eq(tenantIntegrationsTable.enabled, true),
       eq(tenantIntegrationsTable.status, "connected"),
+      ...(integrationId ? [eq(tenantIntegrationsTable.id, integrationId)] : []),
     ));
   const matches = integrations.filter((integration) => {
     const config = integrationConfig(integration.config);
@@ -288,10 +290,13 @@ async function resolveZernioIntegration(
   return matches[0]!;
 }
 
-export async function processZernioInstagramWebhook(payload: unknown): Promise<number> {
+export async function processZernioInstagramWebhook(
+  payload: unknown,
+  integrationId?: string,
+): Promise<number> {
   const sent = parseZernioInstagramSentMessage(payload);
   if (sent) {
-    const integration = await resolveZernioIntegration(sent.accountId, sent.profileId);
+    const integration = await resolveZernioIntegration(sent.accountId, sent.profileId, integrationId);
     if (!integration) return 0;
     const [conversation] = await db.select({ id: chatbotConversationsTable.id })
       .from(chatbotConversationsTable)
@@ -321,7 +326,7 @@ export async function processZernioInstagramWebhook(payload: unknown): Promise<n
 
   const status = parseZernioInstagramMessageStatus(payload);
   if (status) {
-    const integration = await resolveZernioIntegration(status.accountId, status.profileId);
+    const integration = await resolveZernioIntegration(status.accountId, status.profileId, integrationId);
     if (!integration) return 0;
     const [conversation] = await db.select({ id: chatbotConversationsTable.id })
       .from(chatbotConversationsTable)
@@ -356,27 +361,8 @@ export async function processZernioInstagramWebhook(payload: unknown): Promise<n
   const message = parseZernioInstagramMessage(payload);
   if (!message) return 0;
 
-  const integrations = await db.select().from(tenantIntegrationsTable)
-    .where(and(
-      eq(tenantIntegrationsTable.type, INSTAGRAM_ZERNIO_TYPE),
-      eq(tenantIntegrationsTable.enabled, true),
-      eq(tenantIntegrationsTable.status, "connected"),
-    ));
-  const matches = integrations.filter((integration) => {
-    const config = integrationConfig(integration.config);
-    return config["accountId"] === message.accountId
-      && (!message.profileId || config["profileId"] === message.profileId);
-  });
-  if (matches.length !== 1) {
-    logger.warn({
-      accountId: message.accountId,
-      profileId: message.profileId,
-      matchCount: matches.length,
-    }, "[instagram-zernio] Ignored message for an unmapped or ambiguous account");
-    return 0;
-  }
-
-  const integration = matches[0]!;
+  const integration = await resolveZernioIntegration(message.accountId, message.profileId, integrationId);
+  if (!integration) return 0;
   return db.transaction(async (tx) => {
     await tx.execute(sql`
       SELECT pg_advisory_xact_lock(
@@ -472,4 +458,141 @@ export async function processZernioInstagramWebhook(payload: unknown): Promise<n
     }).onConflictDoNothing().returning({ id: chatbotMessagesTable.id });
     return created ? 1 : 0;
   });
+}
+
+export interface ZernioHistoryImportProgress {
+  conversationsFound: number;
+  conversationsProcessed: number;
+  messagesImported: number;
+  messagesAlreadyPresent: number;
+}
+
+function cursorPage(payload: unknown, arrayKey: "data" | "messages") {
+  const object = asObject(payload);
+  const pagination = asObject(object?.pagination);
+  const items = object?.[arrayKey];
+  if (!Array.isArray(items) || typeof pagination?.hasMore !== "boolean") {
+    throw new Error("Invalid Zernio inbox response");
+  }
+  return {
+    items,
+    hasMore: pagination.hasMore,
+    nextCursor: nonEmptyString(pagination.nextCursor),
+  };
+}
+
+async function fetchZernioInboxPage(url: URL, apiKey: string): Promise<unknown> {
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new Error(`Zernio inbox returned HTTP ${response.status}`);
+  return response.json();
+}
+
+export async function importZernioInstagramHistory(
+  apiKey: string,
+  accountId: string,
+  profileId: string,
+  integrationId: string,
+  onProgress: (progress: ZernioHistoryImportProgress) => void,
+): Promise<ZernioHistoryImportProgress> {
+  const progress: ZernioHistoryImportProgress = {
+    conversationsFound: 0,
+    conversationsProcessed: 0,
+    messagesImported: 0,
+    messagesAlreadyPresent: 0,
+  };
+  const seenConversationIds = new Set<string>();
+  const baseUrl = "https://zernio.com/api/v1/inbox/conversations";
+
+  for (const status of ["active", "archived"] as const) {
+    let conversationCursor: string | null = null;
+    const seenConversationCursors = new Set<string>();
+    do {
+      const url = new URL(baseUrl);
+      url.searchParams.set("accountId", accountId);
+      url.searchParams.set("profileId", profileId);
+      url.searchParams.set("platform", "instagram");
+      url.searchParams.set("status", status);
+      url.searchParams.set("limit", "100");
+      if (conversationCursor) url.searchParams.set("cursor", conversationCursor);
+      const page = cursorPage(await fetchZernioInboxPage(url, apiKey), "data");
+
+      for (const rawConversation of page.items) {
+        const conversation = asObject(rawConversation);
+        const id = nonEmptyString(conversation?.id);
+        if (
+          !id ||
+          conversation?.platform !== "instagram" ||
+          conversation.accountId !== accountId ||
+          seenConversationIds.has(id)
+        ) continue;
+        seenConversationIds.add(id);
+        progress.conversationsFound = seenConversationIds.size;
+
+        let messageCursor: string | null = null;
+        const seenMessageCursors = new Set<string>();
+        do {
+          const messagesUrl = new URL(`${baseUrl}/${encodeURIComponent(id)}/messages`);
+          messagesUrl.searchParams.set("accountId", accountId);
+          messagesUrl.searchParams.set("limit", "100");
+          messagesUrl.searchParams.set("sortOrder", "asc");
+          if (messageCursor) messagesUrl.searchParams.set("cursor", messageCursor);
+          const messagePage = cursorPage(await fetchZernioInboxPage(messagesUrl, apiKey), "messages");
+          for (const rawMessage of messagePage.items) {
+            const item = asObject(rawMessage);
+            const messageId = nonEmptyString(item?.id);
+            const direction = item?.direction;
+            const senderId = nonEmptyString(item?.senderId);
+            const createdAt = nonEmptyString(item?.createdAt) ?? nonEmptyString(item?.sentAt);
+            const content = nonEmptyString(item?.message);
+            const attachments = Array.isArray(item?.attachments) ? item.attachments : [];
+            if (
+              !messageId ||
+              item?.platform !== "instagram" ||
+              item.conversationId !== id ||
+              item.accountId !== accountId ||
+              (direction !== "incoming" && direction !== "outgoing") ||
+              (direction === "incoming" && !senderId) ||
+              (!content && attachments.length === 0) ||
+              !createdAt
+            ) continue;
+            const imported = await processZernioInstagramWebhook({
+              event: direction === "incoming" ? "message.received" : "message.sent",
+              timestamp: createdAt,
+              account: { accountId, profileId },
+              message: {
+                id: messageId,
+                conversationId: id,
+                platform: "instagram",
+                direction,
+                text: content,
+                sender: { id: senderId },
+                attachments,
+              },
+            }, integrationId);
+            if (imported > 0) progress.messagesImported++;
+            else progress.messagesAlreadyPresent++;
+          }
+          progress.conversationsProcessed = seenConversationIds.size;
+          onProgress({ ...progress });
+          if (!messagePage.hasMore) break;
+          if (!messagePage.nextCursor || seenMessageCursors.has(messagePage.nextCursor)) {
+            throw new Error("Invalid Zernio message pagination cursor");
+          }
+          seenMessageCursors.add(messagePage.nextCursor);
+          messageCursor = messagePage.nextCursor;
+        } while (messageCursor);
+      }
+
+      if (!page.hasMore) break;
+      if (!page.nextCursor || seenConversationCursors.has(page.nextCursor)) {
+        throw new Error("Invalid Zernio conversation pagination cursor");
+      }
+      seenConversationCursors.add(page.nextCursor);
+      conversationCursor = page.nextCursor;
+    } while (conversationCursor);
+  }
+  return progress;
 }

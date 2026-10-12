@@ -9,6 +9,10 @@ import type { AuthedUser } from "../lib/tenant";
 import { generateId } from "../lib/id";
 import { encryptCredential, decryptCredential } from "../lib/crypto";
 import { assertSafeUrl, ssrfSafeFetchBounded } from "../lib/ssrf";
+import {
+  importZernioInstagramHistory,
+  INSTAGRAM_ZERNIO_TYPE,
+} from "../services/instagram-zernio.js";
 
 const router = Router();
 
@@ -675,6 +679,80 @@ router.get("/integrations/:type", async (req, res, next: NextFunction): Promise<
   }
 });
 
+router.post("/integrations/instagram_zernio/import-history", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireIntegrationAdmin(req, res, next);
+    if (!me) return;
+    const body = z.object({ integrationId: z.string().min(1).max(200) }).safeParse(req.body);
+    if (!body.success) {
+      next(new ValidationError("Selecione uma integração Zernio válida.", "VALIDATION_ERROR"));
+      return;
+    }
+    const [integration] = await db.select().from(tenantIntegrationsTable)
+      .where(and(
+        eq(tenantIntegrationsTable.id, body.data.integrationId),
+        eq(tenantIntegrationsTable.tenantId, me.tenantId),
+        eq(tenantIntegrationsTable.type, INSTAGRAM_ZERNIO_TYPE),
+        eq(tenantIntegrationsTable.enabled, true),
+        eq(tenantIntegrationsTable.status, "connected"),
+      ))
+      .limit(1);
+    if (!integration) {
+      next(new NotFoundError("Integração Zernio ativa não encontrada.", "NOT_FOUND"));
+      return;
+    }
+    const config = (integration.config ?? {}) as Record<string, string>;
+    const accountId = config["accountId"]?.trim();
+    const profileId = config["profileId"]?.trim();
+    const apiKey = integration.secretsEncrypted
+      ? decryptSecrets(integration.secretsEncrypted)["apiKey"]?.trim()
+      : null;
+    if (!accountId || !profileId || !apiKey) {
+      next(new ValidationError("Configure Account ID, Profile ID e chave de API antes de importar.", "VALIDATION_ERROR"));
+      return;
+    }
+    let lastProgress = {
+      conversationsFound: 0,
+      conversationsProcessed: 0,
+      messagesImported: 0,
+      messagesAlreadyPresent: 0,
+    };
+    try {
+      const result = await importZernioInstagramHistory(
+        apiKey,
+        accountId,
+        profileId,
+        integration.id,
+        (progress) => {
+          lastProgress = progress;
+        },
+      );
+      await writeLog(
+        me,
+        INSTAGRAM_ZERNIO_TYPE,
+        "history_import",
+        "info",
+        `Histórico importado: ${result.conversationsProcessed} conversas, ${result.messagesImported} mensagens novas.`,
+      );
+      res.json(result);
+    } catch {
+      await writeLog(
+        me,
+        INSTAGRAM_ZERNIO_TYPE,
+        "history_import",
+        "error",
+        "Falha ao importar o histórico da Zernio; os itens já importados podem ser mantidos. Tente novamente.",
+      );
+      res.status(502).json({
+        message: "Não foi possível concluir a importação. Os itens já importados foram preservados; tente novamente.",
+        partial: lastProgress,
+      });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── PUT /integrations/:type ──────────────────────────────────────────────────
 // Save config + credentials. Secrets sent as MASK are kept as-is. After save,
 // auto-tests server-side and persists status (connected / error). Only Save
@@ -891,7 +969,10 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
 
     // Auto-verify the saved config so the persisted status always reflects the
     // stored credentials. Never auto-test disabled integrations (stale status).
-    if (enabled && (newSecretsEncrypted || secretFields.length === 0)) {
+    if (
+      enabled &&
+      (newSecretsEncrypted || secretFields.length === 0 || type === INSTAGRAM_ZERNIO_TYPE)
+    ) {
       try {
         const secrets = newSecretsEncrypted ? decryptSecrets(newSecretsEncrypted) : {};
         const testResult = await entry.testConnection(resolvedConfig, secrets);

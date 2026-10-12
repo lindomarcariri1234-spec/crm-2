@@ -1169,6 +1169,14 @@ function IntegrationCard({
   useAgencySettingsDirty("integrations", `integration-${type}-${integrationId ?? "new"}`, dirty);
   const [logs, setLogs] = useState<IntegrationLog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
+  const [importingHistory, setImportingHistory] = useState(false);
+  const [historyImportResult, setHistoryImportResult] = useState<{
+    conversationsFound: number;
+    conversationsProcessed: number;
+    messagesImported: number;
+    messagesAlreadyPresent: number;
+  } | null>(null);
+  const [historyImportPartial, setHistoryImportPartial] = useState(false);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -1352,6 +1360,41 @@ function IntegrationCard({
     }
   }
 
+  async function importInstagramHistory() {
+    if (!data?.integrationId) return;
+    setImportingHistory(true);
+    setHistoryImportResult(null);
+    setHistoryImportPartial(false);
+    try {
+      const res = await fetch(`${BASE}/api/integrations/instagram_zernio/import-history`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ integrationId: data.integrationId }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (result.partial) {
+          setHistoryImportPartial(true);
+          setHistoryImportResult(result.partial);
+        }
+        throw new Error(result.message || "Não foi possível importar o histórico.");
+      }
+      setHistoryImportResult(result);
+      toast({
+        title: "Importação concluída",
+        description: `${result.messagesImported} mensagens novas em ${result.conversationsProcessed} conversas.`,
+      });
+    } catch (error) {
+      toast({
+        title: error instanceof Error ? error.message : "Falha ao importar o histórico da Zernio.",
+        variant: "destructive",
+      });
+    } finally {
+      setImportingHistory(false);
+    }
+  }
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -1498,6 +1541,38 @@ function IntegrationCard({
               <p className="text-[11px] text-amber-600">
                 Alterações não salvas. "Testar Conexão" usa os valores atuais; salve para aplicá-los.
               </p>
+            )}
+
+            {type === "instagram_zernio" && data?.integrationId && enabled && status === "connected" && (
+              <div className="space-y-2 rounded-md border border-pink-200 bg-pink-50/40 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs">
+                    <p className="font-medium">Histórico do inbox Zernio</p>
+                    <p className="text-muted-foreground">Importa conversas ativas e arquivadas da conta vinculada. Repetir é seguro.</p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void importInstagramHistory()}
+                    disabled={importingHistory || dirty || saving}
+                  >
+                    {importingHistory && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                    {importingHistory ? "Importando histórico..." : "Importar histórico"}
+                  </Button>
+                </div>
+                {importingHistory && (
+                  <p role="status" className="text-xs text-muted-foreground">
+                    Consultando as páginas da Zernio e sincronizando as mensagens. Esta janela pode permanecer aberta.
+                  </p>
+                )}
+                {historyImportResult && (
+                  <p role="status" className="text-xs text-muted-foreground">
+                    {historyImportPartial ? "Resultado parcial: " : ""}
+                    {historyImportResult.conversationsFound} encontradas · {historyImportResult.messagesImported} mensagens novas · {historyImportResult.messagesAlreadyPresent} já existentes.
+                  </p>
+                )}
+              </div>
             )}
 
             <div className="flex flex-wrap gap-2 pt-1">
