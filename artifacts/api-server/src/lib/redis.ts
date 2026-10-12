@@ -160,75 +160,81 @@ async function maybeFireRedisAlert(): Promise<void> {
     if (Date.now() - _lastAlertSentAt < ALERT_RATE_LIMIT_MS) return;
   }
 
-  const alertEmail = await getAlertEmail();
-  if (!alertEmail) {
-    logger.warn("[redis-alert] No alert email configured (set redis_alert_email in platform settings or SUPERADMIN_EMAIL env) — skipping alert email");
-    return;
-  }
+  try {
+    const alertEmail = await getAlertEmail();
+    if (!alertEmail) {
+      logger.warn("[redis-alert] No alert email configured (set redis_alert_email in platform settings or SUPERADMIN_EMAIL env) — skipping alert email");
+      return;
+    }
 
-  const alertEnabled = await isAlertEnabled("redis_alert_on_degraded");
-  if (!alertEnabled) {
-    logger.info("[redis-alert] Degraded/unavailable alerts disabled via platform settings — skipping");
-    return;
-  }
+    const alertEnabled = await isAlertEnabled("redis_alert_on_degraded");
+    if (!alertEnabled) {
+      logger.info("[redis-alert] Degraded/unavailable alerts disabled via platform settings — skipping");
+      return;
+    }
 
-  const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
-  if (!appUrl) {
-    logger.warn("[redis-alert] APP_URL not set — alert email will not include a dashboard link");
-  }
-  const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
+    const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
+    if (!appUrl) {
+      logger.warn("[redis-alert] APP_URL not set — alert email will not include a dashboard link");
+    }
+    const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
 
-  // Mark the attempt immediately to prevent concurrent duplicate sends.
-  // _alertInFlight lets resetTransientRedisErrors() know a send is pending
-  // so it can set _resetPendingRecovery instead of silently dropping recovery.
-  _lastAlertSentAt = Date.now();
-  _alertInFlight = true;
+    // Mark the attempt immediately to prevent concurrent duplicate sends.
+    // _alertInFlight lets resetTransientRedisErrors() know a send is pending
+    // so it can set _resetPendingRecovery instead of silently dropping recovery.
+    _lastAlertSentAt = Date.now();
+    _alertInFlight = true;
 
-  const tenantId = await getAlertTenantId();
-  if (!tenantId) {
-    _alertInFlight = false;
-    _lastAlertSentAt = null;
-    logger.error("[redis-alert] No tenant available for outbound alert");
-    return;
-  }
-  dispatchOutboundMessage({
-    tenantId,
-    eventType: "redis_alert",
-    idempotencyKey: `redis-alert:${currentStatus}:${new Date().toISOString().slice(0, 13)}`,
-    recipient: { type: "direct", email: alertEmail },
-    email: {
-      subject: `[VisiteCRM] Redis ${currentStatus}`,
-      html: `<h2>Redis ${currentStatus}</h2><p>A conexão Redis está ${currentStatus}.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
-      senderName: "VisiteCRM",
-    },
-    whatsapp: { text: `Alerta VisiteCRM: Redis está ${currentStatus}.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
-    origin: "redis-health",
-    metadata: { status: currentStatus, dashboardUrl },
-  }).then((result) => {
-      const delivery = result.deliveries.find((item) => item.channel === "email");
-      const success = delivery?.status === "accepted" || delivery?.status === "pending";
-      _alertInFlight = false;
-      if (success) {
-        _hadActiveAlert = true;
-        logRedisAlert("alert", currentStatus, alertEmail);
-        logger.warn({ status: currentStatus, to: alertEmail }, "[redis-alert] Alert email sent");
-        // Case B: Redis recovered while we were sending — fire recovery now.
-        if (_resetPendingRecovery) {
-          _resetPendingRecovery = false;
-          void sendRecoveryEmailIfNeeded();
-        }
-      } else {
-        logger.error({ status: currentStatus, error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-alert] Failed to send alert email — clearing rate-limit so next error can retry");
-        _lastAlertSentAt = null;
-        _resetPendingRecovery = false; // abort deferred recovery — no alert was delivered
-      }
-    })
-    .catch((err) => {
-      logger.error({ err }, "[redis-alert] Unexpected error sending alert email — clearing rate-limit so next error can retry");
+    const tenantId = await getAlertTenantId();
+    if (!tenantId) {
       _alertInFlight = false;
       _lastAlertSentAt = null;
-      _resetPendingRecovery = false; // abort deferred recovery — no alert was delivered
+      _resetPendingRecovery = false;
+      logger.error("[redis-alert] No tenant available for outbound alert");
+      return;
+    }
+
+    const result = await dispatchOutboundMessage({
+      tenantId,
+      eventType: "redis_alert",
+      idempotencyKey: `redis-alert:${currentStatus}:${new Date().toISOString().slice(0, 13)}`,
+      recipient: { type: "direct", email: alertEmail },
+      email: {
+        subject: `[VisiteCRM] Redis ${currentStatus}`,
+        html: `<h2>Redis ${currentStatus}</h2><p>A conexão Redis está ${currentStatus}.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
+        senderName: "VisiteCRM",
+      },
+      whatsapp: { text: `Alerta VisiteCRM: Redis está ${currentStatus}.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+      origin: "redis-health",
+      metadata: { status: currentStatus, dashboardUrl },
     });
+
+    const delivery = result.deliveries.find((item) => item.channel === "email");
+    const success = delivery?.status === "accepted" || delivery?.status === "pending";
+    _alertInFlight = false;
+    if (success) {
+      _hadActiveAlert = true;
+      logRedisAlert("alert", currentStatus, alertEmail);
+      logger.warn({ status: currentStatus, to: alertEmail }, "[redis-alert] Alert email sent");
+      // Case B: Redis recovered while we were sending — fire recovery now.
+      if (_resetPendingRecovery) {
+        _resetPendingRecovery = false;
+        await sendRecoveryEmailIfNeeded();
+      }
+    } else {
+      logger.error({ status: currentStatus, error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-alert] Failed to send alert email — clearing rate-limit so next error can retry");
+      _lastAlertSentAt = null;
+      _resetPendingRecovery = false; // abort deferred recovery — no alert was delivered
+    }
+  } catch (error) {
+    _alertInFlight = false;
+    _lastAlertSentAt = null;
+    _resetPendingRecovery = false;
+    logger.error(
+      { errorName: error instanceof Error ? error.name : "unknown" },
+      "[redis-alert] Alert preparation or delivery failed — clearing rate-limit so next error can retry",
+    );
+  }
 }
 
 async function sendRecoveryEmailIfNeeded(): Promise<void> {
@@ -243,50 +249,65 @@ async function sendRecoveryEmailIfNeeded(): Promise<void> {
   _hadActiveAlert = false;
   _lastRecoveryEmailSentAt = now;
 
-  const alertEmail = await getAlertEmail();
-  if (!alertEmail) return;
-
-  const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
-  const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
-
-  const tenantId = await getAlertTenantId();
-  if (!tenantId) return;
-  dispatchOutboundMessage({
-    tenantId,
-    eventType: "redis_recovery",
-    idempotencyKey: `redis-recovery:${new Date().toISOString().slice(0, 13)}`,
-    recipient: { type: "direct", email: alertEmail },
-    email: {
-      subject: "[VisiteCRM] Redis recuperado",
-      html: `<h2>Redis recuperado</h2><p>A conexão Redis foi restabelecida.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
-      senderName: "VisiteCRM",
-    },
-    whatsapp: { text: `VisiteCRM: a conexão Redis foi restabelecida.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
-    origin: "redis-health-recovery",
-    metadata: { dashboardUrl },
-  }).then((result) => {
-      const delivery = result.deliveries.find((item) => item.channel === "email");
-      if (delivery?.status === "accepted" || delivery?.status === "pending") {
-        logRedisAlert("recovery", null, alertEmail);
-        logger.info({ to: alertEmail }, "[redis-recovery] Recovery email sent");
-      } else {
-        logger.error({ error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-recovery] Failed to send recovery email");
-        _lastRecoveryEmailSentAt = null; // reset so next recovery can retry
-      }
-    })
-    .catch((err) => {
-      logger.error({ err }, "[redis-recovery] Unexpected error sending recovery email");
+  try {
+    const alertEmail = await getAlertEmail();
+    if (!alertEmail) {
+      _hadActiveAlert = true;
       _lastRecoveryEmailSentAt = null;
+      return;
+    }
+
+    const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
+    const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
+
+    const tenantId = await getAlertTenantId();
+    if (!tenantId) {
+      _hadActiveAlert = true;
+      _lastRecoveryEmailSentAt = null;
+      logger.error("[redis-recovery] No tenant available for outbound recovery message");
+      return;
+    }
+    const result = await dispatchOutboundMessage({
+      tenantId,
+      eventType: "redis_recovery",
+      idempotencyKey: `redis-recovery:${new Date().toISOString().slice(0, 13)}`,
+      recipient: { type: "direct", email: alertEmail },
+      email: {
+        subject: "[VisiteCRM] Redis recuperado",
+        html: `<h2>Redis recuperado</h2><p>A conexão Redis foi restabelecida.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
+        senderName: "VisiteCRM",
+      },
+      whatsapp: { text: `VisiteCRM: a conexão Redis foi restabelecida.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+      origin: "redis-health-recovery",
+      metadata: { dashboardUrl },
     });
+
+    const delivery = result.deliveries.find((item) => item.channel === "email");
+    if (delivery?.status === "accepted" || delivery?.status === "pending") {
+      logRedisAlert("recovery", null, alertEmail);
+      logger.info({ to: alertEmail }, "[redis-recovery] Recovery email sent");
+    } else {
+      logger.error({ error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-recovery] Failed to send recovery email");
+      _hadActiveAlert = true;
+      _lastRecoveryEmailSentAt = null; // reset so next recovery can retry
+    }
+  } catch (error) {
+    logger.error(
+      { errorName: error instanceof Error ? error.name : "unknown" },
+      "[redis-recovery] Preparation or delivery failed — keeping recovery eligible for retry",
+    );
+    _hadActiveAlert = true;
+    _lastRecoveryEmailSentAt = null;
+  }
 }
 
-export function recordTransientRedisError(): void {
+export function recordTransientRedisError(): Promise<void> {
   _consecutiveTransientErrors++;
   _lastTransientErrorAt = Date.now();
-  void maybeFireRedisAlert();
+  return maybeFireRedisAlert();
 }
 
-export function resetTransientRedisErrors(): void {
+export function resetTransientRedisErrors(): Promise<void> {
   const wasAlerting = _hadActiveAlert;
   const wasInFlight = _alertInFlight;
   _consecutiveTransientErrors = 0;
@@ -295,12 +316,13 @@ export function resetTransientRedisErrors(): void {
 
   if (wasAlerting) {
     // Case A: alert was confirmed delivered before this reset — send recovery now.
-    void sendRecoveryEmailIfNeeded();
+    return sendRecoveryEmailIfNeeded();
   } else if (wasInFlight) {
     // Case B: alert send is still in-flight — defer recovery until it resolves.
     _resetPendingRecovery = true;
   }
   // Case C: no alert was sent (or it failed) — nothing to recover from.
+  return Promise.resolve();
 }
 
 export function getRedisStatus(): "ok" | "degraded" | "unavailable" {
