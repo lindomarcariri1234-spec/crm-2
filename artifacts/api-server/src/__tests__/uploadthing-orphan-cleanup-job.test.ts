@@ -44,6 +44,9 @@ const {
   mockLogInfo,
   mockLogError,
   mockRunWhatsAppMediaRetentionCleanup,
+  mockPoolConnect,
+  mockLockClientQuery,
+  mockLockClientRelease,
 } = vi.hoisted(() => {
   const mockListFiles = vi.fn();
   const mockDeleteFiles = vi.fn();
@@ -67,6 +70,9 @@ const {
   const mockLogInfo = vi.fn();
   const mockLogError = vi.fn();
   const mockRunWhatsAppMediaRetentionCleanup = vi.fn();
+  const mockLockClientQuery = vi.fn();
+  const mockLockClientRelease = vi.fn();
+  const mockPoolConnect = vi.fn();
 
   return {
     mockListFiles, mockDeleteFiles, mockCollectReferenced,
@@ -75,6 +81,7 @@ const {
     mockDbInsert, mockDbInsertValues,
     mockLogInfo, mockLogError,
     mockRunWhatsAppMediaRetentionCleanup,
+    mockPoolConnect, mockLockClientQuery, mockLockClientRelease,
   };
 });
 
@@ -93,6 +100,7 @@ vi.mock("../lib/whatsapp-media-retention.js", () => ({
 }));
 
 vi.mock("@workspace/db", () => ({
+  pool: { connect: mockPoolConnect },
   db: {
     select: mockDbSelect,
     update: mockDbUpdate,
@@ -189,6 +197,9 @@ beforeEach(() => {
   mockLogInfo.mockReset();
   mockLogError.mockReset();
   mockRunWhatsAppMediaRetentionCleanup.mockReset();
+  mockPoolConnect.mockReset();
+  mockLockClientQuery.mockReset();
+  mockLockClientRelease.mockReset();
 
   // Re-wire the db chain after reset
   mockDbSelect.mockReturnValue({ from: mockDbSelectFrom });
@@ -204,6 +215,11 @@ beforeEach(() => {
   mockDbUpdateSetWhere.mockResolvedValue([]);
   mockDbInsertValues.mockResolvedValue([]);
   mockRunWhatsAppMediaRetentionCleanup.mockResolvedValue({ expiredMessages: 0, errors: 0 });
+  mockPoolConnect.mockResolvedValue({
+    query: mockLockClientQuery,
+    release: mockLockClientRelease,
+  });
+  mockLockClientQuery.mockResolvedValue({ rows: [{ unlocked: true }] });
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

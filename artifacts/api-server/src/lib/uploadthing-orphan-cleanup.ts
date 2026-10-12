@@ -37,8 +37,9 @@
  * node-cron fallback: same schedule in both !workersEnabled and !redisConn branches.
  */
 
-import { db, platformSettingsTable } from "@workspace/db";
+import { db, platformSettingsTable, pool } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import type { PoolClient } from "pg";
 import { utapi } from "./uploadthing";
 import { collectReferencedUploadThingKeys } from "./collectReferencedUploadThingKeys";
 import { generateId } from "./id";
@@ -55,6 +56,7 @@ import {
 const GRACE_MS = 26 * 60 * 60 * 1000; // 26 hours
 
 const STAGING_KEY = "uploadthing_orphan_candidates";
+const STAGING_LOCK_KEY = "uploadthing-orphan-cleanup-staging";
 const PAGE_SIZE = 500;
 const DELETE_BATCH_SIZE = 100;
 
@@ -137,6 +139,8 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
   };
 
   let retentionCleanupRejected = false;
+  let stagingLockClient: PoolClient | undefined;
+  let stagingLockHeld = false;
 
   try {
     // Expire old inbound media references before collecting keys, so files
@@ -147,6 +151,13 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
       result.retention = { expiredMessages: 0, errors: 1 };
       retentionCleanupRejected = true;
     }
+
+    stagingLockClient = await pool.connect();
+    await stagingLockClient.query(
+      "SELECT pg_advisory_lock(hashtextextended($1, 0))",
+      [STAGING_LOCK_KEY],
+    );
+    stagingLockHeld = true;
 
     const now = Date.now();
 
@@ -289,6 +300,33 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
       { error: safeErrorLogFields(err) },
       "[uploadthing-orphan] Unexpected error during orphan cleanup — run aborted",
     );
+  } finally {
+    if (stagingLockClient) {
+      let releaseFailure: unknown;
+      if (stagingLockHeld) {
+        try {
+          const { rows } = await stagingLockClient.query<{ unlocked: boolean }>(
+            "SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked",
+            [STAGING_LOCK_KEY],
+          );
+          if (rows[0]?.unlocked !== true) {
+            throw new Error("UploadThing cleanup staging lock was not held");
+          }
+        } catch (error) {
+          releaseFailure = error;
+        }
+      }
+
+      // A failed unlock must not return a still-locked session to the pool.
+      stagingLockClient.release(releaseFailure ? true : undefined);
+      if (releaseFailure) {
+        result.errors++;
+        logger.error(
+          { error: safeErrorLogFields(releaseFailure) },
+          "[uploadthing-orphan] Failed to release staging lock; connection discarded",
+        );
+      }
+    }
   }
 
   const completionSummary = {

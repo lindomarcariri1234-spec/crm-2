@@ -72,6 +72,7 @@ const messageIds = {
   oldWebchatInbound: `wa-retention-webchat-${RUN_ID}`,
   mismatchedTenantInbound: `wa-retention-mismatched-tenant-${RUN_ID}`,
   failedRetentionInbound: `wa-retention-failed-cleanup-${RUN_ID}`,
+  lateReferenceInbound: `wa-retention-late-reference-message-${RUN_ID}`,
 };
 
 const sharedFileKey = `wa-retention-shared-${RUN_ID}`;
@@ -382,6 +383,128 @@ describe("WhatsApp media retention with PostgreSQL", () => {
     );
     expect(cleanupResults.every((result) => result.deleted === 0)).toBe(true);
     expect(mockDeleteFiles).not.toHaveBeenCalled();
+
+    const [stagingRow] = await db
+      .select({ value: platformSettingsTable.value })
+      .from(platformSettingsTable)
+      .where(eq(platformSettingsTable.key, STAGING_KEY))
+      .limit(1);
+    expect(JSON.parse(stagingRow?.value ?? "[]")).toEqual([]);
+  }, 30_000);
+
+  it("serializes overlapping orphan scans so neither run loses its staged candidates", async () => {
+    const firstKey = `wa-retention-overlap-a-${RUN_ID}`;
+    const secondKey = `wa-retention-overlap-b-${RUN_ID}`;
+    await db
+      .update(platformSettingsTable)
+      .set({ value: "[]" })
+      .where(eq(platformSettingsTable.key, STAGING_KEY));
+
+    let firstScanStarted!: () => void;
+    const firstScanStartedPromise = new Promise<void>((resolve) => {
+      firstScanStarted = resolve;
+    });
+    let releaseFirstScan!: () => void;
+    const firstScanGate = new Promise<void>((resolve) => {
+      releaseFirstScan = resolve;
+    });
+
+    mockListFiles.mockReset().mockImplementation(async () => {
+      if (mockListFiles.mock.calls.length === 1) {
+        firstScanStarted();
+        await firstScanGate;
+        return {
+          files: [{ key: firstKey, name: "overlap-a.jpg", size: 100 }],
+          hasMore: false,
+        };
+      }
+      return {
+        files: [
+          { key: firstKey, name: "overlap-a.jpg", size: 100 },
+          { key: secondKey, name: "overlap-b.jpg", size: 100 },
+        ],
+        hasMore: false,
+      };
+    });
+
+    const firstRun = runUploadThingOrphanCleanup();
+    await firstScanStartedPromise;
+    const secondRun = runUploadThingOrphanCleanup();
+
+    let secondRunWaitingForLock = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const { rows } = await pool.query<{ waiting: number }>(`
+        SELECT count(*)::int AS waiting
+        FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock'
+          AND query LIKE '%pg_advisory_lock(hashtextextended%'
+      `);
+      if (rows[0]?.waiting) {
+        secondRunWaitingForLock = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(secondRunWaitingForLock).toBe(true);
+
+    releaseFirstScan();
+    const results = await Promise.all([firstRun, secondRun]);
+    expect(results.every((result) => result.errors === 0)).toBe(true);
+    expect(results.reduce((total, result) => total + result.newlyStaged, 0)).toBe(2);
+
+    const [stagingRow] = await db
+      .select({ value: platformSettingsTable.value })
+      .from(platformSettingsTable)
+      .where(eq(platformSettingsTable.key, STAGING_KEY))
+      .limit(1);
+    const stagedKeys = (
+      JSON.parse(stagingRow?.value ?? "[]") as { key: string; stagedAt: number }[]
+    )
+      .map(({ key }) => key)
+      .sort();
+    expect(stagedKeys).toEqual([firstKey, secondKey].sort());
+  }, 30_000);
+
+  it("rescues a file that becomes referenced after the initial reference scan", async () => {
+    const lateReferenceKey = `wa-retention-late-reference-${RUN_ID}`;
+    await db
+      .update(platformSettingsTable)
+      .set({
+        value: JSON.stringify([
+          {
+            key: lateReferenceKey,
+            stagedAt: Date.now() - ORPHAN_GRACE_MS - 1,
+          },
+        ]),
+      })
+      .where(eq(platformSettingsTable.key, STAGING_KEY));
+
+    mockListFiles.mockReset().mockImplementation(async () => {
+      await db.insert(chatbotMessagesTable).values({
+        id: messageIds.lateReferenceInbound,
+        conversationId: whatsappConversationA,
+        tenantId: tenantA,
+        role: "user",
+        content: "Referência criada durante a limpeza",
+        mediaUrl: `https://utfs.io/f/${lateReferenceKey}`,
+        mediaMimeType: "image/jpeg",
+        mediaFileName: "referencia.jpg",
+        sentAt: NOW,
+      });
+      return {
+        files: [{ key: lateReferenceKey, name: "referencia.jpg", size: 100 }],
+        hasMore: false,
+      };
+    });
+    mockDeleteFiles.mockReset();
+
+    const result = await runUploadThingOrphanCleanup();
+
+    expect(result.deleted).toBe(0);
+    expect(result.errors).toBe(0);
+    expect(mockDeleteFiles).not.toHaveBeenCalled();
+    const referencedKeys = await collectReferencedUploadThingKeys();
+    expect(referencedKeys.has(lateReferenceKey)).toBe(true);
 
     const [stagingRow] = await db
       .select({ value: platformSettingsTable.value })
