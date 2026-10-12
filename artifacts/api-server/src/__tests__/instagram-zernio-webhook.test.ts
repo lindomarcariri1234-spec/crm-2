@@ -66,9 +66,39 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("Zernio Instagram webhook", () => {
+  it("sends an inbox reply through Zernio with account, conversation, and idempotency key", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      success: true,
+      data: { messageId: "zernio-message-123" },
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const messageId = await zernioService.sendZernioInstagramText(
+      "secret-api-key",
+      "account_123",
+      "conversation_123",
+      "Olá!",
+      "c5d0e860-e98c-4f61-8a27-2678c64c54bc",
+    );
+
+    expect(messageId).toBe("zernio-message-123");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://zernio.com/api/v1/inbox/conversations/conversation_123/messages",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-api-key",
+          "Idempotency-Key": "c5d0e860-e98c-4f61-8a27-2678c64c54bc",
+        }),
+        body: JSON.stringify({ accountId: "account_123", message: "Olá!" }),
+      }),
+    );
+  });
+
   it("parses only incoming Instagram messages and retains the provider identifiers", () => {
     expect(zernioService.parseZernioInstagramMessage(event)).toMatchObject({
       accountId: "account_123",

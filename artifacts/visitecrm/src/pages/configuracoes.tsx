@@ -1420,6 +1420,9 @@ function IntegrationCard({
                     {f.label}
                     {f.optional ? " (opcional)" : ""}
                   </Label>
+                  {f.description && (
+                    <p className="text-[11px] text-muted-foreground">{f.description}</p>
+                  )}
                   <Input
                     type="password"
                     value={formSecrets[f.key] ?? ""}
@@ -1712,8 +1715,9 @@ function IntegrationsTab() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Instagram Direct pela Zernio</CardTitle>
             <CardDescription>
-              Este vínculo associa os eventos da Zernio à agência. Configure a URL, a assinatura e os eventos no painel da Zernio;
-              o status aqui valida os IDs informados, não a entrega do webhook.
+              Este vínculo associa os eventos da Zernio à agência. Configure a URL, a assinatura e os eventos no painel da Zernio.
+              Para responder pelo CRM, informe também uma chave de API com permissão de mensagens; o status valida o mapeamento,
+              não a entrega do webhook.
             </CardDescription>
           </CardHeader>
         </Card>
