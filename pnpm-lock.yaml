@@ -101,7 +101,7 @@ overrides:
   http-cache-semantics: 4.3.0
   postcss-selector-parser: 7.1.6
   node-forge: github:digitalbazaar/forge#ceba34402e329f0365134f23fe19898756527d65
-  braces: github:micromatch/braces#a795ee83ecd011131b2d618fe754ac5a8e124dae
+  braces: file:patches/braces-3.0.4-replit.1.tgz
   decode-uri-component: 0.5.0
   ip-address: 10.7.1
   js-cookie: 3.0.8
@@ -5063,8 +5063,9 @@ packages:
     resolution: {integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==}
     engines: {node: 20 || >=22}
 
-  braces@https://codeload.github.com/micromatch/braces/tar.gz/a795ee83ecd011131b2d618fe754ac5a8e124dae:
-    resolution: {tarball: https://codeload.github.com/micromatch/braces/tar.gz/a795ee83ecd011131b2d618fe754ac5a8e124dae}
+  braces@file:patches/braces-3.0.4-replit.1.tgz:
+    resolution: {integrity: sha512-tfUuCBCJIZWkbNZcMsPdy5UOeCKZ7nKRtRCspG5nD434KAeHDgk4ui0kCvPBLSNYoKeKnEOVORsHCt9DXmvbXA==, tarball: file:patches/braces-3.0.4-replit.1.tgz}
+    version: 3.0.4-replit.1
     engines: {node: '>=8.3'}
 
   brotli@1.3.3:
@@ -13894,7 +13895,7 @@ snapshots:
     dependencies:
       balanced-match: 4.0.4
 
-  braces@https://codeload.github.com/micromatch/braces/tar.gz/a795ee83ecd011131b2d618fe754ac5a8e124dae:
+  braces@file:patches/braces-3.0.4-replit.1.tgz:
     dependencies:
       fill-range: 7.1.1
 
@@ -16224,7 +16225,7 @@ snapshots:
 
   micromatch@4.0.8:
     dependencies:
-      braces: https://codeload.github.com/micromatch/braces/tar.gz/a795ee83ecd011131b2d618fe754ac5a8e124dae
+      braces: file:patches/braces-3.0.4-replit.1.tgz
       picomatch: 2.3.2
 
   mime-db@1.52.0: {}
