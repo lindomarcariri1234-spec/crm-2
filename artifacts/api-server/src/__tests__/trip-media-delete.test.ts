@@ -32,6 +32,7 @@ const {
   mockLimit,
   mockDelete,
   mockDeleteWhere,
+  mockTransaction,
   tripMediaRows,
 } = vi.hoisted(() => {
   const mockDeleteOrphanedFile = vi.fn().mockResolvedValue(undefined);
@@ -47,11 +48,12 @@ const {
 
   const mockDeleteWhere = vi.fn().mockResolvedValue([]);
   const mockDelete = vi.fn(() => ({ where: mockDeleteWhere }));
+  const mockTransaction = vi.fn();
 
   return {
     mockDeleteOrphanedFile,
     mockSelect, mockFrom, mockWhere, mockLimit,
-    mockDelete, mockDeleteWhere,
+    mockDelete, mockDeleteWhere, mockTransaction,
     tripMediaRows,
   };
 });
@@ -70,8 +72,11 @@ vi.mock("@workspace/db", () => ({
     delete:      mockDelete,
     insert:      vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
     update:      vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
-    transaction: vi.fn(),
+    transaction: mockTransaction,
   },
+  paymentsTable: { id: "payments.id", tenantId: "payments.tenantId", type: "payments.type" },
+  expensesTable: { id: "expenses.id", tenantId: "expenses.tenantId", tripId: "expenses.tripId" },
+  tripCostsTable: { id: "tripCosts.id", tenantId: "tripCosts.tenantId", tripId: "tripCosts.tripId" },
   tripMediaTable:           { id: "tripMedia.id", tenantId: "tripMedia.tenantId", tripId: "tripMedia.tripId", url: "tripMedia.url" },
   tripsTable:               { id: "trips.id", tenantId: "trips.tenantId" },
   reservationsTable:        {},
@@ -207,6 +212,7 @@ vi.mock("@workspace/api-zod", () => ({
 }));
 
 vi.mock("@workspace/permissions", () => ({
+  PAYMENT_TYPE:       { PAYABLE: "payable" },
   RESERVATION_STATUS: { PENDING: "pending", CONFIRMED: "confirmed", CANCELLED: "cancelled" },
   REFERRAL_STATUS:    { ACTIVE: "active" },
   TRIP_STATUS:        { DRAFT: "draft", PUBLISHED: "published", ACTIVE: "active", CANCELLED: "cancelled" },
@@ -272,6 +278,7 @@ beforeEach(() => {
 
   // Default: db.delete succeeds
   mockDeleteWhere.mockResolvedValue([]);
+  mockTransaction.mockReset();
 });
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -344,6 +351,23 @@ describe("DELETE /trips/:id/media/:mediaId — UploadThing cleanup", () => {
 });
 
 describe("DELETE /trips/:id — UploadThing cleanup", () => {
+  it("blocks deleting a trip while one of its costs has a linked payable", async () => {
+    const deleteTrip = vi.fn();
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({
+        execute: vi.fn().mockResolvedValue({ rows: [{ id: "linked-payable" }] }),
+        select: vi.fn(),
+        delete: vi.fn(() => ({ where: deleteTrip })),
+      }),
+    );
+
+    const res = await request(app).delete(`/trips/${TRIP_ID}`);
+
+    expect(res.status).toBe(409);
+    expect(deleteTrip).not.toHaveBeenCalled();
+    expect(mockDeleteOrphanedFile).not.toHaveBeenCalled();
+  });
+
   it("removes every associated media URL before returning success", async () => {
     tripMediaRows.push({ url: MEDIA_URL }, { url: SECOND_MEDIA_URL }, { url: THIRD_MEDIA_URL });
     mockLimit.mockResolvedValueOnce([{ coverImage: COVER_URL }]);

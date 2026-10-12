@@ -22,7 +22,7 @@ import pino from "pino";
 
 import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, ROLES } from "@workspace/permissions";
 import { paymentsTable } from "@workspace/db";
-import { gte, lt } from "drizzle-orm";
+import { eq, gte, lt } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
@@ -35,8 +35,31 @@ const { dbState, makeChain, makeUpdate, mockSelect, mockExecute, mockInsertValue
     executeRowsQueue: [] as unknown[][],
     executeQueries: [] as unknown[],
   };
-  const mockExpensesTable = {};
-  const mockTripCostsTable = {};
+  const mockExpensesTable = {
+    id: "expenses.id",
+    tenantId: "expenses.tenantId",
+    tripId: "expenses.tripId",
+    linkedTripCostId: "expenses.linkedTripCostId",
+    amount: "expenses.amount",
+    status: "expenses.status",
+    dueDate: "expenses.dueDate",
+    paymentDate: "expenses.paymentDate",
+    category: "expenses.category",
+    description: "expenses.description",
+    notes: "expenses.notes",
+  };
+  const mockTripCostsTable = {
+    id: "trip_costs.id",
+    tenantId: "trip_costs.tenantId",
+    tripId: "trip_costs.tripId",
+    amount: "trip_costs.amount",
+    status: "trip_costs.status",
+    dueDate: "trip_costs.dueDate",
+    paidAt: "trip_costs.paidAt",
+    category: "trip_costs.category",
+    description: "trip_costs.description",
+    notes: "trip_costs.notes",
+  };
   const makeChain = () => {
     const chain = {} as Record<string, unknown>;
     const ret = () => chain;
@@ -1111,6 +1134,311 @@ describe("explicit expense and trip-cost links", () => {
 
     expect(expenseResponse.status).toBe(409);
     expect(costResponse.status).toBe(409);
+  });
+});
+
+describe("operational-cost payable routes", () => {
+  const dueDate = new Date("2026-11-15T12:00:00.000Z");
+  const sourceExpense = {
+    id: "expense-payable-001",
+    tenantId: "tenant-001",
+    tripId: "trip-001",
+    linkedTripCostId: null,
+    category: "transporte",
+    description: "Ônibus",
+    amount: "100.00",
+    dueDate,
+    paymentDate: null,
+    status: PAYMENT_STATUS.PENDING,
+    notes: null,
+  };
+  const payable = {
+    ...FAKE_PAYMENT,
+    id: "payable-001",
+    type: PAYMENT_TYPE.PAYABLE,
+    category: sourceExpense.category,
+    amount: sourceExpense.amount,
+    paymentMethod: "pix",
+    installmentNumber: 1,
+    totalInstallments: 1,
+    dueDate,
+    paidAt: null,
+    status: PAYMENT_STATUS.PENDING,
+    sourceExpenseId: sourceExpense.id,
+    sourceTripCostId: null,
+    reservationId: null,
+    orderId: null,
+  };
+  const unlinkedPayable = {
+    ...payable,
+    sourceExpenseId: null,
+    sourceTripCostId: null,
+  };
+
+  function trackTransactionWrites() {
+    const writes: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({
+        select: vi.fn(() => makeChain()),
+        insert: vi.fn(() => ({ values: mockInsertValues })),
+        update: vi.fn((table: unknown) => ({
+          set: vi.fn((values: Record<string, unknown>) => ({
+            where: vi.fn(async () => {
+              writes.push({ table, values });
+              return undefined;
+            }),
+          })),
+        })),
+        delete: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+      }),
+    );
+    return writes;
+  }
+
+  const createBody = {
+    sourceType: "expense",
+    sourceId: sourceExpense.id,
+    paymentMethod: "pix",
+  };
+
+  it("does not disclose a source or payment owned by another tenant", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.selectRowsQueue = [[], []];
+
+    const sourceResponse = await request(buildApp(paymentsRouter))
+      .post("/api/operational-cost-payables")
+      .send(createBody);
+    expect(sourceResponse.status).toBe(404);
+    expect(JSON.stringify(sourceResponse.body)).not.toContain("tenant-002");
+    expect(eq).toHaveBeenCalledWith(mockExpensesTable.id, sourceExpense.id);
+    expect(eq).toHaveBeenCalledWith(mockExpensesTable.tenantId, "tenant-001");
+    expect(mockInsertValues).not.toHaveBeenCalled();
+
+    dbState.selectRowsQueue = [[], []];
+    const paymentResponse = await request(buildApp(paymentsRouter))
+      .post("/api/operational-cost-payables")
+      .send({ ...createBody, paymentId: "foreign-payable" });
+    expect(paymentResponse.status).toBe(404);
+    expect(JSON.stringify(paymentResponse.body)).not.toContain("foreign-payable");
+    expect(eq).toHaveBeenCalledWith(paymentsTable.tenantId, "tenant-001");
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it("creates once and returns the same association when creation is retried", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.selectRowsQueue = [
+      [],
+      [sourceExpense],
+      [],
+      [payable],
+      [payable],
+      [payable],
+      [sourceExpense],
+      [payable],
+      [payable],
+    ];
+
+    const firstResponse = await request(buildApp(paymentsRouter))
+      .post("/api/operational-cost-payables")
+      .send(createBody);
+    const retryResponse = await request(buildApp(paymentsRouter))
+      .post("/api/operational-cost-payables")
+      .send(createBody);
+
+    expect(firstResponse.status).toBe(201);
+    expect(retryResponse.status).toBe(200);
+    expect(retryResponse.body.id).toBe(firstResponse.body.id);
+    expect(mockInsertValues).toHaveBeenCalledOnce();
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: PAYMENT_TYPE.PAYABLE,
+        sourceExpenseId: sourceExpense.id,
+        sourceTripCostId: null,
+      }),
+    );
+  });
+
+  it.each([
+    ["type", { ...unlinkedPayable, type: PAYMENT_TYPE.RECEIVABLE }],
+    ["amount", { ...unlinkedPayable, amount: "100.01" }],
+    ["status", { ...unlinkedPayable, status: PAYMENT_STATUS.OVERDUE }],
+  ])("rejects linking a payable with an incompatible %s", async (_field, candidate) => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.selectRowsQueue = [[], [candidate], [sourceExpense], []];
+
+    const response = await request(buildApp(paymentsRouter))
+      .post("/api/operational-cost-payables")
+      .send({ ...createBody, paymentId: candidate.id });
+
+    expect(response.status).toBe(409);
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it("links and unlinks an existing payable without changing its identity", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const writes = trackTransactionWrites();
+    dbState.selectRowsQueue = [
+      [],
+      [unlinkedPayable],
+      [sourceExpense],
+      [],
+      [payable],
+    ];
+
+    const linkResponse = await request(buildApp(paymentsRouter))
+      .post("/api/operational-cost-payables")
+      .send({ ...createBody, paymentId: payable.id });
+
+    expect(linkResponse.status).toBe(200);
+    expect(linkResponse.body.id).toBe(payable.id);
+    expect(writes).toContainEqual({
+      table: paymentsTable,
+      values: expect.objectContaining({ sourceExpenseId: sourceExpense.id }),
+    });
+    expect(mockInsertValues).not.toHaveBeenCalled();
+
+    dbState.selectRowsQueue = [[payable], [payable], [sourceExpense]];
+    const unlinkResponse = await request(buildApp(paymentsRouter))
+      .delete(`/api/operational-cost-payables/expense/${sourceExpense.id}`);
+
+    expect(unlinkResponse.status).toBe(200);
+    expect(unlinkResponse.body).toEqual({ success: true });
+    expect(writes).toContainEqual({
+      table: paymentsTable,
+      values: expect.objectContaining({
+        sourceExpenseId: null,
+        sourceTripCostId: null,
+      }),
+    });
+  });
+
+  it("synchronizes a linked payable's paid status to its expense", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const writes = trackTransactionWrites();
+    const paidAt = new Date("2026-11-10T12:00:00.000Z");
+    dbState.selectRowsQueue = [
+      [{ type: PAYMENT_TYPE.PAYABLE, reservationId: null, orderId: null }],
+      [payable],
+      [{ ...payable, status: PAYMENT_STATUS.PAID, paidAt }],
+      [sourceExpense],
+    ];
+
+    const response = await request(buildApp(paymentsRouter))
+      .patch(`/api/payments/${payable.id}`)
+      .send({ status: PAYMENT_STATUS.PAID, paidAt: paidAt.toISOString() });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ id: payable.id, status: PAYMENT_STATUS.PAID });
+    expect(writes).toContainEqual({
+      table: mockExpensesTable,
+      values: { status: PAYMENT_STATUS.PAID, paymentDate: paidAt },
+    });
+  });
+
+  it("updates the linked trip cost and payable together, and blocks deleting the cost", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const tripCost = {
+      id: "cost-payable-001",
+      tripId: "trip-001",
+      tenantId: "tenant-001",
+      category: "transporte",
+      description: "Ônibus",
+      supplierName: null,
+      amount: "100.00",
+      status: PAYMENT_STATUS.PENDING,
+      dueDate,
+      paidAt: null,
+      notes: null,
+      createdAt: dueDate,
+    };
+    const tripCostPayable = {
+      ...unlinkedPayable,
+      sourceTripCostId: tripCost.id,
+    };
+    const writes = trackTransactionWrites();
+    dbState.selectRowsQueue = [
+      [{ id: tripCostPayable.id }],
+      [tripCostPayable],
+      [{ id: tripCost.id }],
+      [],
+      [tripCost],
+      [],
+      [{ id: tripCostPayable.id }],
+      [{ ...tripCost, status: PAYMENT_STATUS.PAID, paidAt: dueDate }],
+      [],
+    ];
+
+    const updateResponse = await request(buildApp(tripCostsRouter))
+      .patch(`/api/trips/${tripCost.tripId}/costs/${tripCost.id}`)
+      .send({ status: PAYMENT_STATUS.PAID });
+
+    expect(updateResponse.status).toBe(200);
+    expect(writes).toContainEqual({
+      table: mockTripCostsTable,
+      values: expect.objectContaining({ status: PAYMENT_STATUS.PAID }),
+    });
+    expect(writes).toContainEqual({
+      table: paymentsTable,
+      values: expect.objectContaining({ status: PAYMENT_STATUS.PAID }),
+    });
+
+    const deleteCost = vi.fn(async () => undefined);
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({
+        select: vi.fn(() => makeChain()),
+        update: vi.fn(() => makeUpdate()),
+        delete: vi.fn(() => ({ where: deleteCost })),
+      }),
+    );
+    dbState.selectRowsQueue = [
+      [{ id: tripCostPayable.id }],
+      [tripCostPayable],
+      [{ id: tripCost.id }],
+      [],
+      [{ id: tripCost.id }],
+      [],
+      [{ id: tripCostPayable.id }],
+    ];
+
+    const deleteResponse = await request(buildApp(tripCostsRouter))
+      .delete(`/api/trips/${tripCost.tripId}/costs/${tripCost.id}`);
+
+    expect(deleteResponse.status).toBe(409);
+    expect(deleteCost).not.toHaveBeenCalled();
+  });
+
+  it("blocks deleting a linked payable or its source expense", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const deletePayment = vi.fn(async () => undefined);
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({
+        select: vi.fn(() => makeChain()),
+        update: vi.fn(() => makeUpdate()),
+        delete: vi.fn(() => ({ where: deletePayment })),
+      }),
+    );
+    dbState.selectRowsQueue = [[payable]];
+
+    const paymentResponse = await request(buildApp(paymentsRouter))
+      .delete(`/api/payments/${payable.id}`);
+
+    expect(paymentResponse.status).toBe(409);
+    expect(deletePayment).not.toHaveBeenCalled();
+
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({
+        select: vi.fn(() => makeChain()),
+        update: vi.fn(() => makeUpdate()),
+        delete: vi.fn(() => ({ where: deletePayment })),
+      }),
+    );
+    dbState.selectRowsQueue = [[payable], [payable], [sourceExpense], [payable]];
+
+    const sourceResponse = await request(buildApp(paymentsRouter))
+      .delete(`/api/expenses/${sourceExpense.id}`);
+
+    expect(sourceResponse.status).toBe(409);
+    expect(deletePayment).not.toHaveBeenCalled();
   });
 });
 
