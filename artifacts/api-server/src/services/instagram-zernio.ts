@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   db,
+  clientsTable,
   chatbotConversationsTable,
   chatbotMessagesTable,
   tenantIntegrationsTable,
@@ -70,6 +71,7 @@ export interface ZernioInstagramMessage {
   profileId: string | null;
   conversationId: string;
   senderId: string;
+  senderUsername: string | null;
   messageId: string;
   content: string;
   sentAt: Date;
@@ -103,6 +105,25 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+export function normalizeInstagramUsername(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const username = value.trim()
+    .replace(/^https?:\/\/(?:www\.)?instagram\.com\//i, "")
+    .split(/[/?#]/, 1)[0]!
+    .replace(/^@+/, "");
+  if (!/^[a-z0-9._]{1,30}$/i.test(username)) return null;
+  return username.toLocaleLowerCase("en-US");
+}
+
+export function resolveUniqueInstagramClientMatch(
+  matchingClientIds: string[],
+  currentClientId: string | null,
+  hasManualOverride: boolean,
+): string | null {
+  if (currentClientId || hasManualOverride || matchingClientIds.length !== 1) return null;
+  return matchingClientIds[0] ?? null;
+}
+
 export function verifyZernioWebhookSignature(
   rawBody: Buffer | undefined,
   signatureHeader: string | undefined,
@@ -128,6 +149,7 @@ export function parseZernioInstagramMessage(payload: unknown): ZernioInstagramMe
   const profileId = nonEmptyString(account?.profileId);
   const conversationId = nonEmptyString(message.conversationId);
   const senderId = nonEmptyString(sender?.id);
+  const senderUsername = normalizeInstagramUsername(sender?.username);
   const messageId = nonEmptyString(message.id) ?? nonEmptyString(message.platformMessageId);
   if (!accountId || !conversationId || !senderId || !messageId) return null;
 
@@ -148,6 +170,7 @@ export function parseZernioInstagramMessage(payload: unknown): ZernioInstagramMe
     profileId,
     conversationId,
     senderId,
+    senderUsername,
     messageId,
     content: text ?? "Mídia recebida pelo Instagram",
     sentAt,
@@ -384,28 +407,51 @@ export async function processZernioInstagramWebhook(payload: unknown): Promise<n
         sql`${chatbotConversationsTable.metadata}->>'zernioConversationId' = ${message.conversationId}`,
       ))
       .limit(1);
+    const existingMetadata = asObject(existingConversation?.metadata) ?? {};
+    const instagramUsername = message.senderUsername
+      ?? normalizeInstagramUsername(existingMetadata["instagramUsername"]);
+    const exactClientMatches = instagramUsername
+      ? await tx.select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(and(
+          eq(clientsTable.tenantId, integration.tenantId),
+          eq(clientsTable.status, "active"),
+          sql`lower(regexp_replace(regexp_replace(regexp_replace(trim(${clientsTable.instagram}), '^https?://(www\\.)?instagram\\.com/', '', 'i'), '[/#?].*$', ''), '^@+', '')) = ${instagramUsername}`,
+        ))
+        .limit(2)
+      : [];
+    const autoMatchedClientId = resolveUniqueInstagramClientMatch(
+      exactClientMatches.map((client) => client.id),
+      existingConversation?.clientId ?? null,
+      existingMetadata["clientAssociationManualOverride"] === true,
+    );
     const metadata = {
-      ...(asObject(existingConversation?.metadata) ?? {}),
+      ...existingMetadata,
       source: "instagram",
       provider: "zernio",
       instagramIntegrationId: integration.id,
       zernioAccountId: message.accountId,
       zernioProfileId: message.profileId ?? "",
       zernioConversationId: message.conversationId,
+      ...(instagramUsername ? { instagramUsername } : {}),
     };
     let conversation = existingConversation;
     if (!conversation) {
       [conversation] = await tx.insert(chatbotConversationsTable).values({
         id: generateId(),
         tenantId: integration.tenantId,
-        clientId: null,
+        clientId: autoMatchedClientId,
         channel: "instagram",
         sessionId: message.senderId,
         metadata,
       }).returning();
-    } else if (conversation.status === "closed") {
+    } else {
       [conversation] = await tx.update(chatbotConversationsTable)
-        .set({ status: "open", endedAt: null, metadata })
+        .set({
+          ...(conversation.status === "closed" ? { status: "open", endedAt: null } : {}),
+          ...(autoMatchedClientId ? { clientId: autoMatchedClientId } : {}),
+          metadata,
+        })
         .where(and(
           eq(chatbotConversationsTable.id, conversation.id),
           eq(chatbotConversationsTable.tenantId, integration.tenantId),

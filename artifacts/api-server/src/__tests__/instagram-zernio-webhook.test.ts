@@ -34,7 +34,7 @@ const event = {
     platform: "instagram",
     direction: "incoming",
     text: "Olá",
-    sender: { id: "customer_123" },
+    sender: { id: "customer_123", username: "LindomarSantos.Cariri" },
   },
   account: {
     id: "account_123",
@@ -45,7 +45,7 @@ const event = {
   timestamp: "2026-10-11T12:00:00.000Z",
 };
 
-function signedRequest(payload: unknown, eventIdHeader?: string) {
+function signedRequest(payload: object, eventIdHeader?: string) {
   const raw = JSON.stringify(payload);
   const signature = createHmac("sha256", secret).update(raw).digest("hex");
   const app = express();
@@ -105,6 +105,7 @@ describe("Zernio Instagram webhook", () => {
       profileId: "profile_123",
       conversationId: "conv_123",
       senderId: "customer_123",
+      senderUsername: "lindomarsantos.cariri",
       messageId: "msg_123",
       content: "Olá",
     });
@@ -116,6 +117,30 @@ describe("Zernio Instagram webhook", () => {
       ...event,
       message: { ...event.message, platform: "whatsapp" },
     })).toBeNull();
+  });
+
+  it("normalizes only Instagram handle wrappers and case, without fuzzy punctuation matching", () => {
+    expect(zernioService.normalizeInstagramUsername("@LindomarSantos.Cariri")).toBe("lindomarsantos.cariri");
+    expect(zernioService.normalizeInstagramUsername("https://www.instagram.com/LindomarSantos.Cariri/"))
+      .toBe("lindomarsantos.cariri");
+    expect(zernioService.normalizeInstagramUsername("lindomarsantos_cariri")).toBe("lindomarsantos_cariri");
+    expect(zernioService.normalizeInstagramUsername("lindomarsantos-cariri")).toBeNull();
+    expect(zernioService.normalizeInstagramUsername("not a handle")).toBeNull();
+  });
+
+  it("only auto-associates one exact match and preserves manual choices", () => {
+    expect(zernioService.resolveUniqueInstagramClientMatch(["client-1"], null, false)).toBe("client-1");
+    expect(zernioService.resolveUniqueInstagramClientMatch(["client-1", "client-2"], null, false)).toBeNull();
+    expect(zernioService.resolveUniqueInstagramClientMatch(["client-1"], "client-manual", false)).toBeNull();
+    expect(zernioService.resolveUniqueInstagramClientMatch(["client-1"], null, true)).toBeNull();
+  });
+
+  it("keeps the handle optional when Zernio omits the sender username", () => {
+    const parsed = zernioService.parseZernioInstagramMessage({
+      ...event,
+      message: { ...event.message, sender: { id: event.message.sender.id } },
+    });
+    expect(parsed?.senderUsername).toBeNull();
   });
 
   it("parses outgoing delivery and read status events without accepting inbound messages", () => {

@@ -335,6 +335,12 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
       if (parsed.data.status !== undefined) updates.status = parsed.data.status;
       if (parsed.data.assignedUserId !== undefined) updates.assignedUserId = parsed.data.assignedUserId || null;
       if (parsed.data.endedAt !== undefined) updates.endedAt = parsed.data.endedAt ? new Date(parsed.data.endedAt) : null;
+      if (parsed.data.clientId !== undefined) {
+        const currentMetadata = current.metadata && typeof current.metadata === "object" && !Array.isArray(current.metadata)
+          ? current.metadata as Record<string, unknown>
+          : {};
+        updates.metadata = { ...currentMetadata, clientAssociationManualOverride: true };
+      }
       const clientChanged = parsed.data.clientId !== undefined && parsed.data.clientId !== current.clientId;
       if (clientChanged) updates.clientId = parsed.data.clientId;
       if (Object.keys(updates).length > 0) {

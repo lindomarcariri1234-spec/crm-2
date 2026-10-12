@@ -24,6 +24,7 @@ const conversation = (overrides: Partial<AiConversation> = {}): AiConversation =
   lastMessageIsBot: null,
   lastMessageStatus: null,
   messageCount: 0,
+  metadata: null,
   ...overrides,
 });
 
@@ -41,6 +42,13 @@ describe("Instagram inbox policy", () => {
     expect(getInstagramIdentity(conversation({ clientName: "  Ana Silva  " }))).toBe("Ana Silva");
     expect(getInstagramIdentity(conversation({ sessionId: "ig:ana_88" }))).toBe("ig:ana_88");
     expect(getInstagramIdentity(conversation())).toBe("Contato sem identificação");
+  });
+
+  it("prefers the provider-confirmed Instagram username when available", () => {
+    expect(getInstagramIdentity(conversation({
+      clientName: "Ana Silva",
+      metadata: { instagramUsername: "ana.silva" },
+    }))).toBe("@ana.silva");
   });
 
   it("keeps replies available only within 24 hours of the latest inbound message", () => {

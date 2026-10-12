@@ -18,6 +18,7 @@ export interface AiConversation {
   status: string;
   assignedUserId: string | null;
   sessionId: string | null;
+  metadata?: Record<string, unknown> | null;
   startedAt: string;
   createdAt: string;
   lastMessageId: string | null;

@@ -3,7 +3,11 @@ import type { AiConversation, AiMessage } from "./CommunicationInboxTabs";
 export const INSTAGRAM_REPLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const INSTAGRAM_REPLY_MAX_BYTES = 1000;
 
-export function getInstagramIdentity(conversation: Pick<AiConversation, "clientName" | "sessionId">): string {
+export function getInstagramIdentity(conversation: Pick<AiConversation, "clientName" | "sessionId" | "metadata">): string {
+  const username = conversation.metadata?.["instagramUsername"];
+  if (typeof username === "string" && username.trim()) {
+    return `@${username.trim().replace(/^@+/, "")}`;
+  }
   return conversation.clientName?.trim() || conversation.sessionId?.trim() || "Contato sem identificação";
 }
 
