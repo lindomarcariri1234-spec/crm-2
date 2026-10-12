@@ -196,30 +196,42 @@ router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFun
         message.role === "user" &&
         Boolean(message.mediaUrl);
       let expiresIn = DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS;
+      let mediaExpiresAt: Date | null = null;
       if (isInboundWhatsAppMedia) {
-        const mediaExpiresAt = getWhatsAppInboundMediaExpirationAt(message.sentAt);
+        mediaExpiresAt = getWhatsAppInboundMediaExpirationAt(message.sentAt);
         const secondsUntilExpiry = Math.floor((mediaExpiresAt.getTime() - now) / 1000);
         if (message.mediaExpiredAt || secondsUntilExpiry <= 0) {
           return {
             ...message,
             mediaUrl: null,
             mediaExpiredAt: message.mediaExpiredAt ?? mediaExpiresAt,
+            mediaExpiresAt,
           };
         }
         expiresIn = Math.min(DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS, secondsUntilExpiry);
       }
 
       const fileKey = message.mediaUrl ? extractVerifiedUploadThingKey(message.mediaUrl) : null;
-      if (!fileKey) return message;
+      if (!fileKey) {
+        return mediaExpiresAt ? { ...message, mediaExpiresAt } : message;
+      }
       try {
         const signed = await utapi.generateSignedURL(fileKey, { expiresIn });
-        return { ...message, mediaUrl: signed.ufsUrl };
+        return {
+          ...message,
+          mediaUrl: signed.ufsUrl,
+          ...(mediaExpiresAt ? { mediaExpiresAt } : {}),
+        };
       } catch {
         logger.warn(
           { tenantId: me.tenantId, messageId: message.id },
           "[chatbot] could not create temporary media URL",
         );
-        return { ...message, mediaUrl: null };
+        return {
+          ...message,
+          mediaUrl: null,
+          ...(mediaExpiresAt ? { mediaExpiresAt } : {}),
+        };
       }
     }));
     res.json(visibleMessages);

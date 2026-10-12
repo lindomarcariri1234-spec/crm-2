@@ -1,6 +1,10 @@
-import { createElement } from "react";
+// This test deliberately drives a small React root to verify the live expiry timer.
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it, vi } from "vitest";
 import {
   AiInboxTab,
   ConversationsTab,
@@ -99,6 +103,40 @@ describe("WhatsApp message media expiration", () => {
 
     expect(html).toContain("Anexo indisponível");
     expect(html).not.toContain("Anexo expirado após 90 dias");
+  });
+
+  it("switches an open attachment to expired when its cutoff passes", async () => {
+    const currentTime = Date.parse("2026-10-01T10:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(currentTime);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          createElement(MessageMediaAttachment, {
+            url: "https://ufs.example/stale-media",
+            mimeType: "audio/ogg",
+            fileName: "voice.ogg",
+            expiredAt: null,
+            expiresAt: new Date(currentTime + 1_000).toISOString(),
+          }),
+        );
+      });
+      expect(container.querySelector("audio")).not.toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expect(container.textContent).toContain("Anexo expirado após 90 dias");
+      expect(container.querySelector("audio")).toBeNull();
+      expect(container.innerHTML).not.toContain("https://ufs.example/stale-media");
+    } finally {
+      await act(async () => root.unmount());
+      vi.useRealTimers();
+    }
   });
 
   it("shows the expired status in the client conversation view", () => {

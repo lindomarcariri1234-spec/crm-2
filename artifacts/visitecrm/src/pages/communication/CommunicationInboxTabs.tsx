@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { MessageSquare, Send } from "lucide-react";
 import type { AiConversationMessage } from "@/lib/communicationTimeline";
 import type { ClientConversationSummary, CommunicationTimelineEntry } from "@/lib/communicationTimeline";
@@ -41,6 +41,7 @@ export interface AiMessage {
   mediaMimeType?: string | null;
   mediaFileName?: string | null;
   mediaExpiredAt?: string | null;
+  mediaExpiresAt?: string | null;
 }
 
 export type ClientLinkStatus = "checking" | "valid" | "missing" | "unavailable";
@@ -112,13 +113,32 @@ export function MessageMediaAttachment({
   mimeType,
   fileName,
   expiredAt,
+  expiresAt,
 }: {
   url: string | null | undefined;
   mimeType: string | null | undefined;
   fileName: string | null | undefined;
   expiredAt: string | null | undefined;
+  expiresAt?: string | null;
 }) {
-  if (expiredAt) {
+  const [now, setNow] = useState(() => Date.now());
+  const expiryTime = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+
+  useEffect(() => {
+    if (!Number.isFinite(expiryTime)) return;
+    const remainingMs = expiryTime - Date.now();
+    if (remainingMs <= 0) {
+      setNow(Date.now());
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setNow(Date.now()),
+      Math.min(remainingMs, 24 * 60 * 60 * 1000),
+    );
+    return () => window.clearTimeout(timer);
+  }, [expiryTime, now]);
+
+  if (expiredAt || (Number.isFinite(expiryTime) && expiryTime <= Math.max(now, Date.now()))) {
     return (
       <span className="mt-1 block text-xs opacity-80" role="status">
         Anexo expirado após 90 dias
@@ -491,6 +511,7 @@ export function ConversationsTab({
                               mimeType={message.mediaMimeType}
                               fileName={message.mediaFileName}
                               expiredAt={message.mediaExpiredAt}
+                              expiresAt={message.mediaExpiresAt}
                             />
                           )}
                         </div>
@@ -773,6 +794,7 @@ export function AiInboxTab({
                             mimeType={message.mediaMimeType}
                             fileName={message.mediaFileName}
                             expiredAt={message.mediaExpiredAt}
+                            expiresAt={message.mediaExpiresAt}
                           />
                         )}
                         <p className="mt-1.5 text-[10px] opacity-75">

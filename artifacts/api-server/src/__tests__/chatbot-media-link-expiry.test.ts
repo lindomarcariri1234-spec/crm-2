@@ -214,12 +214,18 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       (message: { id: string }) => message.id === "old-text-only",
     );
     expect(nearCutoff.mediaUrl).toContain("https://signed.example/near-cutoff");
+    expect(nearCutoff.mediaExpiresAt).toBe(
+      new Date(nearCutoffMessage.sentAt.getTime() + RETENTION_MS).toISOString(),
+    );
     expect(expired).toMatchObject({
       content: "message-past-cutoff",
       mediaUrl: null,
       mediaMimeType: "audio/ogg",
       mediaFileName: "past-cutoff.ogg",
       mediaExpiredAt: new Date(
+        expiredMessage.sentAt.getTime() + RETENTION_MS,
+      ).toISOString(),
+      mediaExpiresAt: new Date(
         expiredMessage.sentAt.getTime() + RETENTION_MS,
       ).toISOString(),
     });
