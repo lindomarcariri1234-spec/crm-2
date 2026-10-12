@@ -169,8 +169,8 @@ function mockStagingEmpty() {
     .mockResolvedValueOnce([]); // write existence check → insert path
 }
 
-function writtenStaging(): Array<{ key: string; stagedAt: number }> {
-  const updateCall = (mockDbUpdateSet.mock.calls as unknown[][])[0];
+function writtenStaging(callIndex = 0): Array<{ key: string; stagedAt: number }> {
+  const updateCall = (mockDbUpdateSet.mock.calls as unknown[][])[callIndex];
   const updatePayload = updateCall?.[0] as
     | { value?: unknown }
     | undefined;
@@ -359,6 +359,40 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       // Deleted key removed from staging
       const written = writtenStaging();
       expect(written.find((c: { key: string }) => c.key === KEY)).toBeUndefined();
+    });
+
+    it("retains original timestamps after a partial provider delete and retries the remaining files immediately", async () => {
+      const stagedAt = Date.now() - GRACE_MS - 5_000;
+      const staged = ["partial-a", "partial-b", "partial-c"].map((key) => ({
+        key,
+        stagedAt,
+      }));
+      mockStaging(staged);
+      mockListFiles.mockResolvedValueOnce(buildPage(staged.map(({ key }) => key)));
+      mockCollectReferenced
+        .mockResolvedValueOnce(new Set())
+        .mockResolvedValueOnce(new Set());
+      mockDeleteFiles.mockResolvedValueOnce({ deletedCount: 1 });
+
+      const partialResult = await runUploadThingOrphanCleanup();
+
+      expect(partialResult.deleted).toBe(1);
+      expect(partialResult.errors).toBe(2);
+      expect(writtenStaging()).toEqual(staged);
+
+      mockStaging(staged);
+      mockListFiles.mockResolvedValueOnce(buildPage(["partial-b", "partial-c"]));
+      mockCollectReferenced
+        .mockResolvedValueOnce(new Set())
+        .mockResolvedValueOnce(new Set());
+      mockDeleteFiles.mockResolvedValueOnce({ deletedCount: 2 });
+
+      const retryResult = await runUploadThingOrphanCleanup();
+
+      expect(retryResult.deleted).toBe(2);
+      expect(retryResult.errors).toBe(0);
+      expect(mockDeleteFiles).toHaveBeenNthCalledWith(2, ["partial-b", "partial-c"]);
+      expect(writtenStaging(1)).toEqual([]);
     });
 
     it("rescues an old-staged file that was committed to DB since staging (per-batch re-check)", async () => {

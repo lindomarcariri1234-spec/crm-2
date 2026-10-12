@@ -228,8 +228,6 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     );
 
     // ── Step 4: Delete eligible candidates in batches, with per-batch re-check ─
-    const deletedKeys: string[] = [];
-
     if (toDelete.length > 0) {
       for (let i = 0; i < toDelete.length; i += DELETE_BATCH_SIZE) {
         const batch = toDelete.slice(i, i + DELETE_BATCH_SIZE);
@@ -261,11 +259,41 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
 
         try {
           const deleteResult = await utapi.deleteFiles(confirmedBatch);
-          result.deleted += deleteResult.deletedCount;
-          deletedKeys.push(...confirmedBatch.slice(0, deleteResult.deletedCount));
+          const reportedDeletedCount = deleteResult.deletedCount;
+          const validDeletedCount =
+            Number.isInteger(reportedDeletedCount) &&
+            reportedDeletedCount >= 0 &&
+            reportedDeletedCount <= confirmedBatch.length;
+          const deletedCount = validDeletedCount ? reportedDeletedCount : 0;
+          result.deleted += deletedCount;
+
+          if (deletedCount < confirmedBatch.length) {
+            const retainedCount = confirmedBatch.length - deletedCount;
+            result.errors += retainedCount;
+            // The provider reports only a count, not which keys were deleted.
+            // Retain the whole batch with its original timestamps; the next list
+            // scan drops keys that really disappeared and retries the rest.
+            for (const key of confirmedBatch) {
+              updatedStaging.push({
+                key,
+                stagedAt: existingStagedMap.get(key) ?? now,
+              });
+            }
+            logger.warn(
+              {
+                batchStart: i,
+                requestedCount: confirmedBatch.length,
+                deletedCount,
+                retainedCount,
+                invalidProviderCount: !validDeletedCount,
+              },
+              "[uploadthing-orphan] Partial batch deletion — retaining candidates for retry",
+            );
+          }
+
           logger.info(
-            { batchStart: i, batchSize: confirmedBatch.length, deletedCount: deleteResult.deletedCount },
-            "[uploadthing-orphan] Batch deleted",
+            { batchStart: i, batchSize: confirmedBatch.length, deletedCount },
+            "[uploadthing-orphan] Batch delete response processed",
           );
         } catch (batchErr) {
           result.errors += confirmedBatch.length;

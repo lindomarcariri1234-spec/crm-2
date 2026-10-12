@@ -869,4 +869,56 @@ describe("WhatsApp media retention with PostgreSQL", () => {
       expect(mockDeleteFiles).toHaveBeenCalledWith([failureFileKey]);
     }, 30_000);
   });
+
+  it("keeps partial UploadThing deletes staged with their original timestamps and retries the remaining files", async () => {
+    const stagedAt = Date.now() - ORPHAN_GRACE_MS - 1_000;
+    const fileKeys = [
+      `wa-retention-partial-delete-a-${RUN_ID}`,
+      `wa-retention-partial-delete-b-${RUN_ID}`,
+      `wa-retention-partial-delete-c-${RUN_ID}`,
+    ];
+    const stagedCandidates = fileKeys.map((key) => ({ key, stagedAt }));
+    await db
+      .update(platformSettingsTable)
+      .set({ value: JSON.stringify(stagedCandidates) })
+      .where(eq(platformSettingsTable.key, STAGING_KEY));
+
+    mockListFiles.mockReset().mockResolvedValueOnce({
+      files: fileKeys.map((key) => ({ key, name: "partial-delete.jpg", size: 100 })),
+      hasMore: false,
+    });
+    mockDeleteFiles.mockReset().mockResolvedValueOnce({ deletedCount: 1 });
+
+    const partialResult = await runUploadThingOrphanCleanup();
+
+    expect(partialResult.deleted).toBe(1);
+    expect(partialResult.errors).toBe(2);
+    const [stagingAfterPartial] = await db
+      .select({ value: platformSettingsTable.value })
+      .from(platformSettingsTable)
+      .where(eq(platformSettingsTable.key, STAGING_KEY))
+      .limit(1);
+    expect(JSON.parse(stagingAfterPartial?.value ?? "[]")).toEqual(stagedCandidates);
+
+    // The provider deleted one unknown member of the first batch; only the two
+    // files it left behind appear on the next listing.
+    mockListFiles.mockReset().mockResolvedValueOnce({
+      files: fileKeys.slice(1).map((key) => ({ key, name: "partial-delete.jpg", size: 100 })),
+      hasMore: false,
+    });
+    mockDeleteFiles.mockReset().mockResolvedValueOnce({ deletedCount: 2 });
+
+    const retryResult = await runUploadThingOrphanCleanup();
+
+    expect(retryResult.deleted).toBe(2);
+    expect(retryResult.errors).toBe(0);
+    expect(mockDeleteFiles).toHaveBeenNthCalledWith(1, fileKeys);
+    expect(mockDeleteFiles).toHaveBeenNthCalledWith(2, fileKeys.slice(1));
+    const [stagingAfterRetry] = await db
+      .select({ value: platformSettingsTable.value })
+      .from(platformSettingsTable)
+      .where(eq(platformSettingsTable.key, STAGING_KEY))
+      .limit(1);
+    expect(JSON.parse(stagingAfterRetry?.value ?? "[]")).toEqual([]);
+  }, 30_000);
 });
