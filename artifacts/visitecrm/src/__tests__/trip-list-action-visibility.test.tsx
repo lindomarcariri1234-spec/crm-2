@@ -342,6 +342,60 @@ describe("TripList — visibilidade das ações por perfil", () => {
   });
 });
 
+describe("TripList — mapa de assentos enquanto as configurações carregam", () => {
+  for (const scenario of readOnlyRoleScenarios) {
+    it(`oculta o mapa durante o carregamento e usa o padrão habilitado quando as configurações não trazem a opção para ${scenario.label}`, async () => {
+      mocks.useTrips.mockReturnValue(makeTripsHook(scenario.role));
+      mocks.useGetTenant.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+      });
+      const handle = await renderComponent(createElement(TripList));
+      const expectedWhileLoading = {
+        overview: true,
+        passengers: true,
+        seatMap: false,
+        boardingPanel: true,
+      };
+
+      expect(getReadOnlyTripActions(handle.container)).toEqual(
+        expectedWhileLoading,
+      );
+
+      const listToggle = handle.container.querySelector<HTMLButtonElement>(
+        '[data-testid="view-list"]',
+      );
+      if (!listToggle) {
+        throw new Error("O botão do modo de lista não foi renderizado");
+      }
+      await flushAct(() => listToggle.click());
+      expect(getReadOnlyTripActions(handle.container)).toEqual(expectedWhileLoading);
+
+      mocks.useGetTenant.mockReturnValue({
+        data: { settings: {} },
+        isLoading: false,
+        isError: false,
+      });
+      await handle.rerender(createElement(TripList));
+      const expectedAfterSettingsLoad = {
+        overview: true,
+        passengers: true,
+        seatMap: true,
+        boardingPanel: true,
+      };
+
+      expect(getReadOnlyTripActions(handle.container)).toEqual(
+        expectedAfterSettingsLoad,
+      );
+      await flushAct(() => listToggle.click());
+      expect(getReadOnlyTripActions(handle.container)).toEqual(
+        expectedAfterSettingsLoad,
+      );
+    });
+  }
+});
+
 describe("TripList — mapa de assentos desativado para perfis somente leitura", () => {
   for (const scenario of readOnlyRoleScenarios) {
     it(`oculta o mapa e mantém as demais ações de viagem para ${scenario.label} em cartões e lista`, async () => {

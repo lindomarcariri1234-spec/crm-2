@@ -52,11 +52,20 @@ export function TripList() {
     canPublishToStore,
   } = getTripListActionPermissions(me?.role);
   const isReadOnly = !canCreateTrip && !canEditTrip && !canManageTrip;
-  const { data: tenantData } = useGetTenant(tenantId ?? "", {
+  const {
+    data: tenantData,
+    isLoading: isTenantSettingsLoading,
+    isError: isTenantSettingsError,
+  } = useGetTenant(tenantId ?? "", {
     query: { enabled: !!tenantId, queryKey: ["tenant", tenantId] },
   });
   const tenantSettings = ((tenantData as (typeof tenantData & { settings?: Record<string, unknown> }))?.settings ?? {}) as Record<string, unknown>;
-  const seatMapEnabled = tenantSettings.seatMapEnabled !== false;
+  const tenantSettingsReady =
+    tenantData !== undefined &&
+    !isTenantSettingsLoading &&
+    !isTenantSettingsError;
+  const seatMapEnabled =
+    tenantSettingsReady && tenantSettings.seatMapEnabled !== false;
 
   const handleExport = async () => {
     setIsExporting(true);
