@@ -11,6 +11,23 @@ export function getInstagramIdentity(conversation: Pick<AiConversation, "clientN
   return conversation.clientName?.trim() || conversation.sessionId?.trim() || "Contato sem identificação";
 }
 
+export function getInstagramProfileUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const input = value.trim();
+  const urlMatch = input.match(/^(?:https?:\/\/)?(?:www\.)?instagram\.com\/([^/?#]+)\/?$/i);
+  const username = (urlMatch?.[1] ?? input).replace(/^@+/, "");
+  if (!/^[a-z0-9._]{1,30}$/i.test(username)) return null;
+  return `https://www.instagram.com/${username}/`;
+}
+
+export function getWhatsAppDirectUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  let number = value.replace(/\D/g, "");
+  if (number.length === 10 || number.length === 11) number = `55${number}`;
+  if (number.length < 12 || number.length > 15) return null;
+  return `https://wa.me/${number}`;
+}
+
 export function getInstagramReplyByteCount(content: string): number {
   return new TextEncoder().encode(content.trim()).length;
 }

@@ -78,6 +78,11 @@ import {
   TicketCheck,
   ChevronsUpDown,
   MapPin,
+  Search,
+  ExternalLink,
+  ArrowLeft,
+  MessageCircle,
+  Mail as MailIcon,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -122,6 +127,8 @@ import { useConversationAiMessages } from "./communication/useConversationAiMess
 import { submitInboxMessage } from "./communication/submitInboxMessage";
 import {
   getInstagramIdentity,
+  getInstagramProfileUrl,
+  getWhatsAppDirectUrl,
   getInstagramReplyByteCount,
   INSTAGRAM_REPLY_MAX_BYTES,
   isInstagramReplyWindowExpired,
@@ -241,6 +248,7 @@ export default function Communication() {
   const [inboxMessage, setInboxMessage] = useState("");
   const [aiConversations, setAiConversations] = useState<AiConversation[]>([]);
   const [aiInboxChannelFilter, setAiInboxChannelFilter] = useState<"all" | "whatsapp" | "instagram">("all");
+  const [aiInboxSearch, setAiInboxSearch] = useState("");
   const [selectedAiConversationId, setSelectedAiConversationId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
   const [loadingAiMessages, setLoadingAiMessages] = useState(false);
@@ -260,11 +268,25 @@ export default function Communication() {
   });
   const [aiInboxError, setAiInboxError] = useState<string | null>(null);
   const [aiReply, setAiReply] = useState("");
-  const visibleAiConversations = aiConversations.filter((conversation) => {
-    const supportedChannel = conversation.channel === "whatsapp" || conversation.channel === "instagram";
-    return supportedChannel
-      && (aiInboxChannelFilter === "all" || conversation.channel === aiInboxChannelFilter);
-  });
+  const visibleAiConversations = useMemo(() => {
+    const query = aiInboxSearch.trim().toLocaleLowerCase("pt-BR");
+    return aiConversations
+      .filter((conversation) => {
+        const supportedChannel = conversation.channel === "whatsapp" || conversation.channel === "instagram";
+        const matchesChannel = aiInboxChannelFilter === "all" || conversation.channel === aiInboxChannelFilter;
+        const searchable = [
+          getInstagramIdentity(conversation),
+          conversation.clientName,
+          conversation.sessionId,
+          conversation.lastMessageContent,
+          conversation.channel,
+        ].filter(Boolean).join(" ").toLocaleLowerCase("pt-BR");
+        return supportedChannel && matchesChannel && (!query || searchable.includes(query));
+      })
+      .sort((a, b) =>
+        Date.parse(b.lastMessageAt ?? b.createdAt) - Date.parse(a.lastMessageAt ?? a.createdAt),
+      );
+  }, [aiConversations, aiInboxChannelFilter, aiInboxSearch]);
   const selectedAiConversation = aiConversations.find(
     (conversation) => conversation.id === selectedAiConversationId,
   );
@@ -528,6 +550,19 @@ export default function Communication() {
   const selectedAiClient = (clients?.data ?? []).find(
     (client) => client.id === selectedAiConversation?.clientId,
   );
+  const selectedInstagramProfileUrl = selectedAiConversation?.channel === "instagram"
+    ? getInstagramProfileUrl(
+      selectedAiConversation.metadata?.["instagramUsername"] ?? selectedAiClient?.instagram,
+    )
+    : null;
+  const selectedWhatsAppUrl = selectedAiConversation?.status === "opted_out"
+    ? null
+    : selectedAiConversation?.channel === "whatsapp"
+      ? getWhatsAppDirectUrl(selectedAiClient?.whatsapp || selectedAiClient?.phone || selectedAiConversation.sessionId)
+      : getWhatsAppDirectUrl(selectedAiClient?.whatsapp || selectedAiClient?.phone);
+  const selectedEmailUrl = selectedAiClient?.email
+    ? `mailto:${encodeURIComponent(selectedAiClient.email)}`
+    : null;
   const { data: messageClients } = useListClients({
     ...messageClientsParams,
   }, {
@@ -1477,17 +1512,12 @@ export default function Communication() {
                 Tentar novamente
               </Button>
             </div>
-          ) : visibleAiConversations.length === 0 ? (
-            <div className="flex min-h-[320px] flex-col items-center justify-center rounded-xl border border-dashed bg-card/60 px-6 py-12 text-center text-muted-foreground">
-              <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-secondary text-primary"><MessageSquare className="h-6 w-6" aria-hidden="true" /></span>
-              <p className="font-semibold text-foreground">{aiInboxChannelFilter === "instagram" ? "Nenhuma DM recebida ainda." : "Nenhum atendimento recebido ainda."}</p>
-              <p className="mt-1 max-w-sm text-sm">As conversas iniciadas pelos clientes aparecem aqui quando a integração estiver conectada.</p>
-            </div>
           ) : (
-            <div className="grid min-w-0 grid-cols-1 gap-3 md:h-[min(76dvh,760px)] md:min-h-[560px] md:grid-cols-[minmax(270px,0.82fr)_minmax(0,1.8fr)]">
-              <section aria-label="Lista de atendimentos" className="flex max-h-[38dvh] min-h-[210px] flex-col overflow-hidden rounded-xl border bg-card shadow-sm md:max-h-none md:min-h-0">
-                <div className="flex items-center justify-between gap-3 border-b bg-secondary/45 px-4 py-3">
-                  <div>
+            <div className="grid min-w-0 grid-cols-1 gap-3 md:h-[min(76dvh,760px)] md:min-h-[560px] md:grid-cols-[minmax(300px,0.9fr)_minmax(0,1.8fr)]">
+              <section aria-label="Lista de atendimentos" className={`flex min-h-[70dvh] flex-col overflow-hidden rounded-xl border bg-card shadow-sm md:min-h-0 ${selectedAiConversationId ? "hidden md:flex" : ""}`}>
+                <div className="space-y-3 border-b bg-secondary/35 px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">Atendimento multicanal</p>
                     <h2 className="mt-0.5 text-base font-semibold tracking-tight">Conversas</h2>
                   </div>
@@ -1507,9 +1537,47 @@ export default function Communication() {
                       </SelectContent>
                     </Select>
                   </div>
+                  </div>
+                  <label className="relative block">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                    <Input
+                      data-testid="input-search-ai-inbox"
+                      aria-label="Pesquisar conversas"
+                      value={aiInboxSearch}
+                      onChange={(event) => setAiInboxSearch(event.target.value)}
+                      placeholder="Buscar nome, @, mensagem..."
+                      className="h-9 rounded-lg bg-background pl-9 text-sm"
+                    />
+                  </label>
                 </div>
                 <div className="min-h-0 flex-1 divide-y overflow-y-auto">
-                  {visibleAiConversations.map((conversation) => (
+                  {visibleAiConversations.length === 0 ? (
+                    <div className="flex min-h-40 flex-col items-center justify-center px-5 text-center text-muted-foreground">
+                      {aiInboxSearch.trim() ? (
+                        <>
+                          <Search className="mb-2 h-4 w-4" aria-hidden="true" />
+                          <p className="text-sm font-medium text-foreground">Nenhuma conversa encontrada</p>
+                          <p className="mt-1 text-xs">Tente outro nome, @ ou trecho da mensagem.</p>
+                          <Button type="button" variant="link" size="sm" className="mt-1" data-testid="button-clear-ai-inbox-search" onClick={() => setAiInboxSearch("")}>
+                            Limpar busca
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <MessageSquare className="mb-2 h-5 w-5" aria-hidden="true" />
+                          <p className="text-sm font-medium text-foreground">
+                            {aiInboxChannelFilter === "instagram" ? "Nenhuma DM recebida ainda." : "Nenhum atendimento recebido ainda."}
+                          </p>
+                          <p className="mt-1 max-w-xs text-xs">As conversas iniciadas pelos clientes aparecem aqui quando a integração estiver conectada.</p>
+                          {aiInboxChannelFilter !== "all" && (
+                            <Button type="button" variant="link" size="sm" className="mt-1" onClick={() => setAiInboxChannelFilter("all")}>
+                              Mostrar todos os canais
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ) : visibleAiConversations.map((conversation) => (
                     <button
                       key={conversation.id}
                       data-testid={`button-ai-inbox-conversation-${conversation.id}`}
@@ -1533,7 +1601,10 @@ export default function Communication() {
                             : conversation.status === "human_handoff" ? "Humano" : conversation.status === "opted_out" ? "Opt-out" : "IA"}
                             </Badge>
                           </div>
-                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{conversation.lastMessageContent || "Atendimento iniciado"}</p>
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                            {conversation.lastMessageRole === "assistant" && <span className="font-medium text-foreground/70">{conversation.lastMessageIsBot ? "IA: " : "Equipe: "}</span>}
+                            {conversation.lastMessageContent || "Atendimento iniciado"}
+                          </p>
                           <p className="mt-1.5 text-[11px] tabular-nums text-muted-foreground">
                             {conversation.channel === "instagram" ? "Instagram Direct" : "WhatsApp"}
                             <span aria-hidden="true"> · </span>
@@ -1546,7 +1617,7 @@ export default function Communication() {
                   ))}
                 </div>
               </section>
-              <section aria-label={selectedAiConversationId ? "Histórico do atendimento selecionado" : "Atendimento selecionado"} className="flex min-h-[64dvh] min-w-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm md:min-h-0">
+              <section aria-label={selectedAiConversationId ? "Histórico do atendimento selecionado" : "Atendimento selecionado"} className={`min-h-[70dvh] min-w-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm md:min-h-0 ${selectedAiConversationId ? "flex" : "hidden md:flex"}`}>
                 {!selectedAiConversationId ? (
                   <div className="flex flex-1 flex-col items-center justify-center px-6 text-center text-muted-foreground">
                     <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-primary"><MessageSquare className="h-5 w-5" aria-hidden="true" /></span>
@@ -1555,17 +1626,64 @@ export default function Communication() {
                   </div>
                 ) : (
                   <>
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-secondary/35 px-4 py-3">
-                      <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-card px-3 py-3 sm:px-4">
+                      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-9 w-9 shrink-0 md:hidden"
+                          aria-label="Voltar para a lista de conversas"
+                          data-testid="button-back-to-ai-inbox"
+                          onClick={() => {
+                            setSelectedAiConversationId(null);
+                            setAiMessages([]);
+                          }}
+                        >
+                          <ArrowLeft className="h-4 w-4" />
+                        </Button>
                         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground" aria-hidden="true">
                           {selectedAiConversation ? getInstagramIdentity(selectedAiConversation).slice(0, 2).toLocaleUpperCase("pt-BR") : "CM"}
                         </span>
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold">{selectedAiConversation ? getInstagramIdentity(selectedAiConversation) : "Contato sem identificação"}</p>
-                          <p className="text-xs text-muted-foreground">{selectedAiConversation?.channel === "instagram" ? "Instagram Direct" : "Atendimento WhatsApp"}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                            <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[10px]">
+                              {selectedAiConversation?.channel === "instagram" ? "Instagram Direct" : "WhatsApp"}
+                            </Badge>
+                            {selectedAiClient && selectedAiConversation && selectedAiClient.name !== getInstagramIdentity(selectedAiConversation) && (
+                              <span className="truncate text-xs text-muted-foreground">{selectedAiClient.name}</span>
+                            )}
+                            <span className={`inline-flex items-center gap-1 text-[11px] ${selectedAiConversation?.status === "human_handoff" ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${selectedAiConversation?.status === "human_handoff" ? "bg-emerald-500" : "bg-slate-400"}`} />
+                              {selectedAiConversation?.status === "human_handoff" ? "Equipe atendendo" : selectedAiConversation?.status === "opted_out" ? "Opt-out" : "Automação"}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                      <Popover open={aiClientPickerOpen} onOpenChange={setAiClientPickerOpen}>
+                      <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto sm:justify-end">
+                        {selectedInstagramProfileUrl && (
+                          <Button asChild variant="outline" size="sm" className="h-9">
+                            <a href={selectedInstagramProfileUrl} target="_blank" rel="noopener noreferrer" aria-label="Abrir perfil no Instagram" data-testid="link-open-instagram-profile">
+                              <ExternalLink className="mr-1.5 h-3.5 w-3.5" />Instagram
+                            </a>
+                          </Button>
+                        )}
+                        {selectedWhatsAppUrl && (
+                          <Button asChild variant="outline" size="sm" className="h-9">
+                            <a href={selectedWhatsAppUrl} target="_blank" rel="noopener noreferrer" aria-label="Falar com cliente pelo WhatsApp" data-testid="link-open-client-whatsapp">
+                              <MessageCircle className="mr-1.5 h-3.5 w-3.5" />WhatsApp
+                            </a>
+                          </Button>
+                        )}
+                        {selectedEmailUrl && (
+                          <Button asChild variant="ghost" size="icon" className="h-9 w-9">
+                            <a href={selectedEmailUrl} aria-label="Enviar e-mail para o cliente" data-testid="link-email-client">
+                              <MailIcon className="h-4 w-4" />
+                            </a>
+                          </Button>
+                        )}
+                        <Popover open={aiClientPickerOpen} onOpenChange={setAiClientPickerOpen}>
                         <PopoverTrigger asChild>
                           <Button
                             type="button"
@@ -1575,13 +1693,13 @@ export default function Communication() {
                             aria-expanded={aiClientPickerOpen}
                             data-testid="button-associar-atendimento-cliente"
                             disabled={associatingAiConversationId === selectedAiConversationId}
-                            className="h-auto min-h-10 w-full justify-between gap-3 px-3 py-2 text-left font-normal sm:w-72"
+                            className="h-9 w-full justify-between gap-2 px-2.5 text-left font-normal sm:w-[220px]"
                           >
                             <span className="flex min-w-0 flex-col items-start">
-                              <span className="truncate text-sm">
-                                {selectedAiClient?.name ?? "Sem cliente associado"}
+                              <span className="truncate text-xs font-medium">
+                                {selectedAiClient?.name ?? "Associar cliente"}
                               </span>
-                              <span className="flex max-w-full items-center gap-1 truncate text-xs text-muted-foreground">
+                              <span className="flex max-w-full items-center gap-1 truncate text-[10px] text-muted-foreground">
                                 {selectedAiClient
                                   ? [selectedAiClient.addressCity, selectedAiClient.addressState].filter(Boolean).join("/")
                                     || "Localidade não informada"
@@ -1654,7 +1772,8 @@ export default function Communication() {
                             </CommandList>
                           </Command>
                         </PopoverContent>
-                      </Popover>
+                        </Popover>
+                      </div>
                     </div>
                     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background/55 px-3 py-4 sm:px-5" aria-label="Mensagens do atendimento" role="log" aria-live="polite">
                       {loadingAiMessages ? (
@@ -1669,14 +1788,33 @@ export default function Communication() {
                           <MessageSquare className="mb-2 h-5 w-5 opacity-60" aria-hidden="true" />
                           <p className="text-sm font-medium text-foreground">Ainda não há mensagens neste atendimento.</p>
                         </div>
-                      ) : aiMessages.map((message) => (
-                        <div key={message.id} className={`flex min-w-0 ${message.role === "user" ? "justify-start" : "justify-end"}`}>
-                          <div className={`min-w-0 max-w-[min(88%,34rem)] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed shadow-sm ${message.role === "user" ? "rounded-tl-md border bg-card" : message.isBot ? "rounded-tr-md bg-accent/70" : "rounded-tr-md bg-primary text-primary-foreground"}`}>
-                            <p className="whitespace-pre-wrap break-words">{message.content || (message.mediaUrl ? "Mídia recebida" : "Mensagem sem texto")}</p>
-                            <p className="mt-1.5 text-[10px] opacity-75">{message.isBot ? "IA" : message.role === "user" ? "Cliente" : "Equipe"} · {new Date(message.sentAt).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}</p>
+                      ) : aiMessages.map((message) => {
+                        const inbound = message.role === "user";
+                        const senderLabel = inbound ? "Cliente" : message.isBot ? "Resposta automática" : "Equipe";
+                        const deliveryLabel = message.deliveryStatus === "read"
+                          ? "Lida"
+                          : message.deliveryStatus === "delivered"
+                            ? "Entregue"
+                            : message.deliveryStatus === "failed"
+                              ? "Falhou"
+                              : message.deliveryStatus === "sending" || message.deliveryStatus === "pending"
+                                ? "Enviando"
+                                : message.deliveryStatus === "sent"
+                                  ? "Enviada"
+                                  : null;
+                        return (
+                          <div key={message.id} data-testid={`message-inbox-${message.id}`} className={`flex min-w-0 ${inbound ? "justify-start" : "justify-end"}`}>
+                            <div className={`min-w-0 max-w-[min(92%,38rem)] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed shadow-sm sm:max-w-[82%] ${inbound ? "rounded-tl-md border border-border/80 bg-card" : message.isBot ? "rounded-tr-md bg-accent/70 text-foreground" : "rounded-tr-md bg-primary text-primary-foreground"}`}>
+                              <p className={`mb-1 text-[10px] font-semibold uppercase tracking-wide ${inbound ? "text-muted-foreground" : message.isBot ? "text-muted-foreground" : "text-primary-foreground/75"}`}>{senderLabel}</p>
+                              <p className="whitespace-pre-wrap break-words">{message.content || (message.mediaUrl ? "Mídia recebida" : "Mensagem sem texto")}</p>
+                              <div className={`mt-1.5 flex items-center justify-end gap-1.5 text-[10px] ${inbound || message.isBot ? "text-muted-foreground" : "text-primary-foreground/75"}`}>
+                                <time dateTime={message.sentAt}>{new Date(message.sentAt).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}</time>
+                                {!inbound && deliveryLabel && <span aria-label={`Status: ${deliveryLabel}`}>· {deliveryLabel}</span>}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                     <div className="border-t bg-card px-3 py-3 sm:px-4">
                       {selectedAiConversation?.channel === "instagram" && (
@@ -1687,31 +1825,23 @@ export default function Communication() {
                           {instagramReplyTooLong && <p className="mt-1 font-medium">Esta mensagem excede o limite permitido de 1.000 bytes.</p>}
                         </div>
                       )}
-                      <form onSubmit={handleAiReply} className="flex min-w-0 items-end gap-2">
+                        <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                          <span>Responder pelo {selectedAiConversation?.channel === "instagram" ? "Instagram Direct" : "WhatsApp"}</span>
+                          <span>As mensagens aparecem no histórico após o envio.</span>
+                        </div>
+                        <form onSubmit={handleAiReply} className="flex min-w-0 items-end gap-2">
                         <div className="min-w-0 flex-1">
-                          {selectedAiConversation?.channel === "instagram" ? (
                             <Textarea
-                              data-testid="textarea-ai-inbox-instagram-reply"
-                              aria-label="Responder no Instagram Direct"
-                              aria-describedby={`instagram-reply-rules-${selectedAiConversationId}`}
-                              className="min-h-10 max-h-32 resize-y rounded-lg"
+                              data-testid={selectedAiConversation?.channel === "instagram" ? "textarea-ai-inbox-instagram-reply" : "textarea-ai-inbox-whatsapp-reply"}
+                              aria-label={selectedAiConversation?.channel === "instagram" ? "Responder no Instagram Direct" : "Responder no atendimento WhatsApp"}
+                              aria-describedby={selectedAiConversation?.channel === "instagram" ? `instagram-reply-rules-${selectedAiConversationId}` : undefined}
+                              className="min-h-11 max-h-36 resize-y rounded-xl"
                               rows={2}
-                              placeholder="Responder no Instagram Direct..."
+                              placeholder={selectedAiConversation?.channel === "instagram" ? "Escreva sua resposta para o Direct..." : "Escreva sua resposta para o cliente..."}
                               value={aiReply}
                               onChange={(e) => setAiReply(e.target.value)}
-                              disabled={instagramReplyWindowExpired}
+                              disabled={selectedAiConversation?.channel === "instagram" && instagramReplyWindowExpired}
                             />
-                          ) : (
-                            <Input
-                              data-testid="input-ai-inbox-whatsapp-reply"
-                              type="text"
-                              aria-label="Responder no atendimento WhatsApp"
-                              className="h-10 rounded-lg"
-                              placeholder="Responder como equipe..."
-                              value={aiReply}
-                              onChange={(e) => setAiReply(e.target.value)}
-                            />
-                          )}
                           {selectedAiConversation?.channel === "instagram" && (
                             <p
                               data-testid="text-ai-inbox-instagram-byte-count"
@@ -1726,11 +1856,12 @@ export default function Communication() {
                           data-testid="button-ai-inbox-send-reply"
                           type="submit"
                           size="sm"
-                          className="h-10 w-10 shrink-0 rounded-lg"
+                          className="h-11 shrink-0 rounded-xl px-3 sm:px-4"
                           aria-label={selectedAiConversation?.channel === "instagram" ? "Enviar resposta no Instagram Direct" : "Enviar resposta no atendimento WhatsApp"}
                           disabled={sendingAiReply || !aiReply.trim() || (selectedAiConversation?.channel === "instagram" && (instagramReplyWindowExpired || instagramReplyTooLong))}
                         >
-                          <Send className="h-4 w-4" />
+                          {sendingAiReply ? <RefreshCcw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                          <span className="ml-2 hidden sm:inline">Enviar</span>
                         </Button>
                       </form>
                     </div>

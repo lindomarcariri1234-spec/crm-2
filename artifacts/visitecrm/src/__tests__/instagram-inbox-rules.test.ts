@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { AiConversation, AiMessage } from "../pages/communication/CommunicationInboxTabs";
 import {
   getInstagramIdentity,
+  getInstagramProfileUrl,
   getInstagramReplyByteCount,
+  getWhatsAppDirectUrl,
   INSTAGRAM_REPLY_MAX_BYTES,
   isInstagramReplyWindowExpired,
 } from "../pages/communication/instagramInboxRules";
@@ -49,6 +51,14 @@ describe("Instagram inbox policy", () => {
       clientName: "Ana Silva",
       metadata: { instagramUsername: "ana.silva" },
     }))).toBe("@ana.silva");
+  });
+
+  it("builds safe direct contact links from a handle or a WhatsApp number", () => {
+    expect(getInstagramProfileUrl("@lindomar.cariri")).toBe("https://www.instagram.com/lindomar.cariri/");
+    expect(getInstagramProfileUrl("https://instagram.com/lindomar.cariri/")).toBe("https://www.instagram.com/lindomar.cariri/");
+    expect(getInstagramProfileUrl("javascript:alert(1)")).toBeNull();
+    expect(getWhatsAppDirectUrl("(88) 99999-1234")).toBe("https://wa.me/5588999991234");
+    expect(getWhatsAppDirectUrl("123")).toBeNull();
   });
 
   it("keeps replies available only within 24 hours of the latest inbound message", () => {
