@@ -149,7 +149,7 @@
 - [Seat update payload bounds](seat-update-payload-bounds.md) — validate/project at publisher, Redis and SSE boundaries; preserve statuses without an allowlist and never log raw payloads.
 - [API Vitest integration selection](api-vitest-integration-selection.md) — register new integration files explicitly and invoke Vitest directly when targeting one file.
 - [CHECK constraint drift scope](check-constraint-drift-scope.md) — reconcile legacy CHECK definitions individually before broadening live drift comparisons.
-- [Instagram Direct scope](instagram-direct-scope.md) — agency-owned professional accounts only; replies are customer-initiated, text-only, and limited to Meta's 24-hour window.
+- [Instagram integrations](instagram-direct-scope.md) — agency-owned accounts, customer-initiated 24-hour replies, and parallel Meta/Zernio validation before any explicit cutover; see [rollout](instagram-provider-rollout.md).
 - [Stripe payment mode accounting](stripe-payment-mode-accounting.md) — Stripe livemode is authoritative; unverifiable historical Stripe payments stay unknown and out of real cash totals.
 - [Storefront card installments](storefront-card-installments.md) — do not advertise Brazilian card installments until the configured Stripe account's support is verified and the chosen schedule reaches the PaymentIntent.
 - [Completed-trip storefront availability](completed-trip-storefront.md) — hide completed trips in public storefront queries and reject stale-cart checkout, rechecking status under the reservation lock.
