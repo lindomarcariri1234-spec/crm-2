@@ -1959,6 +1959,8 @@ export default function Communication() {
                             ? "Entregue"
                             : message.deliveryStatus === "failed"
                               ? "Falhou"
+                              : message.deliveryStatus === "cancelled"
+                                ? "Cancelada"
                               : message.deliveryStatus === "unknown"
                                 ? "Confirmando"
                                 : message.deliveryStatus === "sending" || message.deliveryStatus === "pending" || message.deliveryStatus === "processing"
@@ -1975,6 +1977,15 @@ export default function Communication() {
                                 <time dateTime={message.sentAt}>{new Date(message.sentAt).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}</time>
                                 {!inbound && deliveryLabel && <span aria-label={`Status: ${deliveryLabel}`}>· {deliveryLabel}</span>}
                               </div>
+                              {!inbound && message.deliveryIssue && (
+                                <p
+                                  role="status"
+                                  aria-label="Detalhe do envio"
+                                  className={`mt-2 border-t pt-2 text-xs ${message.isBot ? "border-destructive/20 text-destructive" : "border-primary-foreground/20 text-primary-foreground"}`}
+                                >
+                                  {message.deliveryIssue}
+                                </p>
+                              )}
                             </div>
                           </div>
                         );

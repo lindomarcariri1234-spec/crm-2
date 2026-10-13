@@ -38,6 +38,7 @@ export interface AiMessage {
   isBot: boolean;
   sentAt: string;
   deliveryStatus?: string | null;
+  deliveryIssue?: string | null;
   mediaUrl?: string | null;
   mediaMimeType?: string | null;
   mediaFileName?: string | null;

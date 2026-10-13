@@ -303,6 +303,37 @@ describe("POST /chatbot-conversations/:id/reply for Instagram", () => {
     expect(mockState.dbUpdate).toHaveBeenCalled();
   });
 
+  it("returns safe guidance for a terminal provider failure without leaking its raw response", async () => {
+    const conversation = {
+      ...makeConversation(),
+      channel: "whatsapp",
+      sessionId: "5511999999999",
+    };
+    const message = {
+      id: "instagram-staff-reply-id",
+      tenantId: TENANT_ID,
+      conversationId: CONVERSATION_ID,
+      role: "assistant",
+      content: REPLY_BODY.content,
+      deliveryStatus: "failed",
+      deliveryAttempts: 3,
+      lastDeliveryError: "Authorization: Bearer private-provider-response",
+    };
+    configureSelectResults([conversation], [message]);
+    vi.mocked(deliverAttendanceReply).mockResolvedValueOnce(false);
+
+    const response = await request(buildApp())
+      .post(`/api/chatbot-conversations/${CONVERSATION_ID}/reply`)
+      .send(REPLY_BODY);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "WHATSAPP_DELIVERY_FAILED",
+      error: expect.stringContaining("O WhatsApp não aceitou a mensagem"),
+    });
+    expect(JSON.stringify(response.body)).not.toContain("private-provider-response");
+  });
+
   it("blocks an expired persisted inbound message before inserting or sending", async () => {
     const lastInboundAt = new Date(NOW - 24 * 60 * 60 * 1000);
     const [conversationQuery, integrationQuery, inboundQuery] =

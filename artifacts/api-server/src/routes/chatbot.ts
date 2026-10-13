@@ -39,6 +39,45 @@ import { broadcastSupportTicketUpdate } from "../lib/realtime.js";
 
 const router = Router();
 const DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
+const CHATBOT_DELIVERY_ISSUES = {
+  optedOut: "Envio cancelado: o cliente não autorizou contato pelo WhatsApp.",
+  invalidPhone: "Número de WhatsApp inválido ou desatualizado. Atualize o contato e tente novamente.",
+  conversationUnavailable: "Esta conversa não está disponível para receber respostas.",
+  connectionUnavailable: "Conexão do WhatsApp indisponível. Revise a integração e tente novamente.",
+  providerUnavailable: "O serviço do WhatsApp está indisponível. Tente novamente mais tarde.",
+  rateLimited: "O provedor limitou o envio. Aguarde alguns minutos antes de tentar novamente.",
+  rejected: "O WhatsApp não aceitou a mensagem. Revise o contato e a integração antes de tentar novamente.",
+} as const;
+
+function safeChatbotDeliveryIssue(
+  channel: string,
+  status: string | null | undefined,
+  rawReason: unknown,
+): string | null {
+  if (status !== "failed" && status !== "cancelled") return null;
+  if (channel !== "whatsapp") {
+    return "A plataforma não aceitou a mensagem. Revise a conexão da conta e tente novamente.";
+  }
+  const reason = typeof rawReason === "string" ? rawReason : "";
+  if (["contact_opted_out", "whatsapp_opted_out", "whatsapp_recipient_opted_out"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.optedOut;
+  }
+  if (["invalid_phone", "whatsapp_invalid_phone", "whatsapp_address_missing", "whatsapp_recipient_changed", "whatsapp_recipient_unavailable"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.invalidPhone;
+  }
+  if (["conversation_unavailable", "whatsapp_conversation_unavailable", "outbound_message_unavailable"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.conversationUnavailable;
+  }
+  if (["credentials_not_configured", "whatsapp_connection_unavailable", "whatsapp_connection_ambiguous", "no_whatsapp_provider", "whatsapp_account_unavailable"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.connectionUnavailable;
+  }
+  const providerStatus = /^(?:zapi|evolution)_(\d{3})$/.exec(reason)?.[1];
+  if (providerStatus === "401" || providerStatus === "403") return CHATBOT_DELIVERY_ISSUES.connectionUnavailable;
+  if (providerStatus === "429") return CHATBOT_DELIVERY_ISSUES.rateLimited;
+  if (providerStatus && Number(providerStatus) >= 500) return CHATBOT_DELIVERY_ISSUES.providerUnavailable;
+  if (providerStatus) return CHATBOT_DELIVERY_ISSUES.rejected;
+  return CHATBOT_DELIVERY_ISSUES.rejected;
+}
 
 function readZernioApiKey(encrypted: string | null | undefined): string | null {
   if (!encrypted) return null;
@@ -252,7 +291,13 @@ router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFun
         };
       }
     }));
-    res.json(visibleMessages);
+    res.json(visibleMessages.map((message) => {
+      const { lastDeliveryError, ...safeMessage } = message;
+      return {
+        ...safeMessage,
+        deliveryIssue: safeChatbotDeliveryIssue(conv.channel, message.deliveryStatus, lastDeliveryError),
+      };
+    }));
   } catch (err) {
     next(err);
   }
@@ -753,11 +798,19 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
       return;
     }
     if (!delivered && message.deliveryStatus === "cancelled") {
-      next(new ForbiddenError("A conversa não está autorizada a receber mensagens pelo WhatsApp.", "WHATSAPP_OPTED_OUT"));
+      next(new ForbiddenError(
+        safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, message.lastDeliveryError)
+          ?? CHATBOT_DELIVERY_ISSUES.optedOut,
+        "WHATSAPP_OPTED_OUT",
+      ));
       return;
     }
     if (!delivered && message.deliveryStatus === "failed") {
-      next(new ValidationError("O provedor não aceitou a mensagem pelo WhatsApp.", "WHATSAPP_DELIVERY_FAILED"));
+      next(new ValidationError(
+        safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, message.lastDeliveryError)
+          ?? CHATBOT_DELIVERY_ISSUES.rejected,
+        "WHATSAPP_DELIVERY_FAILED",
+      ));
       return;
     }
     await db.update(chatbotConversationsTable)
