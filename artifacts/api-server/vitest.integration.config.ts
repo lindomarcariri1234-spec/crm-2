@@ -40,6 +40,7 @@ export default defineConfig({
       "src/__tests__/tenant-id-envelope.integration.test.ts",
       "src/__tests__/whatsapp-media-retention.integration.test.ts",
       "src/__tests__/trip-financial-report.integration.test.ts",
+      "src/__tests__/instagram-zernio-import-dedup.integration.test.ts",
     ],
   },
 });
