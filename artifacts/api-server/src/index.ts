@@ -672,5 +672,5 @@ void runApiStartup(process.env, {
   })();
 }).catch((err) => {
   logger.error({ err }, "API startup failed before serving — aborting boot");
-  process.exit(1);
+  logger.flush(() => process.exit(1));
 });

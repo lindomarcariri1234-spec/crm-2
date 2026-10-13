@@ -73,11 +73,6 @@ jobs:
           pnpm --filter @workspace/db run migrate
           pnpm --filter @workspace/db run verify-clean-migration
 
-      - name: Verify concurrent startup on an empty database
-        env:
-          MIGRATION_CONCURRENCY_TEST_ADMIN_URL: ${{ env.DATABASE_URL }}
-        run: pnpm --filter @workspace/db run test:migration-concurrency
-
       - name: Type-check database, API contracts, and API
         run: |
           NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/db exec tsc --build
@@ -140,6 +135,11 @@ jobs:
 
       - name: Build API for production
         run: pnpm --filter @workspace/api-server run build
+
+      - name: Verify startup migration failure and recovery on isolated PostgreSQL databases
+        env:
+          MIGRATION_CONCURRENCY_TEST_ADMIN_URL: ${{ env.DATABASE_URL }}
+        run: pnpm --filter @workspace/db run test:migration-concurrency
 
       - name: Build VisiteCRM frontend and publish bundle budget summary
         env:
