@@ -25,6 +25,7 @@ const PROFILE_A_ID = `zernio-profile-a-${generateId()}`;
 const PROFILE_B_ID = `zernio-profile-b-${generateId()}`;
 const CONVERSATION_ID = `zernio-conversation-${generateId()}`;
 const INBOUND_MESSAGE_ID = `zernio-inbound-${generateId()}`;
+const MEDIA_MESSAGE_ID = `zernio-media-${generateId()}`;
 const OUTBOUND_MESSAGE_ID = `zernio-outbound-${generateId()}`;
 const TENANT_IDS = [TENANT_A_ID, TENANT_B_ID];
 let safeDatabaseVerified = false;
@@ -71,6 +72,23 @@ function incomingEvent(accountId: string, profileId: string, eventId: string) {
       platform: "instagram",
       direction: "incoming",
       text: "Mensagem recebida",
+      sender: { id: `${accountId}-customer` },
+    },
+  };
+}
+
+function incomingMediaEvent(accountId: string, profileId: string, eventId: string) {
+  return {
+    id: eventId,
+    event: "message.received",
+    timestamp: "2026-10-10T12:03:00.000Z",
+    account: { accountId, profileId, platform: "instagram" },
+    message: {
+      id: MEDIA_MESSAGE_ID,
+      conversationId: CONVERSATION_ID,
+      platform: "instagram",
+      direction: "incoming",
+      attachments: [{ type: "image", url: "https://media.example.test/image.jpg" }],
       sender: { id: `${accountId}-customer` },
     },
   };
@@ -188,6 +206,16 @@ describe("Zernio history import and webhook idempotency", () => {
               message: "Resposta enviada",
               createdAt: "2026-10-10T12:05:00.000Z",
             },
+            {
+              id: MEDIA_MESSAGE_ID,
+              accountId: ACCOUNT_A_ID,
+              conversationId: CONVERSATION_ID,
+              platform: "instagram",
+              direction: "incoming",
+              senderId: `${ACCOUNT_A_ID}-customer`,
+              attachments: [{ type: "image", url: "https://media.example.test/image.jpg" }],
+              createdAt: "2026-10-10T12:03:00.000Z",
+            },
           ],
           pagination: { hasMore: false },
         }), { status: 200 });
@@ -215,9 +243,9 @@ describe("Zernio history import and webhook idempotency", () => {
       INTEGRATION_A_ID,
       () => undefined,
     );
-    expect(firstImport.messagesImported).toBe(2);
+    expect(firstImport.messagesImported).toBe(3);
     expect(repeatedImport.messagesImported).toBe(0);
-    expect(repeatedImport.messagesAlreadyPresent).toBe(2);
+    expect(repeatedImport.messagesAlreadyPresent).toBe(3);
 
     vi.unstubAllGlobals();
     const aInbound = await webhookRequest(incomingEvent(ACCOUNT_A_ID, PROFILE_A_ID, `evt-a-in-${generateId()}`));
@@ -226,6 +254,13 @@ describe("Zernio history import and webhook idempotency", () => {
     expect(aInbound.body).toMatchObject({ received: true, stored: 0 });
     expect(aOutbound.status).toBe(200);
     expect(aOutbound.body).toMatchObject({ received: true, stored: 0 });
+    const aMedia = await webhookRequest(incomingMediaEvent(
+      ACCOUNT_A_ID,
+      PROFILE_A_ID,
+      `evt-a-media-${generateId()}`,
+    ));
+    expect(aMedia.status).toBe(200);
+    expect(aMedia.body).toMatchObject({ received: true, stored: 0 });
 
     const bInbound = await webhookRequest(incomingEvent(ACCOUNT_B_ID, PROFILE_B_ID, `evt-b-in-${generateId()}`));
     const bOutbound = await webhookRequest(outgoingEvent(ACCOUNT_B_ID, PROFILE_B_ID, `evt-b-out-${generateId()}`));
@@ -266,6 +301,11 @@ describe("Zernio history import and webhook idempotency", () => {
       tenantId: chatbotMessagesTable.tenantId,
       conversationId: chatbotMessagesTable.conversationId,
     }).from(chatbotMessagesTable).where(eq(chatbotMessagesTable.sourceMessageId, `zernio:${INBOUND_MESSAGE_ID}`));
+    const mediaRows = await db.select({
+      tenantId: chatbotMessagesTable.tenantId,
+      content: chatbotMessagesTable.content,
+      sourceMessageId: chatbotMessagesTable.sourceMessageId,
+    }).from(chatbotMessagesTable).where(eq(chatbotMessagesTable.sourceMessageId, `zernio:${MEDIA_MESSAGE_ID}`));
     const outboundRows = await db.select({
       tenantId: chatbotMessagesTable.tenantId,
       conversationId: chatbotMessagesTable.conversationId,
@@ -274,6 +314,12 @@ describe("Zernio history import and webhook idempotency", () => {
     }).from(chatbotMessagesTable).where(eq(chatbotMessagesTable.providerMessageId, OUTBOUND_MESSAGE_ID));
 
     expect(inboundRows.map((row) => row.tenantId).sort()).toEqual([TENANT_A_ID, TENANT_B_ID].sort());
+    expect(mediaRows).toHaveLength(1);
+    expect(mediaRows[0]).toMatchObject({
+      tenantId: TENANT_A_ID,
+      sourceMessageId: `zernio:${MEDIA_MESSAGE_ID}`,
+      content: "Mídia recebida pelo Instagram",
+    });
     expect(outboundRows.map((row) => row.tenantId).sort()).toEqual([TENANT_A_ID, TENANT_B_ID].sort());
     expect(new Set(inboundRows.map((row) => row.conversationId)).size).toBe(2);
     expect(new Set(outboundRows.map((row) => row.conversationId)).size).toBe(2);
