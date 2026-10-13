@@ -249,6 +249,13 @@ export default function Communication() {
   const [sendChannel, setSendChannel] = useState<"whatsapp" | "email">("whatsapp");
   const [selectedClientId, setSelectedClientId] = useState("");
   const [selectedClientName, setSelectedClientName] = useState("");
+  const [selectedClientSnapshot, setSelectedClientSnapshot] = useState<{
+    email: string | null;
+    emailOptIn: boolean | null;
+    whatsapp: string | null;
+    whatsappOptIn: boolean | null;
+  } | null>(null);
+  const [sendClientPickerOpen, setSendClientPickerOpen] = useState(false);
   const [clientSearch, setClientSearch] = useState("");
   const [debouncedClientSearch, setDebouncedClientSearch] = useState("");
   const [filterChannel, setFilterChannel] = useState("all");
@@ -508,7 +515,7 @@ export default function Communication() {
   const templatesQueryKey = getListMessageTemplatesQueryKey();
   const clientsParams = { limit: 500 };
   const messageClientsParams = {
-    limit: 200,
+    limit: 50,
     search: debouncedClientSearch || undefined,
     sortBy: "name",
     sortOrder: "asc",
@@ -592,7 +599,7 @@ export default function Communication() {
   const selectedEmailUrl = selectedAiClient?.email
     ? `mailto:${encodeURIComponent(selectedAiClient.email)}`
     : null;
-  const { data: messageClients } = useListClients({
+  const { data: messageClients, isLoading: loadingMessageClients } = useListClients({
     ...messageClientsParams,
   }, {
     query: {
@@ -703,14 +710,15 @@ export default function Communication() {
         eventType: "manual_message",
         idempotencyKey: `manual:${crypto.randomUUID()}`,
         recipient: { type: "client", id: selectedClientId },
-        ...(sendChannel === "email"
+        ...(emailHtml.trim()
           ? {
               email: {
                 subject: resolveClientTemplate(emailSubject.trim() || "Mensagem da agência", selectedClientName),
                 html: emailHtml,
               },
             }
-          : { whatsapp: { text: whatsappText } }),
+          : {}),
+        ...(whatsappText.trim() ? { whatsapp: { text: whatsappText } } : {}),
         origin: "user",
         originChannel: sendChannel,
       },
@@ -718,6 +726,7 @@ export default function Communication() {
     setIsSendOpen(false);
     setSelectedClientId("");
     setSelectedClientName("");
+    setSelectedClientSnapshot(null);
     setSendChannel("whatsapp");
     setClientSearch("");
     setDebouncedClientSearch("");
@@ -777,7 +786,7 @@ export default function Communication() {
     setIsTemplateOpen(true);
   };
 
-  const selectedClient = [...(messageClients?.data ?? []), ...(clients?.data ?? [])]
+  const selectedClient = selectedClientSnapshot ?? [...(messageClients?.data ?? []), ...(clients?.data ?? [])]
     .find((client) => client.id === selectedClientId);
   const uniqueHistoryOrigins = useMemo(
     () => Array.from(new Set(loadedHistoryMessages.map((message) => message.origin))).sort(),
@@ -1253,42 +1262,76 @@ export default function Communication() {
                 <Send className="w-4 h-4 mr-2" /> Enviar Mensagem
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-lg overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Enviar Mensagem</DialogTitle>
               </DialogHeader>
               <form onSubmit={handleSend} className="space-y-4 mt-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Cliente</label>
-                  <Input
-                    value={clientSearch}
-                    onChange={(event) => setClientSearch(event.target.value)}
-                    placeholder="Buscar pelo nome do cliente..."
-                    aria-label="Buscar cliente para a mensagem"
-                  />
-                  <Select
-                    value={selectedClientId}
-                    onValueChange={(id) => {
-                      setSelectedClientId(id);
-                      const client = [...(messageClients?.data ?? []), ...(clients?.data ?? [])]
-                        .find((candidate) => candidate.id === id);
-                      setSelectedClientName(client?.name ?? "");
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecionar cliente..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {messageClients?.data?.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Popover open={sendClientPickerOpen} onOpenChange={setSendClientPickerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        role="combobox"
+                        aria-label="Selecionar cliente para enviar mensagem"
+                        aria-expanded={sendClientPickerOpen}
+                        className="w-full justify-between font-normal"
+                      >
+                        <span className="truncate">{selectedClientName || "Buscar e selecionar cliente..."}</span>
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align="start"
+                      className="w-[var(--radix-popover-trigger-width)] p-0"
+                    >
+                      <Command shouldFilter={false}>
+                        <CommandInput
+                          value={clientSearch}
+                          onValueChange={setClientSearch}
+                          placeholder="Buscar pelo nome do cliente..."
+                          aria-label="Buscar cliente para a mensagem"
+                        />
+                        <CommandList className="max-h-[min(18rem,calc(100dvh-15rem))]">
+                          <CommandEmpty>
+                            {loadingMessageClients ? "Buscando clientes..." : "Nenhum cliente encontrado."}
+                          </CommandEmpty>
+                          <CommandGroup heading="Clientes">
+                            {(messageClients?.data ?? []).map((client) => (
+                              <CommandItem
+                                key={client.id}
+                                value={client.id}
+                                onSelect={() => {
+                                  setSelectedClientId(client.id);
+                                  setSelectedClientName(client.name);
+                                  setSelectedClientSnapshot({
+                                    email: client.email ?? null,
+                                    emailOptIn: client.emailOptIn ?? null,
+                                    whatsapp: client.whatsapp ?? null,
+                                    whatsappOptIn: client.whatsappOptIn ?? null,
+                                  });
+                                  setClientSearch("");
+                                  setDebouncedClientSearch("");
+                                  setSendClientPickerOpen(false);
+                                }}
+                              >
+                                <Check className={`mr-2 h-4 w-4 ${selectedClientId === client.id ? "opacity-100" : "opacity-0"}`} />
+                                <span className="truncate">{client.name}</span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                  <p className="text-xs text-muted-foreground">
+                    Digite parte do nome para localizar clientes além dos primeiros resultados.
+                  </p>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Iniciar por</label>
+                  <label className="text-sm font-medium">Canal de referência</label>
                   <Select
                     value={sendChannel}
                     onValueChange={(value) => setSendChannel(value as "email" | "whatsapp")}
@@ -1305,7 +1348,7 @@ export default function Communication() {
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    E-mail e WhatsApp são entregas da mesma mensagem. Escolha apenas qual canal deve iniciar o fluxo.
+                    Cada conteúdo preenchido gera sua própria entrega. Esta opção registra o canal de referência.
                   </p>
                 </div>
                 {selectedClient && (
@@ -1376,7 +1419,7 @@ export default function Communication() {
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Cada canal usa seu próprio conteúdo. Se um campo ficar vazio, somente essa entrega será ignorada.
+                  Preencha um ou ambos os conteúdos. Campos vazios não geram entrega para aquele canal.
                 </p>
                 <div className="flex justify-end gap-2">
                   <Button
