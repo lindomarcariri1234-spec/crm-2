@@ -2,6 +2,11 @@ import { createElement, type ReactNode } from "react";
 
 type AuthWidgetProps = Record<string, unknown>;
 
+function isVisualClientSignedIn() {
+  return typeof window !== "undefined"
+    && window.sessionStorage.getItem("visual-test:portal-authenticated") === "true";
+}
+
 function AuthWidget({ mode }: { mode: "sign-in" | "sign-up" }) {
   const signIn = mode === "sign-in";
   return createElement(
@@ -51,7 +56,19 @@ export function SignUp(props: AuthWidgetProps) {
 }
 
 export function useUser() {
-  return { isLoaded: true, isSignedIn: false, user: null };
+  const isSignedIn = isVisualClientSignedIn();
+  return {
+    isLoaded: true,
+    isSignedIn,
+    user: isSignedIn
+      ? {
+          id: "visual-client-user",
+          firstName: "Viajante",
+          fullName: "Viajante de Teste",
+          primaryEmailAddress: { emailAddress: "viajante@example.invalid" },
+        }
+      : null,
+  };
 }
 
 export function ClerkProvider({ children }: { children: ReactNode }) {
@@ -63,19 +80,29 @@ export function Show({
   children,
   fallback = null,
 }: {
-  when: boolean;
+  when: boolean | "signed-in" | "signed-out";
   children: ReactNode;
   fallback?: ReactNode;
 }) {
-  return when ? children : fallback;
+  const signedIn = isVisualClientSignedIn();
+  const visible = typeof when === "boolean"
+    ? when
+    : when === "signed-in"
+      ? signedIn
+      : !signedIn;
+  return visible ? children : fallback;
 }
 
 export function useAuth() {
-  return { isLoaded: true, isSignedIn: false, userId: null, orgId: null };
+  const isSignedIn = isVisualClientSignedIn();
+  return { isLoaded: true, isSignedIn, userId: isSignedIn ? "visual-client-user" : null, orgId: null };
 }
 
 export function useClerk() {
-  return { signOut: async () => undefined };
+  return {
+    signOut: async () => undefined,
+    addListener: () => () => undefined,
+  };
 }
 
 export function useSignIn() {

@@ -805,6 +805,56 @@ test("customer reservation history labels only Stripe test-mode payments", async
   ).toHaveCount(0);
 });
 
+for (const viewport of widths) {
+  test(`authenticated client portal menu navigates and returns to tabs at ${viewport.label} width`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.addInitScript(() => {
+      window.sessionStorage.setItem("visual-test:portal-authenticated", "true");
+    });
+    await page.route("**/api/client/notifications/stream**", (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+        body: "",
+      }),
+    );
+    await page.goto("/visual-tests/index.html?scenario=portal-authenticated");
+
+    await expect(page).toHaveURL(/\/perfil\?scenario=portal-authenticated$/);
+    await expect(page.getByTestId("text-tenant-name")).toHaveText("Agência Visual de Testes");
+    await expect(page.getByTestId("tab-reservas")).toBeVisible();
+
+    const packageLink = viewport.width < 768
+      ? page.getByTestId("link-mobile-store-packages")
+      : page.getByTestId("link-store-packages");
+    if (viewport.width < 768) {
+      await expect(page.getByTestId("button-toggle-mobile-menu")).toBeVisible();
+      await page.getByTestId("button-toggle-mobile-menu").click();
+      await expect(page.getByTestId("menu-mobile-navigation")).toBeVisible();
+    } else {
+      await expect(page.getByRole("navigation", { name: "Navegação da agência" })).toBeVisible();
+      await expect(page.getByTestId("button-toggle-mobile-menu")).toBeHidden();
+    }
+
+    await packageLink.evaluate((element) => {
+      element.addEventListener("click", (event) => {
+        event.preventDefault();
+        window.history.pushState(null, "", (element as HTMLAnchorElement).href);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }, { once: true });
+    });
+    await packageLink.click();
+    await expect(page).toHaveURL(/\/loja\/visual-fixture\/produtos$/);
+    await expect(page.getByRole("heading", { name: "Nossos Pacotes" })).toBeVisible();
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/perfil\?scenario=portal-authenticated$/);
+    await expect(page.getByTestId("text-tenant-name")).toHaveText("Agência Visual de Testes");
+    await page.getByTestId("tab-reservas").click();
+    await expect(page.getByText("Rota dos Geossítios do Araripe", { exact: true }).first()).toBeVisible();
+  });
+}
+
 test("manual order lookup replaces a Stripe test warning and clears old details after a failed lookup", async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem("visual-test:manual-order-lookup-count", "0");

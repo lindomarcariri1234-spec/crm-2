@@ -2,6 +2,7 @@ import { StrictMode, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "../src/index.css";
+import App from "../src/App";
 import PerfilPage from "../src/pages/perfil";
 import { ClubConfigTab } from "../src/pages/configuracoes";
 import VitrineCatalog from "../src/pages/vitrine/catalog";
@@ -259,6 +260,22 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
     };
   }
   if (pathname === "/api/users/me" || pathname === "/api/auth/me") {
+    if (window.sessionStorage.getItem("visual-test:portal-authenticated") === "true") {
+      return {
+        id: "visual-client-user",
+        tenantId: visualStore.id,
+        role: "cliente",
+        name: "Viajante de Teste",
+        email: "viajante@example.invalid",
+        tenant: {
+          id: visualStore.id,
+          slug: visualStore.slug,
+          name: visualStore.name,
+          primaryColor: visualStore.primaryColor,
+          logoUrl: visualStore.logoUrl,
+        },
+      };
+    }
     if (isClubBenefitConflictKeyboardScenario()) {
       return {
         id: "visual-agency-user",
@@ -278,6 +295,7 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
   }
 
   const storePrefix = `/api/public/store/${visualStore.slug}`;
+  if (pathname === storePrefix) return visualStore;
   if (pathname === `${storePrefix}/categories`) return [visualCategory];
   if (pathname === `${storePrefix}/products`) {
     return { data: [visualProduct], total: 1, page: 1, limit: 12 };
@@ -482,7 +500,12 @@ function scenarioElement(scenario: string) {
   return createElement("p", null, "Cenário de teste desconhecido.");
 }
 
-const scenario = new URLSearchParams(window.location.search).get("scenario") ?? "perfil";
+const requestedScenario = new URLSearchParams(window.location.search).get("scenario");
+const scenario = requestedScenario
+  ?? (sessionStorage.getItem("visual-test:portal-authenticated") === "true" ? "portal-authenticated" : "perfil");
+if (scenario === "portal-authenticated" && window.location.pathname === "/visual-tests/index.html") {
+  window.history.replaceState(null, "", "/perfil?scenario=portal-authenticated");
+}
 const palette = new URLSearchParams(window.location.search).get("palette");
 const themeStore = palette === "fallback"
   ? { ...visualStore, primaryColor: "#3b82f6", secondaryColor: "#10b981", accentColor: "#f59e0b" }
@@ -538,12 +561,14 @@ createRoot(rootElement).render(
   createElement(
     StrictMode,
     null,
-    createElement(
-      QueryClientProvider,
-      { client: queryClient },
-      scenario === "perfil" || scenario === "club-benefit-conflict-keyboard"
-        ? scenarioElement(scenario)
-        : storePage,
-    ),
+    scenario === "portal-authenticated"
+      ? createElement(App)
+      : createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          scenario === "perfil" || scenario === "club-benefit-conflict-keyboard"
+            ? scenarioElement(scenario)
+            : storePage,
+        ),
   ),
 );
