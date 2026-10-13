@@ -267,9 +267,10 @@ async function syncAttendanceChatbotMessage(
   error: string | null,
   skippedReason: string | null,
 ): Promise<void> {
-  if (origin !== "whatsapp-attendance" || !isRecord(metadata)) return;
-  const chatbotMessageId = metadata["chatbotMessageId"];
-  const conversationId = metadata["conversationId"];
+  if (origin !== "whatsapp-attendance" || metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) return;
+  const metadataRecord = metadata as Record<string, unknown>;
+  const chatbotMessageId = metadataRecord["chatbotMessageId"];
+  const conversationId = metadataRecord["conversationId"];
   if (typeof chatbotMessageId !== "string" || typeof conversationId !== "string") return;
   const optedOut = ["whatsapp_opted_out", "contact_opted_out"].includes(skippedReason ?? error ?? "");
   const deliveryStatus = ["accepted", "delivered", "read", "sent"].includes(status)
