@@ -57,10 +57,11 @@ function parseResendBounceType(data: Record<string, unknown>): "permanent" | "te
   return RESEND_BOUNCE_TYPES.get(rawType);
 }
 
-// Evolution calls this endpoint for every inbound WhatsApp event. It is
-// instance-scoped and verifies the integration API key before resolving a
+// Evolution can POST to either the configured base callback URL or append
+// event names when an instance has webhookByEvents enabled. Both paths are
+// instance-scoped and verify the integration API key before resolving a
 // tenant; no tenant identifier is accepted from the external caller.
-router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next: NextFunction): Promise<void> => {
+async function handleEvolutionWebhook(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const statusOutcome = await processEvolutionDeliveryStatus({
       instanceName: req.params["instanceName"] ?? "",
@@ -89,6 +90,17 @@ router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next:
   } catch (err) {
     next(err);
   }
+}
+
+const EVOLUTION_WEBHOOK_EVENTS = new Set(["messages-upsert", "messages-update"]);
+router.post("/webhooks/whatsapp/evolution/:instanceName", handleEvolutionWebhook);
+router.post("/webhooks/whatsapp/evolution/:instanceName/:eventName", (req, res, next): void => {
+  const eventName = req.params["eventName"]?.toLowerCase();
+  if (!eventName || !EVOLUTION_WEBHOOK_EVENTS.has(eventName)) {
+    res.status(404).json({ received: false });
+    return;
+  }
+  void handleEvolutionWebhook(req, res, next);
 });
 
 // Resend sends provider callbacks without a user session. The tenant is
