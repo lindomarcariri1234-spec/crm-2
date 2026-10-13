@@ -305,6 +305,8 @@ describe("Zernio history import and webhook idempotency", () => {
       tenantId: chatbotMessagesTable.tenantId,
       content: chatbotMessagesTable.content,
       sourceMessageId: chatbotMessagesTable.sourceMessageId,
+      mediaUrl: chatbotMessagesTable.mediaUrl,
+      mediaMimeType: chatbotMessagesTable.mediaMimeType,
     }).from(chatbotMessagesTable).where(eq(chatbotMessagesTable.sourceMessageId, `zernio:${MEDIA_MESSAGE_ID}`));
     const outboundRows = await db.select({
       tenantId: chatbotMessagesTable.tenantId,
@@ -319,6 +321,8 @@ describe("Zernio history import and webhook idempotency", () => {
       tenantId: TENANT_A_ID,
       sourceMessageId: `zernio:${MEDIA_MESSAGE_ID}`,
       content: "Mídia recebida pelo Instagram",
+      mediaUrl: "https://media.example.test/image.jpg",
+      mediaMimeType: "image/jpeg",
     });
     expect(outboundRows.map((row) => row.tenantId).sort()).toEqual([TENANT_A_ID, TENANT_B_ID].sort());
     expect(new Set(inboundRows.map((row) => row.conversationId)).size).toBe(2);

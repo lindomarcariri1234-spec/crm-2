@@ -74,6 +74,9 @@ export interface ZernioInstagramMessage {
   senderUsername: string | null;
   messageId: string;
   content: string;
+  mediaUrl: string | null;
+  mediaMimeType: string | null;
+  mediaFileName: string | null;
   sentAt: Date;
 }
 
@@ -92,7 +95,16 @@ interface ZernioInstagramSentMessage {
   conversationId: string;
   messageId: string;
   content: string;
+  mediaUrl: string | null;
+  mediaMimeType: string | null;
+  mediaFileName: string | null;
   sentAt: Date;
+}
+
+interface ZernioInstagramAttachment {
+  mediaUrl: string;
+  mediaMimeType: string | null;
+  mediaFileName: string | null;
 }
 
 function asObject(value: unknown): JsonObject | null {
@@ -103,6 +115,57 @@ function asObject(value: unknown): JsonObject | null {
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function safeHttpUrl(value: unknown): string | null {
+  const raw = nonEmptyString(value);
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function inferInstagramMediaMimeType(url: string, type: unknown): string | null {
+  const normalizedType = nonEmptyString(type)?.toLowerCase();
+  if (normalizedType && /^(image|video|audio)\//.test(normalizedType)) return normalizedType;
+  const path = new URL(url).pathname.toLowerCase();
+  const extension = path.split(".").pop();
+  const knownMimeTypes: Record<string, string> = {
+    avif: "image/avif",
+    gif: "image/gif",
+    jpeg: "image/jpeg",
+    jpg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    mp4: "video/mp4",
+    webm: "video/webm",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    ogg: "audio/ogg",
+    wav: "audio/wav",
+  };
+  return extension ? knownMimeTypes[extension] ?? null : null;
+}
+
+function firstZernioInstagramAttachment(value: unknown): ZernioInstagramAttachment | null {
+  if (!Array.isArray(value)) return null;
+  for (const rawAttachment of value) {
+    const attachment = asObject(rawAttachment);
+    const mediaUrl = safeHttpUrl(attachment?.url ?? attachment?.mediaUrl);
+    if (!attachment || !mediaUrl) continue;
+    const rawMimeType = nonEmptyString(attachment.mimeType) ?? nonEmptyString(attachment.contentType);
+    const normalizedMimeType = rawMimeType?.split(";", 1)[0]?.trim().toLowerCase();
+    const mediaMimeType = normalizedMimeType && /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(normalizedMimeType)
+      ? normalizedMimeType
+      : inferInstagramMediaMimeType(mediaUrl, attachment.type);
+    const mediaFileName = nonEmptyString(attachment.fileName) ?? nonEmptyString(attachment.name);
+    return { mediaUrl, mediaMimeType, mediaFileName };
+  }
+  return null;
 }
 
 export function normalizeInstagramUsername(value: unknown): string | null {
@@ -162,6 +225,7 @@ export function parseZernioInstagramMessage(payload: unknown): ZernioInstagramMe
   if (Number.isNaN(sentAt.getTime())) return null;
 
   const text = nonEmptyString(message.text);
+  const attachment = firstZernioInstagramAttachment(message.attachments);
   const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
   if (!text && !hasAttachments) return null;
 
@@ -173,6 +237,9 @@ export function parseZernioInstagramMessage(payload: unknown): ZernioInstagramMe
     senderUsername,
     messageId,
     content: text ?? "Mídia recebida pelo Instagram",
+    mediaUrl: attachment?.mediaUrl ?? null,
+    mediaMimeType: attachment?.mediaMimeType ?? null,
+    mediaFileName: attachment?.mediaFileName ?? null,
     sentAt,
   };
 }
@@ -237,6 +304,8 @@ export function parseZernioInstagramSentMessage(payload: unknown): ZernioInstagr
   const conversationId = nonEmptyString(message.conversationId);
   const messageId = nonEmptyString(message.id) ?? nonEmptyString(message.platformMessageId);
   const timestampValue = event.timestamp ?? message.timestamp;
+  const attachment = firstZernioInstagramAttachment(message.attachments);
+  const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
   const sentAt = typeof timestampValue === "string" || typeof timestampValue === "number"
     ? new Date(timestampValue)
     : new Date();
@@ -244,6 +313,7 @@ export function parseZernioInstagramSentMessage(payload: unknown): ZernioInstagr
     !accountId ||
     !conversationId ||
     !messageId ||
+    (!nonEmptyString(message.text) && !hasAttachments) ||
     Number.isNaN(sentAt.getTime())
   ) {
     return null;
@@ -254,6 +324,9 @@ export function parseZernioInstagramSentMessage(payload: unknown): ZernioInstagr
     conversationId,
     messageId,
     content: nonEmptyString(message.text) ?? "Mídia enviada pelo Instagram",
+    mediaUrl: attachment?.mediaUrl ?? null,
+    mediaMimeType: attachment?.mediaMimeType ?? null,
+    mediaFileName: attachment?.mediaFileName ?? null,
     sentAt,
   };
 }
@@ -317,6 +390,9 @@ export async function processZernioInstagramWebhook(
       providerMessageId: sent.messageId,
       role: "assistant",
       content: sent.content,
+      mediaUrl: sent.mediaUrl,
+      mediaMimeType: sent.mediaMimeType,
+      mediaFileName: sent.mediaFileName,
       sentAt: sent.sentAt,
       isBot: false,
       deliveryStatus: "sent",
@@ -453,6 +529,9 @@ export async function processZernioInstagramWebhook(
       sourceMessageId: `zernio:${message.messageId}`,
       role: "user",
       content: message.content,
+      mediaUrl: message.mediaUrl,
+      mediaMimeType: message.mediaMimeType,
+      mediaFileName: message.mediaFileName,
       sentAt: message.sentAt,
       isBot: false,
     }).onConflictDoNothing().returning({ id: chatbotMessagesTable.id });

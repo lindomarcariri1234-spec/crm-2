@@ -124,7 +124,17 @@ export function MessageMediaAttachment({
   expiresAt?: string | null;
 }) {
   const [now, setNow] = useState(() => Date.now());
+  const [loadFailed, setLoadFailed] = useState(false);
   const expiryTime = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+  let safeUrl: string | null = null;
+  try {
+    const parsedUrl = url ? new URL(url) : null;
+    if (parsedUrl && (parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:") && !parsedUrl.username && !parsedUrl.password) {
+      safeUrl = parsedUrl.toString();
+    }
+  } catch {
+    safeUrl = null;
+  }
 
   useEffect(() => {
     if (!Number.isFinite(expiryTime)) return;
@@ -140,6 +150,10 @@ export function MessageMediaAttachment({
     return () => window.clearTimeout(timer);
   }, [expiryTime, now]);
 
+  useEffect(() => {
+    setLoadFailed(false);
+  }, [safeUrl]);
+
   if (expiredAt || (Number.isFinite(expiryTime) && expiryTime <= Math.max(now, Date.now()))) {
     return (
       <span className="mt-1 block text-xs opacity-80" role="status">
@@ -148,10 +162,10 @@ export function MessageMediaAttachment({
     );
   }
 
-  if (!url) {
+  if (!safeUrl || loadFailed) {
     return (
-      <span className="mt-1 block text-xs opacity-80">
-        {mimeType ? "Anexo indisponível" : "Mídia anexada"}
+      <span className="mt-1 block text-xs opacity-80" role={mimeType || loadFailed ? "status" : undefined}>
+        {mimeType || loadFailed ? "Anexo indisponível ou expirado" : "Mídia anexada"}
       </span>
     );
   }
@@ -162,19 +176,21 @@ export function MessageMediaAttachment({
       <audio
         className="mt-2 block w-full max-w-full"
         controls
+        onError={() => setLoadFailed(true)}
         preload="none"
-        src={url}
+        src={safeUrl}
         aria-label={fileName || "Áudio recebido"}
       />
     );
   }
   if (INLINE_IMAGE_TYPES.has(normalizedMimeType)) {
     return (
-      <a href={url} target="_blank" rel="noreferrer" className="mt-2 block">
+      <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="mt-2 block">
         <img
-          src={url}
+          src={safeUrl}
           alt={fileName || "Imagem recebida"}
           loading="lazy"
+          onError={() => setLoadFailed(true)}
           className="max-h-64 max-w-full rounded-md object-contain"
         />
       </a>
@@ -185,17 +201,18 @@ export function MessageMediaAttachment({
       <video
         className="mt-2 block max-h-64 max-w-full rounded-md"
         controls
+        onError={() => setLoadFailed(true)}
         preload="metadata"
-        src={url}
+        src={safeUrl}
         aria-label={fileName || "Vídeo recebido"}
       />
     );
   }
   return (
     <a
-      href={url}
+      href={safeUrl}
       target="_blank"
-      rel="noreferrer"
+      rel="noopener noreferrer"
       download={fileName || undefined}
       className="mt-1 block text-xs underline underline-offset-2"
     >

@@ -10,7 +10,10 @@ import {
   flushAct,
   renderComponent,
 } from "./eventSourceHarness.js";
-import { ConversationsTab } from "../pages/communication/CommunicationInboxTabs";
+import {
+  ConversationsTab,
+  MessageMediaAttachment,
+} from "../pages/communication/CommunicationInboxTabs";
 import {
   submitInboxMessage,
   type InboxMessageToast,
@@ -393,6 +396,35 @@ function setInputValue(input: HTMLInputElement, value: string) {
 afterEach(async () => {
   await cleanupRoots();
   vi.unstubAllGlobals();
+});
+
+describe("Instagram conversation attachments", () => {
+  it("renders safe image previews and reports media that can no longer be loaded", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/photo.jpg",
+      mimeType: "image/jpeg",
+      fileName: "photo.jpg",
+      expiredAt: null,
+    }));
+    const image = container.querySelector<HTMLImageElement>("img");
+    expect(image?.getAttribute("src")).toBe("https://media.example.test/photo.jpg");
+    expect(image?.alt).toBe("photo.jpg");
+
+    await flushAct(() => image!.dispatchEvent(new Event("error")));
+    expect(container.textContent).toContain("Anexo indisponível ou expirado");
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("does not create links for non-web attachment URLs", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "javascript:alert(1)",
+      mimeType: null,
+      fileName: null,
+      expiredAt: null,
+    }));
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("Mídia anexada");
+  });
 });
 
 describe("conversation list search interactions", () => {

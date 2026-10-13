@@ -193,6 +193,33 @@ describe("Zernio Instagram webhook", () => {
     })).toBeNull();
   });
 
+  it("retains only safe Instagram attachment URLs and identifies common image types", () => {
+    expect(zernioService.parseZernioInstagramMessage({
+      ...event,
+      message: {
+        ...event.message,
+        text: "",
+        attachments: [{
+          type: "image",
+          url: "https://media.example.test/photo.jpg?token=short-lived",
+          fileName: "photo.jpg",
+        }],
+      },
+    })).toMatchObject({
+      content: "Mídia recebida pelo Instagram",
+      mediaUrl: "https://media.example.test/photo.jpg?token=short-lived",
+      mediaMimeType: "image/jpeg",
+      mediaFileName: "photo.jpg",
+    });
+    expect(zernioService.parseZernioInstagramMessage({
+      ...event,
+      message: {
+        ...event.message,
+        attachments: [{ type: "image", url: "javascript:alert(1)" }],
+      },
+    })?.mediaUrl).toBeNull();
+  });
+
   it("normalizes only Instagram handle wrappers and case, without fuzzy punctuation matching", () => {
     expect(zernioService.normalizeInstagramUsername("@LindomarSantos.Cariri")).toBe("lindomarsantos.cariri");
     expect(zernioService.normalizeInstagramUsername("https://www.instagram.com/LindomarSantos.Cariri/"))

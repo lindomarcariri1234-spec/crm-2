@@ -110,6 +110,7 @@ import {
 } from "@/lib/communicationTimeline";
 import {
   ConversationsTab,
+  MessageMediaAttachment,
   type ClientLinkStatus,
   type AiConversation,
   type AiMessage,
@@ -1973,6 +1974,15 @@ export default function Communication() {
                             <div className={`min-w-0 max-w-[min(92%,38rem)] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed shadow-sm sm:max-w-[82%] ${inbound ? "rounded-tl-md border border-border/80 bg-card" : message.isBot ? "rounded-tr-md bg-accent/70 text-foreground" : "rounded-tr-md bg-primary text-primary-foreground"}`}>
                               <p className={`mb-1 text-[10px] font-semibold uppercase tracking-wide ${inbound ? "text-muted-foreground" : message.isBot ? "text-muted-foreground" : "text-primary-foreground/75"}`}>{senderLabel}</p>
                               <p className="whitespace-pre-wrap break-words">{message.content || (message.mediaUrl ? "Mídia recebida" : "Mensagem sem texto")}</p>
+                               {(message.mediaUrl || message.mediaMimeType || message.mediaExpiredAt) && (
+                                 <MessageMediaAttachment
+                                   url={message.mediaUrl}
+                                   mimeType={message.mediaMimeType}
+                                   fileName={message.mediaFileName}
+                                   expiredAt={message.mediaExpiredAt}
+                                   expiresAt={message.mediaExpiresAt}
+                                 />
+                               )}
                               <div className={`mt-1.5 flex items-center justify-end gap-1.5 text-[10px] ${inbound || message.isBot ? "text-muted-foreground" : "text-primary-foreground/75"}`}>
                                 <time dateTime={message.sentAt}>{new Date(message.sentAt).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}</time>
                                 {!inbound && deliveryLabel && <span aria-label={`Status: ${deliveryLabel}`}>· {deliveryLabel}</span>}
