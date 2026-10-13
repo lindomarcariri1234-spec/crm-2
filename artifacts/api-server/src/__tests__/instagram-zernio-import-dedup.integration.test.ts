@@ -26,6 +26,11 @@ const PROFILE_B_ID = `zernio-profile-b-${generateId()}`;
 const CONVERSATION_ID = `zernio-conversation-${generateId()}`;
 const INBOUND_MESSAGE_ID = `zernio-inbound-${generateId()}`;
 const MEDIA_MESSAGE_ID = `zernio-media-${generateId()}`;
+const MALFORMED_MESSAGE_IDS = [
+  `zernio-empty-attachments-${generateId()}`,
+  `zernio-unusable-attachments-${generateId()}`,
+  `zernio-missing-attachments-${generateId()}`,
+];
 const OUTBOUND_MESSAGE_ID = `zernio-outbound-${generateId()}`;
 const TENANT_IDS = [TENANT_A_ID, TENANT_B_ID];
 let safeDatabaseVerified = false;
@@ -89,6 +94,23 @@ function incomingMediaEvent(accountId: string, profileId: string, eventId: strin
       platform: "instagram",
       direction: "incoming",
       attachments: [{ type: "image", url: "https://media.example.test/image.jpg" }],
+      sender: { id: `${accountId}-customer` },
+    },
+  };
+}
+
+function incomingMalformedMediaEvent(accountId: string, profileId: string, eventId: string) {
+  return {
+    id: eventId,
+    event: "message.received",
+    timestamp: "2026-10-10T12:04:00.000Z",
+    account: { accountId, profileId, platform: "instagram" },
+    message: {
+      id: MALFORMED_MESSAGE_IDS[0],
+      conversationId: CONVERSATION_ID,
+      platform: "instagram",
+      direction: "incoming",
+      attachments: [],
       sender: { id: `${accountId}-customer` },
     },
   };
@@ -216,6 +238,38 @@ describe("Zernio history import and webhook idempotency", () => {
               attachments: [{ type: "image", url: "https://media.example.test/image.jpg" }],
               createdAt: "2026-10-10T12:03:00.000Z",
             },
+            {
+              id: MALFORMED_MESSAGE_IDS[0],
+              accountId: ACCOUNT_A_ID,
+              conversationId: CONVERSATION_ID,
+              platform: "instagram",
+              direction: "incoming",
+              senderId: `${ACCOUNT_A_ID}-customer`,
+              message: "",
+              attachments: [],
+              createdAt: "2026-10-10T12:04:00.000Z",
+            },
+            {
+              id: MALFORMED_MESSAGE_IDS[1],
+              accountId: ACCOUNT_A_ID,
+              conversationId: CONVERSATION_ID,
+              platform: "instagram",
+              direction: "incoming",
+              senderId: `${ACCOUNT_A_ID}-customer`,
+              message: "",
+              attachments: [null, { type: "image" }],
+              createdAt: "2026-10-10T12:04:30.000Z",
+            },
+            {
+              id: MALFORMED_MESSAGE_IDS[2],
+              accountId: ACCOUNT_A_ID,
+              conversationId: CONVERSATION_ID,
+              platform: "instagram",
+              direction: "incoming",
+              senderId: `${ACCOUNT_A_ID}-customer`,
+              message: "",
+              createdAt: "2026-10-10T12:04:45.000Z",
+            },
           ],
           pagination: { hasMore: false },
         }), { status: 200 });
@@ -261,6 +315,13 @@ describe("Zernio history import and webhook idempotency", () => {
     ));
     expect(aMedia.status).toBe(200);
     expect(aMedia.body).toMatchObject({ received: true, stored: 0 });
+    const malformedMedia = await webhookRequest(incomingMalformedMediaEvent(
+      ACCOUNT_A_ID,
+      PROFILE_A_ID,
+      `evt-a-malformed-media-${generateId()}`,
+    ));
+    expect(malformedMedia.status).toBe(200);
+    expect(malformedMedia.body).toMatchObject({ received: true, stored: 0 });
 
     const bInbound = await webhookRequest(incomingEvent(ACCOUNT_B_ID, PROFILE_B_ID, `evt-b-in-${generateId()}`));
     const bOutbound = await webhookRequest(outgoingEvent(ACCOUNT_B_ID, PROFILE_B_ID, `evt-b-out-${generateId()}`));
@@ -308,6 +369,14 @@ describe("Zernio history import and webhook idempotency", () => {
       mediaUrl: chatbotMessagesTable.mediaUrl,
       mediaMimeType: chatbotMessagesTable.mediaMimeType,
     }).from(chatbotMessagesTable).where(eq(chatbotMessagesTable.sourceMessageId, `zernio:${MEDIA_MESSAGE_ID}`));
+    const malformedRows = await db.select({
+      sourceMessageId: chatbotMessagesTable.sourceMessageId,
+      content: chatbotMessagesTable.content,
+    }).from(chatbotMessagesTable)
+      .where(inArray(
+        chatbotMessagesTable.sourceMessageId,
+        MALFORMED_MESSAGE_IDS.map((messageId) => `zernio:${messageId}`),
+      ));
     const outboundRows = await db.select({
       tenantId: chatbotMessagesTable.tenantId,
       conversationId: chatbotMessagesTable.conversationId,
@@ -317,6 +386,7 @@ describe("Zernio history import and webhook idempotency", () => {
 
     expect(inboundRows.map((row) => row.tenantId).sort()).toEqual([TENANT_A_ID, TENANT_B_ID].sort());
     expect(mediaRows).toHaveLength(1);
+    expect(malformedRows).toHaveLength(0);
     expect(mediaRows[0]).toMatchObject({
       tenantId: TENANT_A_ID,
       sourceMessageId: `zernio:${MEDIA_MESSAGE_ID}`,

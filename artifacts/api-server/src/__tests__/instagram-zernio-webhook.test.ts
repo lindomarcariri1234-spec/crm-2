@@ -220,6 +220,35 @@ describe("Zernio Instagram webhook", () => {
     })?.mediaUrl).toBeNull();
   });
 
+  it("rejects attachment-only messages when the attachments are absent, empty, or unusable", () => {
+    const noTextEvent = {
+      ...event,
+      message: { ...event.message, text: "" },
+    };
+    expect(zernioService.parseZernioInstagramMessage(noTextEvent)).toBeNull();
+    expect(zernioService.parseZernioInstagramMessage({
+      ...noTextEvent,
+      message: { ...noTextEvent.message, attachments: [] },
+    })).toBeNull();
+    expect(zernioService.parseZernioInstagramMessage({
+      ...noTextEvent,
+      message: { ...noTextEvent.message, attachments: [null, { type: "image" }] },
+    })).toBeNull();
+    expect(zernioService.parseZernioInstagramMessage({
+      ...noTextEvent,
+      message: { ...noTextEvent.message, attachments: [{ type: "image", url: "javascript:alert(1)" }] },
+    })).toBeNull();
+    expect(zernioService.parseZernioInstagramSentMessage({
+      ...noTextEvent,
+      event: "message.sent",
+      message: {
+        ...noTextEvent.message,
+        direction: "outgoing",
+        attachments: [],
+      },
+    })).toBeNull();
+  });
+
   it("normalizes only Instagram handle wrappers and case, without fuzzy punctuation matching", () => {
     expect(zernioService.normalizeInstagramUsername("@LindomarSantos.Cariri")).toBe("lindomarsantos.cariri");
     expect(zernioService.normalizeInstagramUsername("https://www.instagram.com/LindomarSantos.Cariri/"))

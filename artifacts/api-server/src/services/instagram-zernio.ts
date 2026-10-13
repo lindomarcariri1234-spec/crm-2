@@ -226,8 +226,7 @@ export function parseZernioInstagramMessage(payload: unknown): ZernioInstagramMe
 
   const text = nonEmptyString(message.text);
   const attachment = firstZernioInstagramAttachment(message.attachments);
-  const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
-  if (!text && !hasAttachments) return null;
+  if (!text && !attachment) return null;
 
   return {
     accountId,
@@ -305,7 +304,6 @@ export function parseZernioInstagramSentMessage(payload: unknown): ZernioInstagr
   const messageId = nonEmptyString(message.id) ?? nonEmptyString(message.platformMessageId);
   const timestampValue = event.timestamp ?? message.timestamp;
   const attachment = firstZernioInstagramAttachment(message.attachments);
-  const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
   const sentAt = typeof timestampValue === "string" || typeof timestampValue === "number"
     ? new Date(timestampValue)
     : new Date();
@@ -313,7 +311,7 @@ export function parseZernioInstagramSentMessage(payload: unknown): ZernioInstagr
     !accountId ||
     !conversationId ||
     !messageId ||
-    (!nonEmptyString(message.text) && !hasAttachments) ||
+    (!nonEmptyString(message.text) && !attachment) ||
     Number.isNaN(sentAt.getTime())
   ) {
     return null;
@@ -711,6 +709,7 @@ export async function importZernioInstagramHistoryChunk(
       const createdAt = nonEmptyString(item?.createdAt) ?? nonEmptyString(item?.sentAt);
       const content = nonEmptyString(item?.message);
       const attachments = Array.isArray(item?.attachments) ? item.attachments : [];
+      const attachment = firstZernioInstagramAttachment(attachments);
       if (
         !messageId ||
         item?.platform !== "instagram" ||
@@ -718,7 +717,7 @@ export async function importZernioInstagramHistoryChunk(
         item.accountId !== accountId ||
         (direction !== "incoming" && direction !== "outgoing") ||
         (direction === "incoming" && !senderId) ||
-        (!content && attachments.length === 0) ||
+        (!content && !attachment) ||
         !createdAt
       ) continue;
       const imported = await processZernioInstagramWebhook({
