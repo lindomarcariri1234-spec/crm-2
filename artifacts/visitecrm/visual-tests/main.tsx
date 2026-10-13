@@ -483,6 +483,12 @@ function scenarioElement(scenario: string) {
 }
 
 const scenario = new URLSearchParams(window.location.search).get("scenario") ?? "perfil";
+const palette = new URLSearchParams(window.location.search).get("palette");
+const themeStore = palette === "fallback"
+  ? { ...visualStore, primaryColor: "#3b82f6", secondaryColor: "#10b981", accentColor: "#f59e0b" }
+  : palette === "custom"
+    ? { ...visualStore, primaryColor: "#312e81", secondaryColor: "#166534", accentColor: "#eab308" }
+    : visualStore;
 const rootElement = document.getElementById("visual-test-root");
 if (!rootElement) throw new Error("Elemento raiz dos testes visuais não encontrado.");
 installFixtureFetch();
@@ -516,7 +522,7 @@ const queryClient = new QueryClient({
 });
 const storePage = createElement(
   VitrineThemeProvider,
-  { store: visualStore },
+  { store: themeStore },
   createElement(
     CartProvider,
     { slug: visualStore.slug },

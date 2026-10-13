@@ -40,11 +40,101 @@ const recoveredOrderNumber = "VIS-3DS-001";
 const recoveredOrderToken = "visual-3ds-payment-token";
 const recoveredPaymentIntentId = "pi_visual_3ds";
 
-async function openFixture(page: Page, scenario: string, width: number, height: number) {
+async function openFixture(page: Page, scenario: string, width: number, height: number, palette?: string) {
   await page.setViewportSize({ width, height });
-  await page.goto(`/visual-tests/index.html?scenario=${scenario}`);
+  const paletteQuery = palette ? `&palette=${palette}` : "";
+  await page.goto(`/visual-tests/index.html?scenario=${scenario}${paletteQuery}`);
   await expect(page.locator("#visual-test-root")).toBeVisible();
   await expect(page.locator("#visual-test-root")).not.toContainText("Cenário de teste desconhecido.");
+}
+
+async function assertStorefrontTextContrast(page: Page, scenario: string, palette: string) {
+  const contrastItems = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("Could not create a color sampler for contrast checks.");
+    const parseColors = (value: string) => {
+      const matches = value.match(/#[\da-f]{3,8}\b|(?:rgba?|oklch|lab|lch|color)\([^)]*\)/gi) ?? [];
+      return matches.map((match) => {
+        context.clearRect(0, 0, 1, 1);
+        context.fillStyle = "rgba(0, 0, 0, 0)";
+        context.fillStyle = match;
+        context.fillRect(0, 0, 1, 1);
+        const [r, g, b, alpha] = context.getImageData(0, 0, 1, 1).data;
+        return [r!, g!, b!, alpha! / 255] as const;
+      });
+    };
+    const luminance = ([r, g, b]: readonly number[]) => {
+      const channel = (value: number) => {
+        const normalized = value / 255;
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    };
+    const ratio = (foreground: readonly number[], background: readonly number[]) => {
+      const foregroundLuminance = luminance(foreground);
+      const backgroundLuminance = luminance(background);
+      return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+        / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+    };
+    const visible = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    return [...document.querySelectorAll<HTMLElement>(
+      "#visual-test-root button, #visual-test-root a[role='button'], #visual-test-root [role='status'], #visual-test-root span.rounded-full",
+    )]
+      .filter((element) => {
+        const label = (element.innerText || element.getAttribute("aria-label") || "").trim();
+        return visible(element) && label && !/^(cancelar|voltar|voltar ao produto)$/i.test(label);
+      })
+      .map((element) => {
+        const foreground = parseColors(getComputedStyle(element).color)[0];
+        let backgrounds: Array<readonly [number, number, number, number]> = [];
+        for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+          const style = getComputedStyle(current);
+          const gradientColors = parseColors(style.backgroundImage);
+          if (gradientColors.length > 0) {
+            backgrounds = gradientColors;
+            break;
+          }
+          const color = parseColors(style.backgroundColor)[0];
+          if (color && color[3] > 0) {
+            backgrounds = [color];
+            break;
+          }
+        }
+        if (backgrounds.length === 0) backgrounds = [[255, 255, 255, 1]];
+        const ratios = foreground
+          ? backgrounds.map((background) => {
+              const alpha = background[3];
+              const opaqueBackground = [
+                background[0] * alpha + 255 * (1 - alpha),
+                background[1] * alpha + 255 * (1 - alpha),
+                background[2] * alpha + 255 * (1 - alpha),
+              ];
+              return ratio(foreground, opaqueBackground);
+            })
+          : [];
+        return {
+          text: (element.innerText || element.getAttribute("aria-label") || "").trim().replace(/\s+/g, " ").slice(0, 80),
+          minimumContrast: ratios.length > 0 ? Math.min(...ratios) : 0,
+        };
+      });
+  });
+
+  expect(contrastItems.length, `${scenario} should expose a primary action or status label for ${palette}`).toBeGreaterThan(0);
+  for (const item of contrastItems) {
+    expect(
+      item.minimumContrast,
+      `${scenario} / ${palette}: "${item.text}" contrast`,
+    ).toBeGreaterThanOrEqual(4.5);
+  }
 }
 
 async function clickFlowButton(page: Page, label: string) {
@@ -836,6 +926,45 @@ test("a late order lookup is not announced over the latest result", async ({ pag
   await assertNoSyntheticOrderRequest(page, "looking up public orders");
   expect(await readVisualSessionCounter(page, "visual-test:create-payment-intent-count")).toBe(0);
 });
+
+const themedPages = [
+  { scenario: "entrar", label: "sign-in" },
+  { scenario: "cadastrar", label: "sign-up" },
+  { scenario: "indicacao", label: "referral" },
+  { scenario: "reserva", label: "reservation" },
+  { scenario: "checkout", label: "checkout" },
+  { scenario: "pedido", label: "order tracking" },
+] as const;
+
+const themePalettes = [
+  { name: "fallback", primary: "#1e5b8c" },
+  { name: "custom", primary: "#312e81" },
+] as const;
+
+for (const palette of themePalettes) {
+  for (const themedPage of themedPages) {
+    test(`${themedPage.label} actions and status labels remain readable with the ${palette.name} palette`, async ({ page }) => {
+      if (themedPage.scenario === "pedido") {
+        await page.addInitScript(() => {
+          window.sessionStorage.setItem("visual-test:3ds-mode", "test");
+        });
+      }
+      await openFixture(page, themedPage.scenario, 1280, 900, palette.name);
+      await expect(page.locator("h1").first(), `${themedPage.label} heading`).toBeVisible();
+      const actualPrimary = await page.locator("[data-vitrine-theme]").evaluate((element) =>
+        getComputedStyle(element).getPropertyValue("--vitrine-primary").trim(),
+      );
+      expect(actualPrimary.toLowerCase()).toBe(palette.primary);
+      if (themedPage.scenario === "pedido") {
+        await page.getByLabel("Número do Pedido").fill("VIS-TRACK-LIVE");
+        await page.getByLabel("Código de Acesso").fill("visual-manual-lookup-token");
+        await clickFlowButton(page, "Consultar Pedido");
+        await expect(page.getByText("Cliente Stripe Produção", { exact: true })).toBeVisible();
+      }
+      await assertStorefrontTextContrast(page, themedPage.label, palette.name);
+    });
+  }
+}
 
 for (const stripeMode of stripeThreeDSModes) {
   test(`3DS return and public tracking preserve the no-charge notice for ${stripeMode.label}`, async ({ page }) => {
