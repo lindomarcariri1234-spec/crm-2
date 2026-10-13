@@ -97,7 +97,7 @@ describe("Zernio Instagram webhook", () => {
     );
 
     expect(result).toMatchObject({ conversationsFound: 2, conversationsProcessed: 2 });
-    expect(progress).toHaveLength(2);
+    expect(progress).toHaveLength(3);
     expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("status=active");
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("profileId=profile_123");
@@ -106,6 +106,42 @@ describe("Zernio Instagram webhook", () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
       headers: { Authorization: "Bearer secret-api-key" },
     });
+  });
+
+  it("returns a resumable cursor after a bounded chunk and finishes from that cursor", async () => {
+    const response = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        data: [{ id: "conversation-1", accountId: "account_123", platform: "instagram" }],
+        pagination: { hasMore: false },
+      }))
+      .mockResolvedValueOnce(response({
+        messages: [],
+        pagination: { hasMore: true, nextCursor: "message-cursor-2" },
+      }))
+      .mockResolvedValueOnce(response({ messages: [], pagination: { hasMore: false } }))
+      .mockResolvedValueOnce(response({ data: [], pagination: { hasMore: false } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await zernioService.importZernioInstagramHistoryChunk(
+      "secret-api-key",
+      "account_123",
+      "profile_123",
+      "tenant-integration-id",
+    );
+    expect(first.done).toBe(false);
+    expect(first.cursor?.messageCursor).toBe("message-cursor-2");
+
+    const resumed = await zernioService.importZernioInstagramHistoryChunk(
+      "secret-api-key",
+      "account_123",
+      "profile_123",
+      "tenant-integration-id",
+      first.cursor,
+    );
+    expect(resumed.done).toBe(true);
+    expect(resumed.progress.conversationsProcessed).toBe(1);
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("cursor=message-cursor-2");
   });
 
   it("sends an inbox reply through Zernio with account, conversation, and idempotency key", async () => {

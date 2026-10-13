@@ -35,7 +35,7 @@ const {
   mockTransaction,
   mockAssertSafeUrl,
   mockSsrfFetch,
-  mockImportZernioInstagramHistory,
+  mockImportZernioInstagramHistoryChunk,
 } = vi.hoisted(() => {
   const mockUpdateWhere = vi.fn();
   const mockUpdateSet = vi.fn();
@@ -50,7 +50,7 @@ const {
   const mockRequireAuth = vi.fn();
   const mockAssertSafeUrl = vi.fn();
   const mockSsrfFetch = vi.fn();
-  const mockImportZernioInstagramHistory = vi.fn();
+  const mockImportZernioInstagramHistoryChunk = vi.fn();
 
   return {
     mockLimit,
@@ -66,7 +66,7 @@ const {
     mockTransaction,
     mockAssertSafeUrl,
     mockSsrfFetch,
-    mockImportZernioInstagramHistory,
+    mockImportZernioInstagramHistoryChunk,
   };
 });
 
@@ -122,7 +122,7 @@ vi.mock("../lib/ssrf.js", () => ({
 
 vi.mock("../services/instagram-zernio.js", () => ({
   INSTAGRAM_ZERNIO_TYPE: "instagram_zernio",
-  importZernioInstagramHistory: mockImportZernioInstagramHistory,
+  importZernioInstagramHistoryChunk: mockImportZernioInstagramHistoryChunk,
 }));
 
 // ---------------------------------------------------------------------------
@@ -488,11 +488,15 @@ describe("GET /api/integrations/:type — single integration detail", () => {
       enabled: true,
       status: "connected",
     }]);
-    mockImportZernioInstagramHistory.mockResolvedValueOnce({
+    mockImportZernioInstagramHistoryChunk.mockResolvedValueOnce({
+      done: true,
+      cursor: null,
+      progress: {
       conversationsFound: 2,
       conversationsProcessed: 2,
       messagesImported: 8,
       messagesAlreadyPresent: 3,
+      },
     });
 
     const res = await request(buildApp())
@@ -500,16 +504,68 @@ describe("GET /api/integrations/:type — single integration detail", () => {
       .send({ integrationId: "zernio-integration-1" });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ messagesImported: 8, conversationsProcessed: 2 });
+    expect(res.body).toMatchObject({
+      done: true,
+      cursor: null,
+      progress: { messagesImported: 8, conversationsProcessed: 2 },
+    });
     expect(JSON.stringify(res.body)).not.toContain("private-api-key");
-    expect(mockImportZernioInstagramHistory).toHaveBeenCalledWith(
+    expect(mockImportZernioInstagramHistoryChunk).toHaveBeenCalledWith(
       "private-api-key",
       "account-1",
       "profile-1",
       "zernio-integration-1",
-      expect.any(Function),
+      undefined,
     );
     expect(mockWhere).toHaveBeenCalled();
+  });
+
+  it("validates and returns an encrypted, integration-bound continuation cursor", async () => {
+    asAdmin();
+    const integration = {
+      id: "zernio-integration-1",
+      tenantId: TENANT_ID,
+      type: "instagram_zernio",
+      config: { accountId: "account-1", profileId: "profile-1" },
+      secretsEncrypted: JSON.stringify({ apiKey: "private-api-key" }),
+      enabled: true,
+      status: "connected",
+    };
+    mockLimit.mockResolvedValueOnce([integration]);
+    const checkpoint = {
+      integrationId: integration.id,
+      accountId: "account-1",
+      cursor: { status: "active", conversationCursor: "page-2" },
+    };
+    mockImportZernioInstagramHistoryChunk.mockResolvedValueOnce({
+      done: false,
+      cursor: { status: "active", conversationCursor: "page-3" },
+      progress: {
+        conversationsFound: 100,
+        conversationsProcessed: 4,
+        messagesImported: 12,
+        messagesAlreadyPresent: 1,
+      },
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/instagram_zernio/import-history")
+      .send({ integrationId: integration.id, cursor: JSON.stringify(checkpoint) });
+
+    expect(res.status).toBe(200);
+    expect(mockImportZernioInstagramHistoryChunk).toHaveBeenCalledWith(
+      "private-api-key",
+      "account-1",
+      "profile-1",
+      integration.id,
+      checkpoint.cursor,
+    );
+    expect(JSON.parse(res.body.cursor)).toMatchObject({
+      integrationId: integration.id,
+      accountId: "account-1",
+      cursor: { conversationCursor: "page-3" },
+    });
+    expect(JSON.stringify(res.body)).not.toContain("private-api-key");
   });
 });
 

@@ -1177,6 +1177,29 @@ function IntegrationCard({
     messagesAlreadyPresent: number;
   } | null>(null);
   const [historyImportPartial, setHistoryImportPartial] = useState(false);
+  const [historyImportCursor, setHistoryImportCursor] = useState<unknown | null>(null);
+  const historyImportStorageKey = type === "instagram_zernio" && data?.integrationId
+    ? `zernio-history-import:${data.integrationId}`
+    : null;
+
+  useEffect(() => {
+    setHistoryImportCursor(null);
+    setHistoryImportResult(null);
+    setHistoryImportPartial(false);
+    if (!historyImportStorageKey) return;
+    try {
+      const saved = window.localStorage.getItem(historyImportStorageKey);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as { cursor?: unknown; progress?: typeof historyImportResult };
+      if (parsed.cursor) {
+        setHistoryImportCursor(parsed.cursor);
+        setHistoryImportResult(parsed.progress ?? null);
+        setHistoryImportPartial(true);
+      }
+    } catch {
+      window.localStorage.removeItem(historyImportStorageKey);
+    }
+  }, [historyImportStorageKey]);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -1363,29 +1386,43 @@ function IntegrationCard({
   async function importInstagramHistory() {
     if (!data?.integrationId) return;
     setImportingHistory(true);
-    setHistoryImportResult(null);
-    setHistoryImportPartial(false);
+    let cursor = historyImportCursor;
     try {
-      const res = await fetch(`${BASE}/api/integrations/instagram_zernio/import-history`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ integrationId: data.integrationId }),
-      });
-      const result = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (result.partial) {
+      while (true) {
+        const res = await fetch(`${BASE}/api/integrations/instagram_zernio/import-history`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ integrationId: data.integrationId, cursor }),
+        });
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(result.message || "Não foi possível importar o histórico.");
+        setHistoryImportResult(result.progress);
+        cursor = result.cursor ?? null;
+        if (cursor) {
+          setHistoryImportCursor(cursor);
           setHistoryImportPartial(true);
-          setHistoryImportResult(result.partial);
+          if (historyImportStorageKey) {
+            window.localStorage.setItem(historyImportStorageKey, JSON.stringify({
+              cursor,
+              progress: result.progress,
+            }));
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 100));
+          continue;
         }
-        throw new Error(result.message || "Não foi possível importar o histórico.");
+        if (historyImportStorageKey) window.localStorage.removeItem(historyImportStorageKey);
+        setHistoryImportCursor(null);
+        setHistoryImportPartial(false);
+        toast({
+          title: "Importação concluída",
+          description: `${result.progress.messagesImported} mensagens novas em ${result.progress.conversationsProcessed} conversas.`,
+        });
+        break;
       }
-      setHistoryImportResult(result);
-      toast({
-        title: "Importação concluída",
-        description: `${result.messagesImported} mensagens novas em ${result.conversationsProcessed} conversas.`,
-      });
     } catch (error) {
+      setHistoryImportCursor(cursor);
+      setHistoryImportPartial(cursor !== null);
       toast({
         title: error instanceof Error ? error.message : "Falha ao importar o histórico da Zernio.",
         variant: "destructive",
@@ -1558,12 +1595,19 @@ function IntegrationCard({
                     disabled={importingHistory || dirty || saving}
                   >
                     {importingHistory && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-                    {importingHistory ? "Importando histórico..." : "Importar histórico"}
+                    {importingHistory ? "Importando histórico..." : historyImportCursor ? "Continuar importação" : "Importar histórico"}
                   </Button>
                 </div>
                 {importingHistory && (
                   <p role="status" className="text-xs text-muted-foreground">
-                    Consultando as páginas da Zernio e sincronizando as mensagens. Esta janela pode permanecer aberta.
+                    {historyImportResult
+                      ? `${historyImportResult.conversationsProcessed} conversas concluídas; ${historyImportResult.messagesImported} mensagens novas.`
+                      : "Iniciando a importação em etapas curtas."}
+                  </p>
+                )}
+                {historyImportPartial && !importingHistory && historyImportCursor !== null && (
+                  <p role="status" className="text-xs text-amber-700">
+                    Importação pausada. O progresso foi salvo neste navegador; continue para retomar de onde parou.
                   </p>
                 )}
                 {historyImportResult && (

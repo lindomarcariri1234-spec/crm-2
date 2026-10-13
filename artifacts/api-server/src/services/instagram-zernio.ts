@@ -467,6 +467,65 @@ export interface ZernioHistoryImportProgress {
   messagesAlreadyPresent: number;
 }
 
+export interface ZernioHistoryImportCursor {
+  status: "active" | "archived";
+  conversationCursor: string | null;
+  conversationIds: string[] | null;
+  conversationIndex: number;
+  conversationPageHasMore: boolean;
+  conversationPageNextCursor: string | null;
+  messageConversationId: string | null;
+  messageCursor: string | null;
+  progress: ZernioHistoryImportProgress;
+}
+
+export interface ZernioHistoryImportChunk {
+  done: boolean;
+  cursor: ZernioHistoryImportCursor | null;
+  progress: ZernioHistoryImportProgress;
+}
+
+function initialHistoryCursor(): ZernioHistoryImportCursor {
+  return {
+    status: "active",
+    conversationCursor: null,
+    conversationIds: null,
+    conversationIndex: 0,
+    conversationPageHasMore: false,
+    conversationPageNextCursor: null,
+    messageConversationId: null,
+    messageCursor: null,
+    progress: {
+      conversationsFound: 0,
+      conversationsProcessed: 0,
+      messagesImported: 0,
+      messagesAlreadyPresent: 0,
+    },
+  };
+}
+
+function cloneHistoryCursor(cursor: ZernioHistoryImportCursor): ZernioHistoryImportCursor {
+  return { ...cursor, conversationIds: cursor.conversationIds ? [...cursor.conversationIds] : null, progress: { ...cursor.progress } };
+}
+
+function validHistoryCursor(value: unknown): value is ZernioHistoryImportCursor {
+  const cursor = asObject(value);
+  const progress = asObject(cursor?.progress);
+  const ids = cursor?.conversationIds;
+  return (
+    (cursor?.status === "active" || cursor?.status === "archived") &&
+    (cursor.conversationCursor === null || typeof cursor.conversationCursor === "string") &&
+    (ids === null || (Array.isArray(ids) && ids.length <= 100 && ids.every((id) => typeof id === "string" && id.length <= 200))) &&
+    Number.isInteger(cursor.conversationIndex) &&
+    typeof cursor.conversationPageHasMore === "boolean" &&
+    (cursor.conversationPageNextCursor === null || typeof cursor.conversationPageNextCursor === "string") &&
+    (cursor.messageConversationId === null || typeof cursor.messageConversationId === "string") &&
+    (cursor.messageCursor === null || typeof cursor.messageCursor === "string") &&
+    ["conversationsFound", "conversationsProcessed", "messagesImported", "messagesAlreadyPresent"]
+      .every((key) => Number.isSafeInteger(progress?.[key]) && Number(progress?.[key]) >= 0)
+  );
+}
+
 function cursorPage(payload: unknown, arrayKey: "data" | "messages") {
   const object = asObject(payload);
   const pagination = asObject(object?.pagination);
@@ -490,6 +549,132 @@ async function fetchZernioInboxPage(url: URL, apiKey: string): Promise<unknown> 
   return response.json();
 }
 
+/**
+ * Imports a bounded number of provider pages. The returned cursor contains no
+ * credentials and can be saved by the client between requests, so transient
+ * network failures do not force completed pages to be fetched again.
+ */
+export async function importZernioInstagramHistoryChunk(
+  apiKey: string,
+  accountId: string,
+  profileId: string,
+  integrationId: string,
+  inputCursor?: unknown,
+): Promise<ZernioHistoryImportChunk> {
+  const cursor = inputCursor === undefined ? initialHistoryCursor() :
+    validHistoryCursor(inputCursor) ? cloneHistoryCursor(inputCursor) : null;
+  if (!cursor) throw new Error("Invalid Zernio import cursor");
+
+  const baseUrl = "https://zernio.com/api/v1/inbox/conversations";
+  let requests = 0;
+  const maxRequests = 2;
+
+  while (requests < maxRequests) {
+    if (!cursor.conversationIds) {
+      const url = new URL(baseUrl);
+      url.searchParams.set("accountId", accountId);
+      url.searchParams.set("profileId", profileId);
+      url.searchParams.set("platform", "instagram");
+      url.searchParams.set("status", cursor.status);
+      url.searchParams.set("limit", "100");
+      if (cursor.conversationCursor) url.searchParams.set("cursor", cursor.conversationCursor);
+      const page = cursorPage(await fetchZernioInboxPage(url, apiKey), "data");
+      requests++;
+      const seen = new Set<string>();
+      cursor.conversationIds = page.items.flatMap((raw) => {
+        const conversation = asObject(raw);
+        const id = nonEmptyString(conversation?.id);
+        if (!id || conversation?.platform !== "instagram" || conversation.accountId !== accountId || seen.has(id)) return [];
+        seen.add(id);
+        return [id];
+      });
+      cursor.progress.conversationsFound += cursor.conversationIds.length;
+      cursor.conversationPageHasMore = page.hasMore;
+      cursor.conversationPageNextCursor = page.nextCursor;
+      cursor.conversationIndex = 0;
+    }
+
+    if (cursor.conversationIndex >= cursor.conversationIds.length) {
+      if (cursor.conversationPageHasMore) {
+        if (!cursor.conversationPageNextCursor || cursor.conversationPageNextCursor === cursor.conversationCursor) {
+          throw new Error("Invalid Zernio conversation pagination cursor");
+        }
+        cursor.conversationCursor = cursor.conversationPageNextCursor;
+        cursor.conversationIds = null;
+        cursor.conversationPageNextCursor = null;
+        continue;
+      }
+      if (cursor.status === "active") {
+        cursor.status = "archived";
+        cursor.conversationCursor = null;
+        cursor.conversationIds = null;
+        cursor.conversationPageNextCursor = null;
+        continue;
+      }
+      return { done: true, cursor: null, progress: cursor.progress };
+    }
+
+    const conversationId = cursor.conversationIds[cursor.conversationIndex]!;
+    cursor.messageConversationId = conversationId;
+    if (requests >= maxRequests) break;
+    const messagesUrl = new URL(`${baseUrl}/${encodeURIComponent(conversationId)}/messages`);
+    messagesUrl.searchParams.set("accountId", accountId);
+    messagesUrl.searchParams.set("limit", "100");
+    messagesUrl.searchParams.set("sortOrder", "asc");
+    if (cursor.messageCursor) messagesUrl.searchParams.set("cursor", cursor.messageCursor);
+    const messagePage = cursorPage(await fetchZernioInboxPage(messagesUrl, apiKey), "messages");
+    requests++;
+    for (const rawMessage of messagePage.items) {
+      const item = asObject(rawMessage);
+      const messageId = nonEmptyString(item?.id);
+      const direction = item?.direction;
+      const senderId = nonEmptyString(item?.senderId);
+      const createdAt = nonEmptyString(item?.createdAt) ?? nonEmptyString(item?.sentAt);
+      const content = nonEmptyString(item?.message);
+      const attachments = Array.isArray(item?.attachments) ? item.attachments : [];
+      if (
+        !messageId ||
+        item?.platform !== "instagram" ||
+        item.conversationId !== conversationId ||
+        item.accountId !== accountId ||
+        (direction !== "incoming" && direction !== "outgoing") ||
+        (direction === "incoming" && !senderId) ||
+        (!content && attachments.length === 0) ||
+        !createdAt
+      ) continue;
+      const imported = await processZernioInstagramWebhook({
+        event: direction === "incoming" ? "message.received" : "message.sent",
+        timestamp: createdAt,
+        account: { accountId, profileId },
+        message: {
+          id: messageId,
+          conversationId,
+          platform: "instagram",
+          direction,
+          text: content,
+          sender: { id: senderId },
+          attachments,
+        },
+      }, integrationId);
+      if (imported > 0) cursor.progress.messagesImported++;
+      else cursor.progress.messagesAlreadyPresent++;
+    }
+    if (messagePage.hasMore) {
+      if (!messagePage.nextCursor || messagePage.nextCursor === cursor.messageCursor) {
+        throw new Error("Invalid Zernio message pagination cursor");
+      }
+      cursor.messageCursor = messagePage.nextCursor;
+    } else {
+      cursor.messageCursor = null;
+      cursor.messageConversationId = null;
+      cursor.conversationIndex++;
+      cursor.progress.conversationsProcessed++;
+    }
+  }
+
+  return { done: false, cursor, progress: cursor.progress };
+}
+
 export async function importZernioInstagramHistory(
   apiKey: string,
   accountId: string,
@@ -497,102 +682,11 @@ export async function importZernioInstagramHistory(
   integrationId: string,
   onProgress: (progress: ZernioHistoryImportProgress) => void,
 ): Promise<ZernioHistoryImportProgress> {
-  const progress: ZernioHistoryImportProgress = {
-    conversationsFound: 0,
-    conversationsProcessed: 0,
-    messagesImported: 0,
-    messagesAlreadyPresent: 0,
-  };
-  const seenConversationIds = new Set<string>();
-  const baseUrl = "https://zernio.com/api/v1/inbox/conversations";
-
-  for (const status of ["active", "archived"] as const) {
-    let conversationCursor: string | null = null;
-    const seenConversationCursors = new Set<string>();
-    do {
-      const url = new URL(baseUrl);
-      url.searchParams.set("accountId", accountId);
-      url.searchParams.set("profileId", profileId);
-      url.searchParams.set("platform", "instagram");
-      url.searchParams.set("status", status);
-      url.searchParams.set("limit", "100");
-      if (conversationCursor) url.searchParams.set("cursor", conversationCursor);
-      const page = cursorPage(await fetchZernioInboxPage(url, apiKey), "data");
-
-      for (const rawConversation of page.items) {
-        const conversation = asObject(rawConversation);
-        const id = nonEmptyString(conversation?.id);
-        if (
-          !id ||
-          conversation?.platform !== "instagram" ||
-          conversation.accountId !== accountId ||
-          seenConversationIds.has(id)
-        ) continue;
-        seenConversationIds.add(id);
-        progress.conversationsFound = seenConversationIds.size;
-
-        let messageCursor: string | null = null;
-        const seenMessageCursors = new Set<string>();
-        do {
-          const messagesUrl = new URL(`${baseUrl}/${encodeURIComponent(id)}/messages`);
-          messagesUrl.searchParams.set("accountId", accountId);
-          messagesUrl.searchParams.set("limit", "100");
-          messagesUrl.searchParams.set("sortOrder", "asc");
-          if (messageCursor) messagesUrl.searchParams.set("cursor", messageCursor);
-          const messagePage = cursorPage(await fetchZernioInboxPage(messagesUrl, apiKey), "messages");
-          for (const rawMessage of messagePage.items) {
-            const item = asObject(rawMessage);
-            const messageId = nonEmptyString(item?.id);
-            const direction = item?.direction;
-            const senderId = nonEmptyString(item?.senderId);
-            const createdAt = nonEmptyString(item?.createdAt) ?? nonEmptyString(item?.sentAt);
-            const content = nonEmptyString(item?.message);
-            const attachments = Array.isArray(item?.attachments) ? item.attachments : [];
-            if (
-              !messageId ||
-              item?.platform !== "instagram" ||
-              item.conversationId !== id ||
-              item.accountId !== accountId ||
-              (direction !== "incoming" && direction !== "outgoing") ||
-              (direction === "incoming" && !senderId) ||
-              (!content && attachments.length === 0) ||
-              !createdAt
-            ) continue;
-            const imported = await processZernioInstagramWebhook({
-              event: direction === "incoming" ? "message.received" : "message.sent",
-              timestamp: createdAt,
-              account: { accountId, profileId },
-              message: {
-                id: messageId,
-                conversationId: id,
-                platform: "instagram",
-                direction,
-                text: content,
-                sender: { id: senderId },
-                attachments,
-              },
-            }, integrationId);
-            if (imported > 0) progress.messagesImported++;
-            else progress.messagesAlreadyPresent++;
-          }
-          progress.conversationsProcessed = seenConversationIds.size;
-          onProgress({ ...progress });
-          if (!messagePage.hasMore) break;
-          if (!messagePage.nextCursor || seenMessageCursors.has(messagePage.nextCursor)) {
-            throw new Error("Invalid Zernio message pagination cursor");
-          }
-          seenMessageCursors.add(messagePage.nextCursor);
-          messageCursor = messagePage.nextCursor;
-        } while (messageCursor);
-      }
-
-      if (!page.hasMore) break;
-      if (!page.nextCursor || seenConversationCursors.has(page.nextCursor)) {
-        throw new Error("Invalid Zernio conversation pagination cursor");
-      }
-      seenConversationCursors.add(page.nextCursor);
-      conversationCursor = page.nextCursor;
-    } while (conversationCursor);
+  let cursor: ZernioHistoryImportCursor | undefined;
+  while (true) {
+    const chunk = await importZernioInstagramHistoryChunk(apiKey, accountId, profileId, integrationId, cursor);
+    onProgress(chunk.progress);
+    if (chunk.done) return chunk.progress;
+    cursor = chunk.cursor ?? undefined;
   }
-  return progress;
 }

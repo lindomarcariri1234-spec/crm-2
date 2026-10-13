@@ -10,7 +10,7 @@ import { generateId } from "../lib/id";
 import { encryptCredential, decryptCredential } from "../lib/crypto";
 import { assertSafeUrl, ssrfSafeFetchBounded } from "../lib/ssrf";
 import {
-  importZernioInstagramHistory,
+  importZernioInstagramHistoryChunk,
   INSTAGRAM_ZERNIO_TYPE,
 } from "../services/instagram-zernio.js";
 
@@ -683,7 +683,10 @@ router.post("/integrations/instagram_zernio/import-history", async (req, res, ne
   try {
     const me = await requireIntegrationAdmin(req, res, next);
     if (!me) return;
-    const body = z.object({ integrationId: z.string().min(1).max(200) }).safeParse(req.body);
+    const body = z.object({
+      integrationId: z.string().min(1).max(200),
+      cursor: z.string().max(80_000).nullable().optional(),
+    }).safeParse(req.body);
     if (!body.success) {
       next(new ValidationError("Selecione uma integração Zernio válida.", "VALIDATION_ERROR"));
       return;
@@ -711,30 +714,55 @@ router.post("/integrations/instagram_zernio/import-history", async (req, res, ne
       next(new ValidationError("Configure Account ID, Profile ID e chave de API antes de importar.", "VALIDATION_ERROR"));
       return;
     }
-    let lastProgress = {
-      conversationsFound: 0,
-      conversationsProcessed: 0,
-      messagesImported: 0,
-      messagesAlreadyPresent: 0,
-    };
+    let resumeCursor: unknown;
+    if (body.data.cursor) {
+      try {
+        const checkpoint: unknown = JSON.parse(decryptCredential(body.data.cursor));
+        if (
+          typeof checkpoint !== "object" ||
+          checkpoint === null ||
+          !("cursor" in checkpoint) ||
+          !("integrationId" in checkpoint) ||
+          !("accountId" in checkpoint) ||
+          checkpoint.integrationId !== integration.id ||
+          checkpoint.accountId !== accountId
+        ) {
+          throw new Error("invalid checkpoint");
+        }
+        resumeCursor = checkpoint.cursor;
+      } catch {
+        next(new ValidationError("O ponto de retomada da importação é inválido. Inicie novamente.", "VALIDATION_ERROR"));
+        return;
+      }
+    }
     try {
-      const result = await importZernioInstagramHistory(
+      const result = await importZernioInstagramHistoryChunk(
         apiKey,
         accountId,
         profileId,
         integration.id,
-        (progress) => {
-          lastProgress = progress;
-        },
+        resumeCursor,
       );
-      await writeLog(
-        me,
-        INSTAGRAM_ZERNIO_TYPE,
-        "history_import",
-        "info",
-        `Histórico importado: ${result.conversationsProcessed} conversas, ${result.messagesImported} mensagens novas.`,
-      );
-      res.json(result);
+      if (result.done) {
+        await writeLog(
+          me,
+          INSTAGRAM_ZERNIO_TYPE,
+          "history_import",
+          "info",
+          `Histórico importado: ${result.progress.conversationsProcessed} conversas, ${result.progress.messagesImported} mensagens novas.`,
+        );
+      }
+      res.json({
+        done: result.done,
+        progress: result.progress,
+        cursor: result.cursor
+          ? encryptCredential(JSON.stringify({
+              integrationId: integration.id,
+              accountId,
+              cursor: result.cursor,
+            }))
+          : null,
+      });
     } catch {
       await writeLog(
         me,
@@ -744,8 +772,8 @@ router.post("/integrations/instagram_zernio/import-history", async (req, res, ne
         "Falha ao importar o histórico da Zernio; os itens já importados podem ser mantidos. Tente novamente.",
       );
       res.status(502).json({
-        message: "Não foi possível concluir a importação. Os itens já importados foram preservados; tente novamente.",
-        partial: lastProgress,
+        message: "Não foi possível concluir esta etapa. O progresso salvo foi preservado; tente continuar a importação.",
+        cursor: body.data.cursor ?? null,
       });
     }
   } catch (err) {
