@@ -18,7 +18,10 @@ const redisDailyLimitCircuit = createRedisDailyLimitCircuit({
     if (!connection || connection.status !== "ready") {
       throw new Error("redis_not_ready");
     }
-    await connection.ping();
+    // PING can remain available while the provider rejects ordinary commands
+    // at its daily request quota. Probe with the same command class the workers
+    // need before declaring Redis recovered and resuming their traffic.
+    await connection.get("visitecrm:redis:daily-limit-probe");
   },
   onOpened: recordTransientRedisError,
   onRecovered: resetTransientRedisErrors,

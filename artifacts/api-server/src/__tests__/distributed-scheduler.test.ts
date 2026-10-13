@@ -150,6 +150,50 @@ describe("runScheduledJob", () => {
     expect(databaseFallbackTask).toHaveBeenCalledOnce();
   });
 
+  it("records an operational error when an open circuit skips a scheduled job without a fallback", async () => {
+    redisDailyLimitCircuit.isOpen.mockReturnValue(true);
+    const task = vi.fn();
+
+    await runScheduledJob("pipeline-trip-departure", task, { redis: new FakeRedis() });
+
+    expect(task).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobName: "pipeline-trip-departure",
+        mode: "daily-limit-circuit-open",
+        recovery: "waiting-for-next-cron-trigger",
+      }),
+      expect.stringContaining("Scheduled execution was not run"),
+    );
+  });
+
+  it("logs a failed lease acquisition instead of allowing the scheduled task to run", async () => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    const failure = new Error("Redis request throttled");
+    const redis: SchedulerRedis = {
+      status: "ready",
+      set: vi.fn().mockRejectedValue(failure),
+      eval: vi.fn(),
+    };
+    const task = vi.fn();
+
+    try {
+      await runScheduledJob("pipeline-trip-departure", task, { redis });
+
+      expect(task).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobName: "pipeline-trip-departure",
+          errorName: "Error",
+        }),
+        expect.stringContaining("Lease acquisition failed"),
+      );
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+  });
+
   it("runs the opted-in database fallback when Redis is unavailable in production", async () => {
     const previous = process.env.NODE_ENV;
     process.env.NODE_ENV = "production";

@@ -30,6 +30,17 @@ export function attachCircuitBreaker<T>(worker: Worker<T>, workerName: string): 
   const unregisterWorker = registerRedisDailyLimitWorker(worker);
   worker.once("closed", unregisterWorker);
 
+  // BullMQ's resume() restarts Worker.run() without awaiting its promise when
+  // its previous loop has stopped. Redis can reject that background run while
+  // a quota probe is optimistic, which otherwise becomes an unhandled rejection.
+  const runWorker = worker.run;
+  if (typeof runWorker === "function") {
+    const originalRun = runWorker.bind(worker);
+    worker.run = () => originalRun().catch((error: unknown) => {
+      worker.emit("error", error instanceof Error ? error : new Error("Worker run failed"));
+    });
+  }
+
   worker.on("error", (err: Error) => {
     if (reportRedisDailyLimitError(err)) {
       logger.warn({ workerName }, `[${workerName}] Redis daily-limit circuit is active`);

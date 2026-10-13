@@ -68,4 +68,27 @@ describe("attachCircuitBreaker", () => {
     worker.emit("ready");
     expect(resetTransientRedisErrors).toHaveBeenCalledOnce();
   });
+
+  it("routes a rejected background run through the worker error handler", async () => {
+    const failure = new Error("max daily request limit");
+    redisCircuit.reportDailyLimit.mockReturnValue(true);
+    const worker = new EventEmitter() as EventEmitter & {
+      run: () => Promise<void>;
+      resume: () => void;
+    };
+    worker.run = vi.fn().mockRejectedValue(failure);
+    worker.resume = () => {
+      void worker.run();
+    };
+
+    attachCircuitBreaker(worker as unknown as Worker<unknown>, "email-worker");
+    worker.resume();
+    await Promise.resolve();
+
+    expect(redisCircuit.reportDailyLimit).toHaveBeenCalledWith(failure);
+    expect(logger.warn).toHaveBeenCalledWith(
+      { workerName: "email-worker" },
+      expect.stringContaining("daily-limit circuit"),
+    );
+  });
 });
