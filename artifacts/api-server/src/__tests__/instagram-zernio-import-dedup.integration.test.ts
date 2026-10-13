@@ -92,6 +92,27 @@ function outgoingEvent(accountId: string, profileId: string, eventId: string) {
   };
 }
 
+function statusEvent(
+  accountId: string,
+  profileId: string,
+  eventId: string,
+  eventType: "message.delivered" | "message.read",
+  statusAt: string,
+) {
+  return {
+    id: eventId,
+    event: eventType,
+    statusAt,
+    account: { accountId, profileId, platform: "instagram" },
+    message: {
+      id: OUTBOUND_MESSAGE_ID,
+      conversationId: CONVERSATION_ID,
+      platform: "instagram",
+      direction: "outgoing",
+    },
+  };
+}
+
 beforeAll(async () => {
   assertIsolatedDatabase();
   safeDatabaseVerified = true;
@@ -213,6 +234,34 @@ describe("Zernio history import and webhook idempotency", () => {
     expect(bOutbound.status).toBe(200);
     expect(bOutbound.body).toMatchObject({ received: true, stored: 1 });
 
+    const aDelivered = await webhookRequest(statusEvent(
+      ACCOUNT_A_ID,
+      PROFILE_A_ID,
+      `evt-a-delivered-${generateId()}`,
+      "message.delivered",
+      "2026-10-14T12:06:00.000Z",
+    ));
+    const aRead = await webhookRequest(statusEvent(
+      ACCOUNT_A_ID,
+      PROFILE_A_ID,
+      `evt-a-read-${generateId()}`,
+      "message.read",
+      "2026-10-14T12:07:00.000Z",
+    ));
+    const aOlderDelivered = await webhookRequest(statusEvent(
+      ACCOUNT_A_ID,
+      PROFILE_A_ID,
+      `evt-a-old-delivered-${generateId()}`,
+      "message.delivered",
+      "2026-10-14T12:05:00.000Z",
+    ));
+    expect(aDelivered.status).toBe(200);
+    expect(aDelivered.body).toMatchObject({ received: true, stored: 1 });
+    expect(aRead.status).toBe(200);
+    expect(aRead.body).toMatchObject({ received: true, stored: 1 });
+    expect(aOlderDelivered.status).toBe(200);
+    expect(aOlderDelivered.body).toMatchObject({ received: true, stored: 1 });
+
     const inboundRows = await db.select({
       tenantId: chatbotMessagesTable.tenantId,
       conversationId: chatbotMessagesTable.conversationId,
@@ -220,12 +269,20 @@ describe("Zernio history import and webhook idempotency", () => {
     const outboundRows = await db.select({
       tenantId: chatbotMessagesTable.tenantId,
       conversationId: chatbotMessagesTable.conversationId,
+      deliveryStatus: chatbotMessagesTable.deliveryStatus,
+      deliveryUpdatedAt: chatbotMessagesTable.deliveryUpdatedAt,
     }).from(chatbotMessagesTable).where(eq(chatbotMessagesTable.providerMessageId, OUTBOUND_MESSAGE_ID));
 
     expect(inboundRows.map((row) => row.tenantId).sort()).toEqual([TENANT_A_ID, TENANT_B_ID].sort());
     expect(outboundRows.map((row) => row.tenantId).sort()).toEqual([TENANT_A_ID, TENANT_B_ID].sort());
     expect(new Set(inboundRows.map((row) => row.conversationId)).size).toBe(2);
     expect(new Set(outboundRows.map((row) => row.conversationId)).size).toBe(2);
+    expect(outboundRows).toHaveLength(2);
+    expect(outboundRows.find((row) => row.tenantId === TENANT_A_ID)).toMatchObject({
+      deliveryStatus: "read",
+      deliveryUpdatedAt: new Date("2026-10-14T12:07:00.000Z"),
+    });
+    expect(outboundRows.find((row) => row.tenantId === TENANT_B_ID)?.deliveryStatus).toBe("sent");
 
     const agencyBConversation = await db.select({ id: chatbotConversationsTable.id })
       .from(chatbotConversationsTable)
