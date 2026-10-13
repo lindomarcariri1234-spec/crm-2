@@ -451,20 +451,27 @@ describe("Instagram conversation attachments", () => {
     expect(container.querySelector("video")).toBeNull();
   });
 
-  it("links downloadable files and unsupported media only through safe web URLs", async () => {
+  it("previews PDFs and links unsupported media only through safe web URLs", async () => {
     const { container: fileContainer } = await renderComponent(createElement(MessageMediaAttachment, {
       url: "https://media.example.test/itinerary.pdf",
-      mimeType: "application/pdf",
+      mimeType: "application/pdf; charset=binary",
       fileName: "itinerary.pdf",
       expiredAt: null,
     }));
-    const fileLink = fileContainer.querySelector<HTMLAnchorElement>("a");
-    expect(fileLink?.textContent).toBe("itinerary.pdf");
-    expect(fileLink?.getAttribute("href")).toBe("https://media.example.test/itinerary.pdf");
-    expect(fileLink?.getAttribute("download")).toBe("itinerary.pdf");
-    expect(fileLink?.getAttribute("target")).toBe("_blank");
-    expect(fileLink?.getAttribute("rel")).toBe("noopener noreferrer");
-    expect(fileContainer.querySelector("audio, video, img")).toBeNull();
+    const pdfPreview = fileContainer.querySelector<HTMLObjectElement>("object");
+    expect(pdfPreview?.getAttribute("data")).toBe("https://media.example.test/itinerary.pdf");
+    expect(pdfPreview?.getAttribute("type")).toBe("application/pdf");
+    expect(pdfPreview?.getAttribute("aria-label")).toBe("Pré-visualização de itinerary.pdf");
+    expect(pdfPreview?.hasAttribute("download")).toBe(false);
+    expect(pdfPreview?.querySelector('[role="status"]')?.textContent)
+      .toContain("Não foi possível pré-visualizar este PDF.");
+    const pdfFallbackLink = pdfPreview?.querySelector<HTMLAnchorElement>("a");
+    expect(pdfFallbackLink?.getAttribute("href")).toBe("https://media.example.test/itinerary.pdf");
+    expect(pdfFallbackLink?.getAttribute("target")).toBe("_blank");
+    expect(pdfFallbackLink?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(pdfFallbackLink?.hasAttribute("download")).toBe(false);
+    expect(fileContainer.querySelector("audio, video, img, iframe")).toBeNull();
+    expect(fileContainer.querySelector('[role="status"]')).not.toBeNull();
 
     const { container: unsupportedContainer } = await renderComponent(createElement(MessageMediaAttachment, {
       url: "https://media.example.test/clip.mov",
@@ -475,8 +482,9 @@ describe("Instagram conversation attachments", () => {
     const unsupportedLink = unsupportedContainer.querySelector<HTMLAnchorElement>("a");
     expect(unsupportedLink?.getAttribute("href")).toBe("https://media.example.test/clip.mov");
     expect(unsupportedLink?.textContent).toBe("clip.mov");
+    expect(unsupportedLink?.getAttribute("download")).toBe("clip.mov");
     expect(unsupportedLink?.getAttribute("rel")).toBe("noopener noreferrer");
-    expect(unsupportedContainer.querySelector("video")).toBeNull();
+    expect(unsupportedContainer.querySelector("object, iframe, video")).toBeNull();
   });
 
   it("does not create links for non-web attachment URLs", async () => {
@@ -498,6 +506,7 @@ describe("Instagram conversation attachments", () => {
       expiredAt: null,
     }));
     expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("iframe, object")).toBeNull();
     expect(container.textContent).toContain("Anexo indisponível ou expirado");
   });
 });

@@ -170,7 +170,7 @@ export function MessageMediaAttachment({
     );
   }
 
-  const normalizedMimeType = mimeType?.toLowerCase() ?? "";
+  const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   if (INLINE_AUDIO_TYPES.has(normalizedMimeType)) {
     return (
       <audio
@@ -206,6 +206,28 @@ export function MessageMediaAttachment({
         src={safeUrl}
         aria-label={fileName || "Vídeo recebido"}
       />
+    );
+  }
+  if (normalizedMimeType === "application/pdf") {
+    return (
+      <object
+        className="mt-2 block h-80 w-full max-w-full rounded-md border border-border/70 bg-white"
+        aria-label={fileName ? `Pré-visualização de ${fileName}` : "Pré-visualização de documento PDF"}
+        data={safeUrl}
+        type="application/pdf"
+      >
+        <span className="block p-3 text-xs" role="status">
+          Não foi possível pré-visualizar este PDF.
+          <a
+            className="ml-1 underline underline-offset-2"
+            href={safeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Abrir em uma nova guia
+          </a>
+        </span>
+      </object>
     );
   }
   return (
