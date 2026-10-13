@@ -603,11 +603,14 @@ async function analyzeRows(
       } else {
         row.data.reservationId = reservationId ?? null;
         row.data.clientId = clientId ?? reservationById.get(reservationId ?? "")?.clientId ?? null;
-        if (reservationId && row.data.status === "paid") {
+        if (
+          reservationId
+          && (row.data.status === "paid" || row.data.status === "approved")
+        ) {
           const priorPaid = tenantPayments
             .filter(payment =>
               payment.reservationId === reservationId
-              && payment.status === "paid"
+              && (payment.status === "paid" || payment.status === "approved")
               && payment.id !== targetId,
             )
             .reduce((sum, payment) => sum + Number(payment.amount), 0);
@@ -616,7 +619,7 @@ async function analyzeRows(
           const totalValue = Number(reservationById.get(reservationId)?.totalValue ?? 0);
           if (nextPaid > totalValue + 0.009) {
             row.action = "rejected";
-            row.reason = "O total de pagamentos pagos excede o valor da reserva.";
+            row.reason = "O total de pagamentos recebidos excede o valor da reserva.";
           } else {
             acceptedPaidByReservation.set(reservationId, acceptedPaid + Number(row.data.amount));
           }
@@ -982,18 +985,18 @@ async function upsertPayment(tx: ImportTx, tenantId: string, row: ParsedEntityRo
     ) {
       throw new Error("Não é possível importar um pagamento ativo para uma reserva com gratuidade.");
     }
-    if (data.status === "paid") {
+    if (data.status === "paid" || data.status === "approved") {
       const paidResult = await tx.execute(sql`
         SELECT COALESCE(SUM(amount::numeric), 0) AS prior_paid
         FROM payments
         WHERE reservation_id = ${reservationId}
           AND tenant_id = ${tenantId}
-          AND status = 'paid'
+          AND status IN ('paid', 'approved')
           AND id <> ${targetId}
       `);
       const priorPaid = Number((paidResult as unknown as { rows: Array<{ prior_paid: string }> }).rows[0]?.prior_paid ?? 0);
       if (priorPaid + Number(data.amount) > Number(locked.total_value) + 0.009) {
-        throw new Error("O total de pagamentos pagos excede o valor da reserva.");
+        throw new Error("O total de pagamentos recebidos excede o valor da reserva.");
       }
     }
   }

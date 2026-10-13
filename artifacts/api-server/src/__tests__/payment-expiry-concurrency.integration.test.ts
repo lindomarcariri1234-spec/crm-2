@@ -55,20 +55,20 @@ vi.mock("../lib/google-calendar/sync-service.js", () => ({
   CalendarSyncService: { syncTrip: vi.fn().mockResolvedValue(undefined), syncPayment: vi.fn().mockResolvedValue(undefined) },
 }));
 vi.mock("../lib/reservation-payments.js", () => ({
-  sumPaidReservationPayments: async (
+  sumReceivedReservationPayments: async (
     executor: Pick<typeof db, "execute">,
     reservationId: string,
     tenantId: string,
   ) => {
     const result = await executor.execute(sql`
-      SELECT COALESCE(SUM(amount::numeric), 0) AS total_paid
+      SELECT COALESCE(SUM(amount::numeric), 0) AS total_received
       FROM payments
       WHERE reservation_id = ${reservationId}
         AND tenant_id = ${tenantId}
-        AND status = ${PAYMENT_STATUS.PAID}
+        AND status IN (${PAYMENT_STATUS.PAID}, ${PAYMENT_STATUS.APPROVED})
     `);
-    const row = (result as unknown as { rows: Array<{ total_paid: string }> }).rows[0];
-    return Number(row?.total_paid ?? "0");
+    const row = (result as unknown as { rows: Array<{ total_received: string }> }).rows[0];
+    return Number(row?.total_received ?? "0");
   },
   syncReservationPaymentStatus: vi.fn().mockResolvedValue(undefined),
 }));
@@ -209,7 +209,7 @@ async function createPayment(
   options: {
     reservationId?: string | null;
     orderId?: string | null;
-    status?: typeof PAYMENT_STATUS.PENDING | typeof PAYMENT_STATUS.PAID;
+    status?: typeof PAYMENT_STATUS.PENDING | typeof PAYMENT_STATUS.PAID | typeof PAYMENT_STATUS.APPROVED;
   } = {},
 ) {
   const id = paymentId(suffix);
@@ -223,8 +223,8 @@ async function createPayment(
     amount: "100.00",
     paymentMethod: "pix",
     dueDate: new Date(),
-    ...(options.status === PAYMENT_STATUS.PAID
-      ? { status: PAYMENT_STATUS.PAID, paidAt: new Date() }
+    ...(options.status === PAYMENT_STATUS.PAID || options.status === PAYMENT_STATUS.APPROVED
+      ? { status: options.status, paidAt: new Date() }
       : { status: options.status ?? PAYMENT_STATUS.PENDING }),
   });
   return id;
@@ -1035,5 +1035,121 @@ describe("payment and reservation expiry concurrency — real PostgreSQL", () =>
       await blocker.query("ROLLBACK").catch(() => undefined);
       blocker.release();
     }
+  });
+
+  it.each([
+    { firstStatus: PAYMENT_STATUS.PAID, secondStatus: PAYMENT_STATUS.APPROVED },
+    { firstStatus: PAYMENT_STATUS.APPROVED, secondStatus: PAYMENT_STATUS.PAID },
+  ])("counts $firstStatus and $secondStatus as received when creating payments", async ({ firstStatus, secondStatus }) => {
+    const reservation = await createReservation(`create-${firstStatus}-${secondStatus}`, {
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const app = buildApp();
+    const createReceivedPayment = (amount: number, status: typeof firstStatus | typeof secondStatus) =>
+      request(app).post("/api/payments").send({
+        reservationId: reservation,
+        type: PAYMENT_TYPE.RECEIVABLE,
+        category: "reservation",
+        amount,
+        paymentMethod: "pix",
+        dueDate: new Date().toISOString(),
+        status,
+        paidAt: new Date().toISOString(),
+      });
+
+    const firstResponse = await createReceivedPayment(60, firstStatus);
+    expect(firstResponse.status).toBe(201);
+    const secondResponse = await createReceivedPayment(50, secondStatus);
+    expect(secondResponse.status).toBe(400);
+    expect(secondResponse.body.code).toBe("PAYMENT_EXCEEDS_BALANCE");
+
+    const storedPayments = await db.select({
+      status: paymentsTable.status,
+      amount: paymentsTable.amount,
+    }).from(paymentsTable).where(and(
+      eq(paymentsTable.tenantId, TENANT_ID),
+      eq(paymentsTable.reservationId, reservation),
+    ));
+    const receivedPayments = storedPayments.filter((payment) =>
+      payment.status === PAYMENT_STATUS.PAID || payment.status === PAYMENT_STATUS.APPROVED,
+    );
+    const receivedTotal = receivedPayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    expect(receivedPayments).toHaveLength(1);
+    expect(receivedPayments[0]?.status).toBe(firstStatus);
+    expect(receivedTotal).toBe(60);
+    expect(100 - receivedTotal).toBe(40);
+  });
+
+  it.each([
+    { firstStatus: PAYMENT_STATUS.PAID, secondStatus: PAYMENT_STATUS.APPROVED },
+    { firstStatus: PAYMENT_STATUS.APPROVED, secondStatus: PAYMENT_STATUS.PAID },
+  ])("counts $firstStatus and $secondStatus as received when changing payment status", async ({ firstStatus, secondStatus }) => {
+    const reservation = await createReservation(`status-${firstStatus}-${secondStatus}`, {
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const firstPayment = await createPayment(`status-first-${firstStatus}-${secondStatus}`, { reservationId: reservation });
+    const secondPayment = await createPayment(`status-second-${firstStatus}-${secondStatus}`, { reservationId: reservation });
+    await db.update(paymentsTable).set({ amount: "60.00" }).where(eq(paymentsTable.id, firstPayment));
+    await db.update(paymentsTable).set({ amount: "50.00" }).where(eq(paymentsTable.id, secondPayment));
+    const app = buildApp();
+
+    const firstResponse = await request(app).patch(`/api/payments/${firstPayment}`).send({
+      status: firstStatus,
+      paidAt: new Date().toISOString(),
+    });
+    expect(firstResponse.status).toBe(200);
+    const secondResponse = await request(app).patch(`/api/payments/${secondPayment}`).send({
+      status: secondStatus,
+      paidAt: new Date().toISOString(),
+    });
+    expect(secondResponse.status).toBe(400);
+    expect(secondResponse.body.code).toBe("PAYMENT_EXCEEDS_BALANCE");
+
+    const storedPayments = await db.select({
+      id: paymentsTable.id,
+      status: paymentsTable.status,
+      amount: paymentsTable.amount,
+    }).from(paymentsTable).where(and(
+      eq(paymentsTable.tenantId, TENANT_ID),
+      eq(paymentsTable.reservationId, reservation),
+    ));
+    const receivedPayments = storedPayments.filter((payment) =>
+      payment.status === PAYMENT_STATUS.PAID || payment.status === PAYMENT_STATUS.APPROVED,
+    );
+    const receivedTotal = receivedPayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    expect(receivedPayments).toHaveLength(1);
+    expect(receivedPayments[0]).toMatchObject({ id: firstPayment, status: firstStatus });
+    expect(storedPayments.find((payment) => payment.id === secondPayment)?.status).toBe(PAYMENT_STATUS.PENDING);
+    expect(receivedTotal).toBe(60);
+    expect(100 - receivedTotal).toBe(40);
+  });
+
+  it.each([
+    { initialStatus: PAYMENT_STATUS.PAID, nextStatus: PAYMENT_STATUS.APPROVED },
+    { initialStatus: PAYMENT_STATUS.APPROVED, nextStatus: PAYMENT_STATUS.PAID },
+  ])("allows changing an already received payment from $initialStatus to $nextStatus", async ({ initialStatus, nextStatus }) => {
+    const reservation = await createReservation(`received-transition-${initialStatus}-${nextStatus}`, {
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const payment = await createPayment(`received-transition-${initialStatus}-${nextStatus}`, {
+      reservationId: reservation,
+      status: initialStatus,
+    });
+    await db.update(paymentsTable).set({ amount: "60.00" }).where(eq(paymentsTable.id, payment));
+
+    const response = await request(buildApp()).patch(`/api/payments/${payment}`).send({
+      status: nextStatus,
+      paidAt: new Date().toISOString(),
+    });
+
+    expect(response.status).toBe(200);
+    const [storedPayment] = await db.select({
+      status: paymentsTable.status,
+      amount: paymentsTable.amount,
+    }).from(paymentsTable).where(and(
+      eq(paymentsTable.id, payment),
+      eq(paymentsTable.tenantId, TENANT_ID),
+    ));
+    expect(storedPayment).toEqual({ status: nextStatus, amount: "60.00" });
   });
 });

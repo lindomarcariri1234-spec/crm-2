@@ -179,6 +179,73 @@ afterAll(async () => {
 });
 
 describe("financial spreadsheet imports reservation lock order", () => {
+  it("counts approved reservation payments when validating imported paid payments", async () => {
+    const approvedPaymentId = `sipl-approved-${RUN}`;
+    await db.insert(paymentsTable).values({
+      id: approvedPaymentId,
+      tenantId: TENANT_ID,
+      reservationId: RESERVATION_A,
+      type: "receivable",
+      category: "reserva",
+      amount: "60.00",
+      paymentMethod: "pix",
+      dueDate: new Date("2026-12-15T12:00:00.000Z"),
+      status: "approved",
+      paidAt: new Date("2026-10-12T12:00:00.000Z"),
+    });
+
+    const csv = [
+      "id_externo,reserva_id_externo,tipo,categoria,valor,status,forma_pagamento,vencimento,pago_em",
+      "PAY-OVER-APPROVED,RES-A,receivable,reserva,\"50,00\",paid,pix,15/12/2026,12/10/2026",
+    ].join("\n");
+    const response = await request(buildApp()).post("/api/spreadsheet-imports/import").send({
+      entity: "payments",
+      filename: `approved-balance-${RUN}.csv`,
+      idempotencyKey: `sipl-approved-balance-${RUN}`,
+      contentBase64: Buffer.from(csv).toString("base64"),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.report.results).toEqual([
+      expect.objectContaining({
+        action: "rejected",
+        reason: expect.stringContaining("pagamentos recebidos excede"),
+      }),
+    ]);
+    const reservationPayments = await db.select({
+      id: paymentsTable.id,
+      status: paymentsTable.status,
+    }).from(paymentsTable).where(and(
+      eq(paymentsTable.tenantId, TENANT_ID),
+      eq(paymentsTable.reservationId, RESERVATION_A),
+    ));
+    expect(reservationPayments).toEqual([{ id: approvedPaymentId, status: "approved" }]);
+
+    const approvedImportCsv = [
+      "id_externo,reserva_id_externo,tipo,categoria,valor,status,forma_pagamento,vencimento",
+      "PAY-APPROVED-SNAPSHOT,RES-B,receivable,reserva,\"10,00\",approved,pix,15/12/2026",
+    ].join("\n");
+    const approvedImport = await request(buildApp()).post("/api/spreadsheet-imports/import").send({
+      entity: "payments",
+      filename: `approved-snapshot-${RUN}.csv`,
+      idempotencyKey: `sipl-approved-snapshot-${RUN}`,
+      contentBase64: Buffer.from(approvedImportCsv).toString("base64"),
+    });
+    expect(approvedImport.status).toBe(200);
+    expect(approvedImport.body.report.results).toEqual([
+      expect.objectContaining({ action: "created" }),
+    ]);
+    const [reservationSnapshot] = await db.select({
+      paidValue: reservationsTable.paidValue,
+      balance: reservationsTable.balance,
+    }).from(reservationsTable).where(and(
+      eq(reservationsTable.id, RESERVATION_B),
+      eq(reservationsTable.tenantId, TENANT_ID),
+    ));
+    expect(Number(reservationSnapshot?.paidValue)).toBe(10);
+    expect(Number(reservationSnapshot?.balance)).toBe(90);
+  });
+
   it("completes concurrent imports that list the same reservations in opposite orders", async () => {
     const app = buildApp();
     const [forward, reverse] = await Promise.all([
@@ -201,6 +268,7 @@ describe("financial spreadsheet imports reservation lock order", () => {
       .where(and(
         eq(paymentsTable.tenantId, TENANT_ID),
         eq(paymentsTable.category, "reserva"),
+        eq(paymentsTable.status, "pending"),
       ));
     expect(imported).toHaveLength(4);
   });

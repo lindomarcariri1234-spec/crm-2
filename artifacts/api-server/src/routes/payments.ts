@@ -12,7 +12,7 @@ import { roundMoney } from "../lib/pricing";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
 import { ALL_STAFF_ROLES } from '../lib/tenant';
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { sumPaidReservationPayments, syncReservationPaymentStatus } from "../lib/reservation-payments";
+import { sumReceivedReservationPayments, syncReservationPaymentStatus } from "../lib/reservation-payments";
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
 import { enqueueNewBookingNotificationEmail, dispatchReferralReversedEmail } from "../queues/email-helpers";
 import { dispatchWhatsAppPaymentReceived } from "../queues/whatsapp-helpers";
@@ -983,7 +983,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
           );
         }
         if (isReceivedPayment) {
-          const paidValue = await sumPaidReservationPayments(
+          const paidValue = await sumReceivedReservationPayments(
             tx,
             parsed.data.reservationId,
             me.tenantId,
@@ -1554,20 +1554,26 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
                 );
               }
               assertOpen(reservation);
-              const paidValue = await sumPaidReservationPayments(
-                tx,
-                existingPayment.reservationId,
-                me.tenantId,
-              );
-              const currentBalance = roundMoney(Math.max(
-                0,
-                roundMoney(Number(reservation.totalValue)) - paidValue,
-              ));
-              if (roundMoney(Number(existingPayment.amount)) > currentBalance) {
-                throw new ValidationError(
-                  "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
-                  "PAYMENT_EXCEEDS_BALANCE",
+              const wasReceived = existingPayment.status === PAYMENT_STATUS.PAID
+                || existingPayment.status === PAYMENT_STATUS.APPROVED;
+              const willBeReceived = updates.status === PAYMENT_STATUS.PAID
+                || updates.status === PAYMENT_STATUS.APPROVED;
+              if (!wasReceived && willBeReceived) {
+                const receivedValue = await sumReceivedReservationPayments(
+                  tx,
+                  existingPayment.reservationId,
+                  me.tenantId,
                 );
+                const currentBalance = roundMoney(Math.max(
+                  0,
+                  roundMoney(Number(reservation.totalValue)) - receivedValue,
+                ));
+                if (roundMoney(Number(existingPayment.amount)) > currentBalance) {
+                  throw new ValidationError(
+                    "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
+                    "PAYMENT_EXCEEDS_BALANCE",
+                  );
+                }
               }
             } else if (lockedOrder) {
               const reservations = await tx.select({

@@ -159,7 +159,7 @@ vi.mock("../lib/google-calendar/sync-service.js", () => ({
   },
 }));
 vi.mock("../lib/reservation-payments.js", () => ({
-  sumPaidReservationPayments: mockSumPaidReservationPayments,
+  sumReceivedReservationPayments: mockSumPaidReservationPayments,
   syncReservationPaymentStatus: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../services/checkout/create-reservations.js", () => ({

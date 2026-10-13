@@ -30,20 +30,24 @@ type ReservationUpdate = Partial<typeof reservationsTable.$inferInsert> & {
   status?: ReservationStatus;
 };
 
-export async function sumPaidReservationPayments(
+/**
+ * PAID and APPROVED both consume a reservation's receivable balance.
+ * Keep this definition shared by status changes and reservation snapshots.
+ */
+export async function sumReceivedReservationPayments(
   executor: DbExecutor,
   reservationId: string,
   tenantId: string,
 ): Promise<number> {
   const result = await executor.execute(sql`
-    SELECT COALESCE(SUM(amount::numeric), 0) AS total_paid
+    SELECT COALESCE(SUM(amount::numeric), 0) AS total_received
     FROM payments
     WHERE reservation_id = ${reservationId}
       AND tenant_id = ${tenantId}
-      AND status = ${PAYMENT_STATUS.PAID}
+      AND status IN (${PAYMENT_STATUS.PAID}, ${PAYMENT_STATUS.APPROVED})
   `);
-  const row = (result as unknown as { rows: Array<{ total_paid: string }> }).rows[0];
-  return roundMoney(Number(row?.total_paid ?? "0"));
+  const row = (result as unknown as { rows: Array<{ total_received: string }> }).rows[0];
+  return roundMoney(Number(row?.total_received ?? "0"));
 }
 
 export async function syncReservationPaymentStatus(
@@ -71,7 +75,7 @@ export async function syncReservationPaymentStatus(
   if (!reservation) return;
 
   const totalValue = roundMoney(Number(reservation.totalValue));
-  const paidValue = await sumPaidReservationPayments(executor, reservationId, tenantId);
+  const paidValue = await sumReceivedReservationPayments(executor, reservationId, tenantId);
   const balance = roundMoney(Math.max(totalValue - paidValue, 0));
   const isExpired = String(reservation.status) === "expired";
 
