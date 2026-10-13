@@ -20,7 +20,7 @@ import { logger } from "./lib/logger";
 import { runFinancialCategoryIntegrityCheck } from "./lib/financial-category-integrity";
 import { runMigrations } from "@workspace/db";
 import { initStripeSync } from "./lib/stripeSync";
-import { runApiStartup } from "./lib/api-startup";
+import { runApiStartup, runMigrationsWithErrorLogging } from "./lib/api-startup";
 import { backfillEncryptedCredentials } from "./lib/credential-backfill";
 import { seedPlansIfMissing } from "./lib/seed-plans";
 import { runScheduledJob, scheduleDistributedCron } from "./lib/distributed-scheduler";
@@ -159,18 +159,11 @@ const __serverDir = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__serverDir, "../../../lib/db/drizzle");
 
 async function applyMigrations() {
-  try {
-    await runMigrations(migrationsFolder);
-    logger.info("Drizzle migrations complete");
-  } catch (err) {
-    logger.error({ err }, "Drizzle migration failed");
-    // Never keep serving after a migration failure. Continuing here leaves
-    // the process alive but the schema may be incomplete, which makes the
-    // deployment probe and the first real requests fail with unrelated 500s.
-    // Re-throw so the startup catch below terminates the instance and lets
-    // Autoscale retry with a clean process.
-    throw err;
-  }
+  await runMigrationsWithErrorLogging(
+    () => runMigrations(migrationsFolder),
+    (err) => logger.error({ err }, "Drizzle migration failed"),
+  );
+  logger.info("Drizzle migrations complete");
   // Idempotently seed plan rows so a freshly-deployed/empty database does not
   // leave billing, onboarding, and plan selection broken. Insert-only — never
   // clobbers operator edits made via /admin/plans.
