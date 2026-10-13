@@ -945,6 +945,103 @@ describe("payment and reservation expiry concurrency — real PostgreSQL", () =>
     }
   });
 
+  it("accepts simultaneous payment confirmations that exactly exhaust the reservation balance", async () => {
+    const reservation = await createReservation("patch-exact-balance", {
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const firstPayment = await createPayment("patch-exact-balance-first", { reservationId: reservation });
+    const secondPayment = await createPayment("patch-exact-balance-second", { reservationId: reservation });
+    await db.update(paymentsTable).set({ amount: "60.00" }).where(eq(paymentsTable.id, firstPayment));
+    await db.update(paymentsTable).set({ amount: "40.00" }).where(eq(paymentsTable.id, secondPayment));
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM reservations WHERE id = $1 FOR UPDATE", [reservation]);
+      const [{ pid }] = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows;
+      const app = buildApp();
+      const confirm = (paymentId: string) => request(app).patch(`/api/payments/${paymentId}`).send({
+        status: PAYMENT_STATUS.PAID,
+        paidAt: new Date().toISOString(),
+      });
+      const firstResponsePromise = confirm(firstPayment);
+      const secondResponsePromise = confirm(secondPayment);
+
+      const barrier = waitForBlockedQuery(
+        pid,
+        (query) =>
+          query.includes("for update")
+          && (query.includes("reservations") || query.includes("store_orders")),
+        2,
+      ).then(
+        () => ({ kind: "both-blocked" as const }),
+        (error) => ({ kind: "timeout" as const, error }),
+      );
+      const firstOutcome = await Promise.race([
+        barrier,
+        firstResponsePromise.then((response) => ({
+          kind: "response" as const,
+          request: "first",
+          response,
+        })),
+        secondResponsePromise.then((response) => ({
+          kind: "response" as const,
+          request: "second",
+          response,
+        })),
+      ]);
+      if (firstOutcome.kind === "response") {
+        throw new Error(
+          `Payment ${firstOutcome.request} finished before both confirmations reached the reservation lock: ${firstOutcome.response.status} ${JSON.stringify(firstOutcome.response.body)}`,
+        );
+      }
+      if (firstOutcome.kind === "timeout") {
+        throw new Error(
+          `${String(firstOutcome.error)}; PostgreSQL pool total=${pool.totalCount}, idle=${pool.idleCount}, waiting=${pool.waitingCount}`,
+        );
+      }
+
+      await blocker.query("COMMIT");
+      const [firstResponse, secondResponse] = await Promise.all([
+        firstResponsePromise,
+        secondResponsePromise,
+      ]);
+      expect(firstResponse.status).toBe(200);
+      expect(secondResponse.status).toBe(200);
+
+      const storedPayments = await db.select({
+        id: paymentsTable.id,
+        status: paymentsTable.status,
+        amount: paymentsTable.amount,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.tenantId, TENANT_ID),
+        eq(paymentsTable.reservationId, reservation),
+      ));
+      expect(storedPayments).toHaveLength(2);
+      expect(storedPayments.every((payment) => payment.status === PAYMENT_STATUS.PAID)).toBe(true);
+      const totalPaid = storedPayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+      expect(totalPaid).toBe(100);
+
+      const actualReservationPayments = await vi.importActual<
+        typeof import("../lib/reservation-payments.js")
+      >("../lib/reservation-payments.js");
+      await actualReservationPayments.syncReservationPaymentStatus(reservation, TENANT_ID);
+      const [storedReservation] = await db.select({
+        totalValue: reservationsTable.totalValue,
+        paidValue: reservationsTable.paidValue,
+        balance: reservationsTable.balance,
+      }).from(reservationsTable).where(and(
+        eq(reservationsTable.id, reservation),
+        eq(reservationsTable.tenantId, TENANT_ID),
+      ));
+      expect(Number(storedReservation?.totalValue)).toBe(100);
+      expect(Number(storedReservation?.paidValue)).toBe(100);
+      expect(Number(storedReservation?.balance)).toBe(0);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
   it("only creates one of two simultaneous received payments that exceed the reservation balance together", async () => {
     const reservation = await createReservation("post-competing-payments", {
       expiresAt: new Date(Date.now() + 60 * 60_000),
