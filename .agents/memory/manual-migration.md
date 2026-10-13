@@ -56,6 +56,12 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 
 **How to apply:** Force a SQL error in a disposable copy of a migration, then retry with the canonical journal against the same database and confirm the full journal completes without dropping the database.
 
+**Abrupt process termination:** PostgreSQL releases a session-level advisory lock when the owning process loses its connection, even when application cleanup never runs.
+
+**Why:** A normal exception exercises `finally`, but a forced process exit validates the database's recovery boundary and prevents tests from relying on cleanup code that cannot run after a crash.
+
+**How to apply:** In an isolated PostgreSQL database, kill a child process after it confirms lock ownership, retry through the CLI, and verify the database identity and a preexisting marker remain unchanged while the journal completes.
+
 **Migration recovery fixtures:** Select the migration to fault by its stable tag or SQL signature, never by a relative journal position such as `entries.at(-2)`.
 
 **Why:** The append-only journal can gain newer entries, shifting a positional lookup onto unrelated SQL and making the integration suite fail before it reaches the intended recovery case.
