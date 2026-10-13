@@ -15,6 +15,7 @@ import ReferralLanding from "../src/pages/vitrine/referral-landing";
 import VitrineComparar from "../src/pages/vitrine/comparar";
 import VitrineSignIn from "../src/pages/vitrine/store-signin";
 import VitrineSignUp from "../src/pages/vitrine/store-signup";
+import { InstagramMediaPlaybackFixture } from "./InstagramMediaPlaybackFixture";
 import { CartProvider } from "../src/contexts/CartContext";
 import { ComparisonProvider } from "../src/contexts/ComparisonContext";
 import { FavoritesProvider } from "../src/contexts/FavoritesContext";
@@ -477,6 +478,12 @@ function installFixtureFetch() {
 function scenarioElement(scenario: string) {
   if (scenario === "perfil") return createElement(PerfilPage);
   if (scenario === "club-benefit-conflict-keyboard") return createElement(ClubConfigTab);
+  if (scenario === "instagram-media-playback") {
+    const mediaBase = new URLSearchParams(window.location.search).get("mediaBase");
+    return mediaBase
+      ? createElement(InstagramMediaPlaybackFixture, { mediaBase })
+      : createElement("p", null, "Servidor de mídia de teste não informado.");
+  }
   if (scenario === "catalogo") return createElement(VitrineCatalog, { slug: visualStore.slug, store: visualStore });
   if (scenario === "calendario") return createElement(VitrineCalendar, { slug: visualStore.slug, store: visualStore });
   if (scenario === "produto") return createElement(VitrineProduct, { slug: visualStore.slug, productSlug: visualProduct.slug, store: visualStore });
