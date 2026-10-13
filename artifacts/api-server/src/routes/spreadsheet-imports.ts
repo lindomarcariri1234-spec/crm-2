@@ -26,6 +26,7 @@ import {
 import { ADMIN_ROLES } from "../lib/tenant.js";
 import { requireAuth } from "../lib/tenant.js";
 import { AppError, ForbiddenError, ValidationError } from "../lib/errors.js";
+import { logger } from "../lib/logger.js";
 import { generateId, generateVoucherCode } from "../lib/id.js";
 import { getTenantReservationPrefix, getYearMonth, nextReservationSequence, buildReservationNumber, tripTypeToCode } from "../lib/reservation-number.js";
 import { syncReservationPaymentStatus } from "../lib/reservation-payments.js";
@@ -1376,7 +1377,12 @@ router.post("/spreadsheet-imports/import", async (req, res, next: NextFunction):
     res.json({ importId: result.importId, replayed: result.kind === "replay", report: result.report });
   } catch (error) {
     if (error instanceof ValidationError || error instanceof ForbiddenError) { next(error); return; }
-    next(new AppError(error instanceof Error ? error.message : "A importação falhou.", 500, "SPREADSHEET_IMPORT_FAILED"));
+    logger.error({ err: error }, "[spreadsheet-imports] unexpected import failure");
+    next(new AppError(
+      "Não foi possível concluir a importação. Tente novamente.",
+      500,
+      "SPREADSHEET_IMPORT_FAILED",
+    ));
   }
 });
 

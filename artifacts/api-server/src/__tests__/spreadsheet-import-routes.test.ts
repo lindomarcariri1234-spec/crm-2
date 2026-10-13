@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => {
     mockTransaction: vi.fn(),
     mockInsert: vi.fn(),
     mockExecute: vi.fn(),
+    mockLoggerError: vi.fn(),
   };
 });
 
@@ -89,6 +90,10 @@ vi.mock("../lib/tenant.js", () => ({
 vi.mock("../lib/id.js", () => ({
   generateId: vi.fn(() => "generated-id"),
   generateVoucherCode: vi.fn(() => "VOUCHER1"),
+}));
+
+vi.mock("../lib/logger.js", () => ({
+  logger: { error: mocks.mockLoggerError },
 }));
 
 vi.mock("../lib/reservation-number.js", () => ({
@@ -361,6 +366,30 @@ describe("rotas de importação operacional", () => {
     expect(response.body.replayed).toBe(true);
     expect(response.body.report).toEqual(savedReport);
     expect(mocks.mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("não expõe detalhes SQL quando a importação falha inesperadamente", async () => {
+    const privateSqlMessage = 'relation "private_schema.client_credentials" does not exist';
+    const sqlError = Object.assign(new Error(privateSqlMessage), { code: "42P01" });
+    mocks.mockTransaction.mockRejectedValue(sqlError);
+
+    const response = await request(app()).post("/api/spreadsheet-imports/import").send(payload(
+      "clients",
+      "id_externo,nome,whatsapp,cpf\nCLI-1,Maria,(88) 99999-9999,529.982.247-25",
+      "sql-error",
+    ));
+
+    expect(response.status).toBe(500);
+    expect(response.body).toMatchObject({
+      error: "Internal server error",
+      message: "Internal server error",
+      code: "SPREADSHEET_IMPORT_FAILED",
+    });
+    expect(JSON.stringify(response.body)).not.toContain(privateSqlMessage);
+    expect(mocks.mockLoggerError).toHaveBeenCalledWith(
+      { err: sqlError },
+      "[spreadsheet-imports] unexpected import failure",
+    );
   });
 
   it("nega a prévia para quem não é administrador", async () => {

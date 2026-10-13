@@ -27,7 +27,7 @@ export function errorHandler(
   const tenantId = req.tenantId ?? "unknown";
   const userId = req.userId ?? "unknown";
 
-  if (err instanceof AppError && err.isOperational) {
+  if (err instanceof AppError && err.isOperational && err.statusCode < 500) {
     req.log?.warn(
       { requestId: rid, tenantId, userId, code: err.code, statusCode: err.statusCode },
       err.message,
@@ -39,6 +39,20 @@ export function errorHandler(
       message: err.message,
       requestId: rid,
       ...err.extra,
+    });
+    return;
+  }
+
+  if (err instanceof AppError && err.isOperational) {
+    req.log?.error(
+      { requestId: rid, tenantId, userId, code: err.code, statusCode: err.statusCode },
+      "Unexpected server error",
+    );
+    res.status(500).json({
+      error: "Internal server error",
+      code: err.code,
+      message: "Internal server error",
+      requestId: rid,
     });
     return;
   }
