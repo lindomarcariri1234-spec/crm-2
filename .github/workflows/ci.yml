@@ -109,7 +109,7 @@ jobs:
         run: pnpm --filter @workspace/visitecrm exec vitest run src/__tests__/role-gate.auth.test.tsx --pool=forks --maxWorkers=1 --no-file-parallelism
 
       - name: Test publication verification
-        run: node --test scripts/verify-publication.test.mjs scripts/verify-publication-chunks.test.mjs scripts/verify-referral-publication.test.mjs scripts/promote-verified-main.test.mjs scripts/vercel-ignore-build.test.mjs scripts/frontend-bundle-size.test.mjs
+        run: node --test scripts/vercel-api-routes.test.mjs scripts/verify-publication.test.mjs scripts/verify-publication-chunks.test.mjs scripts/verify-referral-publication.test.mjs scripts/promote-verified-main.test.mjs scripts/vercel-ignore-build.test.mjs scripts/frontend-bundle-size.test.mjs
 
       - name: Check protected publication route coverage
         run: node scripts/verify-publication-chunks.mjs --check-route-coverage

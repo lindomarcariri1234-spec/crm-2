@@ -29,6 +29,10 @@
       "destination": "/api/storefront?store_slug=:slug&store_path=:rest*"
     },
     {
+      "source": "/api/healthz",
+      "destination": "https://crm-2-lindomarcariri.replit.app/api/healthz"
+    },
+    {
       "source": "/api",
       "destination": "https://crm-2-lindomarcariri.replit.app/api"
     },
