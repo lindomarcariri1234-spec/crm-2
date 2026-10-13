@@ -48,7 +48,7 @@ export function errorHandler(
       { requestId: rid, tenantId, userId, code: err.code, statusCode: err.statusCode },
       "Unexpected server error",
     );
-    res.status(500).json({
+    res.status(err.statusCode).json({
       error: "Internal server error",
       code: err.code,
       message: "Internal server error",

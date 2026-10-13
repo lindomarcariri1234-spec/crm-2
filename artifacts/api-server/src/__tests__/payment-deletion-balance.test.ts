@@ -45,8 +45,13 @@ vi.mock("@workspace/db", () => ({
     })),
     execute: vi.fn(async () => ({
       rows: [{
-        total_paid: dbState.payments
-          .filter((payment) => payment.tenantId === TENANT_ID && payment.status === PAYMENT_STATUS.PAID)
+        total_received: dbState.payments
+          .filter((payment) =>
+            payment.tenantId === TENANT_ID &&
+            (payment.status === PAYMENT_STATUS.PAID || payment.status === PAYMENT_STATUS.APPROVED) &&
+            payment.type === PAYMENT_TYPE.RECEIVABLE &&
+            payment.reservationId === RESERVATION_ID,
+          )
           .reduce((total, payment) => total + Number(payment.amount), 0)
           .toFixed(2),
         total_spent: "0",
