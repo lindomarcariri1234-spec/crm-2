@@ -153,6 +153,7 @@ vi.mock("../services/instagram-zernio.js", () => ({
 import { errorHandler } from "../middlewares/errorHandler.js";
 import { requireAuth } from "../lib/tenant.js";
 import chatbotRouter from "../routes/chatbot.js";
+import { deliverAttendanceReply } from "../services/whatsapp-attendance.js";
 
 const TENANT_ID = "tenant-instagram-reply-test";
 const STAFF_ID = "staff-instagram-reply-test";
@@ -272,6 +273,36 @@ afterEach(() => {
 });
 
 describe("POST /chatbot-conversations/:id/reply for Instagram", () => {
+  it("returns a queued WhatsApp reply instead of treating pending delivery as a send failure", async () => {
+    const conversation = {
+      ...makeConversation(),
+      channel: "whatsapp",
+      sessionId: "5511999999999",
+    };
+    const pendingMessage = {
+      id: "instagram-staff-reply-id",
+      tenantId: TENANT_ID,
+      conversationId: CONVERSATION_ID,
+      role: "assistant",
+      content: REPLY_BODY.content,
+      deliveryStatus: "pending",
+      deliveryAttempts: 1,
+    };
+    configureSelectResults([conversation], [pendingMessage]);
+    vi.mocked(deliverAttendanceReply).mockResolvedValueOnce(false);
+
+    const response = await request(buildApp())
+      .post(`/api/chatbot-conversations/${CONVERSATION_ID}/reply`)
+      .send(REPLY_BODY);
+
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({
+      id: pendingMessage.id,
+      deliveryStatus: "pending",
+    });
+    expect(mockState.dbUpdate).toHaveBeenCalled();
+  });
+
   it("blocks an expired persisted inbound message before inserting or sending", async () => {
     const lastInboundAt = new Date(NOW - 24 * 60 * 60 * 1000);
     const [conversationQuery, integrationQuery, inboundQuery] =

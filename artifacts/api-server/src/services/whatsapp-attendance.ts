@@ -331,14 +331,21 @@ export async function deliverAttendanceReply(opts: {
     // A pending ledger row is queued, not delivered. The attendance outbox
     // must remain retryable until the outbound worker records acceptance.
     const delivered = whatsappDelivery?.status === "accepted";
+    const deliveryError = whatsappDelivery?.skippedReason ?? whatsappDelivery?.lastError ?? "delivery_failed";
+    const optedOut = deliveryError === "whatsapp_opted_out" || deliveryError === "contact_opted_out";
+    const terminalFailure = whatsappDelivery?.status === "failed" || whatsappDelivery?.status === "skipped";
     await db.update(chatbotMessagesTable)
       .set(
         delivered
           ? { deliveryStatus: "sent", deliveryUpdatedAt: new Date(), lastDeliveryError: null }
           : {
-              deliveryStatus: claimed[0].deliveryAttempts >= MAX_DELIVERY_ATTEMPTS ? "failed" : "pending",
+              deliveryStatus: optedOut
+                ? "cancelled"
+                : terminalFailure || claimed[0].deliveryAttempts >= MAX_DELIVERY_ATTEMPTS
+                  ? "failed"
+                  : "pending",
               deliveryUpdatedAt: new Date(),
-              lastDeliveryError: whatsappDelivery?.skippedReason ?? "delivery_failed",
+              lastDeliveryError: deliveryError,
             },
       )
       .where(and(eq(chatbotMessagesTable.id, opts.messageId), eq(chatbotMessagesTable.tenantId, opts.tenantId)));

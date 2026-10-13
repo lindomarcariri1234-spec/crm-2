@@ -445,6 +445,18 @@ export default function Communication() {
     }
   }, [toast]);
 
+  useEffect(() => {
+    if (!selectedAiConversationId || !aiMessages.some((message) =>
+      message.role !== "user"
+      && ["pending", "processing", "unknown"].includes(message.deliveryStatus ?? ""),
+    )) return;
+    const conversationId = selectedAiConversationId;
+    const interval = window.setInterval(() => {
+      void selectAiConversation(conversationId, true);
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [aiMessages, selectedAiConversationId, selectAiConversation]);
+
   useEffect(() => () => {
     aiConversationRequestId.current += 1;
   }, []);
@@ -1064,9 +1076,16 @@ export default function Communication() {
             ? responseBody["message"]
             : "Não foi possível confirmar o envio.");
       }
+      const deliveryQueued = res.status === 202;
       setAiReply("");
       aiReplyKey.current = null;
       await Promise.all([selectAiConversation(selectedAiConversationId), fetchAiInbox()]);
+      if (deliveryQueued) {
+        toast({
+          title: "Resposta na fila",
+          description: "A conversa será atualizada quando o envio for confirmado.",
+        });
+      }
     } catch (error) {
       const channelLabel = selectedAiConversation?.channel === "instagram" ? "Instagram" : "WhatsApp";
       toast({
@@ -1897,8 +1916,10 @@ export default function Communication() {
                             ? "Entregue"
                             : message.deliveryStatus === "failed"
                               ? "Falhou"
-                              : message.deliveryStatus === "sending" || message.deliveryStatus === "pending"
-                                ? "Enviando"
+                              : message.deliveryStatus === "unknown"
+                                ? "Confirmando"
+                                : message.deliveryStatus === "sending" || message.deliveryStatus === "pending" || message.deliveryStatus === "processing"
+                                  ? "Na fila"
                                 : message.deliveryStatus === "sent"
                                   ? "Enviada"
                                   : null;

@@ -738,20 +738,32 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         eq(chatbotMessagesTable.sourceMessageId, sourceMessageId),
       ))
       .limit(1);
-    if (!existing || !await deliverAttendanceReply({
-      tenantId: me.tenantId,
-      messageId: existing.id,
-    })) {
+    const delivered = existing
+      ? await deliverAttendanceReply({ tenantId: me.tenantId, messageId: existing.id })
+      : false;
+    if (!existing) {
       next(new ValidationError("Não foi possível enviar a mensagem pelo WhatsApp.", "WHATSAPP_DELIVERY_FAILED"));
+      return;
+    }
+    const [message] = await db.select().from(chatbotMessagesTable)
+      .where(and(eq(chatbotMessagesTable.id, existing.id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!message) {
+      next(new NotFoundError("Mensagem não encontrada após o envio.", "MESSAGE_NOT_FOUND"));
+      return;
+    }
+    if (!delivered && message.deliveryStatus === "cancelled") {
+      next(new ForbiddenError("A conversa não está autorizada a receber mensagens pelo WhatsApp.", "WHATSAPP_OPTED_OUT"));
+      return;
+    }
+    if (!delivered && message.deliveryStatus === "failed") {
+      next(new ValidationError("O provedor não aceitou a mensagem pelo WhatsApp.", "WHATSAPP_DELIVERY_FAILED"));
       return;
     }
     await db.update(chatbotConversationsTable)
       .set({ status: "human_handoff", assignedUserId: me.id })
       .where(eq(chatbotConversationsTable.id, conversation.id));
-    const [message] = await db.select().from(chatbotMessagesTable)
-      .where(and(eq(chatbotMessagesTable.id, id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
-      .limit(1);
-    res.status(201).json(message);
+    res.status(delivered ? 201 : 202).json(message);
   } catch (err) {
     next(err);
   }

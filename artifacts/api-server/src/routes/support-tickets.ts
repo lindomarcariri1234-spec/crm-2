@@ -606,7 +606,16 @@ router.post("/support/tickets/:id/reply", async (req, res, next: NextFunction): 
       next(new NotFoundError("Mensagem não encontrada após o envio.", "MESSAGE_NOT_FOUND"));
       return;
     }
-    res.status(delivered ? 201 : 202).json({ message, deliveryQueued: !delivered });
+    if (!delivered && message.deliveryStatus === "cancelled") {
+      next(new ForbiddenError("A conversa não está autorizada a receber mensagens pelo WhatsApp.", "WHATSAPP_OPTED_OUT"));
+      return;
+    }
+    if (!delivered && message.deliveryStatus === "failed") {
+      next(new ValidationError("O provedor não aceitou a resposta pelo WhatsApp.", "WHATSAPP_REPLY_FAILED"));
+      return;
+    }
+    const deliveryQueued = !delivered;
+    res.status(deliveryQueued ? 202 : 201).json({ message, deliveryQueued });
   } catch (err) {
     next(err);
   }
