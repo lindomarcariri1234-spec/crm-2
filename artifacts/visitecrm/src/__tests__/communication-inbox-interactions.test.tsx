@@ -415,6 +415,70 @@ describe("Instagram conversation attachments", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
+  it("renders known audio as a player and reports playback failures", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/voice.mp3",
+      mimeType: "audio/mpeg",
+      fileName: "voice.mp3",
+      expiredAt: null,
+    }));
+    const audio = container.querySelector<HTMLAudioElement>("audio");
+    expect(audio).not.toBeNull();
+    expect(audio?.hasAttribute("controls")).toBe(true);
+    expect(audio?.getAttribute("src")).toBe("https://media.example.test/voice.mp3");
+    expect(audio?.getAttribute("preload")).toBe("none");
+
+    await flushAct(() => audio!.dispatchEvent(new Event("error")));
+    expect(container.textContent).toContain("Anexo indisponível ou expirado");
+    expect(container.querySelector("audio")).toBeNull();
+  });
+
+  it("renders known video as a player and reports playback failures", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/clip.mp4",
+      mimeType: "video/mp4",
+      fileName: "clip.mp4",
+      expiredAt: null,
+    }));
+    const video = container.querySelector<HTMLVideoElement>("video");
+    expect(video).not.toBeNull();
+    expect(video?.hasAttribute("controls")).toBe(true);
+    expect(video?.getAttribute("src")).toBe("https://media.example.test/clip.mp4");
+    expect(video?.getAttribute("preload")).toBe("metadata");
+
+    await flushAct(() => video!.dispatchEvent(new Event("error")));
+    expect(container.textContent).toContain("Anexo indisponível ou expirado");
+    expect(container.querySelector("video")).toBeNull();
+  });
+
+  it("links downloadable files and unsupported media only through safe web URLs", async () => {
+    const { container: fileContainer } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/itinerary.pdf",
+      mimeType: "application/pdf",
+      fileName: "itinerary.pdf",
+      expiredAt: null,
+    }));
+    const fileLink = fileContainer.querySelector<HTMLAnchorElement>("a");
+    expect(fileLink?.textContent).toBe("itinerary.pdf");
+    expect(fileLink?.getAttribute("href")).toBe("https://media.example.test/itinerary.pdf");
+    expect(fileLink?.getAttribute("download")).toBe("itinerary.pdf");
+    expect(fileLink?.getAttribute("target")).toBe("_blank");
+    expect(fileLink?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(fileContainer.querySelector("audio, video, img")).toBeNull();
+
+    const { container: unsupportedContainer } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/clip.mov",
+      mimeType: "video/quicktime",
+      fileName: "clip.mov",
+      expiredAt: null,
+    }));
+    const unsupportedLink = unsupportedContainer.querySelector<HTMLAnchorElement>("a");
+    expect(unsupportedLink?.getAttribute("href")).toBe("https://media.example.test/clip.mov");
+    expect(unsupportedLink?.textContent).toBe("clip.mov");
+    expect(unsupportedLink?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(unsupportedContainer.querySelector("video")).toBeNull();
+  });
+
   it("does not create links for non-web attachment URLs", async () => {
     const { container } = await renderComponent(createElement(MessageMediaAttachment, {
       url: "javascript:alert(1)",
@@ -424,6 +488,17 @@ describe("Instagram conversation attachments", () => {
     }));
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent).toContain("Mídia anexada");
+  });
+
+  it("does not create links for URLs containing embedded credentials", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://user:pass@media.example.test/private.pdf",
+      mimeType: "application/pdf",
+      fileName: "private.pdf",
+      expiredAt: null,
+    }));
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("Anexo indisponível ou expirado");
   });
 });
 
