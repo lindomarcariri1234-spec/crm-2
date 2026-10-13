@@ -6,7 +6,7 @@
 - [Workspace lib TypeScript build](db-ts-build.md) — Consumers read lib dist/*.d.ts via project references; rebuild with `tsc --build` after a schema column change OR after adding a new exported file (e.g. api-client-react), else TS2305/missing-property.
 - [Clerk e2e testing flag](testing-clerk-auth.md) — runTest on this Clerk app needs `testClerkAuth:true` (else Cloudflare bot wall); reach role-gated pages via a [DB] role/tenant UPDATE + reload.
 - [Marketing NPS naming conflict](marketing-nps-conflict.md) — `npsResponsesTable` already exists in marketing.ts for e-commerce; client travel NPS uses `clientNpsResponsesTable` in nps.ts / table `client_nps_responses`.
-- [Manual migration workflow](manual-migration.md) — drizzle-kit is interactive; journal hand-written SQL, and after failure verify same-database retry after lock release.
+- [Manual migration workflow](manual-migration.md) — journal SQL manually; keep CLI/API migration locking, bounded waits, safe progress logs, and retries aligned.
 - [Store product vs trip favorites](store-favorites-join.md) — Trip favorites store tripId; join via storeProductsTable.tripId to get slug. Product favorites store storeProductsTable.id; join with storesTable for tenantId filter.
 - [Expo Metro version pins](expo-metro-version-pins.md) — metro-* must be at 0.83.7 EXCEPT metro-file-map (keep 0.83.3) for guide-app Expo artifact to start without crashing.
 - [SSRF for tenant base URLs](ssrf-tenant-base-url.md) — connect-time IP enforcement (not just a pre-check); canonicalize IPv4-in-IPv6 literals; guard empty custom baseURL to avoid leaking keys to OpenAI.

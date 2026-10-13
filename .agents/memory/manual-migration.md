@@ -38,6 +38,12 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 
 **How to apply:** Preserve the transaction boundary, translate lock-timeout SQLSTATE `55P03` to the actionable migration timeout error, and keep the session lock until the full journal runner ends.
 
+**Lock wait progress:** Probe with a nonblocking advisory-lock attempt, then log a safe start notice and periodic elapsed time only while contended; use the shared pipeline for CLI and API startup.
+
+**Why:** Startup could appear frozen during the bounded wait, while diagnostics must not expose database URLs, credentials, or SQL.
+
+**How to apply:** Keep progress logs limited to the validated application name and elapsed/timeout durations; test a short wait that releases normally and assert CLI/API messages are safe.
+
 **Timeout owner diagnostics:** Label CLI/API lock sessions with stable application names, restore each connection's original name before returning it to the pool, and report only the holder PID plus a sanitized `application_name`.
 
 **Why:** In a multi-instance deployment, the lock owner must be identifiable without exposing connection URLs, SQL, or unrelated session metadata.
