@@ -496,6 +496,7 @@ describe("GET /api/integrations/:type — single integration detail", () => {
       conversationsProcessed: 2,
       messagesImported: 8,
       messagesAlreadyPresent: 3,
+        messagesSkipped: 2,
       },
     });
 
@@ -507,7 +508,7 @@ describe("GET /api/integrations/:type — single integration detail", () => {
     expect(res.body).toMatchObject({
       done: true,
       cursor: null,
-      progress: { messagesImported: 8, conversationsProcessed: 2 },
+      progress: { messagesImported: 8, conversationsProcessed: 2, messagesSkipped: 2 },
     });
     expect(JSON.stringify(res.body)).not.toContain("private-api-key");
     expect(mockImportZernioInstagramHistoryChunk).toHaveBeenCalledWith(
@@ -545,6 +546,7 @@ describe("GET /api/integrations/:type — single integration detail", () => {
         conversationsProcessed: 4,
         messagesImported: 12,
         messagesAlreadyPresent: 1,
+        messagesSkipped: 0,
       },
     });
 

@@ -1175,6 +1175,7 @@ function IntegrationCard({
     conversationsProcessed: number;
     messagesImported: number;
     messagesAlreadyPresent: number;
+    messagesSkipped: number;
   } | null>(null);
   const [historyImportPartial, setHistoryImportPartial] = useState(false);
   const [historyImportCursor, setHistoryImportCursor] = useState<unknown | null>(null);
@@ -1193,7 +1194,9 @@ function IntegrationCard({
       const parsed = JSON.parse(saved) as { cursor?: unknown; progress?: typeof historyImportResult };
       if (parsed.cursor) {
         setHistoryImportCursor(parsed.cursor);
-        setHistoryImportResult(parsed.progress ?? null);
+        setHistoryImportResult(parsed.progress
+          ? { ...parsed.progress, messagesSkipped: parsed.progress.messagesSkipped ?? 0 }
+          : null);
         setHistoryImportPartial(true);
       }
     } catch {
@@ -1416,7 +1419,7 @@ function IntegrationCard({
         setHistoryImportPartial(false);
         toast({
           title: "Importação concluída",
-          description: `${result.progress.messagesImported} mensagens novas em ${result.progress.conversationsProcessed} conversas.`,
+          description: `${result.progress.messagesImported} mensagens novas; ${result.progress.messagesAlreadyPresent} já existentes; ${result.progress.messagesSkipped} não importadas.`,
         });
         break;
       }
@@ -1601,7 +1604,7 @@ function IntegrationCard({
                 {importingHistory && (
                   <p role="status" className="text-xs text-muted-foreground">
                     {historyImportResult
-                      ? `${historyImportResult.conversationsProcessed} conversas concluídas; ${historyImportResult.messagesImported} mensagens novas.`
+                      ? `${historyImportResult.conversationsProcessed} conversas concluídas; ${historyImportResult.messagesImported} mensagens novas; ${historyImportResult.messagesSkipped} não importadas.`
                       : "Iniciando a importação em etapas curtas."}
                   </p>
                 )}
@@ -1613,7 +1616,7 @@ function IntegrationCard({
                 {historyImportResult && (
                   <p role="status" className="text-xs text-muted-foreground">
                     {historyImportPartial ? "Resultado parcial: " : ""}
-                    {historyImportResult.conversationsFound} encontradas · {historyImportResult.messagesImported} mensagens novas · {historyImportResult.messagesAlreadyPresent} já existentes.
+                    {historyImportResult.conversationsFound} encontradas · {historyImportResult.messagesImported} mensagens novas · {historyImportResult.messagesAlreadyPresent} já existentes · {historyImportResult.messagesSkipped} não importadas.
                   </p>
                 )}
               </div>

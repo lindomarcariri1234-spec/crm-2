@@ -24,8 +24,10 @@ const ACCOUNT_B_ID = `zernio-account-b-${generateId()}`;
 const PROFILE_A_ID = `zernio-profile-a-${generateId()}`;
 const PROFILE_B_ID = `zernio-profile-b-${generateId()}`;
 const CONVERSATION_ID = `zernio-conversation-${generateId()}`;
+const ORPHAN_CONVERSATION_ID = `zernio-orphan-conversation-${generateId()}`;
 const INBOUND_MESSAGE_ID = `zernio-inbound-${generateId()}`;
 const MEDIA_MESSAGE_ID = `zernio-media-${generateId()}`;
+const ORPHAN_OUTBOUND_MESSAGE_ID = `zernio-orphan-outbound-${generateId()}`;
 const MALFORMED_MESSAGE_IDS = [
   `zernio-empty-attachments-${generateId()}`,
   `zernio-unusable-attachments-${generateId()}`,
@@ -206,6 +208,22 @@ describe("Zernio history import and webhook idempotency", () => {
     const historyFetch = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/messages")) {
+        const requestedConversationId = url.pathname.split("/").at(-2);
+        if (requestedConversationId === ORPHAN_CONVERSATION_ID) {
+          return new Response(JSON.stringify({
+            messages: [{
+              id: ORPHAN_OUTBOUND_MESSAGE_ID,
+              accountId: ACCOUNT_A_ID,
+              conversationId: ORPHAN_CONVERSATION_ID,
+              platform: "instagram",
+              direction: "outgoing",
+              senderId: ACCOUNT_A_ID,
+              message: "Resposta sem conversa local",
+              createdAt: "2026-10-10T12:06:00.000Z",
+            }],
+            pagination: { hasMore: false },
+          }), { status: 200 });
+        }
         return new Response(JSON.stringify({
           messages: [
             {
@@ -276,7 +294,10 @@ describe("Zernio history import and webhook idempotency", () => {
       }
       return new Response(JSON.stringify({
         data: url.searchParams.get("status") === "active"
-          ? [{ id: CONVERSATION_ID, accountId: ACCOUNT_A_ID, platform: "instagram" }]
+          ? [
+              { id: CONVERSATION_ID, accountId: ACCOUNT_A_ID, platform: "instagram" },
+              { id: ORPHAN_CONVERSATION_ID, accountId: ACCOUNT_A_ID, platform: "instagram" },
+            ]
           : [],
         pagination: { hasMore: false },
       }), { status: 200 });
@@ -297,9 +318,13 @@ describe("Zernio history import and webhook idempotency", () => {
       INTEGRATION_A_ID,
       () => undefined,
     );
+    expect(firstImport.conversationsFound).toBe(2);
     expect(firstImport.messagesImported).toBe(3);
+    expect(firstImport.messagesAlreadyPresent).toBe(0);
+    expect(firstImport.messagesSkipped).toBe(1);
     expect(repeatedImport.messagesImported).toBe(0);
     expect(repeatedImport.messagesAlreadyPresent).toBe(3);
+    expect(repeatedImport.messagesSkipped).toBe(1);
 
     vi.unstubAllGlobals();
     const aInbound = await webhookRequest(incomingEvent(ACCOUNT_A_ID, PROFILE_A_ID, `evt-a-in-${generateId()}`));
@@ -383,6 +408,9 @@ describe("Zernio history import and webhook idempotency", () => {
       deliveryStatus: chatbotMessagesTable.deliveryStatus,
       deliveryUpdatedAt: chatbotMessagesTable.deliveryUpdatedAt,
     }).from(chatbotMessagesTable).where(eq(chatbotMessagesTable.providerMessageId, OUTBOUND_MESSAGE_ID));
+    const orphanOutboundRows = await db.select({ id: chatbotMessagesTable.id })
+      .from(chatbotMessagesTable)
+      .where(eq(chatbotMessagesTable.providerMessageId, ORPHAN_OUTBOUND_MESSAGE_ID));
 
     expect(inboundRows.map((row) => row.tenantId).sort()).toEqual([TENANT_A_ID, TENANT_B_ID].sort());
     expect(mediaRows).toHaveLength(1);
@@ -398,6 +426,7 @@ describe("Zernio history import and webhook idempotency", () => {
     expect(new Set(inboundRows.map((row) => row.conversationId)).size).toBe(2);
     expect(new Set(outboundRows.map((row) => row.conversationId)).size).toBe(2);
     expect(outboundRows).toHaveLength(2);
+    expect(orphanOutboundRows).toHaveLength(0);
     expect(outboundRows.find((row) => row.tenantId === TENANT_A_ID)).toMatchObject({
       deliveryStatus: "read",
       deliveryUpdatedAt: new Date("2026-10-14T12:07:00.000Z"),

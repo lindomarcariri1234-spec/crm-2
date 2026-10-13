@@ -131,16 +131,26 @@ describe("Zernio Instagram webhook", () => {
     );
     expect(first.done).toBe(false);
     expect(first.cursor?.messageCursor).toBe("message-cursor-2");
+    const legacyCursor = first.cursor && {
+      ...first.cursor,
+      progress: {
+        conversationsFound: first.cursor.progress.conversationsFound,
+        conversationsProcessed: first.cursor.progress.conversationsProcessed,
+        messagesImported: first.cursor.progress.messagesImported,
+        messagesAlreadyPresent: first.cursor.progress.messagesAlreadyPresent,
+      },
+    };
 
     const resumed = await zernioService.importZernioInstagramHistoryChunk(
       "secret-api-key",
       "account_123",
       "profile_123",
       "tenant-integration-id",
-      first.cursor,
+      legacyCursor,
     );
     expect(resumed.done).toBe(true);
     expect(resumed.progress.conversationsProcessed).toBe(1);
+    expect(resumed.progress.messagesSkipped).toBe(0);
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain("cursor=message-cursor-2");
   });
 

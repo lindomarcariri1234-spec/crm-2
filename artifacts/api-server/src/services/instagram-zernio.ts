@@ -542,6 +542,7 @@ export interface ZernioHistoryImportProgress {
   conversationsProcessed: number;
   messagesImported: number;
   messagesAlreadyPresent: number;
+  messagesSkipped: number;
 }
 
 export interface ZernioHistoryImportCursor {
@@ -577,12 +578,17 @@ function initialHistoryCursor(): ZernioHistoryImportCursor {
       conversationsProcessed: 0,
       messagesImported: 0,
       messagesAlreadyPresent: 0,
+      messagesSkipped: 0,
     },
   };
 }
 
 function cloneHistoryCursor(cursor: ZernioHistoryImportCursor): ZernioHistoryImportCursor {
-  return { ...cursor, conversationIds: cursor.conversationIds ? [...cursor.conversationIds] : null, progress: { ...cursor.progress } };
+  return {
+    ...cursor,
+    conversationIds: cursor.conversationIds ? [...cursor.conversationIds] : null,
+    progress: { ...cursor.progress, messagesSkipped: cursor.progress.messagesSkipped ?? 0 },
+  };
 }
 
 function validHistoryCursor(value: unknown): value is ZernioHistoryImportCursor {
@@ -599,7 +605,9 @@ function validHistoryCursor(value: unknown): value is ZernioHistoryImportCursor 
     (cursor.messageConversationId === null || typeof cursor.messageConversationId === "string") &&
     (cursor.messageCursor === null || typeof cursor.messageCursor === "string") &&
     ["conversationsFound", "conversationsProcessed", "messagesImported", "messagesAlreadyPresent"]
-      .every((key) => Number.isSafeInteger(progress?.[key]) && Number(progress?.[key]) >= 0)
+      .every((key) => Number.isSafeInteger(progress?.[key]) && Number(progress?.[key]) >= 0) &&
+    (progress?.messagesSkipped === undefined ||
+      (Number.isSafeInteger(progress.messagesSkipped) && Number(progress.messagesSkipped) >= 0))
   );
 }
 
@@ -645,6 +653,7 @@ export async function importZernioInstagramHistoryChunk(
   const baseUrl = "https://zernio.com/api/v1/inbox/conversations";
   let requests = 0;
   const maxRequests = 2;
+  let integrationTenantId: string | null | undefined;
 
   while (requests < maxRequests) {
     if (!cursor.conversationIds) {
@@ -735,7 +744,29 @@ export async function importZernioInstagramHistoryChunk(
         },
       }, integrationId);
       if (imported > 0) cursor.progress.messagesImported++;
-      else cursor.progress.messagesAlreadyPresent++;
+      else {
+        if (integrationTenantId === undefined) {
+          const [integration] = await db.select({ tenantId: tenantIntegrationsTable.tenantId })
+            .from(tenantIntegrationsTable)
+            .where(eq(tenantIntegrationsTable.id, integrationId))
+            .limit(1);
+          integrationTenantId = integration?.tenantId ?? null;
+        }
+        const messageSourceFilter = direction === "incoming"
+          ? eq(chatbotMessagesTable.sourceMessageId, `zernio:${messageId}`)
+          : eq(chatbotMessagesTable.providerMessageId, messageId);
+        const existingMessage = integrationTenantId
+          ? await db.select({ id: chatbotMessagesTable.id })
+            .from(chatbotMessagesTable)
+            .where(and(
+              eq(chatbotMessagesTable.tenantId, integrationTenantId),
+              messageSourceFilter,
+            ))
+            .limit(1)
+          : [];
+        if (existingMessage.length > 0) cursor.progress.messagesAlreadyPresent++;
+        else cursor.progress.messagesSkipped++;
+      }
     }
     if (messagePage.hasMore) {
       if (!messagePage.nextCursor || messagePage.nextCursor === cursor.messageCursor) {

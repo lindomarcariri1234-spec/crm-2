@@ -749,7 +749,7 @@ router.post("/integrations/instagram_zernio/import-history", async (req, res, ne
           INSTAGRAM_ZERNIO_TYPE,
           "history_import",
           "info",
-          `Histórico importado: ${result.progress.conversationsProcessed} conversas, ${result.progress.messagesImported} mensagens novas.`,
+          `Histórico importado: ${result.progress.conversationsProcessed} conversas, ${result.progress.messagesImported} mensagens novas, ${result.progress.messagesAlreadyPresent} já existentes e ${result.progress.messagesSkipped} não importadas.`,
         );
       }
       res.json({
