@@ -26,6 +26,7 @@ export default defineConfig({
       "src/__tests__/reservation-referral-payment-reversal-integration.test.ts",
       "src/__tests__/reservation-boarding-point-roundtrip.integration.test.ts",
       "src/__tests__/payment-expiry-concurrency.integration.test.ts",
+      "src/__tests__/spreadsheet-import-payment-lock.integration.test.ts",
       "src/__tests__/reservation-gratuity-payment-race.integration.test.ts",
       "src/__tests__/nps-email-response-concurrency.integration.test.ts",
       "src/__tests__/unlink-client-from-trips-concurrency-integration.test.ts",

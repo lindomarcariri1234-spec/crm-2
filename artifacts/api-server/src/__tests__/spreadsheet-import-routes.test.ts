@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => {
     mockInsert: vi.fn(),
     mockExecute: vi.fn(),
     mockLoggerError: vi.fn(),
+    mockLockReservations: vi.fn().mockResolvedValue(undefined),
+    mockSyncReservationPaymentStatus: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -94,6 +96,12 @@ vi.mock("../lib/id.js", () => ({
 
 vi.mock("../lib/logger.js", () => ({
   logger: { error: mocks.mockLoggerError },
+}));
+
+vi.mock("../lib/reservation-payments.js", () => ({
+  lockReservationsForPaymentReconciliation: mocks.mockLockReservations,
+  syncReservationPaymentStatus: mocks.mockSyncReservationPaymentStatus,
+  paymentExistsForGatewayTx: vi.fn(),
 }));
 
 vi.mock("../lib/reservation-number.js", () => ({

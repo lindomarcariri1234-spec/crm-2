@@ -1,11 +1,30 @@
 import { db } from "@workspace/db";
 import { reservationsTable, paymentsTable, tripsTable } from "@workspace/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { roundMoney } from "./pricing";
 import { RESERVATION_STATUS, PAYMENT_STATUS, type ReservationStatus } from "@workspace/permissions";
 import { recomputeClientClassification } from "../services/client-classification.js";
 
 export type DbExecutor = Pick<typeof db, "execute" | "select" | "insert" | "update" | "delete">;
+
+export async function lockReservationsForPaymentReconciliation(
+  tenantId: string,
+  reservationIds: Iterable<string>,
+  executor: DbExecutor,
+): Promise<void> {
+  const ids = [...new Set(reservationIds)].filter(Boolean);
+  if (ids.length === 0) return;
+
+  await executor
+    .select({ id: reservationsTable.id })
+    .from(reservationsTable)
+    .where(and(
+      eq(reservationsTable.tenantId, tenantId),
+      inArray(reservationsTable.id, ids),
+    ))
+    .orderBy(asc(reservationsTable.id))
+    .for("update");
+}
 
 type ReservationUpdate = Partial<typeof reservationsTable.$inferInsert> & {
   status?: ReservationStatus;

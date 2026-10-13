@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Router, type NextFunction } from "express";
 import { z } from "zod";
-import { and, count, eq, or, sql } from "drizzle-orm";
+import { and, count, eq, inArray, or, sql } from "drizzle-orm";
 import {
   db,
   clientsTable,
@@ -29,7 +29,10 @@ import { AppError, ForbiddenError, ValidationError } from "../lib/errors.js";
 import { logger } from "../lib/logger.js";
 import { generateId, generateVoucherCode } from "../lib/id.js";
 import { getTenantReservationPrefix, getYearMonth, nextReservationSequence, buildReservationNumber, tripTypeToCode } from "../lib/reservation-number.js";
-import { syncReservationPaymentStatus } from "../lib/reservation-payments.js";
+import {
+  lockReservationsForPaymentReconciliation,
+  syncReservationPaymentStatus,
+} from "../lib/reservation-payments.js";
 import { normalizeExpenseCategory } from "../lib/financial-categories.js";
 import { recomputeClientClassification } from "../services/client-classification.js";
 import {
@@ -1310,6 +1313,31 @@ router.post("/spreadsheet-imports/import", async (req, res, next: NextFunction):
         : Number.POSITIVE_INFINITY;
       if (request.entity === "clients" || request.entity === "trips") {
         applyPlanCapacity(analyzed, remainingCapacity, request.entity);
+      }
+      if (request.entity === "payments") {
+        const importableRows = analyzed.filter(row =>
+          row.action !== "rejected" && row.data && row.sourceKey,
+        );
+        const reservationIds = new Set(
+          importableRows
+            .map(row => row.data?.reservationId)
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+        );
+        const existingPaymentIds = importableRows
+          .filter(row => row.action === "updated" && row.targetId)
+          .map(row => row.targetId!);
+        if (existingPaymentIds.length > 0) {
+          const existingPayments = await tx.select({
+            reservationId: paymentsTable.reservationId,
+          }).from(paymentsTable).where(and(
+            eq(paymentsTable.tenantId, me.tenantId),
+            inArray(paymentsTable.id, existingPaymentIds),
+          ));
+          for (const payment of existingPayments) {
+            if (payment.reservationId) reservationIds.add(payment.reservationId);
+          }
+        }
+        await lockReservationsForPaymentReconciliation(me.tenantId, reservationIds, tx);
       }
       const results: SpreadsheetImportRowResult[] = [];
       for (const row of analyzed) {
