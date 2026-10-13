@@ -7,6 +7,7 @@ const {
   mockStoreEvolutionInboundMedia,
   mockGetAIClientForTenant,
   mockExtractEvolutionInboundMedia,
+  mockDispatchOutboundMessage,
   mockConsentState,
   mockTxUpdateSets,
   mockInsertedMessages,
@@ -17,6 +18,7 @@ const {
   mockStoreEvolutionInboundMedia: vi.fn(),
   mockGetAIClientForTenant: vi.fn(),
   mockExtractEvolutionInboundMedia: vi.fn(),
+  mockDispatchOutboundMessage: vi.fn(),
   mockConsentState: { clientOptIn: true, conversationStatus: "open" },
   mockTxUpdateSets: [] as Record<string, unknown>[],
   mockInsertedMessages: [] as Record<string, unknown>[],
@@ -103,7 +105,7 @@ vi.mock("../lib/uploadthing.js", () => ({
   deleteOrphanedFile: vi.fn(),
 }));
 vi.mock("./outbound-delivery.js", () => ({
-  dispatchOutboundMessage: vi.fn(),
+  dispatchOutboundMessage: mockDispatchOutboundMessage,
   updateOutboundDeliveryFromWebhook: vi.fn(),
 }));
 vi.mock("./client-classification.js", () => ({
@@ -116,11 +118,12 @@ vi.mock("./whatsapp-media.js", () => ({
   unwrapEvolutionMessage: vi.fn((message: unknown) => message),
 }));
 
-import { processEvolutionInbound } from "./whatsapp-attendance.js";
+import { deliverAttendanceReply, processEvolutionInbound } from "./whatsapp-attendance.js";
 
 function makeQuery<T>(result: T) {
   const query: Record<string, ReturnType<typeof vi.fn>> = {};
   query["from"] = vi.fn(() => query);
+  query["leftJoin"] = vi.fn(() => query);
   query["where"] = vi.fn(() => query);
   query["orderBy"] = vi.fn(() => query);
   query["limit"] = vi.fn(async () => result);
@@ -144,6 +147,7 @@ describe("Evolution inbound attendance consent", () => {
     mockDbUpdate.mockReset();
     mockStoreEvolutionInboundMedia.mockReset();
     mockGetAIClientForTenant.mockReset();
+    mockDispatchOutboundMessage.mockReset();
 
     const integration = {
       id: "integration-1",
@@ -319,5 +323,50 @@ describe("Evolution inbound attendance consent", () => {
     });
     expect(handoffUpdate.set).toHaveBeenCalledWith({ status: "human_handoff" });
     expect(mockGetAIClientForTenant).not.toHaveBeenCalled();
+  });
+
+  it("uses the durable inline fallback when a staff reply cannot be queued", async () => {
+    const claimedMessage = {
+      id: "reply-1",
+      conversationId: "conversation-1",
+      ticketId: null,
+      content: "Sua reserva está confirmada.",
+      deliveryAttempts: 1,
+    };
+    const claimQuery: Record<string, ReturnType<typeof vi.fn>> = {};
+    claimQuery["set"] = vi.fn(() => claimQuery);
+    claimQuery["where"] = vi.fn(() => claimQuery);
+    claimQuery["returning"] = vi.fn(async () => [claimedMessage]);
+
+    const finalizeQuery: Record<string, ReturnType<typeof vi.fn>> = {};
+    finalizeQuery["set"] = vi.fn(() => finalizeQuery);
+    finalizeQuery["where"] = vi.fn(async () => undefined);
+    mockDbUpdate
+      .mockReturnValueOnce(claimQuery)
+      .mockReturnValueOnce(finalizeQuery);
+    mockDbSelect.mockReturnValueOnce(makeQuery([{
+      sessionId: "5511999999999",
+      status: "human_handoff",
+      clientId: "client-1",
+      whatsappIntegrationId: "integration-1",
+      clientWhatsappOptIn: true,
+    }]));
+    mockDispatchOutboundMessage.mockResolvedValue({
+      deliveries: [{ channel: "whatsapp", status: "accepted" }],
+    });
+
+    await expect(deliverAttendanceReply({
+      tenantId: "tenant-1",
+      messageId: "reply-1",
+      inlineOnQueueFailure: true,
+    })).resolves.toBe(true);
+
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: "tenant-1",
+        origin: "whatsapp-attendance",
+      }),
+      { inlineOnQueueFailure: true },
+    );
   });
 });

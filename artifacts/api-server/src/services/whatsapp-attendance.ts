@@ -238,6 +238,7 @@ export async function processEvolutionDeliveryStatus(opts: {
 export async function deliverAttendanceReply(opts: {
   tenantId: string;
   messageId: string;
+  inlineOnQueueFailure?: boolean;
 }): Promise<boolean> {
   const claimed = await db
     .update(chatbotMessagesTable)
@@ -310,9 +311,9 @@ export async function deliverAttendanceReply(opts: {
       await notifyTicket();
       return false;
     }
-    // The attendance service only persists/queues the reply. Provider calls
-    // belong to the outbound-delivery worker, so a webhook replay cannot
-    // accidentally send outside the durable ledger.
+    // Provider calls always pass through the durable outbound ledger. A
+    // staff-initiated reply may process through its atomic DB claim if Redis
+    // cannot enqueue it; automated replies stay queue-only.
     const outbound = await dispatchOutboundMessage({
       tenantId: opts.tenantId,
       eventType: "whatsapp_attendance_reply",
@@ -326,7 +327,7 @@ export async function deliverAttendanceReply(opts: {
         conversationId: claimed[0].conversationId,
         whatsappIntegrationId: conversation.whatsappIntegrationId,
       },
-    });
+    }, { inlineOnQueueFailure: opts.inlineOnQueueFailure === true });
     const whatsappDelivery = outbound.deliveries.find((delivery) => delivery.channel === "whatsapp");
     // A pending ledger row is queued, not delivered. The attendance outbox
     // must remain retryable until the outbound worker records acceptance.

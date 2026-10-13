@@ -784,7 +784,11 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
       ))
       .limit(1);
     const delivered = existing
-      ? await deliverAttendanceReply({ tenantId: me.tenantId, messageId: existing.id })
+      ? await deliverAttendanceReply({
+          tenantId: me.tenantId,
+          messageId: existing.id,
+          inlineOnQueueFailure: true,
+        })
       : false;
     if (!existing) {
       next(new ValidationError("Não foi possível enviar a mensagem pelo WhatsApp.", "WHATSAPP_DELIVERY_FAILED"));
