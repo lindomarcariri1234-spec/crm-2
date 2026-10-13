@@ -1,4 +1,4 @@
-import { Router, type Request, type NextFunction } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import crypto from "node:crypto";
 import { db } from "@workspace/db";
 import { storeOrdersTable, reservationsTable, paymentsTable, storesTable, tripsTable } from "@workspace/db";
@@ -42,6 +42,11 @@ function evolutionWebhookApiKey(req: Request): string | undefined {
   return typeof payloadKey === "string" ? payloadKey : undefined;
 }
 
+function evolutionInstanceName(req: Request): string {
+  const value = req.params["instanceName"];
+  return typeof value === "string" ? value : value?.[0] ?? "";
+}
+
 const RESEND_BOUNCE_TYPES = new Map<string, "permanent" | "temporary">([
   ["permanent", "permanent"],
   ["temporary", "temporary"],
@@ -64,7 +69,7 @@ function parseResendBounceType(data: Record<string, unknown>): "permanent" | "te
 async function handleEvolutionWebhook(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const statusOutcome = await processEvolutionDeliveryStatus({
-      instanceName: req.params["instanceName"] ?? "",
+      instanceName: evolutionInstanceName(req),
       apiKey: evolutionWebhookApiKey(req),
       payload: req.body,
     });
@@ -78,7 +83,7 @@ async function handleEvolutionWebhook(req: Request, res: Response, next: NextFun
     }
 
     const outcome = await processEvolutionInbound({
-      instanceName: req.params["instanceName"] ?? "",
+      instanceName: evolutionInstanceName(req),
       apiKey: evolutionWebhookApiKey(req),
       payload: req.body,
     });
