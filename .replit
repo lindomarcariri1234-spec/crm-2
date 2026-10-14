@@ -184,7 +184,7 @@ channel = "stable-25_05"
 NODE_ENV = "production"
 ENABLE_WORKERS = "true"
 UPLOADTHING_CALLBACK_URL = "https://visitecrm.com/api/uploadthing"
-CLERK_PUBLISHABLE_KEY = "pk_live_Y2xlcmsudmlzaXRlY3JtLmNvbSQ"
+CLERK_PUBLISHABLE_KEY = "pk_live_Y2xlcmsudmlzaXRlY2FyaXJpLmNvbS5iciQ"
 RESEND_FROM_EMAIL = "VisiteCRM <reservas@resend.visitecrm.com>"
 
   [userenv.shared]
@@ -197,7 +197,7 @@ VITE_STRIPE_PUBLIC_KEY = "pk_live_51TSu3dKLGMGrnwqHxjXo5fRdJdAyFQHsuFoWG6BaJKx6G
 VITE_CLERK_PROXY_URL = "https://visitecrm.com/api/__clerk"
 
   [userenv.development]
-CLERK_PUBLISHABLE_KEY = "pk_test_ZW1pbmVudC1jYXQtMjMuY2xlcmsuYWNjb3VudHMuZGV2JA"
+CLERK_PUBLISHABLE_KEY = "pk_test_ZW5hYmxlZC1ndWxsLTM0NzUuY2xlcmsuYWNjb3VudHMuZGV2JA"
 
 [[ports]]
 localPort = 5000
