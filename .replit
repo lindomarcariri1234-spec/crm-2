@@ -192,7 +192,7 @@ RESEND_FROM_EMAIL = "VisiteCRM <reservas@resend.visitecrm.com>"
 SUPERADMIN_CLERK_ID = "user_3HaDzC14MwYlHVrzWU6jTFtsZGi"
 FRONTEND_URL = "https://visitecrm.com"
 VITE_APP_URL = "https://visitecrm.com/"
-PUBLICATION_SMOKE_URL = "https://crm-2-lindomarcariri.replit.app"
+PUBLICATION_SMOKE_URL = "https://visitecrm.com"
 VITE_STRIPE_PUBLIC_KEY = "pk_live_51TSu3dKLGMGrnwqHxjXo5fRdJdAyFQHsuFoWG6BaJKx6GGza4pjg2PPMQzFch9OMDVeLOHU07SxYp3J4v27FL5lT00yZoKCeXr"
 
   [userenv.development]

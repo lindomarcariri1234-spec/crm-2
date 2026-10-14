@@ -35,3 +35,16 @@ origin, or CORS middleware rejects cross-origin POSTs and Clerk
 Re-publish from the Publish button so Replit auto-injects `VITE_CLERK_PROXY_URL`
 into the production build for the custom domain. Without republishing, the old
 build (without the proxy URL) stays live.
+
+## Verify the live Clerk path
+
+DNS resolution alone does not confirm that the deployed frontend is using the
+Clerk proxy. Inspect the live Vite bundle for a defined compiled `proxyUrl`, then
+load an authenticated route in a clean browser and confirm Clerk initializes
+instead of failing on the custom Frontend API host.
+
+**Why:** a domain record can propagate while a stale deployment still renders a
+blank app because its Clerk provider was built without the Replit-injected proxy.
+
+**How to apply:** after changing Clerk DNS or proxy settings, republish first,
+then verify the compiled production bundle and the real authenticated route.
