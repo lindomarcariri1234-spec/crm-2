@@ -28,6 +28,7 @@
 import { createProxyMiddleware } from "http-proxy-middleware";
 import type { RequestHandler } from "express";
 import type { IncomingHttpHeaders } from "http";
+import { getClientIp } from "../lib/get-client-ip";
 
 const CLERK_FAPI = "https://frontend-api.clerk.dev";
 export const CLERK_PROXY_PATH = "/api/__clerk";
@@ -83,11 +84,9 @@ export function clerkProxyMiddleware(): RequestHandler {
         proxyReq.setHeader("Clerk-Proxy-Url", proxyUrl);
         proxyReq.setHeader("Clerk-Secret-Key", secretKey);
 
-        const xff = req.headers["x-forwarded-for"];
-        const clientIp =
-          (Array.isArray(xff) ? xff[0] : xff)?.split(",")[0]?.trim() ||
-          req.socket?.remoteAddress ||
-          "";
+        // Use Express's trust-proxy-aware client IP instead of the leftmost
+        // X-Forwarded-For value, which a client can spoof when a CDN appends it.
+        const clientIp = getClientIp(req);
         if (clientIp) {
           proxyReq.setHeader("X-Forwarded-For", clientIp);
         }
