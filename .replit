@@ -186,7 +186,6 @@ ENABLE_WORKERS = "true"
 UPLOADTHING_CALLBACK_URL = "https://visitecrm.com/api/uploadthing"
 CLERK_PUBLISHABLE_KEY = "pk_live_Y2xlcmsudmlzaXRlY3JtLmNvbSQ"
 RESEND_FROM_EMAIL = "VisiteCRM <reservas@resend.visitecrm.com>"
-VITE_CLERK_PROXY_URL = "https://visitecrm.com/api/__clerk,https://www.visitecrm.com/api/__clerk,https://visitecariri.com.br/api/__clerk,https://crm-2-lindomarcariri.replit.app/api/__clerk"
 
   [userenv.shared]
   VITE_UPLOADTHING_URL = "/api/uploadthing"
@@ -195,6 +194,7 @@ FRONTEND_URL = "https://visitecrm.com"
 VITE_APP_URL = "https://visitecrm.com/"
 PUBLICATION_SMOKE_URL = "https://crm-2-lindomarcariri.replit.app"
 VITE_STRIPE_PUBLIC_KEY = "pk_live_51TSu3dKLGMGrnwqHxjXo5fRdJdAyFQHsuFoWG6BaJKx6GGza4pjg2PPMQzFch9OMDVeLOHU07SxYp3J4v27FL5lT00yZoKCeXr"
+VITE_CLERK_PROXY_URL = "https://visitecrm.com/api/__clerk,https://www.visitecrm.com/api/__clerk,https://visitecariri.com.br/api/__clerk,https://crm-2-lindomarcariri.replit.app/api/__clerk"
 
   [userenv.development]
 CLERK_PUBLISHABLE_KEY = "pk_test_ZW1pbmVudC1jYXQtMjMuY2xlcmsuYWNjb3VudHMuZGV2JA"
