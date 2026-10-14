@@ -184,7 +184,7 @@ channel = "stable-25_05"
 NODE_ENV = "production"
 ENABLE_WORKERS = "true"
 UPLOADTHING_CALLBACK_URL = "https://visitecrm.com/api/uploadthing"
-CLERK_PUBLISHABLE_KEY = "pk_live_Y2xlcmsudmlzaXRlY2FyaXJpLmNvbS5iciQ"
+CLERK_PUBLISHABLE_KEY = "pk_live_Y2xlcmsudmlzaXRlY3JtLmNvbSQ"
 RESEND_FROM_EMAIL = "VisiteCRM <reservas@resend.visitecrm.com>"
 
   [userenv.shared]
