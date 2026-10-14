@@ -186,6 +186,7 @@ ENABLE_WORKERS = "true"
 UPLOADTHING_CALLBACK_URL = "https://visitecrm.com/api/uploadthing"
 CLERK_PUBLISHABLE_KEY = "pk_live_Y2xlcmsudmlzaXRlY3JtLmNvbSQ"
 RESEND_FROM_EMAIL = "VisiteCRM <reservas@resend.visitecrm.com>"
+VITE_CLERK_PROXY_URL = "https://visitecrm.com/api/__clerk,https://www.visitecrm.com/api/__clerk,https://visitecariri.com.br/api/__clerk,https://crm-2-lindomarcariri.replit.app/api/__clerk"
 
   [userenv.shared]
   VITE_UPLOADTHING_URL = "/api/uploadthing"
