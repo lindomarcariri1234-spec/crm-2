@@ -302,7 +302,10 @@ void runApiStartup(process.env, {
         await runPipelineTripEndedCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      scheduleDistributedCron("pipeline-trip-departure", "* * * * *", async () => {
+      // This database-backed transition is minute-accurate but not latency-critical.
+      // Running every five minutes cuts distributed Redis lease traffic by 80%
+      // while keeping the departure-stage update delay below four minutes.
+      scheduleDistributedCron("pipeline-trip-departure", "*/5 * * * *", async () => {
         await runPipelineTripDepartureCron();
       }, { timezone: "America/Sao_Paulo" });
 
