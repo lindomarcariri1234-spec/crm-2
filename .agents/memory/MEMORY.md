@@ -122,6 +122,7 @@
 - [PMS schema verification](pms-schema-verification.md) — after PMS column migrations, verify the live database separately; an apparently successful migrate can still leave schema drift
 - [Scrollable Radix tabs](radix-tab-scroll-alignment.md) — mobile overflow rails inherit centered alignment; use start alignment so leading tabs remain reachable
 - [Vite build vs. serve environment](vite-build-serve-env.md) — validate PORT/BASE_PATH for dev servers, not static builds invoked without runtime environment
+- [Client trip visibility](client-trip-visibility.md) — authenticated clients may read only trips tied to their own reservations; the storefront remains the public catalog.
 - [Lead deal fallback](lead-deal-fallback.md) — client creation must still create a pipeline deal when no stage is supplied; the API resolves the tenant default stage
 - [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping
 - [Referral cap concurrency](referral-cap-concurrency.md) — lock before reading the referrer's count so both cap and tier decisions remain consistent under concurrent conversions
