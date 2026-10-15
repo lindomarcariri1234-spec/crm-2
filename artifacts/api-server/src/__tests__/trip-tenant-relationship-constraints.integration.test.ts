@@ -1,6 +1,13 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { pool } from "@workspace/db";
 import { generateId } from "../lib/id.js";
+
+const tripTenantMigration = readFileSync(
+  fileURLToPath(new URL("../../../../lib/db/drizzle/0120_trip_tenant_relationship_constraints.sql", import.meta.url)),
+  "utf8",
+);
 
 describe("trip tenant relationship constraints — PostgreSQL", () => {
   it("preserves valid check-ins and rejects cross-tenant or cross-trip links", async () => {
@@ -109,6 +116,149 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
       );
     } finally {
       await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
+
+  it("backfills only canonical legacy links and rolls back mismatched or orphaned rows", async () => {
+    if (!process.env["DATABASE_URL"]) {
+      throw new Error("DATABASE_URL must point to an isolated integration-test database");
+    }
+
+    const client = await pool.connect();
+    const seedScratchTables = async (
+      checkin: { passengerId: string; reservationId: string | null },
+    ) => {
+      await client.query(`
+        DROP TABLE IF EXISTS
+          pg_temp.trip_checkins,
+          pg_temp.passengers,
+          pg_temp.reservations,
+          pg_temp.trips,
+          pg_temp.tenants
+        CASCADE
+      `);
+      await client.query(`
+        CREATE TEMP TABLE tenants (id text PRIMARY KEY);
+        CREATE TEMP TABLE trips (id text PRIMARY KEY, tenant_id text NOT NULL);
+        CREATE TEMP TABLE reservations (
+          id text PRIMARY KEY,
+          trip_id text NOT NULL,
+          tenant_id text NOT NULL
+        );
+        CREATE TEMP TABLE passengers (
+          id text PRIMARY KEY,
+          reservation_id text NOT NULL
+        );
+        CREATE TEMP TABLE trip_checkins (
+          id text PRIMARY KEY,
+          trip_id text NOT NULL,
+          tenant_id text NOT NULL,
+          passenger_id text NOT NULL,
+          reservation_id text
+        );
+        ALTER TABLE reservations
+          ADD CONSTRAINT reservations_trip_id_trips_id_fk
+          FOREIGN KEY (trip_id) REFERENCES trips (id);
+        ALTER TABLE trip_checkins
+          ADD CONSTRAINT trip_checkins_trip_id_trips_id_fk
+          FOREIGN KEY (trip_id) REFERENCES trips (id);
+        INSERT INTO tenants (id) VALUES ('tenant-a'), ('tenant-b');
+        INSERT INTO trips (id, tenant_id)
+          VALUES ('trip-a', 'tenant-a'), ('trip-b', 'tenant-b');
+        INSERT INTO reservations (id, trip_id, tenant_id)
+          VALUES ('reservation-a', 'trip-a', 'tenant-a'),
+                 ('reservation-b', 'trip-b', 'tenant-b');
+        INSERT INTO passengers (id, reservation_id)
+          VALUES ('passenger-a', 'reservation-a'),
+                 ('passenger-b', 'reservation-b');
+      `);
+      await client.query(
+        `INSERT INTO trip_checkins
+          (id, trip_id, tenant_id, passenger_id, reservation_id)
+         VALUES ('legacy-checkin', 'trip-a', 'tenant-a', $1, $2)`,
+        [checkin.passengerId, checkin.reservationId],
+      );
+    };
+
+    const runMigration = async (): Promise<unknown | null> => {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL search_path TO pg_temp, public");
+      try {
+        await client.query(tripTenantMigration);
+        await client.query("COMMIT");
+        return null;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        return error;
+      }
+    };
+
+    try {
+      await client.query("SET search_path TO pg_temp, public");
+
+      await seedScratchTables({ passengerId: "passenger-a", reservationId: null });
+      expect(await runMigration()).toBeNull();
+      const backfilled = await client.query(
+        "SELECT reservation_id FROM pg_temp.trip_checkins WHERE id = 'legacy-checkin'",
+      );
+      expect(backfilled.rows).toEqual([{ reservation_id: "reservation-a" }]);
+
+      await seedScratchTables({
+        passengerId: "passenger-a",
+        reservationId: "reservation-b",
+      });
+      const mismatchError = await runMigration();
+      expect(mismatchError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining("invalid passenger, reservation, trip, or tenant relationship"),
+      });
+      const mismatched = await client.query(
+        "SELECT passenger_id, reservation_id FROM pg_temp.trip_checkins WHERE id = 'legacy-checkin'",
+      );
+      expect(mismatched.rows).toEqual([{
+        passenger_id: "passenger-a",
+        reservation_id: "reservation-b",
+      }]);
+
+      await seedScratchTables({ passengerId: "passenger-b", reservationId: null });
+      const crossTenantBackfillError = await runMigration();
+      expect(crossTenantBackfillError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining("invalid passenger, reservation, trip, or tenant relationship"),
+      });
+      const notBackfilledAcrossTenants = await client.query(
+        "SELECT passenger_id, reservation_id FROM pg_temp.trip_checkins WHERE id = 'legacy-checkin'",
+      );
+      expect(notBackfilledAcrossTenants.rows).toEqual([{
+        passenger_id: "passenger-b",
+        reservation_id: null,
+      }]);
+
+      await seedScratchTables({ passengerId: "missing-passenger", reservationId: null });
+      const orphanError = await runMigration();
+      expect(orphanError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining("invalid passenger, reservation, trip, or tenant relationship"),
+      });
+      const orphaned = await client.query(
+        "SELECT passenger_id, reservation_id FROM pg_temp.trip_checkins WHERE id = 'legacy-checkin'",
+      );
+      expect(orphaned.rows).toEqual([{
+        passenger_id: "missing-passenger",
+        reservation_id: null,
+      }]);
+    } finally {
+      await client.query("RESET search_path").catch(() => undefined);
+      await client.query(`
+        DROP TABLE IF EXISTS
+          pg_temp.trip_checkins,
+          pg_temp.passengers,
+          pg_temp.reservations,
+          pg_temp.trips,
+          pg_temp.tenants
+        CASCADE
+      `).catch(() => undefined);
       client.release();
     }
   });
