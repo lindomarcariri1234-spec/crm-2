@@ -45,7 +45,7 @@ import { retryPendingDeferredOrderAccounting } from "./services/checkout/deferre
 import { runSeatReconciliationCron } from "./lib/seat-reconciliation";
 import { runCapacityIntegrityCheck } from "./services/capacity-integrity";
 import { runStripeHealthCheckCron } from "./lib/stripe-health-check";
-import { getRedisConnection, waitForEvictionPolicyCheck, fetchUpstashDailyStats, getRedisWarningThresholdPct, maybeSendDailyLimitAlert } from "./lib/redis";
+import { getRedisConnection, getBullMQWorkerConnection, waitForEvictionPolicyCheck, fetchUpstashDailyStats, getRedisWarningThresholdPct, maybeSendDailyLimitAlert } from "./lib/redis";
 import { initSeatUpdateSubscriber, closeSeatUpdateSubscriber } from "./lib/realtime";
 import { getReminderQueue, closeQueues } from "./queues/index";
 import { startEmailWorker, stopEmailWorker } from "./workers/email.worker";
@@ -432,14 +432,29 @@ void runApiStartup(process.env, {
           }
         })
         .catch((err) => logger.warn({ err }, "[redis-stats] Failed to check daily usage on startup"));
+      fetchUpstashDailyStats("queue")
+        .then((stats) => {
+          if (!stats) return;
+          const threshold = getRedisWarningThresholdPct();
+          logger.info(
+            { commandCount: stats.commandCount, maxCommands: stats.maxCommands, usagePct: Math.round(stats.usagePct * 10) / 10 },
+            `[redis-queue-stats] Daily request usage: ${stats.commandCount.toLocaleString()} / ${stats.maxCommands.toLocaleString()} (${Math.round(stats.usagePct)}%)`,
+          );
+          if (stats.usagePct >= threshold) maybeSendDailyLimitAlert(stats, "queue");
+        })
+        .catch((err) => logger.warn({ err }, "[redis-queue-stats] Failed to check daily usage on startup"));
 
       // ── Hourly Redis daily-limit alert check ──
       // Polls usage once per hour and emails the superadmin when the configured
       // threshold is crossed. The alert itself is rate-limited to 1/hour inside
       // maybeSendDailyLimitAlert() so duplicate cron runs never flood the inbox.
       scheduleDistributedCron("redis-daily-limit", "0 * * * *", async () => {
-        const stats = await fetchUpstashDailyStats();
-        if (stats) maybeSendDailyLimitAlert(stats);
+        const [appStats, queueStats] = await Promise.all([
+          fetchUpstashDailyStats(),
+          fetchUpstashDailyStats("queue"),
+        ]);
+        if (appStats) maybeSendDailyLimitAlert(appStats, "app");
+        if (queueStats) maybeSendDailyLimitAlert(queueStats, "queue");
       });
 
       // ENABLE_WORKERS: opt-in flag for BullMQ worker initialization.
@@ -514,7 +529,7 @@ void runApiStartup(process.env, {
       }
 
       // BullMQ: start workers if Redis is available
-      const redisConn = getRedisConnection();
+      const redisConn = getBullMQWorkerConnection();
       if (redisConn) {
         try {
           // Await the eviction-policy check before initialising BullMQ workers.
@@ -633,7 +648,7 @@ void runApiStartup(process.env, {
           logger.info("[reminders] Repeatable reminder jobs registered");
         }
       } else {
-        logger.warn("[queue] REDIS_URL not set — BullMQ workers not started, emails sent synchronously");
+        logger.warn("[queue] Neither REDIS_QUEUE_URL nor REDIS_URL is set — BullMQ workers not started, emails sent synchronously");
 
         scheduleDistributedCron("expired-reservations", "*/5 * * * *", () => {
           runExpiredReservationsCron().catch((err) =>

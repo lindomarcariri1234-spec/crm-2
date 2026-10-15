@@ -17,9 +17,10 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
 
-    const [redisStatus, dailyStats, webhookAudit, stripeSyncTables, driftSnapshot, orphanDeals, clientFinancialDrift] = await Promise.all([
+    const [redisStatus, dailyStats, queueDailyStats, webhookAudit, stripeSyncTables, driftSnapshot, orphanDeals, clientFinancialDrift] = await Promise.all([
       Promise.resolve(getRedisStatus()),
       fetchUpstashDailyStats(),
+      fetchUpstashDailyStats("queue"),
       Promise.resolve(getWebhookAuditStatus()),
       Promise.resolve(getStripeSyncTablesStatus()),
       getDriftSnapshot(),
@@ -37,6 +38,16 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
                 maxCommands: dailyStats.maxCommands,
                 usagePct: Math.round(dailyStats.usagePct * 10) / 10,
                 warningThresholdPct: dailyStats.warningThresholdPct,
+              },
+            }
+          : {}),
+        ...(queueDailyStats !== null
+          ? {
+              queueDailyUsage: {
+                commandCount: queueDailyStats.commandCount,
+                maxCommands: queueDailyStats.maxCommands,
+                usagePct: Math.round(queueDailyStats.usagePct * 10) / 10,
+                warningThresholdPct: queueDailyStats.warningThresholdPct,
               },
             }
           : {}),

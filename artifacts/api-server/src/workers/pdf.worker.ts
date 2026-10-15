@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { getRedisConnection } from "../lib/redis";
+import { getBullMQWorkerConnection } from "../lib/redis";
 import {
   attachCircuitBreaker,
   WORKER_IDLE_DRAIN_DELAY_SECONDS,
@@ -93,7 +93,7 @@ export async function processPdfJob(data: PdfJobData, jobId?: string | number): 
 }
 
 export function startPdfWorker(): Worker<PdfJobData> | null {
-  const conn = getRedisConnection();
+  const conn = getBullMQWorkerConnection();
   if (!conn) {
     logger.warn("[pdf-worker] No Redis connection — worker not started");
     return null;

@@ -10,6 +10,7 @@ import {
 } from "./redis-daily-limit-circuit";
 
 let _connection: Redis | null = null;
+let _queueConnection: Redis | null = null;
 export let isQueueEnabled = false;
 
 const redisDailyLimitCircuit = createRedisDailyLimitCircuit({
@@ -27,16 +28,40 @@ const redisDailyLimitCircuit = createRedisDailyLimitCircuit({
   onRecovered: resetTransientRedisErrors,
 });
 
+const queueRedisDailyLimitCircuit = createRedisDailyLimitCircuit({
+  probe: async () => {
+    const connection = _queueConnection;
+    if (!connection || connection.status !== "ready") {
+      throw new Error("queue_redis_not_ready");
+    }
+    await connection.get("visitecrm:queue-redis:daily-limit-probe");
+  },
+  onOpened: recordTransientRedisError,
+  onRecovered: resetTransientRedisErrors,
+});
+
 export function isRedisDailyLimitCircuitOpen(): boolean {
   return redisDailyLimitCircuit.isOpen();
 }
 
 export function registerRedisDailyLimitWorker(worker: RedisQuotaWorker): () => void {
-  return redisDailyLimitCircuit.registerWorker(worker);
+  return queueRedisDailyLimitCircuit.registerWorker(worker);
 }
 
 export function reportRedisDailyLimitError(error: unknown): boolean {
   return redisDailyLimitCircuit.reportError(error);
+}
+
+export function isQueueRedisDailyLimitCircuitOpen(): boolean {
+  return queueRedisDailyLimitCircuit.isOpen();
+}
+
+export function registerQueueRedisDailyLimitWorker(worker: RedisQuotaWorker): () => void {
+  return queueRedisDailyLimitCircuit.registerWorker(worker);
+}
+
+export function reportQueueRedisDailyLimitError(error: unknown): boolean {
+  return queueRedisDailyLimitCircuit.reportError(error);
 }
 
 // ─── Eviction policy ──────────────────────────────────────────────────────────
@@ -466,14 +491,6 @@ export function getRedisConnection(): Redis | null {
   const useTls = url.startsWith("rediss://") || knownTlsHosts.some((h) => parsedHost.endsWith(h));
 
   if (!_connection) {
-    // Create a new promise for this connection's eviction policy check.
-    // Any caller that awaits waitForEvictionPolicyCheck() will block until
-    // maybeFixEvictionPolicy resolves it (or until closeRedisConnection resolves it).
-    _evictionPolicyPromise = new Promise((resolve) => {
-      _evictionPolicyResolve = resolve;
-    });
-    _evictionPolicySafe = null;
-
     try {
       _connection = new Redis(url, {
         maxRetriesPerRequest: null,
@@ -513,8 +530,6 @@ export function getRedisConnection(): Redis | null {
 
       _connection.on("ready", () => {
         if (!isRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
-        // Attempt to enforce noeviction policy for BullMQ safety (once per startup).
-        void maybeFixEvictionPolicy(_connection!);
       });
 
       _connection.on("error", (err: Error) => {
@@ -538,6 +553,79 @@ export function getRedisConnection(): Redis | null {
   }
 
   return _connection;
+}
+
+/**
+ * Redis connection used only by BullMQ. REDIS_QUEUE_URL can point at an
+ * independent provider resource; omitting it preserves the legacy single-Redis
+ * setup by falling back to REDIS_URL.
+ */
+export function getBullMQWorkerConnection(): Redis | null {
+  const raw = (process.env["REDIS_QUEUE_URL"]?.trim() || process.env["REDIS_URL"]?.trim());
+  if (!raw) return null;
+
+  const urlMatch = raw.match(/(rediss?:\/\/\S+)/);
+  const url = urlMatch ? urlMatch[1] : raw;
+  let parsedHost = "";
+  try { parsedHost = new URL(url.replace(/^redis:\/\//, "https://")).hostname; } catch { /* ignore */ }
+  const knownTlsHosts = [".upstash.io", ".redis.cache.windows.net", ".redislabs.com"];
+  const useTls = url.startsWith("rediss://") || knownTlsHosts.some((host) => parsedHost.endsWith(host));
+
+  if (!_queueConnection) {
+    _evictionPolicyPromise = new Promise((resolve) => {
+      _evictionPolicyResolve = resolve;
+    });
+    _evictionPolicyChecked = false;
+    _evictionPolicySafe = null;
+
+    try {
+      _queueConnection = new Redis(url, {
+        maxRetriesPerRequest: null,
+        enableReadyCheck: false,
+        lazyConnect: false,
+        keepAlive: 30_000,
+        connectTimeout: 10_000,
+        ...(useTls ? { tls: {} } : {}),
+        retryStrategy: (times: number) => {
+          const delayMs = Math.min(500 * Math.pow(2, times - 1), 30_000);
+          if (times <= 3 || times % 10 === 0) {
+            logger.warn({ attempt: times, delayMs }, "[redis-queue] Reconnecting with exponential back-off");
+          }
+          return delayMs;
+        },
+      });
+
+      _queueConnection.on("connect", () => {
+        isQueueEnabled = true;
+        if (!isQueueRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
+        logger.info("[redis-queue] Connected");
+      });
+      _queueConnection.on("ready", () => {
+        if (!isQueueRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
+        void maybeFixEvictionPolicy(_queueConnection!);
+      });
+      _queueConnection.on("error", (err: Error) => {
+        const dailyLimit = reportQueueRedisDailyLimitError(err);
+        if (isTransientRedisError(err)) {
+          if (!dailyLimit) recordTransientRedisError();
+          logger.warn({ err }, "[redis-queue] Transient error (will retry)");
+        } else {
+          logger.error({ err }, "[redis-queue] Error");
+        }
+      });
+      _queueConnection.on("close", () => {
+        isQueueEnabled = false;
+        logger.warn("[redis-queue] Connection closed");
+      });
+    } catch (err) {
+      logger.error({ err }, "[redis-queue] Failed to create connection");
+      _queueConnection = null;
+      _evictionPolicyResolve?.();
+      _evictionPolicyResolve = null;
+      _evictionPolicyPromise = Promise.resolve();
+    }
+  }
+  return _queueConnection;
 }
 
 let _producerConnection: Redis | null = null;
@@ -566,7 +654,7 @@ export function getBullMQQueueConnection(): Redis | null {
   // and nothing would ever consume them (silent job loss).
   if (!areWorkersEnabled()) return null;
 
-  const conn = getRedisConnection();
+  const conn = getBullMQWorkerConnection();
   if (!conn) return null;
 
   if (!_producerConnection) {
@@ -581,7 +669,7 @@ export function getBullMQQueueConnection(): Redis | null {
     });
 
     _producerConnection.on("error", (err: Error) => {
-      const dailyLimit = reportRedisDailyLimitError(err);
+      const dailyLimit = reportQueueRedisDailyLimitError(err);
       if (isTransientRedisError(err)) {
         if (!dailyLimit) recordTransientRedisError();
         logger.warn({ err }, "[redis-producer] Transient error");
@@ -596,6 +684,7 @@ export function getBullMQQueueConnection(): Redis | null {
 
 export async function closeRedisConnection(): Promise<void> {
   redisDailyLimitCircuit.stop();
+  queueRedisDailyLimitCircuit.stop();
   // Resolve any pending eviction-policy waiters before tearing down.
   _evictionPolicyResolve?.();
   _evictionPolicyResolve = null;
@@ -605,9 +694,11 @@ export async function closeRedisConnection(): Promise<void> {
 
   await Promise.all([
     _producerConnection?.quit().catch(() => {}),
+    _queueConnection?.quit().catch(() => {}),
     _connection?.quit().catch(() => {}),
   ]);
   _producerConnection = null;
+  _queueConnection = null;
   _connection = null;
   isQueueEnabled = false;
 }
@@ -655,14 +746,19 @@ export interface UpstashDailyStats {
  *
  * Returns null when neither source is configured.
  */
-function getUpstashRestCredentials(): { restUrl: string; token: string } | null {
-  const explicitUrl = process.env["UPSTASH_REDIS_REST_URL"]?.trim();
-  const explicitToken = process.env["UPSTASH_REDIS_REST_TOKEN"]?.trim();
-  if (explicitUrl && explicitToken) {
-    return { restUrl: explicitUrl.replace(/\/$/, ""), token: explicitToken };
+function getUpstashRestCredentials(resource: "app" | "queue" = "app"): { restUrl: string; token: string } | null {
+  const queueRedisUrl = resource === "queue" ? process.env["REDIS_QUEUE_URL"]?.trim() : undefined;
+  if (resource === "queue" && !queueRedisUrl) return null;
+
+  if (resource === "app") {
+    const explicitUrl = process.env["UPSTASH_REDIS_REST_URL"]?.trim();
+    const explicitToken = process.env["UPSTASH_REDIS_REST_TOKEN"]?.trim();
+    if (explicitUrl && explicitToken) {
+      return { restUrl: explicitUrl.replace(/\/$/, ""), token: explicitToken };
+    }
   }
 
-  const redisUrl = process.env["REDIS_URL"]?.trim();
+  const redisUrl = queueRedisUrl ?? process.env["REDIS_URL"]?.trim();
   if (!redisUrl) return null;
 
   const urlMatch = redisUrl.match(/(rediss?:\/\/\S+)/);
@@ -690,12 +786,12 @@ function getUpstashRestCredentials(): { restUrl: string; token: string } | null 
 // Caching avoids hammering the Upstash REST API on every /admin/system-health
 // request. The cache is intentionally short-lived so the dashboard still
 // reflects near-real-time data.
-let _dailyStatsCache: { stats: UpstashDailyStats; fetchedAt: number } | null = null;
+const _dailyStatsCache = new Map<"app" | "queue", { stats: UpstashDailyStats; fetchedAt: number }>();
 const DAILY_STATS_CACHE_TTL_MS = 45_000; // 45 seconds
 
 // ─── Upstash daily limit alert ────────────────────────────────────────────────
 // At most one alert per hour when usage crosses the configured threshold.
-let _lastDailyLimitAlertAt: number | null = null;
+const _lastDailyLimitAlertAt = new Map<"app" | "queue", number>();
 const DAILY_LIMIT_ALERT_RATE_LIMIT_MS = 60 * 60 * 1000; // 1 hour
 
 /**
@@ -703,20 +799,21 @@ const DAILY_LIMIT_ALERT_RATE_LIMIT_MS = 60 * 60 * 1000; // 1 hour
  * warning threshold and the rate-limit window has elapsed.
  * Safe to call on every stats fetch — does nothing if conditions aren't met.
  */
-export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
+export function maybeSendDailyLimitAlert(stats: UpstashDailyStats, resource: "app" | "queue" = "app"): void {
   if (stats.usagePct < stats.warningThresholdPct) return;
 
-  if (_lastDailyLimitAlertAt !== null) {
-    if (Date.now() - _lastDailyLimitAlertAt < DAILY_LIMIT_ALERT_RATE_LIMIT_MS) return;
+  const lastAlertAt = _lastDailyLimitAlertAt.get(resource);
+  if (lastAlertAt !== undefined) {
+    if (Date.now() - lastAlertAt < DAILY_LIMIT_ALERT_RATE_LIMIT_MS) return;
   }
 
   // Mark immediately to prevent concurrent duplicate sends; reset on failure.
-  _lastDailyLimitAlertAt = Date.now();
+  _lastDailyLimitAlertAt.set(resource, Date.now());
 
   void getAlertEmail().then(async (alertEmail) => {
     if (!alertEmail) {
       logger.warn("[redis-daily-limit] No alert email configured — skipping daily limit alert email");
-      _lastDailyLimitAlertAt = null;
+      _lastDailyLimitAlertAt.delete(resource);
       return;
     }
 
@@ -734,16 +831,16 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
       return dispatchOutboundMessage({
         tenantId,
         eventType: "redis_daily_limit_alert",
-        idempotencyKey: `redis-daily-limit:${new Date().toISOString().slice(0, 10)}`,
+          idempotencyKey: `redis-daily-limit:${resource}:${new Date().toISOString().slice(0, 10)}`,
         recipient: { type: "direct", email: alertEmail },
         email: {
-          subject: "[VisiteCRM] Limite diário do Redis próxima",
-          html: `<h2>Limite diário do Redis</h2><p>Uso atual: ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}). Limite de alerta: ${stats.warningThresholdPct}%.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
+          subject: `[VisiteCRM] Limite diário do Redis ${resource === "queue" ? "(filas)" : "(aplicação)"} próximo`,
+          html: `<h2>Limite diário do Redis ${resource === "queue" ? "(filas)" : "(aplicação)"}</h2><p>Uso atual: ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}). Limite de alerta: ${stats.warningThresholdPct}%.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
           senderName: "VisiteCRM",
         },
-        whatsapp: { text: `Alerta VisiteCRM: uso diário do Redis em ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}).${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
-        origin: "redis-daily-limit",
-        metadata: { ...stats, dashboardUrl },
+        whatsapp: { text: `Alerta VisiteCRM: uso diário do Redis (${resource}) em ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}).${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+        origin: `redis-daily-limit-${resource}`,
+        metadata: { ...stats, resource, dashboardUrl },
       });
     })
       .then((result) => {
@@ -759,7 +856,7 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
             { error: delivery?.lastError ?? delivery?.skippedReason },
             "[redis-daily-limit] Failed to send alert email — clearing rate-limit so next check can retry",
           );
-          _lastDailyLimitAlertAt = null;
+          _lastDailyLimitAlertAt.delete(resource);
         }
       })
       .catch((err) => {
@@ -767,7 +864,7 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
           { err },
           "[redis-daily-limit] Unexpected error sending alert email — clearing rate-limit so next check can retry",
         );
-        _lastDailyLimitAlertAt = null;
+        _lastDailyLimitAlertAt.delete(resource);
       });
   });
 }
@@ -783,13 +880,14 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
  * - The host is not an Upstash instance (no REST stats API available)
  * - The network request fails
  */
-export async function fetchUpstashDailyStats(): Promise<UpstashDailyStats | null> {
+export async function fetchUpstashDailyStats(resource: "app" | "queue" = "app"): Promise<UpstashDailyStats | null> {
   // Return cached result if still fresh
-  if (_dailyStatsCache !== null && Date.now() - _dailyStatsCache.fetchedAt < DAILY_STATS_CACHE_TTL_MS) {
-    return _dailyStatsCache.stats;
+  const cached = _dailyStatsCache.get(resource);
+  if (cached && Date.now() - cached.fetchedAt < DAILY_STATS_CACHE_TTL_MS) {
+    return cached.stats;
   }
 
-  const creds = getUpstashRestCredentials();
+  const creds = getUpstashRestCredentials(resource);
   if (!creds) return null;
 
   try {
@@ -829,7 +927,7 @@ export async function fetchUpstashDailyStats(): Promise<UpstashDailyStats | null
     const warningThresholdPct = getRedisWarningThresholdPct();
 
     const result = { commandCount, maxCommands, usagePct, warningThresholdPct };
-    _dailyStatsCache = { stats: result, fetchedAt: Date.now() };
+    _dailyStatsCache.set(resource, { stats: result, fetchedAt: Date.now() });
     return result;
   } catch (err) {
     logger.warn({ err }, "[redis-stats] Failed to fetch Upstash daily stats");

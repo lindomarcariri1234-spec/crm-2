@@ -12,4 +12,6 @@ export interface SystemHealthRedis {
   status: SystemHealthRedisStatus;
   /** @nullable */
   dailyUsage?: SystemHealthRedisDailyUsage;
+  /** @nullable */
+  queueDailyUsage?: SystemHealthRedisDailyUsage;
 }

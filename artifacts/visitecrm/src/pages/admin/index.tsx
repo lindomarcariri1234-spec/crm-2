@@ -51,6 +51,7 @@ function buildDailyUsageAlert(
   commandCount: number,
   maxCommands: number,
   warningThresholdPct: number,
+  resourceLabel: string,
 ): { label: string; description: string; classes: string; iconClasses: string } | null {
   if (usagePct < warningThresholdPct) return null;
   const pctLabel = usagePct.toFixed(1);
@@ -59,8 +60,8 @@ function buildDailyUsageAlert(
   const isCritical = usagePct >= 90;
   return {
     label: isCritical
-      ? `Redis: uso crítico (${pctLabel}% do limite diário)`
-      : `Redis: uso elevado (${pctLabel}% do limite diário)`,
+      ? `${resourceLabel}: uso crítico (${pctLabel}% do limite diário)`
+      : `${resourceLabel}: uso elevado (${pctLabel}% do limite diário)`,
     description: `${usedLabel} de ${maxLabel} requisições usadas hoje. ${
       isCritical
         ? "O serviço pode ser interrompido em breve. Reduza o polling ou atualize o plano."
@@ -93,13 +94,19 @@ export default function AdminDashboard() {
   const redisAlert = redisStatus && redisStatus !== "ok" ? REDIS_STATUS_CONFIG[redisStatus] : null;
   const workersEnabled = systemHealth?.workers?.enabled ?? true;
 
-  const redisDailyUsage = systemHealth?.redis?.dailyUsage ?? null;
+  const appRedisDailyUsage = systemHealth?.redis?.dailyUsage ?? null;
+  const queueRedisDailyUsage = systemHealth?.redis?.queueDailyUsage ?? null;
+  const queueUsageIsHigher = queueRedisDailyUsage !== null
+    && (!appRedisDailyUsage || queueRedisDailyUsage.usagePct > appRedisDailyUsage.usagePct);
+  const redisDailyUsage = queueUsageIsHigher ? queueRedisDailyUsage : appRedisDailyUsage;
+  const redisDailyUsageLabel = queueUsageIsHigher ? "Redis das filas BullMQ" : "Redis da aplicação";
   const dailyUsageAlert = redisDailyUsage
     ? buildDailyUsageAlert(
         redisDailyUsage.usagePct,
         redisDailyUsage.commandCount,
         redisDailyUsage.maxCommands,
         redisDailyUsage.warningThresholdPct,
+        redisDailyUsageLabel,
       )
     : null;
 

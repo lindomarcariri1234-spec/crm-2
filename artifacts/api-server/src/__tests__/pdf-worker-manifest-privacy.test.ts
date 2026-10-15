@@ -22,7 +22,7 @@ vi.mock("../lib/manifest-helpers.js", () => ({
   generateManifestHtml: mockGenerateManifestHtml,
   generateManifestPdf: mockGenerateManifestPdf,
 }));
-vi.mock("../lib/redis.js", () => ({ getRedisConnection: vi.fn() }));
+vi.mock("../lib/redis.js", () => ({ getBullMQWorkerConnection: vi.fn() }));
 vi.mock("../lib/worker-circuit-breaker.js", () => ({ attachCircuitBreaker: vi.fn() }));
 vi.mock("../lib/logger.js", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../lib/id.js", () => ({ generateId: vi.fn(() => "audit-id") }));

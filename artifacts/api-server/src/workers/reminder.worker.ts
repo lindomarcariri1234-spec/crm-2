@@ -4,7 +4,7 @@ import { eq, and, gt, sql, gte, lt, lte, isNull, isNotNull, notLike, like, inArr
 import { renderNpsSurveyEmail, renderTrialExpiryEmail } from "@workspace/email";
 import { dispatchReferralBonusReleasedEmail } from "../queues/email-helpers";
 import { getWhatsAppNotificationSettings } from "../queues/whatsapp-helpers";
-import { getRedisConnection } from "../lib/redis";
+import { getBullMQWorkerConnection } from "../lib/redis";
 import {
   attachCircuitBreaker,
   WORKER_IDLE_DRAIN_DELAY_SECONDS,
@@ -2065,7 +2065,7 @@ export async function processTrialExpiryNotifications(): Promise<void> {
 let _worker: Worker<ReminderJobData> | null = null;
 
 export function startReminderWorker(): Worker<ReminderJobData> | null {
-  const conn = getRedisConnection();
+  const conn = getBullMQWorkerConnection();
   if (!conn) {
     logger.warn("[reminder-worker] No Redis connection — worker not started");
     return null;

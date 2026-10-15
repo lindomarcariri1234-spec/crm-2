@@ -71,8 +71,12 @@ const JOBS: Record<string, () => Promise<unknown>> = {
   "expiry-warning-retry": retryFailedExpiryWarningEmails,
   "nps-dispatch": processNpsDispatch,
   "redis-daily-limit": async () => {
-    const stats = await fetchUpstashDailyStats();
-    if (stats) maybeSendDailyLimitAlert(stats);
+    const [appStats, queueStats] = await Promise.all([
+      fetchUpstashDailyStats(),
+      fetchUpstashDailyStats("queue"),
+    ]);
+    if (appStats) maybeSendDailyLimitAlert(appStats, "app");
+    if (queueStats) maybeSendDailyLimitAlert(queueStats, "queue");
   },
 };
 

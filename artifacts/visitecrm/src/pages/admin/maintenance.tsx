@@ -157,6 +157,7 @@ function SystemHealthSection() {
     : systemHealth?.redis?.status ?? "unknown";
 
   const redisDailyUsage = systemHealth?.redis?.dailyUsage ?? null;
+  const queueDailyUsage = systemHealth?.redis?.queueDailyUsage ?? null;
 
   const dbStatus: StatusLevel = isLoading
     ? "loading"
@@ -240,49 +241,52 @@ function SystemHealthSection() {
             }
             status={redisStatus}
           />
-          {!isLoading && redisDailyUsage !== null && (
-            <div className="py-3 border-b last:border-b-0">
+          {!isLoading && [
+            { label: "Uso Diário do Redis da Aplicação", usage: redisDailyUsage },
+            { label: "Uso Diário do Redis das Filas BullMQ", usage: queueDailyUsage },
+          ].map(({ label, usage }) => usage && (
+            <div key={label} className="py-3 border-b last:border-b-0">
               <div className="flex items-center gap-3 mb-2">
                 <Gauge className="w-4 h-4 text-muted-foreground shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">Uso Diário do Redis (Upstash)</p>
+                  <p className="text-sm font-medium">{label} (Upstash)</p>
                   <p className="text-xs text-muted-foreground">
-                    {redisDailyUsage.commandCount.toLocaleString("pt-BR")} de{" "}
-                    {redisDailyUsage.maxCommands.toLocaleString("pt-BR")} requisições hoje
+                    {usage.commandCount.toLocaleString("pt-BR")} de{" "}
+                    {usage.maxCommands.toLocaleString("pt-BR")} requisições hoje
                   </p>
                 </div>
                 <span
                   className={`text-sm font-semibold shrink-0 ${
-                    redisDailyUsage.usagePct >= 90
+                    usage.usagePct >= 90
                       ? "text-red-600"
-                      : redisDailyUsage.usagePct >= redisDailyUsage.warningThresholdPct
+                      : usage.usagePct >= usage.warningThresholdPct
                       ? "text-amber-600"
                       : "text-green-600"
                   }`}
                 >
-                  {redisDailyUsage.usagePct.toFixed(1)}%
+                  {usage.usagePct.toFixed(1)}%
                 </span>
               </div>
               <div className="pl-7">
                 <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all ${
-                      redisDailyUsage.usagePct >= 90
+                      usage.usagePct >= 90
                         ? "bg-red-500"
-                        : redisDailyUsage.usagePct >= redisDailyUsage.warningThresholdPct
+                        : usage.usagePct >= usage.warningThresholdPct
                         ? "bg-amber-400"
                         : "bg-green-500"
                     }`}
-                    style={{ width: `${Math.min(redisDailyUsage.usagePct, 100)}%` }}
+                    style={{ width: `${Math.min(usage.usagePct, 100)}%` }}
                   />
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Limite diário: {redisDailyUsage.maxCommands.toLocaleString("pt-BR")} req — aviso a partir de{" "}
-                  {redisDailyUsage.warningThresholdPct}%
+                  Limite diário: {usage.maxCommands.toLocaleString("pt-BR")} req — aviso a partir de{" "}
+                  {usage.warningThresholdPct}%
                 </p>
               </div>
             </div>
-          )}
+          ))}
         </div>
 
         <div className="pt-3">

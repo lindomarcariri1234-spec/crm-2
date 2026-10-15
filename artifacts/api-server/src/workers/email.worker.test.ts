@@ -93,7 +93,7 @@ vi.mock("@workspace/email", () => ({
 }));
 
 vi.mock("../lib/redis", () => ({
-  getRedisConnection: vi.fn(() => ({})),
+  getBullMQWorkerConnection: vi.fn(() => ({})),
 }));
 
 vi.mock("../lib/worker-circuit-breaker", async (importOriginal) => {

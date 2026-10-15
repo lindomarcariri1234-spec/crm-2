@@ -1151,6 +1151,14 @@ export const GetSystemHealthResponse = zod.object({
         warningThresholdPct: zod.number(),
       })
       .nullish(),
+    queueDailyUsage: zod
+      .object({
+        commandCount: zod.number(),
+        maxCommands: zod.number(),
+        usagePct: zod.number(),
+        warningThresholdPct: zod.number(),
+      })
+      .nullish(),
   }),
   stripeWebhookAudit: zod.object({
     status: zod.enum(["ok", "duplicate", "unknown"]),

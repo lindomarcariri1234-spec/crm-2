@@ -13,11 +13,11 @@ const { logger, redisCircuit } = vi.hoisted(() => ({
 }));
 vi.mock("../lib/logger", () => ({ logger }));
 vi.mock("../lib/redis", () => ({
-  isRedisDailyLimitCircuitOpen: redisCircuit.isOpen,
+  isQueueRedisDailyLimitCircuitOpen: redisCircuit.isOpen,
   isTransientRedisError: redisCircuit.isTransient,
   recordTransientRedisError: redisCircuit.recordTransient,
-  registerRedisDailyLimitWorker: redisCircuit.registerWorker,
-  reportRedisDailyLimitError: redisCircuit.reportDailyLimit,
+  registerQueueRedisDailyLimitWorker: redisCircuit.registerWorker,
+  reportQueueRedisDailyLimitError: redisCircuit.reportDailyLimit,
   resetTransientRedisErrors: vi.fn(),
 }));
 

@@ -79,7 +79,7 @@ export function createRedisDailyLimitCircuit({
           "[redis] Daily-limit recovery callback failed",
         );
       }
-      logger.info("[redis] Daily request limit recovered; BullMQ workers resumed");
+      logger.info("[redis] Daily request limit recovered; circuit closed");
     } catch (error) {
       pauseAllWorkers();
       nextProbeDelayMs = Math.min(nextProbeDelayMs * 2, maximumProbeDelayMs);
@@ -89,7 +89,7 @@ export function createRedisDailyLimitCircuit({
           errorName: error instanceof Error ? error.name : "unknown",
           retryDelayMs,
         },
-        "[redis] Daily-limit recovery probe failed; workers remain paused",
+        "[redis] Daily-limit recovery probe failed; circuit remains open",
       );
       scheduleProbe(retryDelayMs);
     } finally {
@@ -120,9 +120,12 @@ export function createRedisDailyLimitCircuit({
           "[redis] Daily-limit open callback failed",
         );
       }
+      const message = workers.size > 0
+        ? "[redis] Daily request limit reached; pausing BullMQ workers"
+        : "[redis] Daily request limit reached; Redis-dependent scheduled work paused";
       logger.error(
         { workerCount: workers.size, retryDelayMs: firstProbeDelayMs },
-        "[redis] Daily request limit reached; pausing BullMQ workers",
+        message,
       );
       pauseAllWorkers();
       scheduleProbe(firstProbeDelayMs);
