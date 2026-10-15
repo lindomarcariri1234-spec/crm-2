@@ -47,6 +47,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatCurrency } from "@/lib/utils";
 import { useUploadDocument } from "@/hooks/use-upload";
 import { getReservationFinancialSummary, type ReservationWithFinancialLinks } from "@/pages/reservations/financial";
+import { METHOD_LABELS } from "@/pages/reservations/constants";
 
 const API_BASE_ADMIN = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -894,8 +895,8 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
   );
 
   const { data: payments } = useListPayments(
-    { clientId: id, limit: 20 },
-    { query: { enabled: open && !!id, queryKey: getListPaymentsQueryKey({ clientId: id, limit: 20 }) } }
+    { clientId: id, limit: 500 },
+    { query: { enabled: open && !!id, queryKey: getListPaymentsQueryKey({ clientId: id, limit: 500 }) } }
   );
 
   const { data: loyaltyInfo } = useGetClientLoyalty(id, {
@@ -1335,23 +1336,39 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
                   <p className="text-sm text-muted-foreground text-center py-8">Nenhum pagamento encontrado.</p>
                 ) : (
                   <div className="space-y-2">
-                    {payments.data.map(p => (
-                      <div key={p.id} className="flex items-center justify-between p-3 rounded-lg border">
-                        <div>
-                          <p className="font-medium text-sm">{p.description ?? p.category}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Vence {format(parseISO(p.dueDate), "dd/MM/yyyy", { locale: ptBR })}
-                            {p.paidAt && ` · Pago ${format(parseISO(p.paidAt), "dd/MM/yyyy", { locale: ptBR })}`}
-                          </p>
+                    {payments.data.map(p => {
+                      const isStripeRefund = p.category === "stripe_refund";
+                      const paymentDate = p.paidAt ?? p.dueDate;
+                      return (
+                        <div key={p.id} className="flex items-center justify-between p-3 rounded-lg border">
+                          <div>
+                            <p className={`font-medium text-sm ${isStripeRefund ? "text-destructive" : ""}`}>
+                              {isStripeRefund ? "Estorno Stripe" : p.description ?? p.category}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {isStripeRefund
+                                ? `Estornado em ${format(parseISO(paymentDate), "dd/MM/yyyy", { locale: ptBR })}`
+                                : `Vence ${format(parseISO(p.dueDate), "dd/MM/yyyy", { locale: ptBR })}`}
+                              {isStripeRefund
+                                ? ` · Método original: ${METHOD_LABELS[p.paymentMethod ?? ""] ?? p.paymentMethod ?? "—"}`
+                                : p.paidAt && ` · Pago ${format(parseISO(p.paidAt), "dd/MM/yyyy", { locale: ptBR })}`}
+                              {p.description && ` · ${p.description}`}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className={`font-semibold text-sm ${isStripeRefund ? "text-destructive" : ""}`}>
+                              {isStripeRefund ? `− ${formatCurrency(Math.abs(p.amount))}` : formatCurrency(p.amount)}
+                            </p>
+                            <Badge
+                              variant={isStripeRefund ? "destructive" : p.status === PAYMENT_STATUS.PAID ? "default" : p.status === PAYMENT_STATUS.OVERDUE ? "destructive" : "secondary"}
+                              className="text-xs"
+                            >
+                              {isStripeRefund ? "Estornado" : p.status === PAYMENT_STATUS.PAID ? "Pago" : p.status === PAYMENT_STATUS.OVERDUE ? "Vencido" : "Pendente"}
+                            </Badge>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <p className="font-semibold text-sm">{formatCurrency(p.amount)}</p>
-                          <Badge variant={p.status === PAYMENT_STATUS.PAID ? "default" : p.status === PAYMENT_STATUS.OVERDUE ? "destructive" : "secondary"} className="text-xs">
-                            {p.status === PAYMENT_STATUS.PAID ? "Pago" : p.status === PAYMENT_STATUS.OVERDUE ? "Vencido" : "Pendente"}
-                          </Badge>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </TabsContent>
