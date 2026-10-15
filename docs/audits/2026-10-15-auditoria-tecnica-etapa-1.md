@@ -21,6 +21,7 @@ O inventário automatizado não substitui uma auditoria geral de frontend, schem
 
 ### Inventário por classe de acesso
 
+- A matriz de famílias privadas, guardas, escopo e evidências de teste está em [`2026-10-15-matriz-rotas-privadas.md`](2026-10-15-matriz-rotas-privadas.md).
 - **Públicas sem sessão (33):** `/`, `/health`, `/healthz`, `/health/auth`, `/onboarding/check-slug`, `/guide/auth` (código de guia), `/partner/login` (credencial de parceiro), `/nps/respond`, `GET /public/store/:slug/distribution/offers`, `GET /club/config`, `GET /club/benefits`, `GET /club/ranking` e as rotas de catálogo, assento, pedido, indicação, cupom, review e alerta de preço sob `/public/store/:slug` em `store-public.ts`.
 - **Webhook/cron (14):** `ALL /cron/:job`; webhooks Evolution, Resend, Stripe e MercadoPago em `webhooks.ts`; `/webhooks/stripe`; callbacks Instagram/Zernio e callbacks de exclusão de dados em `instagram-messaging.ts`; e `POST /public/store/:slug/infinitepay/webhook`.
 - **Autenticadas (563):** todas as demais declarações de método/path nos 67 módulos montados em `routes/index.ts`; incluem sessão Clerk e guardas de domínio, como JWT de guia, `requireClientAccess`, administradores de integração/distribuição e handlers compartilhados. Nenhum router global as autentica implicitamente.
@@ -39,6 +40,7 @@ O inventário automatizado não substitui uma auditoria geral de frontend, schem
 10. **O inventário das rotas não revelou outras rotas públicas acidentais.** As 33 rotas sem sessão foram classificadas como catálogo/loja pública, conteúdo público do clube/NPS, health, autenticação por código/token ou verificação pública; os 14 webhooks/cron permanecem em grupo separado e usam seus próprios mecanismos de validação.
 11. **Uma referência de reserva enviada pelo cliente podia cruzar agências durante o check-in.** Em `POST /trips/:id/checkins` e `POST /guide/trip/:tripId/checkins`, a consulta comprovava que o passageiro pertencia à viagem e ao tenant correto, mas o `reservationId` persistido era aceito do corpo sem comparação com a reserva real do passageiro. A correção usa `passengers.reservationId` da consulta já escopada e rejeita um valor divergente. Um teste negativo com passageiro/reserva da agência A e ID de reserva da agência B confirma que o check-in não é gravado.
 12. **A busca estática de predicados por identificador foi seguida até os handlers candidatos.** Leituras e mutações sem `tenantId` no próprio `where` foram consideradas seguras somente quando precedidas por uma verificação tenant-scoped do pai ou protegidas por `SUPER_ADMIN`; rotas públicas usam slug de loja ou token limitado. As consultas globais restantes estão descritas como exceções abaixo, não como acesso de agência.
+13. **A cobertura por família agora inclui um teste negativo de exportação financeira.** CSV produzido para a agência A exclui uma linha correspondente da agência B; filtros de agregações financeiras, importação em lote, backup e fan-out SSE foram verificados junto com os testes existentes (45 testes em sete suítes direcionadas passaram).
 
 ## Achados e riscos
 
