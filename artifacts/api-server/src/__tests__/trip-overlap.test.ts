@@ -3,13 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
 
-const { mockSelect, mockSelectDistinct, mockNotInArray, mockInnerJoin, selectQueue, selectDistinctQueue } = vi.hoisted(() => ({
+const { mockSelect, mockSelectDistinct, mockNotInArray, mockInnerJoin, mockEq, mockAnd, selectQueue, selectDistinctQueue, whereCalls } = vi.hoisted(() => ({
   mockSelect: vi.fn(),
   mockSelectDistinct: vi.fn(),
   mockNotInArray: vi.fn((column: unknown, values: unknown[]) => ({ column, values })),
   mockInnerJoin: vi.fn(),
+  mockEq: vi.fn((column: unknown, value: unknown) => ({ kind: "eq", column, value })),
+  mockAnd: vi.fn((...conditions: unknown[]) => ({ kind: "and", conditions })),
   selectQueue: [] as unknown[][],
   selectDistinctQueue: [] as unknown[][],
+  whereCalls: [] as unknown[],
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -49,7 +52,7 @@ vi.mock("@workspace/db", () => ({
 
 vi.mock("drizzle-orm", async () => {
   const { makeDrizzleOrmMock } = await import("./helpers/drizzle-mock.js");
-  return { ...makeDrizzleOrmMock(), notInArray: mockNotInArray };
+  return { ...makeDrizzleOrmMock(), eq: mockEq, and: mockAnd, notInArray: mockNotInArray };
 });
 
 vi.mock("@clerk/express", () => ({
@@ -173,7 +176,10 @@ function makeChain(data: unknown[]): QueryChain {
     mockInnerJoin(...args);
     return chain;
   };
-  chain.where = () => chain;
+  chain.where = (...args) => {
+    whereCalls.push(args[0]);
+    return chain;
+  };
   chain.limit = () => chain;
   chain.offset = () => chain;
   chain.orderBy = () => chain;
@@ -352,6 +358,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   selectQueue.length = 0;
   selectDistinctQueue.length = 0;
+  whereCalls.length = 0;
   mockSelect.mockImplementation(() => makeChain(selectQueue.shift() ?? []));
   mockSelectDistinct.mockImplementation(() => makeChain(selectDistinctQueue.shift() ?? []));
   vi.mocked(requireAuth).mockResolvedValue(USER as never);
@@ -437,6 +444,54 @@ describe("GET /api/reservations/trip-overlap", () => {
       )).toBe(true);
     },
   );
+});
+
+describe("GET /api/reservations/stats — client scope", () => {
+  it("limits client-visible statistics to the caller's own reservations", async () => {
+    const clientUserId = "client-user-001";
+    vi.mocked(requireAuth).mockResolvedValue({
+      ...USER,
+      id: clientUserId,
+      role: ROLES.CLIENT,
+    } as never);
+    selectQueue.push(
+      [{ id: CLIENT_ID }],
+      [{ total: 1, confirmed: 1, pending: 0, cancelled: 0, totalOutstanding: 250 }],
+    );
+
+    const response = await request(buildApp()).get("/api/reservations/stats");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      total: 1,
+      confirmed: 1,
+      pending: 0,
+      cancelled: 0,
+      totalOutstanding: 250,
+    });
+    expect(mockEq.mock.calls.some(([, value]) => value === clientUserId)).toBe(true);
+    expect(whereCalls.some((condition) => JSON.stringify(condition).includes(CLIENT_ID))).toBe(true);
+  });
+
+  it("returns zero statistics when the client account is not linked to a client record", async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      ...USER,
+      id: "unlinked-client-user",
+      role: ROLES.CLIENT,
+    } as never);
+    selectQueue.push([]);
+
+    const response = await request(buildApp()).get("/api/reservations/stats");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      total: 0,
+      confirmed: 0,
+      pending: 0,
+      cancelled: 0,
+      totalOutstanding: 0,
+    });
+  });
 });
 
 describe("GET /api/reservations departure date filters", () => {

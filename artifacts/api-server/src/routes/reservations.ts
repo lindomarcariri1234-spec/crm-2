@@ -751,6 +751,10 @@ router.get("/reservations/stats", async (req, res, next: NextFunction): Promise<
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.VIEW)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const { tripId, status, sellerId, dateFrom, dateTo, search, hasAutoRetry } = req.query as Record<string, string>;
     const conditions: ReturnType<typeof eq>[] = [eq(reservationsTable.tenantId, me.tenantId)];
@@ -787,7 +791,19 @@ router.get("/reservations/stats", async (req, res, next: NextFunction): Promise<
         ? or(voucherCondition, inArray(reservationsTable.clientId, matchingClients.map(client => client.id))) as ReturnType<typeof eq>
         : voucherCondition);
     }
-    if (me.role === ROLES.SALES) conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
+    if (me.role === ROLES.CLIENT) {
+      const [client] = await db.select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.userId, me.id)))
+        .limit(1);
+      if (!client) {
+        res.json({ total: 0, confirmed: 0, pending: 0, cancelled: 0, totalOutstanding: 0 });
+        return;
+      }
+      conditions.push(eq(reservationsTable.clientId, client.id));
+    } else if (me.role === ROLES.SALES) {
+      conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
+    }
 
     const [statsRow] = await db
       .select({
