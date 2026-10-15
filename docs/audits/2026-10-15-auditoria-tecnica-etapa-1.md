@@ -1,7 +1,7 @@
 # Auditoria técnica — etapa 1: isolamento multi-tenant e permissões
 
 **Data:** 15 de outubro de 2026
-**Situação:** parcial; revisão dos controles centrais e de fluxos representativos concluída. A leitura linha a linha de todas as rotas ainda não foi concluída.
+**Situação:** parcial; revisão dos controles centrais e de fluxos representativos concluída. Foram corrigidas quatro falhas de autorização confirmadas. A leitura linha a linha de todas as rotas ainda não foi concluída.
 
 ## Escopo desta rodada
 
@@ -13,9 +13,11 @@ Foi priorizada a fronteira de segurança entre Clerk, usuário local, agência e
 - `lib/permissions/src/index.ts`: papéis e matriz central de permissões.
 - `artifacts/api-server/src/routes/users.ts`, `team.ts`, `onboarding.ts`, `tenants.ts` e os controles administrativos de `admin.ts`.
 - Leitura representativa de listagem/detalhe de viagens e reservas em `trips.ts` e `reservations.ts`, incluindo a projeção de dados para clientes.
+- Revisão de autorização das rotas de assinatura/faturas em `subscriptions.ts`, do histórico/envio em `outbound-messages.ts`, da comunicação interna em `communication.ts` e da caixa de entrada em `chatbot.ts`.
 - Busca de atribuições de `req.tenantId`, uso de `tenantId` vindo de requisição, políticas RLS e testes com fixtures de mais de um tenant.
 
 Isto não equivale à inspeção linha a linha de todos os 67 módulos nem de todo o frontend, banco e integrações.
+O inventário estático identificou 609 declarações `router.get/post/put/patch/delete` nos módulos de rotas; esse total não deve ser confundido com revisão manual individual.
 
 ## Coberto e evidências
 
@@ -27,6 +29,7 @@ Isto não equivale à inspeção linha a linha de todos os 67 módulos nem de to
 6. **Administração global exige papel explícito.** As rotas administrativas e de gestão de tenants revisadas chamam `requireAuth` e verificam `SUPER_ADMIN`; a promoção inicial também exige correspondência com `SUPERADMIN_CLERK_ID` e usuário local ativo.
 7. **A matriz concede leitura de viagens/reservas a clientes, mas os caminhos revisados restringem os registros ao próprio vínculo.** Viagens são limitadas às viagens associadas às reservas do cliente e formatadas sem custos e dados de documentos de motoristas. Reservas são limitadas ao registro de cliente ligado ao usuário. Listagens administrativas/restritas também adicionam o tenant do usuário.
 8. **Não foi confirmado acesso cruzado nas rotas centrais revisadas.** Os testes direcionados passaram: `inactive-user-auth`, `payments-authz`, `users-auth`, `free-passenger-seat-conflict`, `clients-cpf` e `pipeline-deal-linkage` — 162 testes no total. Há testes com cenários de tenant cruzado em 32 arquivos de teste, mas isso não demonstra cobertura completa da API.
+9. **Foram confirmadas e corrigidas quatro lacunas de autorização.** Os detalhes e os testes de regressão estão em A4–A7; os testes focados atualizados passaram (43 testes em quatro suítes).
 
 ## Achados e riscos
 
@@ -54,15 +57,47 @@ Foram localizados cenários multi-tenant em 32 arquivos; não foi verificado nes
 
 **Ação recomendada:** criar uma matriz rota × papel × tenant, usar fixtures simultâneas de dois tenants e exigir teste negativo para IDOR em cada família de endpoint.
 
+### A4 — Leitura de faturamento e início de pagamentos não verificavam a permissão financeira
+
+**Prioridade:** alta; falha de autorização confirmada e corrigida nesta rodada.
+
+`GET /subscriptions/current` exigia autenticação, mas não a permissão `FINANCIAL.VIEW`, apesar de retornar dados da assinatura e faturas. `POST /invoices/:id/pix` e `POST /invoices/:id/stripe/checkout` verificavam o tenant da fatura, mas não exigiam `FINANCIAL.EDIT`; qualquer usuário autenticado da mesma agência podia iniciar a operação. O segundo endpoint também usava o tenant do usuário autenticado ao localizar/criar o cliente Stripe, em vez do tenant da fatura, incorreto no caminho de superadmin.
+
+**Correção:** leitura exige `FINANCIAL.VIEW`; geração de PIX e PaymentIntent exige `FINANCIAL.EDIT`; a resolução do cliente Stripe usa `invoice.tenantId`. Os filtros de ownership e a exceção explícita de superadmin foram preservados. Testes negativos cobrem cliente, vendedor, suporte e gerente nas mutações, e cliente/vendedor/suporte na leitura; a suíte completa de assinaturas passou.
+
+### A5 — Rotas de mensagens da agência aceitavam qualquer usuário autenticado
+
+**Prioridade:** alta; falha de autorização confirmada e corrigida nesta rodada.
+
+O histórico, exportação, stream, resumo de falhas, criação e repetição de mensagens chamavam somente `requireAuth`. Uma conta de cliente podia consultar o histórico amplo de mensagens da agência ou chamar a rota de criação com um destinatário direto; o serviço aceita destinatários diretos que não correspondem a um cliente e usa os canais configurados pela agência.
+
+**Correção:** as rotas de mensagens agora exigem um papel em `ALL_STAFF_ROLES`; as rotas de reconciliação continuam restritas a administradores. O escopo por tenant nos serviços foi mantido. Testes confirmam que uma conta de cliente não lê o histórico nem inicia um envio.
+
+### A6 — Comunicação interna estava acessível a contas de cliente
+
+**Prioridade:** alta; falha de autorização confirmada e corrigida nesta rodada.
+
+`GET /messages` retornava mensagens de toda a agência com apenas `requireAuth`, e `POST /messages` permitia enviar pelo canal configurado pela agência para qualquer usuário autenticado. As rotas adjacentes de consulta de clientes para mensagens, modelos e automações também não tinham uma barreira comum de equipe. A filtragem por tenant não impedia o acesso de uma conta de cliente ao conteúdo da própria agência.
+
+**Correção:** leitura/envio de mensagens, consulta de destinatários, modelos e automações exigem `ALL_STAFF_ROLES`. Restrições administrativas já existentes para alterações de modelos/automações e permissões de gestão dos logs foram mantidas. Testes verificam que cliente não lê mensagens ou destinatários e não consegue enviar pela conta da agência.
+
+### A7 — Caixa de entrada do chatbot não restringia acesso a membros da equipe
+
+**Prioridade:** alta; falha de autorização confirmada e corrigida nesta rodada.
+
+As rotas autenticadas de listagem de conversas, leitura de mensagens, criação de mensagens e resposta à conversa usavam somente `requireAuth`. Uma conta de cliente da agência podia tentar acessar o histórico compartilhado da caixa de entrada ou iniciar uma resposta, embora os registros estivessem corretamente filtrados pelo tenant.
+
+**Correção:** todas as rotas privadas de `/chatbot-conversations` e `/chatbot-messages` agora exigem `ALL_STAFF_ROLES`; as regras administrativas específicas de alteração de operações e clientes foram mantidas. Testes confirmam que clientes não conseguem listar conversas nem enviar respostas.
+
 ## Resultado dos scanners
 
 - **Dependências:** concluído; 0 vulnerabilidades retornadas nesta execução.
 - **SAST:** concluído; 0 resultados retornados nesta execução.
 - **HoundDog:** inconclusivo; falhou com `HOUNDDOG_SCHEMA_MISMATCH`. Não deve ser interpretado como ausência de achados.
 
-## Bloqueio operacional observado fora do escopo da etapa 1
+## Verificação operacional fora do escopo da etapa 1
 
-O workflow `artifacts/api-server: API Server` não iniciou nesta rodada: o bundle foi produzido, mas a verificação de integridade encerrou o build com `artifacts/api-server/dist/index.mjs has no source fingerprint`. Nenhuma alteração foi feita no bundle nem no código do servidor durante esta auditoria. O erro precisa ser triado na etapa 8 (builds/regressão) antes de considerar o servidor verificado.
+Uma tentativa anterior do workflow `artifacts/api-server: API Server` falhou com `artifacts/api-server/dist/index.mjs has no source fingerprint`. Após a correção das rotas, o workflow foi reiniciado, o bundle foi produzido e o servidor iniciou na porta 8080. A falha anterior não se reproduziu; isso não substitui os smoke checks de publicação previstos para a etapa 8.
 
 ## O que ainda falta na etapa 1
 

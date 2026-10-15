@@ -12,7 +12,7 @@ import { eq, and, desc, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { decryptCredential } from "../lib/crypto";
-import { requireAuth } from "../lib/tenant";
+import { ALL_STAFF_ROLES, requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { deliverAttendanceReply } from "../services/whatsapp-attendance";
@@ -38,6 +38,20 @@ import { ensureSupportTicketForConversation, recordSupportTicketEvent } from "..
 import { broadcastSupportTicketUpdate } from "../lib/realtime.js";
 
 const router = Router();
+
+async function requireChatbotStaff(
+  req: Parameters<typeof requireAuth>[0],
+  res: Parameters<typeof requireAuth>[1],
+  next: NextFunction,
+) {
+  const me = await requireAuth(req, res);
+  if (!me) return null;
+  if (!ALL_STAFF_ROLES.includes(me.role)) {
+    next(new ForbiddenError("Apenas membros da equipe podem acessar a caixa de entrada da agência.", "FORBIDDEN_ROLE"));
+    return null;
+  }
+  return me;
+}
 const DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
 const CHATBOT_DELIVERY_ISSUES = {
   optedOut: "Envio cancelado: o cliente não autorizou contato pelo WhatsApp.",
@@ -112,7 +126,7 @@ const ReplyConversationBody = z.object({
 
 router.get("/chatbot-conversations", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const conversations = await db.select({
       id: chatbotConversationsTable.id,
@@ -196,7 +210,7 @@ router.get("/chatbot-conversations", async (req, res, next: NextFunction): Promi
 
 router.post("/chatbot-conversations", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = CreateConversationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
@@ -211,7 +225,7 @@ router.post("/chatbot-conversations", async (req, res, next: NextFunction): Prom
 
 router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const [conv] = await db.select().from(chatbotConversationsTable)
       .where(and(eq(chatbotConversationsTable.id, req.params.id), eq(chatbotConversationsTable.tenantId, me.tenantId))).limit(1);
@@ -305,7 +319,7 @@ router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFun
 
 router.post("/chatbot-messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = CreateMessageBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
@@ -326,7 +340,7 @@ router.post("/chatbot-messages", async (req, res, next: NextFunction): Promise<v
 
 router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = z.object({
       status: z.string().optional(),
@@ -531,7 +545,7 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
  * never accepted from the browser, which keeps an agent inside their tenant. */
 router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = ReplyConversationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
