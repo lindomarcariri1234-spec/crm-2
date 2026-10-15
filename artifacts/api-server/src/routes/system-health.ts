@@ -6,6 +6,7 @@ import { getStripeSyncTablesStatus, getWebhookAuditStatus, recheckWebhookAudit }
 import { getDriftSnapshot, getOrphanDealsCount, getClientFinancialDriftCount, cleanupOrphanDeals, repairSeatDriftOnly } from "../lib/seat-reconciliation";
 import { ROLES } from "@workspace/permissions";
 import { getBullMQRedisCutoverStatus } from "../queues/index.js";
+import { getReminderSchedulerRegistrationHealth } from "../queues/reminder-schedulers.js";
 
 const router = Router();
 
@@ -57,6 +58,7 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
       workers: {
         enabled: areWorkersEnabled(),
       },
+      reminderSchedulers: getReminderSchedulerRegistrationHealth(),
       stripeWebhookAudit: {
         status: webhookAudit.status,
         duplicateCount: webhookAudit.duplicateCount,

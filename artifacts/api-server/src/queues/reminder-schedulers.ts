@@ -1,3 +1,5 @@
+import { logger } from "../lib/logger.js";
+
 export const REMINDER_SCHEDULERS = {
   boardingReminderDaily: { id: "boarding-reminder-daily", name: "boarding_reminder" },
   paymentReminderDaily: { id: "payment-reminder-daily", name: "payment_reminder" },
@@ -16,6 +18,71 @@ export const REMINDER_SCHEDULERS = {
 } as const;
 
 export const REMINDER_SCHEDULER_DEFINITIONS = Object.values(REMINDER_SCHEDULERS);
+
+export type ReminderSchedulerDefinition = (typeof REMINDER_SCHEDULER_DEFINITIONS)[number];
+export type ReminderSchedulerStatus = "not_attempted" | "registered" | "failed";
+
+type ReminderSchedulerRegistration = {
+  status: Exclude<ReminderSchedulerStatus, "not_attempted">;
+  lastAttemptAt: string;
+  lastSuccessfulAt: string | null;
+  failureCount: number;
+};
+
+const registrationState = new Map<string, ReminderSchedulerRegistration>();
+
+export async function registerReminderScheduler(
+  scheduler: ReminderSchedulerDefinition,
+  register: () => Promise<unknown>,
+): Promise<void> {
+  const lastAttemptAt = new Date().toISOString();
+  const previous = registrationState.get(scheduler.id);
+
+  try {
+    await register();
+    registrationState.set(scheduler.id, {
+      status: "registered",
+      lastAttemptAt,
+      lastSuccessfulAt: lastAttemptAt,
+      failureCount: 0,
+    });
+  } catch {
+    registrationState.set(scheduler.id, {
+      status: "failed",
+      lastAttemptAt,
+      lastSuccessfulAt: previous?.lastSuccessfulAt ?? null,
+      failureCount: (previous?.failureCount ?? 0) + 1,
+    });
+    // Do not log provider error text; Redis errors can contain connection details.
+    logger.error(
+      { schedulerId: scheduler.id, schedulerName: scheduler.name },
+      "[reminders] Failed to register reminder scheduler",
+    );
+  }
+}
+
+export function getReminderSchedulerRegistrationHealth() {
+  const schedulers = REMINDER_SCHEDULER_DEFINITIONS.map((scheduler) => {
+    const registration = registrationState.get(scheduler.id);
+    return {
+      id: scheduler.id,
+      name: scheduler.name,
+      status: registration?.status ?? "not_attempted" as const,
+      lastAttemptAt: registration?.lastAttemptAt ?? null,
+      lastSuccessfulAt: registration?.lastSuccessfulAt ?? null,
+      failureCount: registration?.failureCount ?? 0,
+    };
+  });
+  const failedCount = schedulers.filter((scheduler) => scheduler.status === "failed").length;
+  const unattemptedCount = schedulers.filter((scheduler) => scheduler.status === "not_attempted").length;
+
+  return {
+    status: failedCount > 0 ? "degraded" as const : unattemptedCount > 0 ? "unknown" as const : "ok" as const,
+    failedCount,
+    unattemptedCount,
+    schedulers,
+  };
+}
 
 export const REMINDER_SCHEDULER_NAME_BY_ID = new Map<string, string>(
   REMINDER_SCHEDULER_DEFINITIONS.map(({ id, name }) => [id, name]),

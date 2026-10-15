@@ -48,7 +48,11 @@ import { runStripeHealthCheckCron } from "./lib/stripe-health-check";
 import { getRedisConnection, getBullMQWorkerConnection, waitForEvictionPolicyCheck, fetchUpstashDailyStats, getRedisWarningThresholdPct, maybeSendDailyLimitAlert } from "./lib/redis";
 import { initSeatUpdateSubscriber, closeSeatUpdateSubscriber } from "./lib/realtime";
 import { getReminderQueue, closeQueues, prepareAndVerifyBullMQQueueRedisCutover } from "./queues/index";
-import { REMINDER_SCHEDULERS } from "./queues/reminder-schedulers";
+import {
+  getReminderSchedulerRegistrationHealth,
+  REMINDER_SCHEDULERS,
+  registerReminderScheduler,
+} from "./queues/reminder-schedulers";
 import { startEmailWorker, stopEmailWorker } from "./workers/email.worker";
 import { startReminderWorker, stopReminderWorker, retryFailedBookingEmails, retryFailedExpiryWarningEmails } from "./workers/reminder.worker";
 import { startPdfWorker, stopPdfWorker } from "./workers/pdf.worker";
@@ -565,92 +569,48 @@ void runApiStartup(process.env, {
           const REMINDER_TZ = process.env["REMINDER_TZ"] ?? "America/Sao_Paulo";
           const REMINDER_CRON = process.env["REMINDER_CRON"] ?? "0 8 * * *";
           const schedulers = REMINDER_SCHEDULERS;
+          const schedule = (
+            scheduler: (typeof schedulers)[keyof typeof schedulers],
+            repeat: { pattern: string; tz?: string },
+          ) =>
+            registerReminderScheduler(scheduler, () =>
+              reminderQueue.upsertJobScheduler(
+                scheduler.id,
+                repeat,
+                { name: scheduler.name, data: { type: scheduler.name } },
+              ),
+            );
 
-          await reminderQueue.upsertJobScheduler(
-            schedulers.boardingReminderDaily.id,
-            { pattern: REMINDER_CRON, tz: REMINDER_TZ },
-            { name: schedulers.boardingReminderDaily.name, data: { type: schedulers.boardingReminderDaily.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule boarding reminder"));
+          await schedule(schedulers.boardingReminderDaily, { pattern: REMINDER_CRON, tz: REMINDER_TZ });
+          await schedule(schedulers.paymentReminderDaily, { pattern: REMINDER_CRON, tz: REMINDER_TZ });
+          await schedule(schedulers.expiredReservationsCleanup, { pattern: "*/5 * * * *" });
+          await schedule(schedulers.failedEmailRetry, { pattern: "*/15 * * * *" });
+          await schedule(schedulers.referralExpiryNotificationDaily, { pattern: "0 9 * * *", tz: REMINDER_TZ });
+          await schedule(schedulers.referralExpiryWarningDaily, { pattern: "0 9 * * *", tz: REMINDER_TZ });
+          await schedule(schedulers.expiryWarningEmailRetry, { pattern: "*/15 * * * *" });
+          await schedule(schedulers.referralBonusReleaseNotificationDaily, { pattern: "0 9 * * *", tz: REMINDER_TZ });
+          await schedule(schedulers.npsDispatchHourly, { pattern: "30 * * * *" });
+          await schedule(schedulers.installmentDueReminderDaily, { pattern: REMINDER_CRON, tz: REMINDER_TZ });
+          await schedule(schedulers.seatReconciliationDaily, { pattern: "0 4 * * *", tz: "America/Sao_Paulo" });
+          await schedule(schedulers.trialExpiryNotificationDaily, { pattern: "0 9 * * *", tz: REMINDER_TZ });
+          await schedule(schedulers.uploadthingOrphanCleanupNightly, { pattern: "0 2 * * *", tz: "America/Sao_Paulo" });
+          await schedule(schedulers.chatbotDeliveryRetry, { pattern: "*/5 * * * *" });
 
-          await reminderQueue.upsertJobScheduler(
-            schedulers.paymentReminderDaily.id,
-            { pattern: REMINDER_CRON, tz: REMINDER_TZ },
-            { name: schedulers.paymentReminderDaily.name, data: { type: schedulers.paymentReminderDaily.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule payment reminder"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.expiredReservationsCleanup.id,
-            { pattern: "*/5 * * * *" },
-            { name: schedulers.expiredReservationsCleanup.name, data: { type: schedulers.expiredReservationsCleanup.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule expired reservations cleanup"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.failedEmailRetry.id,
-            { pattern: "*/15 * * * *" },
-            { name: schedulers.failedEmailRetry.name, data: { type: schedulers.failedEmailRetry.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule failed-email retry"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.referralExpiryNotificationDaily.id,
-            { pattern: "0 9 * * *", tz: process.env["REMINDER_TZ"] ?? "America/Sao_Paulo" },
-            { name: schedulers.referralExpiryNotificationDaily.name, data: { type: schedulers.referralExpiryNotificationDaily.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule referral expiry notification"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.referralExpiryWarningDaily.id,
-            { pattern: "0 9 * * *", tz: process.env["REMINDER_TZ"] ?? "America/Sao_Paulo" },
-            { name: schedulers.referralExpiryWarningDaily.name, data: { type: schedulers.referralExpiryWarningDaily.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule referral expiry warning"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.expiryWarningEmailRetry.id,
-            { pattern: "*/15 * * * *" },
-            { name: schedulers.expiryWarningEmailRetry.name, data: { type: schedulers.expiryWarningEmailRetry.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule expiry-warning email retry"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.referralBonusReleaseNotificationDaily.id,
-            { pattern: "0 9 * * *", tz: process.env["REMINDER_TZ"] ?? "America/Sao_Paulo" },
-            { name: schedulers.referralBonusReleaseNotificationDaily.name, data: { type: schedulers.referralBonusReleaseNotificationDaily.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule referral bonus release notification"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.npsDispatchHourly.id,
-            { pattern: "30 * * * *" },
-            { name: schedulers.npsDispatchHourly.name, data: { type: schedulers.npsDispatchHourly.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule NPS dispatch"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.installmentDueReminderDaily.id,
-            { pattern: process.env["REMINDER_CRON"] ?? "0 8 * * *", tz: process.env["REMINDER_TZ"] ?? "America/Sao_Paulo" },
-            { name: schedulers.installmentDueReminderDaily.name, data: { type: schedulers.installmentDueReminderDaily.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule installment due reminder"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.seatReconciliationDaily.id,
-            { pattern: "0 4 * * *", tz: "America/Sao_Paulo" },
-            { name: schedulers.seatReconciliationDaily.name, data: { type: schedulers.seatReconciliationDaily.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule seat reconciliation"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.trialExpiryNotificationDaily.id,
-            { pattern: "0 9 * * *", tz: REMINDER_TZ },
-            { name: schedulers.trialExpiryNotificationDaily.name, data: { type: schedulers.trialExpiryNotificationDaily.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule trial expiry notification"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.uploadthingOrphanCleanupNightly.id,
-            { pattern: "0 2 * * *", tz: "America/Sao_Paulo" },
-            { name: schedulers.uploadthingOrphanCleanupNightly.name, data: { type: schedulers.uploadthingOrphanCleanupNightly.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule uploadthing orphan cleanup"));
-
-          await reminderQueue.upsertJobScheduler(
-            schedulers.chatbotDeliveryRetry.id,
-            { pattern: "*/5 * * * *" },
-            { name: schedulers.chatbotDeliveryRetry.name, data: { type: schedulers.chatbotDeliveryRetry.name } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule chatbot delivery retry"));
-
-          logger.info("[reminders] Repeatable reminder jobs registered");
+          const schedulerHealth = getReminderSchedulerRegistrationHealth();
+          if (schedulerHealth.failedCount > 0) {
+            logger.warn(
+              {
+                failedCount: schedulerHealth.failedCount,
+                unattemptedCount: schedulerHealth.unattemptedCount,
+              },
+              "[reminders] Scheduler registration completed with failures",
+            );
+          } else {
+            logger.info(
+              { registeredCount: schedulerHealth.schedulers.length },
+              "[reminders] Repeatable reminder jobs registered",
+            );
+          }
         }
       } else {
         logger.warn("[queue] Neither REDIS_QUEUE_URL nor REDIS_URL is set — BullMQ workers not started, emails sent synchronously");

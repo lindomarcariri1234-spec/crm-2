@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { ReminderSchedulerRegistrationHealth } from "./reminderSchedulerRegistrationHealth";
 import type { SystemHealthClientFinancialDrift } from "./systemHealthClientFinancialDrift";
 import type { SystemHealthPipelineOrphans } from "./systemHealthPipelineOrphans";
 import type { SystemHealthRedis } from "./systemHealthRedis";
@@ -17,6 +18,7 @@ export interface SystemHealth {
   redis: SystemHealthRedis;
   stripeWebhookAudit: SystemHealthStripeWebhookAudit;
   stripeSyncTables: SystemHealthStripeSyncTables;
+  reminderSchedulers: ReminderSchedulerRegistrationHealth;
   workers?: SystemHealthWorkers;
   seatDrift?: SystemHealthSeatDrift;
   pipelineOrphans?: SystemHealthPipelineOrphans;

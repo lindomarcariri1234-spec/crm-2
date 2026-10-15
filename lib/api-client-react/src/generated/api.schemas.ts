@@ -3892,10 +3892,47 @@ export type SystemHealthPipelineOrphans = { [key: string]: unknown };
 
 export type SystemHealthClientFinancialDrift = { [key: string]: unknown };
 
+export type ReminderSchedulerRegistrationHealthStatus =
+  (typeof ReminderSchedulerRegistrationHealthStatus)[keyof typeof ReminderSchedulerRegistrationHealthStatus];
+
+export const ReminderSchedulerRegistrationHealthStatus = {
+  ok: "ok",
+  degraded: "degraded",
+  unknown: "unknown",
+} as const;
+
+export type ReminderSchedulerRegistrationStatus =
+  (typeof ReminderSchedulerRegistrationStatus)[keyof typeof ReminderSchedulerRegistrationStatus];
+
+export const ReminderSchedulerRegistrationStatus = {
+  not_attempted: "not_attempted",
+  registered: "registered",
+  failed: "failed",
+} as const;
+
+export interface ReminderSchedulerRegistration {
+  id: string;
+  name: string;
+  status: ReminderSchedulerRegistrationStatus;
+  /** @nullable */
+  lastAttemptAt: string | null;
+  /** @nullable */
+  lastSuccessfulAt: string | null;
+  failureCount: number;
+}
+
+export interface ReminderSchedulerRegistrationHealth {
+  status: ReminderSchedulerRegistrationHealthStatus;
+  failedCount: number;
+  unattemptedCount: number;
+  schedulers: ReminderSchedulerRegistration[];
+}
+
 export interface SystemHealth {
   redis: SystemHealthRedis;
   stripeWebhookAudit: SystemHealthStripeWebhookAudit;
   stripeSyncTables: SystemHealthStripeSyncTables;
+  reminderSchedulers: ReminderSchedulerRegistrationHealth;
   workers?: SystemHealthWorkers;
   seatDrift?: SystemHealthSeatDrift;
   pipelineOrphans?: SystemHealthPipelineOrphans;

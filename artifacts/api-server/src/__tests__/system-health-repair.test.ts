@@ -20,6 +20,7 @@ const {
   mockRequireAuth,
   mockGetStripeSyncTablesStatus,
   mockGetBullMQRedisCutoverStatus,
+  mockGetReminderSchedulerRegistrationHealth,
   mockCleanupOrphanDeals,
   mockRepairSeatDriftOnly,
   mockRunSeatReconciliationCron,
@@ -27,6 +28,7 @@ const {
   const mockRequireAuth = vi.fn();
   const mockGetStripeSyncTablesStatus = vi.fn();
   const mockGetBullMQRedisCutoverStatus = vi.fn();
+  const mockGetReminderSchedulerRegistrationHealth = vi.fn();
   const mockCleanupOrphanDeals = vi.fn();
   const mockRepairSeatDriftOnly = vi.fn();
   const mockRunSeatReconciliationCron = vi.fn();
@@ -34,6 +36,7 @@ const {
     mockRequireAuth,
     mockGetStripeSyncTablesStatus,
     mockGetBullMQRedisCutoverStatus,
+    mockGetReminderSchedulerRegistrationHealth,
     mockCleanupOrphanDeals,
     mockRepairSeatDriftOnly,
     mockRunSeatReconciliationCron,
@@ -74,6 +77,10 @@ vi.mock("../lib/stripeSync.js", () => ({
 
 vi.mock("../queues/index.js", () => ({
   getBullMQRedisCutoverStatus: mockGetBullMQRedisCutoverStatus,
+}));
+
+vi.mock("../queues/reminder-schedulers.js", () => ({
+  getReminderSchedulerRegistrationHealth: mockGetReminderSchedulerRegistrationHealth,
 }));
 
 vi.mock("@clerk/express", () => ({
@@ -233,6 +240,19 @@ describe("GET /admin/system-health", () => {
 
   it("includes the Stripe Sync table assertion status for SUPER_ADMIN", async () => {
     mockRequireAuth.mockResolvedValue(makeSuperAdmin());
+    mockGetReminderSchedulerRegistrationHealth.mockReturnValue({
+      status: "degraded",
+      failedCount: 1,
+      unattemptedCount: 0,
+      schedulers: [{
+        id: "boarding-reminder-daily",
+        name: "boarding_reminder",
+        status: "failed",
+        lastAttemptAt: "2026-10-15T12:00:00.000Z",
+        lastSuccessfulAt: null,
+        failureCount: 1,
+      }],
+    });
     mockGetStripeSyncTablesStatus.mockReturnValue({
       ok: false,
       checkedAt: "2026-08-24T12:00:00.000Z",
@@ -244,6 +264,11 @@ describe("GET /admin/system-health", () => {
     expect(res.body.stripeSyncTables).toEqual({
       ok: false,
       checkedAt: "2026-08-24T12:00:00.000Z",
+    });
+    expect(res.body.reminderSchedulers).toMatchObject({
+      status: "degraded",
+      failedCount: 1,
+      schedulers: [expect.objectContaining({ id: "boarding-reminder-daily", status: "failed" })],
     });
   });
 

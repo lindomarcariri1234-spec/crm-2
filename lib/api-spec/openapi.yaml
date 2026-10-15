@@ -11562,6 +11562,8 @@ components:
           $ref: "#/components/schemas/SystemHealthStripeWebhookAudit"
         stripeSyncTables:
           $ref: "#/components/schemas/SystemHealthStripeSyncTables"
+        reminderSchedulers:
+          $ref: "#/components/schemas/ReminderSchedulerRegistrationHealth"
         workers:
           type: object
           additionalProperties: true
@@ -11574,7 +11576,43 @@ components:
         clientFinancialDrift:
           type: object
           additionalProperties: true
-      required: [redis, stripeWebhookAudit, stripeSyncTables]
+      required: [redis, stripeWebhookAudit, stripeSyncTables, reminderSchedulers]
+
+    ReminderSchedulerRegistrationHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unknown]
+        failedCount:
+          type: integer
+        unattemptedCount:
+          type: integer
+        schedulers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReminderSchedulerRegistration"
+      required: [status, failedCount, unattemptedCount, schedulers]
+
+    ReminderSchedulerRegistration:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [not_attempted, registered, failed]
+        lastAttemptAt:
+          type: ["string", "null"]
+          format: date-time
+        lastSuccessfulAt:
+          type: ["string", "null"]
+          format: date-time
+        failureCount:
+          type: integer
+      required: [id, name, status, lastAttemptAt, lastSuccessfulAt, failureCount]
 
     RepairSystemHealth:
       type: object

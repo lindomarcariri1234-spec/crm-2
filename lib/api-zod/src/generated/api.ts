@@ -1203,6 +1203,21 @@ export const GetSystemHealthResponse = zod.object({
     ok: zod.boolean().nullable(),
     checkedAt: zod.string().nullable(),
   }),
+  reminderSchedulers: zod.object({
+    status: zod.enum(["ok", "degraded", "unknown"]),
+    failedCount: zod.number().int(),
+    unattemptedCount: zod.number().int(),
+    schedulers: zod.array(
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        status: zod.enum(["not_attempted", "registered", "failed"]),
+        lastAttemptAt: zod.coerce.date().nullable(),
+        lastSuccessfulAt: zod.coerce.date().nullable(),
+        failureCount: zod.number().int(),
+      }),
+    ),
+  }),
   workers: zod.record(zod.string(), zod.unknown()).optional(),
   seatDrift: zod.record(zod.string(), zod.unknown()).optional(),
   pipelineOrphans: zod.record(zod.string(), zod.unknown()).optional(),

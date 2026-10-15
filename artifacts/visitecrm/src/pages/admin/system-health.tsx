@@ -144,6 +144,14 @@ export default function SystemHealthPage() {
   const clientDrift = data?.clientFinancialDrift;
   const stripeSyncTables = data?.stripeSyncTables;
   const queueCutover = data?.redis?.queueCutover;
+  const reminderSchedulers = data?.reminderSchedulers;
+  const reminderSchedulerStatus: StatusLevel = isLoading
+    ? "loading"
+    : reminderSchedulers?.status === "ok"
+    ? "ok"
+    : reminderSchedulers?.status === "degraded"
+    ? "degraded"
+    : "unknown";
 
   const seatStatus: StatusLevel = isLoading
     ? "loading"
@@ -284,6 +292,70 @@ export default function SystemHealthPage() {
               </ul>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Activity className="w-4 h-4 text-primary" />
+            Agendamentos de lembretes
+          </CardTitle>
+          <CardDescription>
+            Confirma se cada tarefa recorrente foi registrada na fila de lembretes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="divide-y divide-border -mt-2">
+          <MetricRow
+            icon={Activity}
+            label="Registro dos schedulers"
+            description={
+              reminderSchedulers
+                ? `${reminderSchedulers.schedulers.length - reminderSchedulers.unattemptedCount} de ${reminderSchedulers.schedulers.length} tentados · ${reminderSchedulers.failedCount} falha(s)`
+                : "Aguardando dados de registro..."
+            }
+            status={reminderSchedulerStatus}
+          />
+          {reminderSchedulers?.schedulers.map((scheduler) => {
+            const schedulerStatus: StatusLevel = scheduler.status === "registered"
+              ? "ok"
+              : scheduler.status === "failed"
+              ? "degraded"
+              : "unknown";
+            const labels: Record<string, string> = {
+              "boarding-reminder-daily": "Lembrete de embarque",
+              "payment-reminder-daily": "Lembrete de pagamento",
+              "expired-reservations-cleanup": "Limpeza de reservas expiradas",
+              "failed-email-retry": "Nova tentativa de e-mails",
+              "referral-expiry-notification-daily": "Aviso de expiração de indicação",
+              "referral-expiry-warning-daily": "Alerta de expiração de indicação",
+              "expiry-warning-email-retry": "Nova tentativa de avisos de expiração",
+              "referral-bonus-release-notification-daily": "Aviso de liberação de bônus",
+              "nps-dispatch-hourly": "Envio de pesquisa NPS",
+              "installment-due-reminder-daily": "Lembrete de parcela",
+              "seat-reconciliation-daily": "Reconciliação de assentos",
+              "trial-expiry-notification-daily": "Aviso de expiração de avaliação",
+              "uploadthing-orphan-cleanup-nightly": "Limpeza de arquivos órfãos",
+              "chatbot-delivery-retry": "Nova tentativa de entrega do chatbot",
+            };
+            const attemptTime = scheduler.lastAttemptAt
+              ? new Date(scheduler.lastAttemptAt).toLocaleString("pt-BR")
+              : null;
+            const description = scheduler.status === "failed"
+              ? `Falha ao registrar · ${scheduler.failureCount} falha(s)${attemptTime ? ` · última tentativa: ${attemptTime}` : ""}`
+              : scheduler.status === "registered"
+              ? `Registrado com sucesso${attemptTime ? ` · tentativa: ${attemptTime}` : ""}`
+              : "Aguardando tentativa de registro";
+            return (
+              <MetricRow
+                key={scheduler.id}
+                icon={scheduler.status === "failed" ? AlertTriangle : Activity}
+                label={labels[scheduler.id] ?? scheduler.name}
+                description={description}
+                status={schedulerStatus}
+              />
+            );
+          })}
         </CardContent>
       </Card>
 
