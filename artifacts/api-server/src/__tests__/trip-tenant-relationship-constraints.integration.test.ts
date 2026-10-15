@@ -332,6 +332,41 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         tenant_id: "tenant-a",
       }]);
       await expectRejectedMigrationLeftSchemaUnchanged();
+
+      await seedScratchTables({ passengerId: "passenger-a", reservationId: "reservation-a" });
+      await client.query(`
+        ALTER TABLE pg_temp.reservations
+          DROP CONSTRAINT reservations_trip_id_trips_id_fk;
+        UPDATE pg_temp.reservations
+           SET tenant_id = 'tenant-b'
+         WHERE id = 'reservation-a';
+        UPDATE pg_temp.reservations
+           SET tenant_id = 'tenant-a'
+         WHERE id = 'reservation-b';
+        INSERT INTO pg_temp.reservations (id, trip_id, tenant_id)
+          VALUES ('reservation-c', 'missing-trip', 'tenant-a'),
+                 ('reservation-d', 'trip-a', 'tenant-a');
+      `);
+      const multipleInvalidReservationsError = await runMigration();
+      expect(multipleInvalidReservationsError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining(
+          "3 reservations reference a trip from another tenant or a missing trip",
+        ),
+      });
+      const reservationRowsAfterRollback = await client.query(
+        `SELECT id, trip_id, tenant_id
+           FROM pg_temp.reservations
+          WHERE id IN ('reservation-a', 'reservation-b', 'reservation-c', 'reservation-d')
+          ORDER BY id`,
+      );
+      expect(reservationRowsAfterRollback.rows).toEqual([
+        { id: "reservation-a", trip_id: "trip-a", tenant_id: "tenant-b" },
+        { id: "reservation-b", trip_id: "trip-b", tenant_id: "tenant-a" },
+        { id: "reservation-c", trip_id: "missing-trip", tenant_id: "tenant-a" },
+        { id: "reservation-d", trip_id: "trip-a", tenant_id: "tenant-a" },
+      ]);
+      await expectRejectedMigrationLeftSchemaUnchanged();
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`
