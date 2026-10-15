@@ -100,6 +100,7 @@ import {
   prepareReferrals,
   prepareCommissions,
   preparePipeline,
+  chunkReservationIds,
   downloadXlsx,
   downloadPdf,
 } from "../pages/downloads-utils.js";
@@ -531,6 +532,16 @@ describe("prepareReservations", () => {
     expect(col("Detalhes dos Estornos Stripe")).toContain("25,00");
     expect(col("Valor Pago Líquido (R$)")).toBe("75,00");
     expect(col("Saldo (R$)")).toBe("25,00");
+  });
+});
+
+describe("chunkReservationIds", () => {
+  it("splits large exports into batches accepted by the bulk payments filter", () => {
+    const ids = Array.from({ length: 251 }, (_, index) => `reservation-${index}`);
+    const batches = chunkReservationIds(ids);
+
+    expect(batches.map(batch => batch.length)).toEqual([100, 100, 51]);
+    expect(batches.flat()).toEqual(ids);
   });
 });
 

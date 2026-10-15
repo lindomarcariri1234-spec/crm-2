@@ -3382,15 +3382,17 @@ export interface UpdateOrderBody {
   paymentStatus?: string | null;
 }
 
+export type PublicCheckoutBodyItemsItemMetadata = { [key: string]: unknown };
+
 export type PublicCheckoutBodyItemsItem = {
   productId: string;
   productName?: string;
   quantity: number;
-  /** Client-side display estimate only; the server recalculates the amount. */
+  /** Client-side display estimate only. The server recalculates the amount from the current product and selected variant. */
   unitPrice?: number;
   variantName?: string;
   variantLabel?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: PublicCheckoutBodyItemsItemMetadata;
 };
 
 /**
@@ -6029,6 +6031,11 @@ export type ListPaymentsParams = {
    * @nullable
    */
   reservationId?: string | null;
+  /**
+   * Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).
+   * @nullable
+   */
+  reservationIds?: string | null;
   /**
    * @nullable
    */

@@ -22,7 +22,7 @@ import pino from "pino";
 
 import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, ROLES } from "@workspace/permissions";
 import { paymentsTable } from "@workspace/db";
-import { eq, gte, lt, sql } from "drizzle-orm";
+import { eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
@@ -115,6 +115,7 @@ vi.mock("@workspace/db", () => ({
     amount: "payments.amount",
     paidAt: "payments.paidAt",
     dueDate: "payments.dueDate",
+    reservationId: "payments.reservationId",
     sourceExpenseId: "payments.sourceExpenseId",
     sourceTripCostId: "payments.sourceTripCostId",
   },
@@ -316,6 +317,28 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
       paymentsTable.dueDate,
       new Date("2026-02-02T03:00:00.000Z"),
     );
+  });
+
+  it("GET /payments → supports a tenant-scoped bulk reservation filter", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/payments?reservationIds=res-1,res-2");
+
+    expect(res.status).toBe(200);
+    expect(inArray).toHaveBeenCalledWith(paymentsTable.reservationId, ["res-1", "res-2"]);
+  });
+
+  it("GET /payments → rejects oversized bulk reservation filters before querying", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+
+    const reservationIds = Array.from({ length: 101 }, (_, index) => `res-${index}`).join(",");
+    const res = await request(buildApp(paymentsRouter))
+      .get(`/api/payments?reservationIds=${reservationIds}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(mockSelect).not.toHaveBeenCalled();
   });
 
   it("GET /payments/:id → 403 for SUPPORT (cannot fetch arbitrary payment by id)", async () => {

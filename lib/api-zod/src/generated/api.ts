@@ -5473,6 +5473,12 @@ export const listPaymentsQueryLimitDefault = 20;
 
 export const ListPaymentsQueryParams = zod.object({
   reservationId: zod.coerce.string().nullish(),
+  reservationIds: zod.coerce
+    .string()
+    .nullish()
+    .describe(
+      "Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).",
+    ),
   clientId: zod.coerce.string().nullish(),
   status: zod.coerce.string().nullish(),
   type: zod.coerce.string().nullish(),

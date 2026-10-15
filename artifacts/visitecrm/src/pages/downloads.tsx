@@ -22,6 +22,7 @@ import {
   prepareReferrals,
   prepareCommissions,
   preparePipeline,
+  chunkReservationIds,
   type ReservationPaymentItem,
   downloadXlsx,
   downloadPdf,
@@ -293,17 +294,20 @@ export default function Downloads() {
   }
 
   async function _prepareReservations() {
-    const [all, allPayments] = await Promise.all([
-      fetchAllPages<{
+    const all = await fetchAllPages<{
       id: string; client?: { name?: string } | null; trip?: { name?: string; departureDate?: string } | null;
       status: string; seats?: unknown[] | null; totalValue?: number; paidValue?: number; balance?: number;
       paymentMethod?: string | null; installments?: number | null; createdAt: string;
-      }>("/api/reservations", { dateFrom: quickStart, dateTo: quickEnd }),
-      fetchAllPages<{
-        reservationId?: string | null; type: string; category: string; amount: number;
-        status: string; dueDate?: string | null; paidAt?: string | null;
-      }>("/api/payments", {}),
-    ]);
+    }>("/api/reservations", { dateFrom: quickStart, dateTo: quickEnd });
+    const reservationIds = all.map(reservation => reservation.id);
+    const allPayments: ReservationPaymentItem[] = [];
+    for (const reservationIdsChunk of chunkReservationIds(reservationIds)) {
+      const payments = await fetchAllPages<ReservationPaymentItem>(
+        "/api/payments",
+        { reservationIds: reservationIdsChunk.join(",") },
+      );
+      allPayments.push(...payments);
+    }
     const paymentsByReservation = new globalThis.Map<string, ReservationPaymentItem[]>();
     for (const payment of allPayments) {
       if (!payment.reservationId) continue;

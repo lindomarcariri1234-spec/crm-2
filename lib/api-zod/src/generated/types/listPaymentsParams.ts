@@ -12,6 +12,11 @@ export type ListPaymentsParams = {
    */
   reservationId?: string | null;
   /**
+   * Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).
+   * @nullable
+   */
+  reservationIds?: string | null;
+  /**
    * @nullable
    */
   clientId?: string | null;

@@ -2229,6 +2229,11 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: reservationIds
+          in: query
+          description: Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).
+          schema:
+            type: ["string", "null"]
         - name: clientId
           in: query
           schema:

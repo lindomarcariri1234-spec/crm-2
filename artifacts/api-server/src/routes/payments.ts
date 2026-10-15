@@ -746,6 +746,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
 
     const {
       reservationId,
+      reservationIds: reservationIdsParam,
       clientId: clientIdParam,
       status,
       type,
@@ -782,6 +783,24 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       next(new ValidationError("unlinkedOnly must be true or false", "VALIDATION_ERROR"));
       return;
     }
+    let reservationIds: string[] | undefined;
+    if (reservationIdsParam !== undefined) {
+      if (typeof reservationIdsParam !== "string") {
+        next(new ValidationError("reservationIds must be a comma-separated string", "VALIDATION_ERROR"));
+        return;
+      }
+      reservationIds = reservationIdsParam.split(",").map(id => id.trim());
+      if (
+        reservationId
+        || reservationIds.length === 0
+        || reservationIds.length > 100
+        || reservationIds.some(id => !id || id.length > 200)
+      ) {
+        next(new ValidationError("reservationIds must contain 1 to 100 valid reservation IDs and cannot be combined with reservationId", "VALIDATION_ERROR"));
+        return;
+      }
+      reservationIds = [...new Set(reservationIds)];
+    }
     if ((dateFrom && dateTo && dateFrom > dateTo) || (dueDateFrom && dueDateTo && dueDateFrom > dueDateTo)) {
       next(new ValidationError("The start date must not be after the end date", "VALIDATION_ERROR"));
       return;
@@ -790,6 +809,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
     const conditions: ReturnType<typeof eq>[] = [eq(paymentsTable.tenantId, me.tenantId)];
     conditions.push(eq(paymentsTable.isTestMode, false));
     if (reservationId) conditions.push(eq(paymentsTable.reservationId, reservationId));
+    else if (reservationIds) conditions.push(inArray(paymentsTable.reservationId, reservationIds));
     if (status) conditions.push(eq(paymentsTable.status, parsePaymentStatus(status)));
     if (type) conditions.push(eq(paymentsTable.type, parsePaymentType(type)));
     if (unlinkedOnly === "true") {

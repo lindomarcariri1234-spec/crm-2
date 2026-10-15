@@ -338,6 +338,7 @@ export * from "./productCategory";
 export * from "./productImage";
 export * from "./publicCheckoutBody";
 export * from "./publicCheckoutBodyItemsItem";
+export * from "./publicCheckoutBodyItemsItemMetadata";
 export * from "./publicStoreInfo";
 export * from "./publicStoreOrderResponse";
 export * from "./receiveInstagramWebhookBody";

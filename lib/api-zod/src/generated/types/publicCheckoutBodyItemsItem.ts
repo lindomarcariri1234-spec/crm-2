@@ -5,14 +5,15 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { PublicCheckoutBodyItemsItemMetadata } from "./publicCheckoutBodyItemsItemMetadata";
 
 export type PublicCheckoutBodyItemsItem = {
   productId: string;
   productName?: string;
   quantity: number;
-  /** Client-side display estimate only; the server recalculates the amount. */
+  /** Client-side display estimate only. The server recalculates the amount from the current product and selected variant. */
   unitPrice?: number;
   variantName?: string;
   variantLabel?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: PublicCheckoutBodyItemsItemMetadata;
 };

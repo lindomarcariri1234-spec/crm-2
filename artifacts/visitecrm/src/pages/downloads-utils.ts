@@ -91,12 +91,21 @@ export function prepareTrips(
 }
 
 export interface ReservationPaymentItem {
+  reservationId?: string | null;
   type: string;
   category: string;
   amount: number;
   status: string;
   dueDate?: string | null;
   paidAt?: string | null;
+}
+
+export function chunkReservationIds(reservationIds: string[], batchSize = 100): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < reservationIds.length; index += batchSize) {
+    chunks.push(reservationIds.slice(index, index + batchSize));
+  }
+  return chunks;
 }
 
 // Reservation item shape used by prepareManifest / prepareReservations
