@@ -120,7 +120,7 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
     }
   });
 
-  it("backfills only canonical legacy links and rolls back mismatched or orphaned rows", async () => {
+  it("backfills canonical check-ins and rejects mismatched legacy reservation ownership", async () => {
     if (!process.env["DATABASE_URL"]) {
       throw new Error("DATABASE_URL must point to an isolated integration-test database");
     }
@@ -290,6 +290,46 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
       expect(orphaned.rows).toEqual([{
         passenger_id: "missing-passenger",
         reservation_id: null,
+      }]);
+      await expectRejectedMigrationLeftSchemaUnchanged();
+
+      await seedScratchTables({ passengerId: "passenger-a", reservationId: "reservation-a" });
+      await client.query(
+        "UPDATE pg_temp.reservations SET tenant_id = 'tenant-b' WHERE id = 'reservation-a'",
+      );
+      const crossTenantReservationError = await runMigration();
+      expect(crossTenantReservationError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining("reservations reference a trip from another tenant or a missing trip"),
+      });
+      const mismatchedReservation = await client.query(
+        "SELECT trip_id, tenant_id FROM pg_temp.reservations WHERE id = 'reservation-a'",
+      );
+      expect(mismatchedReservation.rows).toEqual([{
+        trip_id: "trip-a",
+        tenant_id: "tenant-b",
+      }]);
+      await expectRejectedMigrationLeftSchemaUnchanged();
+
+      await seedScratchTables({ passengerId: "passenger-a", reservationId: "reservation-a" });
+      await client.query(`
+        ALTER TABLE pg_temp.reservations
+          DROP CONSTRAINT reservations_trip_id_trips_id_fk
+      `);
+      await client.query(
+        "UPDATE pg_temp.reservations SET trip_id = 'missing-trip' WHERE id = 'reservation-a'",
+      );
+      const missingTripError = await runMigration();
+      expect(missingTripError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining("reservations reference a trip from another tenant or a missing trip"),
+      });
+      const missingTripReservation = await client.query(
+        "SELECT trip_id, tenant_id FROM pg_temp.reservations WHERE id = 'reservation-a'",
+      );
+      expect(missingTripReservation.rows).toEqual([{
+        trip_id: "missing-trip",
+        tenant_id: "tenant-a",
       }]);
       await expectRejectedMigrationLeftSchemaUnchanged();
     } finally {
