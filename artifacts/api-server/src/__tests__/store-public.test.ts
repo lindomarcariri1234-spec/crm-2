@@ -1703,6 +1703,30 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     });
 
     it.each([
+      ["network failure", () => mockFetch.mockRejectedValueOnce(new Error("customer@example.com"))],
+      ["malformed success response", () => mockFetch.mockResolvedValueOnce(new Response("{", { status: 200 }))],
+    ])("releases the checkout claim after a %s so the order can be retried", async (_label, configureFetch) => {
+      mockUpdateSet.mockImplementation(() => ({
+        where: vi.fn(() => Object.assign(Promise.resolve([]), {
+          returning: vi.fn().mockResolvedValue([{ id: infinitePayOrder.id }]),
+        })),
+      }));
+      mockLimit
+        .mockResolvedValueOnce([infinitePayStore])
+        .mockResolvedValueOnce([infinitePayOrder]);
+      configureFetch();
+
+      const response = await request(buildApp())
+        .post("/api/public/store/minha-loja/infinitepay/checkout")
+        .send({ orderNumber, paymentToken, returnPath: "/checkout/success" });
+
+      expect(response.status).toBe(502);
+      expect(response.body.code).toMatch(/^INFINITEPAY_/);
+      expect(JSON.stringify(response.body)).not.toContain("customer@example.com");
+      expect(mockUpdateSet).toHaveBeenCalledWith({ paymentIntentId: null });
+    });
+
+    it.each([
       ["unknown order", "another-order", paymentToken, []],
       ["wrong token", orderNumber, "wrong-token", [infinitePayOrder]],
     ])("does not create a checkout for an %s", async (_label, suppliedOrder, suppliedToken, rows) => {
@@ -1799,6 +1823,24 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
         transaction_nsu: "tx-webhook",
         slug: "invoice-webhook",
       });
+      expect(mockApplyGatewayPayment).toHaveBeenCalledTimes(1);
+    });
+
+    it("confirms an already-started payment after its storefront is deactivated", async () => {
+      mockLimit
+        .mockResolvedValueOnce([{ ...infinitePayStore, isActive: false }])
+        .mockResolvedValueOnce([{ paymentToken }])
+        .mockResolvedValueOnce([checkoutReadyOrder]);
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(validCheck), { status: 200 }));
+
+      const response = await request(buildApp())
+        .post("/api/public/store/minha-loja/infinitepay/webhook")
+        .send({ order_nsu: orderNumber, transaction_nsu: "tx-after-deactivation", invoice_slug: "invoice-abc" });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ received: true });
+      // The store lookup must be slug-only, not gated by stores.isActive.
+      expect(mockWhere.mock.calls[0]?.[0]).toBe("eq");
       expect(mockApplyGatewayPayment).toHaveBeenCalledTimes(1);
     });
 

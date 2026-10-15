@@ -10895,8 +10895,23 @@ components:
             properties:
               productId:
                 type: string
+              productName:
+                type: string
               quantity:
                 type: integer
+              unitPrice:
+                type: number
+                description: >
+                  Client-side display estimate only. The server recalculates
+                  the amount from the current product and selected variant.
+              variantName:
+                type: string
+              variantLabel:
+                type: string
+              metadata:
+                type: object
+                additionalProperties: true
+            required: [productId, quantity]
         customerName:
           type: string
         customerEmail:

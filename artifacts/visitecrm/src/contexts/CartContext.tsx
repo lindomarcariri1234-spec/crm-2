@@ -12,6 +12,7 @@ export interface CartItem {
   productName: string;
   unitPrice: number;
   quantity: number;
+  variantName?: string;
   variantLabel?: string;
   image?: string;
 }

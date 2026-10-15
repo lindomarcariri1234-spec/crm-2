@@ -843,6 +843,7 @@ export interface CreateOrderInput {
     productName: string;
     quantity: number;
     unitPrice: number;
+    variantName?: string;
     variantLabel?: string;
     metadata?: Record<string, unknown>;
   }>;

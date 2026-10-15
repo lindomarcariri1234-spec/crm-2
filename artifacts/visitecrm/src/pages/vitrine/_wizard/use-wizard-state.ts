@@ -786,6 +786,7 @@ export function useWizardState({
             productName: product.name,
             quantity: qty,
             unitPrice,
+            variantName: selectedVariant?.variantName,
             variantLabel: selectedVariant?.label,
             ...(partnerInfo?.hasPartner && form.partnerSelectedDate
               ? { metadata: { partnerDate: form.partnerSelectedDate, partnerTime: form.partnerSelectedTime || undefined } }

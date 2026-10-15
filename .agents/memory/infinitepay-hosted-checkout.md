@@ -22,3 +22,9 @@ The storefront accepts Brazilian phone numbers in national formatting, while Inf
 **Why:** passing a display-formatted local phone directly can violate provider validation even when the checkout form accepts it.
 
 **How to apply:** normalize only the InfinitePay request payload; preserve the customer's original phone in the order record.
+
+Payment returns and webhooks must remain verifiable after a store is deactivated. Storefront order creation remains active-only, but callbacks should resolve the store by slug and verify the exact transaction through `payment_check`. Also release the conditional in-progress checkout claim after fetch, response parsing, or persistence failures before a URL is returned to the customer.
+
+**Why:** provider callbacks can arrive after store deactivation, and an unreleased creation marker otherwise makes a failed checkout impossible to retry.
+
+**How to apply:** keep customer-facing checkout creation behind the active-store check; allow authenticated provider verification for existing orders regardless of current storefront availability, and clear only the exact marker claimed by that request.

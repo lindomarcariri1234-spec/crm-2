@@ -1346,6 +1346,7 @@ const CreateOrderBody = z.object({
     productName: z.string().optional(),
     quantity: z.number().int().min(1),
     unitPrice: z.number().nonnegative().optional(),
+    variantName: z.string().optional(),
     variantLabel: z.string().optional(),
     variantData: z.record(z.string(), z.unknown()).optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
@@ -3425,50 +3426,79 @@ router.post("/public/store/:slug/infinitepay/checkout", async (req, res, next: N
     const redirectUrl = new URL(returnPath, origin).toString();
     const webhookUrl = `${publicBase}/api/public/store/${encodeURIComponent(store.slug)}/infinitepay/webhook`;
     const customerPhone = formatInfinitePayPhoneNumber(order.customerPhone);
-    const apiResponse = await fetch("https://api.checkout.infinitepay.io/links", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        handle: store.infinitePayHandle,
-        order_nsu: orderNumber,
-        items: [{ quantity: 1, price: amountCents, description: `Pedido ${orderNumber}` }],
-        customer: {
-          name: order.customerName,
-          email: order.customerEmail,
-          ...(customerPhone ? { phone_number: customerPhone } : {}),
-        },
-        redirect_url: redirectUrl,
-        webhook_url: webhookUrl,
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!apiResponse.ok) {
-      // InfinitePay does not document a /links error-body schema. Treat any
-      // response body as untrusted and classify only its HTTP status.
+    let checkoutUrl: string;
+    try {
+      const apiResponse = await fetch("https://api.checkout.infinitepay.io/links", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          handle: store.infinitePayHandle,
+          order_nsu: orderNumber,
+          items: [{ quantity: 1, price: amountCents, description: `Pedido ${orderNumber}` }],
+          customer: {
+            name: order.customerName,
+            email: order.customerEmail,
+            ...(customerPhone ? { phone_number: customerPhone } : {}),
+          },
+          redirect_url: redirectUrl,
+          webhook_url: webhookUrl,
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!apiResponse.ok) {
+        // InfinitePay does not document a /links error-body schema. Treat any
+        // response body as untrusted and classify only its HTTP status.
+        logger.warn(
+          {
+            requestId: req.id ?? "unknown",
+            providerStatusCode: apiResponse.status,
+            providerFailureKind: classifyInfinitePayHttpFailure(apiResponse.status),
+          },
+          "InfinitePay link API rejected checkout",
+        );
+        throw new AppError("InfinitePay checkout creation failed", 502, "INFINITEPAY_CHECKOUT_FAILED");
+      }
+      const responseBody = await apiResponse.json() as { url?: unknown };
+      if (typeof responseBody.url !== "string" || !responseBody.url.startsWith("https://")) {
+        throw new AppError("InfinitePay returned an invalid checkout URL", 502, "INFINITEPAY_INVALID_RESPONSE");
+      }
+      const [savedClaim] = await db.update(storeOrdersTable).set({
+        paymentIntentId: marker,
+        infinitePayCheckoutUrl: responseBody.url,
+      }).where(and(
+        eq(storeOrdersTable.id, order.id),
+        eq(storeOrdersTable.paymentProvider, "infinitepay"),
+        eq(storeOrdersTable.paymentIntentId, creatingMarker),
+      )).returning({ id: storeOrdersTable.id });
+      if (!savedClaim) {
+        throw new ConflictError("O checkout InfinitePay perdeu sua reserva de criação.", "INFINITEPAY_CHECKOUT_STATE_CHANGED");
+      }
+      checkoutUrl = responseBody.url;
+    } catch (providerErr) {
+      // Release the in-progress marker for transport failures, malformed
+      // success responses, and persistence errors so a customer can retry.
+      // A response that was never returned to the customer cannot be used to
+      // pay, and the conditional update prevents clearing a newer checkout.
+      try {
+        await db.update(storeOrdersTable).set({ paymentIntentId: null })
+          .where(and(
+            eq(storeOrdersTable.id, order.id),
+            eq(storeOrdersTable.paymentIntentId, creatingMarker),
+          ));
+      } catch {
+        logger.warn(
+          { requestId: req.id ?? "unknown", orderId: order.id },
+          "Failed to release InfinitePay checkout claim after an error",
+        );
+      }
+      if (providerErr instanceof AppError) throw providerErr;
       logger.warn(
-        {
-          requestId: req.id ?? "unknown",
-          providerStatusCode: apiResponse.status,
-          providerFailureKind: classifyInfinitePayHttpFailure(apiResponse.status),
-        },
-        "InfinitePay link API rejected checkout",
+        { requestId: req.id ?? "unknown", orderId: order.id },
+        "InfinitePay checkout request failed before a URL was saved",
       );
-      await db.update(storeOrdersTable).set({ paymentIntentId: null })
-        .where(and(eq(storeOrdersTable.id, order.id), eq(storeOrdersTable.paymentIntentId, creatingMarker)));
       throw new AppError("InfinitePay checkout creation failed", 502, "INFINITEPAY_CHECKOUT_FAILED");
     }
-    const responseBody = await apiResponse.json() as { url?: unknown };
-    if (typeof responseBody.url !== "string" || !responseBody.url.startsWith("https://")) {
-      throw new AppError("InfinitePay returned an invalid checkout URL", 502, "INFINITEPAY_INVALID_RESPONSE");
-    }
-    await db.update(storeOrdersTable).set({
-      paymentIntentId: marker,
-      infinitePayCheckoutUrl: responseBody.url,
-    }).where(and(
-      eq(storeOrdersTable.id, order.id),
-      eq(storeOrdersTable.paymentProvider, "infinitepay"),
-    ));
-    res.json({ checkoutUrl: responseBody.url });
+    res.json({ checkoutUrl });
   } catch (err) { next(err); }
 });
 
@@ -3485,7 +3515,10 @@ router.post("/public/store/:slug/infinitepay/confirm", async (req, res, next: Ne
       next(new ValidationError("Dados de retorno InfinitePay inválidos", "VALIDATION_ERROR"));
       return;
     }
-    const store = await getActiveStore(req.params.slug);
+    // Keep payment confirmation available for orders created before a store
+    // was deactivated; the provider's payment_check still authenticates the
+    // transaction before any order/payment state is changed.
+    const store = await getStoreForPublicPage(req.params.slug);
     const verified = await checkInfinitePayPayment(store, input);
     res.json({ verified });
   } catch (err) { next(err); }
@@ -3501,7 +3534,9 @@ router.post("/public/store/:slug/infinitepay/webhook", async (req, res, next: Ne
       res.status(400).json({ received: false });
       return;
     }
-    const store = await getActiveStore(req.params.slug);
+    // Provider callbacks may arrive after the storefront has been disabled.
+    // Resolve by slug and rely on payment_check + order binding for trust.
+    const store = await getStoreForPublicPage(req.params.slug);
     const [order] = await db.select({ paymentToken: storeOrdersTable.paymentToken })
       .from(storeOrdersTable).where(and(
         eq(storeOrdersTable.storeId, store?.id ?? ""),

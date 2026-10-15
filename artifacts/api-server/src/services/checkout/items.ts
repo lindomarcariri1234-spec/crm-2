@@ -8,6 +8,7 @@ import type { PersistedOrderItem } from "./persist-order";
 export interface CheckoutItemInput {
   productId: string;
   quantity: number;
+  variantName?: string;
   variantLabel?: string;
   variantData?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -20,6 +21,47 @@ export interface PreparedCheckoutItems {
   quantityByProductId: Map<string, number>;
   tripLinkedProducts: Map<string, { product: typeof storeProductsTable.$inferSelect; totalQty: number; totalValue: number }>;
   partnerAttributions: Map<string, { partnerId: string; partnerProductId: string; sellerName: string }>;
+}
+
+export function resolveCheckoutUnitPrice(
+  product: typeof storeProductsTable.$inferSelect,
+  item: Pick<CheckoutItemInput, "variantName" | "variantLabel">,
+): number {
+  const basePrice = Number(product.onSale && product.salePrice ? product.salePrice : product.price);
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  if (!product.hasVariants || variants.length === 0) return basePrice;
+
+  const label = item.variantLabel?.trim();
+  if (!label) {
+    throw new ValidationError(`Selecione uma opção para "${product.name}"`, "PRODUCT_VARIANT_REQUIRED");
+  }
+  const requestedName = item.variantName?.trim();
+  const matchingOptions = variants.flatMap((rawVariant) => {
+    if (!rawVariant || typeof rawVariant !== "object") return [];
+    const variant = rawVariant as { name?: unknown; options?: unknown };
+    if (requestedName && variant.name !== requestedName) return [];
+    if (!Array.isArray(variant.options)) return [];
+    return variant.options.flatMap((rawOption) => {
+      if (!rawOption || typeof rawOption !== "object") return [];
+      const option = rawOption as { label?: unknown; price?: unknown };
+      return option.label === label ? [{ option, name: variant.name }] : [];
+    });
+  });
+  if (matchingOptions.length !== 1) {
+    throw new ValidationError(
+      `A opção selecionada para "${product.name}" não está disponível`,
+      "INVALID_PRODUCT_VARIANT",
+    );
+  }
+
+  const price = Number(matchingOptions[0]!.option.price);
+  if (!Number.isFinite(price) || price < 0) {
+    throw new ValidationError(
+      `O preço da opção selecionada para "${product.name}" é inválido`,
+      "INVALID_PRODUCT_VARIANT_PRICE",
+    );
+  }
+  return price;
 }
 
 export async function prepareCheckoutItems(args: {
@@ -37,6 +79,7 @@ export async function prepareCheckoutItems(args: {
   let subtotal = 0;
   const orderItemsData: PersistedOrderItem[] = [];
   const fetchedProducts = new Map<string, typeof storeProductsTable.$inferSelect>();
+  const valueByProductId = new Map<string, number>();
   const tripLinkedProducts = new Map<string, { product: typeof storeProductsTable.$inferSelect; totalQty: number; totalValue: number }>();
   const partnerAttributions = new Map<string, { partnerId: string; partnerProductId: string; sellerName: string }>();
 
@@ -91,9 +134,10 @@ export async function prepareCheckoutItems(args: {
       fetchedProducts.set(product.id, product);
     }
     const product = fetchedProducts.get(item.productId)!;
-    const price = parseFloat(product.onSale && product.salePrice ? product.salePrice : product.price);
+    const price = resolveCheckoutUnitPrice(product, item);
     const lineTotal = price * item.quantity;
     subtotal += lineTotal;
+    valueByProductId.set(product.id, (valueByProductId.get(product.id) ?? 0) + lineTotal);
     orderItemsData.push({
       id: generateId(),
       orderId: "",
@@ -101,7 +145,9 @@ export async function prepareCheckoutItems(args: {
       productName: product.name,
       productType: product.type,
       productImage: product.thumbnail,
-      variant: item.variantData || (item.variantLabel ? { label: item.variantLabel } : null),
+      variant: item.variantData || (item.variantLabel
+        ? { ...(item.variantName ? { name: item.variantName } : {}), label: item.variantLabel }
+        : null),
       price: price.toFixed(2),
       quantity: item.quantity,
       subtotal: lineTotal.toFixed(2),
@@ -116,13 +162,13 @@ export async function prepareCheckoutItems(args: {
     if (!product.tripId) continue;
     const totalQty = quantityByProductId.get(productId) ?? 0;
     if (totalQty <= 0) continue;
-    const productPrice = parseFloat(product.onSale && product.salePrice ? product.salePrice : product.price);
+    const totalValue = valueByProductId.get(productId) ?? 0;
     const existing = tripLinkedProducts.get(product.tripId);
     if (existing) {
       existing.totalQty += totalQty;
-      existing.totalValue += productPrice * totalQty;
+      existing.totalValue += totalValue;
     } else {
-      tripLinkedProducts.set(product.tripId, { product, totalQty, totalValue: productPrice * totalQty });
+      tripLinkedProducts.set(product.tripId, { product, totalQty, totalValue });
     }
   }
 

@@ -7,6 +7,12 @@
  */
 
 export type PublicCheckoutBodyItemsItem = {
-  productId?: string;
-  quantity?: number;
+  productId: string;
+  productName?: string;
+  quantity: number;
+  /** Client-side display estimate only; the server recalculates the amount. */
+  unitPrice?: number;
+  variantName?: string;
+  variantLabel?: string;
+  metadata?: Record<string, unknown>;
 };

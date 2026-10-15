@@ -1,9 +1,9 @@
-- [Testing harness gotchas](testing-harness-gotchas.md) — pointers to brittle mocks, database-test setup, and validation coverage details.
+- [Testing harness and Vitest selection](testing-harness-gotchas.md) — brittle mocks and database setup; register integration files and run Vitest directly ([selection](api-vitest-integration-selection.md)).
 - [BullMQ worker resume rejections](bullmq-worker-resume-rejections.md) — BullMQ resume can fire-and-forget a rejected run loop; catch it and route it through the worker error event.
 - [Checkout now synchronous](persist-order-no-client.md) — client/reservation/deal/portal-account creation moved from post-payment to checkout time (idempotent); referral crediting still deferred to post-payment
 - [logger warn vs console warn in tests](logger-warn-test-spy.md) — production code uses logger.warn (src/lib/logger); tests spying on console.warn will miss it; add vi.mock("../lib/logger.js") with a mockLogWarn vi.fn() closure
 - [Pino HTTP error serializers](pino-http-error-serializers.md) — apply safe error serializers to both base Pino and pino-http request loggers; pino-http can otherwise emit raw error messages
-- [API Zod codegen guardrails](api-zod-manual-edits.md) — keep generated types and schemas synchronized; index exports only the API superset (see [duplicate-export detail](api-zod-duplicate-export.md))
+- [API codegen guardrails](api-zod-manual-edits.md) — keep spec and generated trees synchronized; use canonical OpenAPI and Zod 3 ([Orval flow](orval-js-yaml-codegen.md), [compat](orval8-zod3-codegen.md), [exports](api-zod-duplicate-export.md)).
 - [Workspace lib TypeScript build](db-ts-build.md) — Consumers read lib dist/*.d.ts via project references; rebuild with `tsc --build` after a schema column change OR after adding a new exported file (e.g. api-client-react), else TS2305/missing-property.
 - [Clerk e2e testing flag](testing-clerk-auth.md) — runTest on this Clerk app needs `testClerkAuth:true` (else Cloudflare bot wall); reach role-gated pages via a [DB] role/tenant UPDATE + reload.
 - [Marketing NPS naming conflict](marketing-nps-conflict.md) — `npsResponsesTable` already exists in marketing.ts for e-commerce; client travel NPS uses `clientNpsResponsesTable` in nps.ts / table `client_nps_responses`.
@@ -13,8 +13,7 @@
 - [SSRF for tenant base URLs](ssrf-tenant-base-url.md) — connect-time IP enforcement (not just a pre-check); canonicalize IPv4-in-IPv6 literals; guard empty custom baseURL to avoid leaking keys to OpenAI.
 - [Connection tests vs saved status](ai-config-test-vs-save.md) — keep credential tests transient; test unsaved values, persist only on Save, and never expose write-only secrets.
 - [Published Stripe test mode](stripe-test-key-production-warning.md) — warn on published test keys without blocking activation; keep test credentials usable in development checkout.
-- [Referral conversion returns tier result](referral-tier-upgrade-pattern.md) — recordReferralConversion returns ReferralConversionResult{tierUpgraded,…}; caller in persist-order.ts dispatches tier-upgrade email when tierUpgraded=true. Tier badge in indicacoes.tsx uses referrerSuccessfulReferrals from API (not per-row conversions).
-- [Referral reservationId invariant](referral-reservation-id.md) — CRM path always sets reservationId (assertion in reservations.ts); store checkout sets it only when a trip reservation was created (null OK for product-only orders); admin POST creates pending invites with no reservationId.
+- [Referral conversion and reservation links](referral-tier-upgrade-pattern.md) — preserve tier-upgrade effects and set reservationId only when a trip reservation exists ([ID invariant](referral-reservation-id.md)).
 - [Calendar dedup not-found pattern](calendar-dedup.md) — updateEvent returns boolean|"not-found"; "not-found"=404 means event deleted externally; upsertCalendarEvent deletes stale DB record and recreates. isEventNotFoundError exported from calendar-service.ts.
 - [Calendar trip-event concurrency](calendar-trip-concurrency.md) — serialize trip event lookup, Google call, and persistence by tenant+trip+user; leave other event types unchanged.
 - [Migration journal timestamps](migration-journal-timestamps.md) — reconcile live-only columns with additive DDL above both watermarks; never replay historical backfills over populated data.
@@ -38,7 +37,7 @@
 - [stripe-replit-sync migrations bundling](stripe-sync-migrations-bundling.md) — call runMigrations() in initStripeSync + copy package migrations into bundle dir (esbuild __dirname trap), else stripe.* tables missing.
 - [stripe-sync managed webhook auto-secret](stripe-sync-webhook-auto-secret.md) — signing secret auto-cached from stripe._managed_webhooks.secret; use getStripeSecretKey() not env var in initStripeSync for prod live key.
 - [Stripe plan→price link](stripe-plan-price-link.md) — checkout resolves price via prices.search planSlug metadata (no stripePriceId col); empty plans table → /subscriptions/upgrade 404; missing planSlug → silent one-time-payment fallback; search is eventually consistent.
-- [Stripe payment confirmation activation](stripe-payment-confirmation-activation.md) — activate invoices/tenants only after confirmed payment, and carry persisted annual period through PaymentIntent completion.
+- [Stripe payment lifecycle](stripe-payment-confirmation-activation.md) — activate only on confirmed payments; see [mode accounting](stripe-payment-mode-accounting.md) for livemode and unknown historical rows.
 - [Mock services not raw db chains in route tests](mock-service-not-db-chain.md) — when a route delegates to an already-unit-tested service fn, vi.mock the service directly instead of chaining db.select/insert mocks; far less brittle to call-order changes.
 - [broadcastSeatUpdate dual-query mock](broadcast-seat-update-dual-query.md) — realtime.ts makes 2 db.select() calls (reservations then trip freePassengers); use mock.calls.length to route different chains per call.
 - [SSL sslmode strip pattern](ssl-sslmode-strip.md) — explicit ssl option alongside sslmode=require in connectionString does NOT suppress pg-connection-string warning; must strip sslmode from URL before passing to Pool.
@@ -48,7 +47,6 @@
 - [GitHub API push limits](github-api-push-limits.md) — Git Database uploads need small tree batches, paced blob requests, and a separate strategy for oversized generated artifacts
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
 - [Metro parser remediation](metro-image-parser-remediation.md) — retain an API-compatible replacement when an upstream parser remains unpatched.
-- [Orval codegen workflow](orval-js-yaml-codegen.md) — generated API artifacts come from the canonical first OpenAPI document; use the drift command, never hand-edit output.
 - [Trial expiry notification idempotency](trial-expiry-notification-idempotency.md) — use the platform-settings ledger for atomic per-tenant, per-trial-window email claims without changing the immutable tenant schema
 - [Vite canonical URL handling](vite-canonical-url.md) — a relative canonical href="/" is processed as a filesystem asset and breaks this Vite production build; use an absolute fallback URL
 - [Shared UploadThing file references](shared-uploadthing-file-references.md) — after a cascade, protect files still referenced by another record in the same tenant, not only by another tenant
@@ -77,10 +75,8 @@
 - [Vercel deployment alias SSO](vercel-deployment-alias-sso.md) — deployment and git aliases may require Vercel SSO; validate anonymous output through the project's custom domain instead.
 - [Query error branches and hook order](query-error-hook-order.md) — aggregate query-error UI must not return before later React hooks in the same component.
 - [Migration validator parsing](migration-validator-alter-table.md) — recognize IF EXISTS, comma-separated ADD COLUMNs, and unindented CREATE TABLE blocks (see [indentation detail](validate-tables-indent.md)).
-- [Canonical financial metric semantics](canonical-financial-metrics.md) — keep ledgers distinct; explicit payable source links alone connect costs and must survive deletion.
-- [Financial category normalization](financial-category-normalization.md) — spreadsheet imports reject unknown categories; backup restores normalize known aliases but retain unknown legacy values.
-- [Financial integrity release alerts](financial-integrity-release-alerts.md) — keep integrity emails aggregate-only and claim once per stable release before sending.
-- [Financial balance period scoping](financial-snapshot-scaling.md) — overdue payments use due dates, unpaid commissions use creation dates, and user referral balance remains current.
+- [Financial ledgers and categories](canonical-financial-metrics.md) — separate planned/realized values and normalize categories ([imports](financial-category-normalization.md), [consolidation](financial-consolidation-view.md)).
+- [Financial balances and alerts](financial-snapshot-scaling.md) — scope overdue payables by due date and unpaid commissions by creation; release alerts stay aggregate-only and once per release ([alerts](financial-integrity-release-alerts.md)).
 - [Trip occupancy and cost reconciliation](trip-occupancy-projections.md) — keep six occupancy scenarios separate from confirmed-booking budgets; what-if edits stay local and never overwrite saved finance.
 - [Multichannel delivery history](multichannel-delivery-history.md) — preserve numeric delivery attempts and expose detailed provider attempts under a separate history field.
 - [PostgreSQL parameter casts](postgres-parameter-casts.md) — raw SQL arithmetic needs explicit casts when interpolated values arrive as unknown parameters.
@@ -96,13 +92,10 @@
 - [Outbox lease ambiguity](outbox-lease-ambiguity.md) — an expired delivery lease has an unknown provider outcome; never auto-reset it to pending and resend.
 - [Mixed-order receipt allocation](mixed-order-receipt-allocation.md) — allocate order-level receipts to child reservations proportionally in cents, with deterministic remainder assignment.
 - [Capacity integrity check](capacity-integrity-check.md) — diagnose trip, inventory, and partner-capacity drift before repair jobs; never auto-correct persisted claims.
-- [Orval 8 with Zod 3](orval8-zod3-codegen.md) — secure Orval upgrades need explicit Zod 3 output, explicit formatting, and DOM iterable types for the generated fetch client.
 - [API codegen clean-install drift](api-codegen-clean-install-drift.md) — pin exact root Prettier and the local/CI pnpm version, then verify from a frozen install; don't hand-edit generated output.
 - [Deployment migration fail-fast](deployment-migration-fail-fast.md) — production must terminate on migration failure instead of serving a partially migrated schema and masking boot errors as 500s.
-- [Publication smoke checks](publication-smoke-check.md) — Replit has no postDeploy hook; verify the public storefront and API from the production entrypoint after local readiness.
-- [Clerk publication smoke authentication](publication-clerk-auth.md) — use one-use Clerk sign-in links for dedicated CI identities, validate the browser session, then revoke sessions or unused tokens; never rotate human cookies.
+- [Published route and chunk checks](publication-smoke-check.md) — verify storefront/API and recursively fetch route JS; see [authenticated routes](publication-clerk-auth.md) and [chunk checks](published-chunk-verification.md).
 - [Vercel external storefront assets](vercel-external-storefront-assets.md) — when storefront HTML is rewritten from Replit, forward hashed `/assets/*` before the SPA fallback so JS is not returned as HTML.
-- [Published chunk verification](published-chunk-verification.md) — recursively fetch same-origin Vite JS imports per public/protected route; pass short-lived auth only through environment headers.
 - [Referral credit reservation](referral-credit-reservation.md) — reserve cashback atomically at checkout; payment confirms it and unpaid orders release it.
 - [Stripe 3DS checkout recovery](stripe-3ds-checkout-recovery.md) — redirected card returns have an empty cart; restore by token and retain the server-applied cashback snapshot.
 - [Vercel root API discovery](vercel-api-directory-discovery.md) — reserve root api/ for deployable functions; tests there are pre-discovered and can cause post-build ENOENT.
@@ -125,9 +118,7 @@
 - [Client trip visibility](client-trip-visibility.md) — authenticated clients may read only trips tied to their own reservations; the storefront remains the public catalog.
 - [Agency onboarding ownership](agency-onboarding-ownership.md) — only an unassigned agency administrator may self-provision; lock and recheck the user row before creating a tenant.
 - [Lead deal fallback](lead-deal-fallback.md) — client creation must still create a pipeline deal when no stage is supplied; the API resolves the tenant default stage
-- [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping
-- [Referral cap concurrency](referral-cap-concurrency.md) — lock before reading the referrer's count so both cap and tier decisions remain consistent under concurrent conversions
-- [Referral database constraints](referral-database-constraints.md) — keep financial checks aligned with real status transitions; add legacy FKs/checks as NOT VALID until production data is audited
+- [Referral concurrency and constraints](referral-cap-concurrency.md) — lock before counting conversions; align checks with state transitions and audit legacy rows before validating ([constraints](referral-database-constraints.md)).
 - [Referral notification stamping](referral-notification-stamping.md) — mark D-7/D-1 and bonus-release notices only after durable delivery acceptance; manual retries need a separate attempt key
 - [First-purchase referral reservation](first-purchase-referral-reservation.md) — serialize by tenant + normalized customer email; pending orders reserve eligibility while cancelled/refunded orders release it
 - [Commission travel scope](commission-travel-scope.md) — unknown destinations use general rules; preview and reservation sync share trip → travel scope → general precedence
@@ -147,13 +138,12 @@
 - [Ticket SSE recovery](support-ticket-redis-recovery.md) — after Redis subscriber reconnect, wait for subscribe acknowledgment then send local ticket streams a tenant-scoped refresh hint.
 - [Seat stream recovery](seat-stream-redis-recovery.md) — recovery hints carry only a trip ID; clients re-fetch occupancy through the current tenant- and trip-scoped seat-map route.
 - [Seat update payload bounds](seat-update-payload-bounds.md) — validate/project at publisher, Redis and SSE boundaries; preserve statuses without an allowlist and never log raw payloads.
-- [API Vitest integration selection](api-vitest-integration-selection.md) — register new integration files explicitly and invoke Vitest directly when targeting one file.
 - [CHECK constraint drift scope](check-constraint-drift-scope.md) — reconcile legacy CHECK definitions individually before broadening live drift comparisons.
 - [Instagram integrations](instagram-direct-scope.md) — agency-owned accounts, customer-initiated 24-hour replies, and parallel Meta/Zernio validation before any explicit cutover; see [rollout](instagram-provider-rollout.md).
-- [Stripe payment mode accounting](stripe-payment-mode-accounting.md) — Stripe livemode is authoritative; unverifiable historical Stripe payments stay unknown and out of real cash totals.
 - [Storefront card installments](storefront-card-installments.md) — do not advertise Brazilian card installments until the configured Stripe account's support is verified and the chosen schedule reaches the PaymentIntent.
 - [Completed-trip storefront availability](completed-trip-storefront.md) — hide completed trips in public storefront queries and reject stale-cart checkout, rechecking status under the reservation lock.
 - [InfinitePay hosted checkout](infinitepay-hosted-checkout.md) — treat redirects/webhooks as untrusted; confirm via payment_check; do not infer fees, settlement, refunds, or signature support.
+- [Store variant pricing](store-variant-checkout-pricing.md) — recalculate variant prices from the tenant's product options on the server; client unit prices are display-only.
 - [CRM settings route scope](crm-settings-route-scope.md) — keep `/configuracoes` focused on general agency and tourism-operation setup; specialized settings remain elsewhere.
 - [Club benefit edit versions](club-benefit-edit-versions.md) — every benefit mutation must strictly advance `updatedAt`, which the editor uses as its optimistic concurrency token.
 - [Playwright WebKit on Nix](playwright-webkit-nix-runtime.md) — Linux WebKit may fail on Nix with Ubuntu ABI gaps; require a real passing run instead of adding one-off browser libraries.
