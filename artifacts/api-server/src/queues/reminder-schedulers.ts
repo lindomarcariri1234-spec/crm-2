@@ -1,4 +1,5 @@
 import { logger } from "../lib/logger.js";
+import type { Queue } from "bullmq";
 
 export const REMINDER_SCHEDULERS = {
   boardingReminderDaily: { id: "boarding-reminder-daily", name: "boarding_reminder" },
@@ -21,6 +22,12 @@ export const REMINDER_SCHEDULER_DEFINITIONS = Object.values(REMINDER_SCHEDULERS)
 
 export type ReminderSchedulerDefinition = (typeof REMINDER_SCHEDULER_DEFINITIONS)[number];
 export type ReminderSchedulerStatus = "not_attempted" | "registered" | "failed";
+export type ReminderSchedulerScheduleStatus =
+  | "healthy"
+  | "registration_failed"
+  | "missing"
+  | "delayed"
+  | "unavailable";
 
 type ReminderSchedulerRegistration = {
   status: Exclude<ReminderSchedulerStatus, "not_attempted">;
@@ -29,7 +36,13 @@ type ReminderSchedulerRegistration = {
   failureCount: number;
 };
 
+type ReminderSchedulerLastRun = {
+  lastRunAt: string;
+  lastRunStatus: "completed" | "failed";
+};
+
 const registrationState = new Map<string, ReminderSchedulerRegistration>();
+const lastRunState = new Map<string, ReminderSchedulerLastRun>();
 
 export async function registerReminderScheduler(
   scheduler: ReminderSchedulerDefinition,
@@ -61,6 +74,21 @@ export async function registerReminderScheduler(
   }
 }
 
+export function recordReminderSchedulerExecution(
+  job: { name: string; repeatJobKey?: string },
+  status: ReminderSchedulerLastRun["lastRunStatus"],
+  finishedAt = Date.now(),
+): void {
+  const scheduler = REMINDER_SCHEDULER_DEFINITIONS.find(
+    ({ id, name }) => name === job.name && job.repeatJobKey?.includes(id),
+  );
+  if (!scheduler || !Number.isFinite(finishedAt)) return;
+  lastRunState.set(scheduler.id, {
+    lastRunAt: new Date(finishedAt).toISOString(),
+    lastRunStatus: status,
+  });
+}
+
 export function getReminderSchedulerRegistrationHealth() {
   const schedulers = REMINDER_SCHEDULER_DEFINITIONS.map((scheduler) => {
     const registration = registrationState.get(scheduler.id);
@@ -80,6 +108,117 @@ export function getReminderSchedulerRegistrationHealth() {
     status: failedCount > 0 ? "degraded" as const : unattemptedCount > 0 ? "unknown" as const : "ok" as const,
     failedCount,
     unattemptedCount,
+    schedulers,
+  };
+}
+
+export async function getReminderSchedulerRunHealth(
+  queue: Pick<Queue, "getJobSchedulers" | "getJobs"> | null,
+  timezone: string,
+) {
+  const registrationHealth = getReminderSchedulerRegistrationHealth();
+  let schedulerMetadata: Awaited<ReturnType<Queue["getJobSchedulers"]>> = [];
+  type RecentRun = {
+    job: Awaited<ReturnType<Queue["getJobs"]>>[number];
+    status: "completed" | "failed";
+  };
+  let recentRuns: RecentRun[] = [];
+  let inspectionAvailable = false;
+
+  if (queue) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const [metadata, completedJobs, failedJobs] = await Promise.race([
+        Promise.all([
+          queue.getJobSchedulers(),
+          queue.getJobs(["completed"], 0, 99, false),
+          queue.getJobs(["failed"], 0, 99, false),
+        ]),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error("scheduler-health-timeout")), 3_000);
+        }),
+      ]);
+      schedulerMetadata = metadata;
+      recentRuns = [
+        ...completedJobs.map((job) => ({ job, status: "completed" as const })),
+        ...failedJobs.map((job) => ({ job, status: "failed" as const })),
+      ];
+      inspectionAvailable = true;
+    } catch {
+      // Health output intentionally omits raw Redis errors and connection details.
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  const now = Date.now();
+  const schedulers = registrationHealth.schedulers.map((scheduler) => {
+    const metadata = schedulerMetadata.find(
+      (candidate) => candidate.id === scheduler.id && candidate.name === scheduler.name,
+    );
+    const lastRun = recentRuns
+      .filter(
+        ({ job }) =>
+          job.name === scheduler.name &&
+          job.repeatJobKey?.includes(scheduler.id) &&
+          typeof job.finishedOn === "number",
+      )
+      .sort((a, b) => (b.job.finishedOn ?? 0) - (a.job.finishedOn ?? 0))[0];
+    const queueLastRunAt = typeof lastRun?.job.finishedOn === "number"
+      ? lastRun.job.finishedOn
+      : null;
+    const trackedLastRun = lastRunState.get(scheduler.id);
+    const trackedLastRunAt = trackedLastRun ? Date.parse(trackedLastRun.lastRunAt) : null;
+    const useTrackedLastRun = trackedLastRunAt !== null &&
+      (queueLastRunAt === null || trackedLastRunAt > queueLastRunAt);
+    const nextRunAt = typeof metadata?.next === "number" && Number.isFinite(metadata.next)
+      ? new Date(metadata.next).toISOString()
+      : null;
+    const lastRunAt = useTrackedLastRun
+      ? trackedLastRun!.lastRunAt
+      : queueLastRunAt !== null
+      ? new Date(queueLastRunAt).toISOString()
+      : null;
+
+    let scheduleStatus: ReminderSchedulerScheduleStatus;
+    if (scheduler.status === "failed") {
+      scheduleStatus = "registration_failed";
+    } else if (!inspectionAvailable) {
+      scheduleStatus = "unavailable";
+    } else if (!metadata) {
+      scheduleStatus = "missing";
+    } else if (nextRunAt === null) {
+      scheduleStatus = "unavailable";
+    } else if (metadata.next! < now - 5 * 60_000) {
+      scheduleStatus = "delayed";
+    } else {
+      scheduleStatus = "healthy";
+    }
+
+    return {
+      ...scheduler,
+      scheduleStatus,
+      nextRunAt,
+      lastRunAt,
+      lastRunStatus: useTrackedLastRun ? trackedLastRun!.lastRunStatus : lastRun?.status ?? null,
+    };
+  });
+  const delayedCount = schedulers.filter(({ scheduleStatus }) => scheduleStatus === "delayed").length;
+  const missingCount = schedulers.filter(({ scheduleStatus }) => scheduleStatus === "missing").length;
+  const unavailableCount = schedulers.filter(({ scheduleStatus }) => scheduleStatus === "unavailable").length;
+  const registrationFailureCount = schedulers.filter(({ scheduleStatus }) => scheduleStatus === "registration_failed").length;
+
+  return {
+    ...registrationHealth,
+    status: delayedCount + missingCount + registrationFailureCount > 0
+      ? "degraded" as const
+      : unavailableCount > 0
+      ? "unknown" as const
+      : "ok" as const,
+    timezone,
+    delayedCount,
+    missingCount,
+    unavailableCount,
     schedulers,
   };
 }

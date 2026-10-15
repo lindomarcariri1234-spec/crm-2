@@ -24,6 +24,7 @@ import {
   deliverReservationReminderOnce,
   resetStaleReservationReminderClaims,
 } from "../services/checkout/reservation-confirmation-outbox";
+import { recordReminderSchedulerExecution } from "../queues/reminder-schedulers.js";
 import { retryPendingAttendanceReplies } from "../services/whatsapp-attendance";
 import { dispatchOutboundMessage, htmlToWhatsAppText } from "../services/outbound-delivery";
 import { formatTripDeparture, tripDepartureAtSql } from "../lib/trip-date-time";
@@ -2115,7 +2116,14 @@ export function startReminderWorker(): Worker<ReminderJobData> | null {
       : { connection: conn, concurrency: 1, stalledInterval: 15_000, drainDelay: WORKER_IDLE_DRAIN_DELAY_SECONDS },
   );
 
+  _worker.on("completed", (job) => {
+    recordReminderSchedulerExecution(job, "completed", job.finishedOn ?? Date.now());
+  });
+
   _worker.on("failed", (job, err) => {
+    if (job) {
+      recordReminderSchedulerExecution(job, "failed", job.finishedOn ?? Date.now());
+    }
     logger.error({ jobId: job?.id, err }, "[reminder-worker] Job failed");
   });
 

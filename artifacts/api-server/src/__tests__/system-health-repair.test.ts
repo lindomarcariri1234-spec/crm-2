@@ -20,7 +20,7 @@ const {
   mockRequireAuth,
   mockGetStripeSyncTablesStatus,
   mockGetBullMQRedisCutoverStatus,
-  mockGetReminderSchedulerRegistrationHealth,
+  mockGetReminderSchedulerRunHealth,
   mockCleanupOrphanDeals,
   mockRepairSeatDriftOnly,
   mockRunSeatReconciliationCron,
@@ -28,7 +28,7 @@ const {
   const mockRequireAuth = vi.fn();
   const mockGetStripeSyncTablesStatus = vi.fn();
   const mockGetBullMQRedisCutoverStatus = vi.fn();
-  const mockGetReminderSchedulerRegistrationHealth = vi.fn();
+  const mockGetReminderSchedulerRunHealth = vi.fn();
   const mockCleanupOrphanDeals = vi.fn();
   const mockRepairSeatDriftOnly = vi.fn();
   const mockRunSeatReconciliationCron = vi.fn();
@@ -36,7 +36,7 @@ const {
     mockRequireAuth,
     mockGetStripeSyncTablesStatus,
     mockGetBullMQRedisCutoverStatus,
-    mockGetReminderSchedulerRegistrationHealth,
+    mockGetReminderSchedulerRunHealth,
     mockCleanupOrphanDeals,
     mockRepairSeatDriftOnly,
     mockRunSeatReconciliationCron,
@@ -77,10 +77,11 @@ vi.mock("../lib/stripeSync.js", () => ({
 
 vi.mock("../queues/index.js", () => ({
   getBullMQRedisCutoverStatus: mockGetBullMQRedisCutoverStatus,
+  getReminderQueue: vi.fn(() => null),
 }));
 
 vi.mock("../queues/reminder-schedulers.js", () => ({
-  getReminderSchedulerRegistrationHealth: mockGetReminderSchedulerRegistrationHealth,
+  getReminderSchedulerRunHealth: mockGetReminderSchedulerRunHealth,
 }));
 
 vi.mock("@clerk/express", () => ({
@@ -236,20 +237,36 @@ describe("POST /admin/system-health/repair", () => {
 describe("GET /admin/system-health", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetReminderSchedulerRunHealth.mockResolvedValue({
+      status: "unknown",
+      failedCount: 0,
+      unattemptedCount: 14,
+      delayedCount: 0,
+      unavailableCount: 14,
+      timezone: "America/Sao_Paulo",
+      schedulers: [],
+    });
   });
 
   it("includes the Stripe Sync table assertion status for SUPER_ADMIN", async () => {
     mockRequireAuth.mockResolvedValue(makeSuperAdmin());
-    mockGetReminderSchedulerRegistrationHealth.mockReturnValue({
+    mockGetReminderSchedulerRunHealth.mockResolvedValue({
       status: "degraded",
       failedCount: 1,
       unattemptedCount: 0,
+      delayedCount: 1,
+      unavailableCount: 0,
+      timezone: "America/Sao_Paulo",
       schedulers: [{
         id: "boarding-reminder-daily",
         name: "boarding_reminder",
         status: "failed",
+        scheduleStatus: "registration_failed",
         lastAttemptAt: "2026-10-15T12:00:00.000Z",
         lastSuccessfulAt: null,
+        nextRunAt: null,
+        lastRunAt: null,
+        lastRunStatus: null,
         failureCount: 1,
       }],
     });

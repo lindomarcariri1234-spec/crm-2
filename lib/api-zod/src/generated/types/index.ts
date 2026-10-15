@@ -351,6 +351,8 @@ export * from "./referralValidationResult";
 export * from "./reminderSchedulerRegistration";
 export * from "./reminderSchedulerRegistrationHealth";
 export * from "./reminderSchedulerRegistrationHealthStatus";
+export * from "./reminderSchedulerRegistrationLastRunStatus";
+export * from "./reminderSchedulerRegistrationScheduleStatus";
 export * from "./reminderSchedulerRegistrationStatus";
 export * from "./repairSeatDrift";
 export * from "./repairSystemHealth";

@@ -67,6 +67,24 @@ function MetricRow({
   );
 }
 
+function formatReminderTime(value: string | null, timezone: string) {
+  if (!value) return "sem registro";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "horário inválido";
+  try {
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  } catch {
+    return date.toLocaleString("pt-BR");
+  }
+}
+
 export default function SystemHealthPage() {
   const { toast } = useToast();
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -302,7 +320,7 @@ export default function SystemHealthPage() {
             Agendamentos de lembretes
           </CardTitle>
           <CardDescription>
-            Confirma se cada tarefa recorrente foi registrada na fila de lembretes.
+            Horários no fuso {reminderSchedulers?.timezone ?? "configurado"}; schedules ausentes ou atrasados ficam destacados.
           </CardDescription>
         </CardHeader>
         <CardContent className="divide-y divide-border -mt-2">
@@ -311,16 +329,20 @@ export default function SystemHealthPage() {
             label="Registro dos schedulers"
             description={
               reminderSchedulers
-                ? `${reminderSchedulers.schedulers.length - reminderSchedulers.unattemptedCount} de ${reminderSchedulers.schedulers.length} tentados · ${reminderSchedulers.failedCount} falha(s)`
+                ? `${reminderSchedulers.schedulers.length - reminderSchedulers.unattemptedCount} tentados · ${reminderSchedulers.failedCount} falha(s) · ${reminderSchedulers.missingCount} ausentes · ${reminderSchedulers.delayedCount} atrasados`
                 : "Aguardando dados de registro..."
             }
             status={reminderSchedulerStatus}
           />
           {reminderSchedulers?.schedulers.map((scheduler) => {
-            const schedulerStatus: StatusLevel = scheduler.status === "registered"
+            const schedulerStatus: StatusLevel = scheduler.scheduleStatus === "healthy"
               ? "ok"
-              : scheduler.status === "failed"
+              : scheduler.scheduleStatus === "delayed" ||
+                scheduler.scheduleStatus === "missing" ||
+                scheduler.scheduleStatus === "registration_failed"
               ? "degraded"
+              : scheduler.scheduleStatus === "unavailable"
+              ? "unavailable"
               : "unknown";
             const labels: Record<string, string> = {
               "boarding-reminder-daily": "Lembrete de embarque",
@@ -338,18 +360,26 @@ export default function SystemHealthPage() {
               "uploadthing-orphan-cleanup-nightly": "Limpeza de arquivos órfãos",
               "chatbot-delivery-retry": "Nova tentativa de entrega do chatbot",
             };
-            const attemptTime = scheduler.lastAttemptAt
-              ? new Date(scheduler.lastAttemptAt).toLocaleString("pt-BR")
-              : null;
-            const description = scheduler.status === "failed"
-              ? `Falha ao registrar · ${scheduler.failureCount} falha(s)${attemptTime ? ` · última tentativa: ${attemptTime}` : ""}`
-              : scheduler.status === "registered"
-              ? `Registrado com sucesso${attemptTime ? ` · tentativa: ${attemptTime}` : ""}`
-              : "Aguardando tentativa de registro";
+            const scheduleStatusLabel: Record<typeof scheduler.scheduleStatus, string> = {
+              healthy: "Agendado",
+              registration_failed: "Falha no registro",
+              missing: "Scheduler ausente na fila",
+              delayed: "Próxima execução atrasada",
+              unavailable: "Estado da fila indisponível",
+            };
+            const lastRunLabel = scheduler.lastRunAt
+              ? `${formatReminderTime(scheduler.lastRunAt, reminderSchedulers.timezone)}${scheduler.lastRunStatus === "failed" ? " (falhou)" : ""}`
+              : "sem execução recente encontrada";
+            const description = [
+              scheduleStatusLabel[scheduler.scheduleStatus],
+              `próxima: ${formatReminderTime(scheduler.nextRunAt, reminderSchedulers.timezone)}`,
+              `última: ${lastRunLabel}`,
+              scheduler.scheduleStatus === "registration_failed" ? `${scheduler.failureCount} falha(s) no registro` : "",
+            ].filter(Boolean).join(" · ");
             return (
               <MetricRow
                 key={scheduler.id}
-                icon={scheduler.status === "failed" ? AlertTriangle : Activity}
+                icon={schedulerStatus === "degraded" ? AlertTriangle : Activity}
                 label={labels[scheduler.id] ?? scheduler.name}
                 description={description}
                 status={schedulerStatus}

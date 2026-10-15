@@ -3910,14 +3910,44 @@ export const ReminderSchedulerRegistrationStatus = {
   failed: "failed",
 } as const;
 
+export type ReminderSchedulerRegistrationScheduleStatus =
+  (typeof ReminderSchedulerRegistrationScheduleStatus)[keyof typeof ReminderSchedulerRegistrationScheduleStatus];
+
+export const ReminderSchedulerRegistrationScheduleStatus = {
+  healthy: "healthy",
+  registration_failed: "registration_failed",
+  missing: "missing",
+  delayed: "delayed",
+  unavailable: "unavailable",
+} as const;
+
+/**
+ * @nullable
+ */
+export type ReminderSchedulerRegistrationLastRunStatus =
+  | (typeof ReminderSchedulerRegistrationLastRunStatus)[keyof typeof ReminderSchedulerRegistrationLastRunStatus]
+  | null;
+
+export const ReminderSchedulerRegistrationLastRunStatus = {
+  completed: "completed",
+  failed: "failed",
+} as const;
+
 export interface ReminderSchedulerRegistration {
   id: string;
   name: string;
   status: ReminderSchedulerRegistrationStatus;
+  scheduleStatus: ReminderSchedulerRegistrationScheduleStatus;
   /** @nullable */
   lastAttemptAt: string | null;
   /** @nullable */
   lastSuccessfulAt: string | null;
+  /** @nullable */
+  nextRunAt: string | null;
+  /** @nullable */
+  lastRunAt: string | null;
+  /** @nullable */
+  lastRunStatus: ReminderSchedulerRegistrationLastRunStatus;
   failureCount: number;
 }
 
@@ -3925,6 +3955,10 @@ export interface ReminderSchedulerRegistrationHealth {
   status: ReminderSchedulerRegistrationHealthStatus;
   failedCount: number;
   unattemptedCount: number;
+  delayedCount: number;
+  missingCount: number;
+  unavailableCount: number;
+  timezone: string;
   schedulers: ReminderSchedulerRegistration[];
 }
 

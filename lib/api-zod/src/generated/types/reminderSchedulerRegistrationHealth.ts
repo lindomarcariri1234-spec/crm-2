@@ -12,5 +12,9 @@ export interface ReminderSchedulerRegistrationHealth {
   status: ReminderSchedulerRegistrationHealthStatus;
   failedCount: number;
   unattemptedCount: number;
+  delayedCount: number;
+  missingCount: number;
+  unavailableCount: number;
+  timezone: string;
   schedulers: ReminderSchedulerRegistration[];
 }

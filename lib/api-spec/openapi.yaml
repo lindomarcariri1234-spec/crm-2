@@ -11588,11 +11588,19 @@ components:
           type: integer
         unattemptedCount:
           type: integer
+        delayedCount:
+          type: integer
+        missingCount:
+          type: integer
+        unavailableCount:
+          type: integer
+        timezone:
+          type: string
         schedulers:
           type: array
           items:
             $ref: "#/components/schemas/ReminderSchedulerRegistration"
-      required: [status, failedCount, unattemptedCount, schedulers]
+      required: [status, failedCount, unattemptedCount, delayedCount, missingCount, unavailableCount, timezone, schedulers]
 
     ReminderSchedulerRegistration:
       type: object
@@ -11604,15 +11612,27 @@ components:
         status:
           type: string
           enum: [not_attempted, registered, failed]
+        scheduleStatus:
+          type: string
+          enum: [healthy, registration_failed, missing, delayed, unavailable]
         lastAttemptAt:
           type: ["string", "null"]
           format: date-time
         lastSuccessfulAt:
           type: ["string", "null"]
           format: date-time
+        nextRunAt:
+          type: ["string", "null"]
+          format: date-time
+        lastRunAt:
+          type: ["string", "null"]
+          format: date-time
+        lastRunStatus:
+          type: ["string", "null"]
+          enum: [completed, failed, null]
         failureCount:
           type: integer
-      required: [id, name, status, lastAttemptAt, lastSuccessfulAt, failureCount]
+      required: [id, name, status, scheduleStatus, lastAttemptAt, lastSuccessfulAt, nextRunAt, lastRunAt, lastRunStatus, failureCount]
 
     RepairSystemHealth:
       type: object

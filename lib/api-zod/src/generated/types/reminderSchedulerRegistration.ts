@@ -5,15 +5,24 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { ReminderSchedulerRegistrationLastRunStatus } from "./reminderSchedulerRegistrationLastRunStatus";
+import type { ReminderSchedulerRegistrationScheduleStatus } from "./reminderSchedulerRegistrationScheduleStatus";
 import type { ReminderSchedulerRegistrationStatus } from "./reminderSchedulerRegistrationStatus";
 
 export interface ReminderSchedulerRegistration {
   id: string;
   name: string;
   status: ReminderSchedulerRegistrationStatus;
+  scheduleStatus: ReminderSchedulerRegistrationScheduleStatus;
   /** @nullable */
   lastAttemptAt: Date | null;
   /** @nullable */
   lastSuccessfulAt: Date | null;
+  /** @nullable */
+  nextRunAt: Date | null;
+  /** @nullable */
+  lastRunAt: Date | null;
+  /** @nullable */
+  lastRunStatus: ReminderSchedulerRegistrationLastRunStatus;
   failureCount: number;
 }

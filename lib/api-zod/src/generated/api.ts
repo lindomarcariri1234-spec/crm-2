@@ -1207,13 +1207,33 @@ export const GetSystemHealthResponse = zod.object({
     status: zod.enum(["ok", "degraded", "unknown"]),
     failedCount: zod.number().int(),
     unattemptedCount: zod.number().int(),
+    delayedCount: zod.number().int(),
+    missingCount: zod.number().int(),
+    unavailableCount: zod.number().int(),
+    timezone: zod.string(),
     schedulers: zod.array(
       zod.object({
         id: zod.string(),
         name: zod.string(),
         status: zod.enum(["not_attempted", "registered", "failed"]),
+        scheduleStatus: zod.enum([
+          "healthy",
+          "registration_failed",
+          "missing",
+          "delayed",
+          "unavailable",
+        ]),
         lastAttemptAt: zod.coerce.date().nullable(),
         lastSuccessfulAt: zod.coerce.date().nullable(),
+        nextRunAt: zod.coerce.date().nullable(),
+        lastRunAt: zod.coerce.date().nullable(),
+        lastRunStatus: zod
+          .union([
+            zod.literal("completed"),
+            zod.literal("failed"),
+            zod.literal(null),
+          ])
+          .nullable(),
         failureCount: zod.number().int(),
       }),
     ),
