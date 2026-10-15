@@ -32,6 +32,7 @@ const {
   mockLimit,
   mockDelete,
   mockDeleteWhere,
+  mockInsert,
   mockTransaction,
   tripMediaRows,
   selectRows,
@@ -52,11 +53,19 @@ const {
       offset: () => query,
     });
   });
-  const mockFrom = vi.fn(() => ({ where: mockWhere }));
+  const mockFrom = vi.fn(() => ({
+    where: mockWhere,
+    innerJoin: () => ({ where: mockWhere }),
+  }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
   const mockDeleteWhere = vi.fn().mockResolvedValue([]);
   const mockDelete = vi.fn(() => ({ where: mockDeleteWhere }));
+  const mockInsert = vi.fn(() => ({
+    values: vi.fn(() => ({
+      onConflictDoUpdate: vi.fn().mockResolvedValue([]),
+    })),
+  }));
   const mockTransaction = vi.fn();
   const selectRows: unknown[][] = [];
   const mockInArray = vi.fn((_column: unknown, values: unknown[]) => ({ kind: "inArray", values }));
@@ -64,7 +73,7 @@ const {
   return {
     mockDeleteOrphanedFile,
     mockSelect, mockFrom, mockWhere, mockLimit,
-    mockDelete, mockDeleteWhere, mockTransaction,
+    mockDelete, mockDeleteWhere, mockInsert, mockTransaction,
     tripMediaRows,
     selectRows,
     mockInArray,
@@ -83,7 +92,7 @@ vi.mock("@workspace/db", () => ({
   db: {
     select:      mockSelect,
     delete:      mockDelete,
-    insert:      vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
+    insert:      mockInsert,
     update:      vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
     transaction: mockTransaction,
   },
@@ -552,5 +561,24 @@ describe("GET /trips — client visibility", () => {
     expect(formatted.driverCnh).toBeNull();
     expect(formatted.fixedCosts).toEqual([]);
     expect(formatted.variableCosts).toEqual([]);
+  });
+
+  it("rejects a check-in that tries to link a passenger to another tenant's reservation", async () => {
+    mockLimit
+      .mockResolvedValueOnce([{ id: TRIP_ID }])
+      .mockResolvedValueOnce([{
+        id: "passenger-tenant-a",
+        reservationId: "reservation-tenant-a",
+      }]);
+
+    const res = await request(app)
+      .post(`/trips/${TRIP_ID}/checkins`)
+      .send({
+        passengerId: "passenger-tenant-a",
+        reservationId: "reservation-tenant-b",
+      });
+
+    expect(res.status).toBe(400);
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 });

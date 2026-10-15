@@ -3158,7 +3158,10 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
       .limit(1);
     if (!trip) { next(new NotFoundError("Viagem não encontrada", "TRIP_NOT_FOUND")); return; }
 
-    const [passenger] = await db.select({ id: passengersTable.id })
+    const [passenger] = await db.select({
+      id: passengersTable.id,
+      reservationId: passengersTable.reservationId,
+    })
       .from(passengersTable)
       .innerJoin(reservationsTable, eq(passengersTable.reservationId, reservationsTable.id))
       .where(and(
@@ -3168,6 +3171,10 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
       ))
       .limit(1);
     if (!passenger) { next(new NotFoundError("Passageiro não encontrado", "PASSENGER_NOT_FOUND")); return; }
+    if (reservationId && reservationId !== passenger.reservationId) {
+      next(new ValidationError("A reserva não corresponde ao passageiro.", "VALIDATION_ERROR"));
+      return;
+    }
 
     const checkedInAt = new Date();
     await db.insert(tripCheckinsTable)
@@ -3176,7 +3183,7 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
         tripId: req.params.id!,
         tenantId: me.tenantId,
         passengerId,
-        reservationId: reservationId ?? null,
+        reservationId: passenger.reservationId ?? null,
         checkedInByUserRef: me.id,
         checkedInAt,
         notes: notes ?? null,

@@ -1,7 +1,7 @@
 # Auditoria técnica — etapa 1: isolamento multi-tenant e permissões
 
 **Data:** 15 de outubro de 2026
-**Situação:** parcial; revisão dos controles centrais e de fluxos representativos concluída. Foram corrigidas quatro falhas de autorização confirmadas. A leitura linha a linha de todas as rotas ainda não foi concluída.
+**Situação:** revisão de acesso entre agências concluída no inventário das rotas. Foram corrigidas cinco falhas confirmadas nesta etapa e foram adicionados testes direcionados. As etapas 2–8 da sequência abaixo continuam fora do escopo desta revisão.
 
 ## Escopo desta rodada
 
@@ -16,8 +16,14 @@ Foi priorizada a fronteira de segurança entre Clerk, usuário local, agência e
 - Revisão de autorização das rotas de assinatura/faturas em `subscriptions.ts`, do histórico/envio em `outbound-messages.ts`, da comunicação interna em `communication.ts` e da caixa de entrada em `chatbot.ts`.
 - Busca de atribuições de `req.tenantId`, uso de `tenantId` vindo de requisição, políticas RLS e testes com fixtures de mais de um tenant.
 
-Isto não equivale à inspeção linha a linha de todos os 67 módulos nem de todo o frontend, banco e integrações.
-O inventário estático identificou 609 declarações `router.get/post/put/patch/delete` nos módulos de rotas; esse total não deve ser confundido com revisão manual individual.
+Na segunda rodada, o inventário AST enumerou os 610 handlers `router.get/post/put/patch/delete/all` distribuídos pelos 67 módulos. A classificação final foi: 563 rotas autenticadas (incluindo guards de domínio), 33 rotas públicas sem sessão e 14 webhooks/cron. As exceções sem `requireAuth` inline foram revisadas individualmente: `/guide/auth` exige código de guia; `/partner/login` emite credencial de parceiro; `/onboarding/check-slug`, health checks e `/` são públicos; os dois métodos de `/system-configs` e `/trips/:id/costs/:costId` reutilizam handlers autenticados.
+O inventário automatizado não substitui uma auditoria geral de frontend, schema, RLS e integrações; esses itens continuam nas etapas posteriores.
+
+### Inventário por classe de acesso
+
+- **Públicas sem sessão (33):** `/`, `/health`, `/healthz`, `/health/auth`, `/onboarding/check-slug`, `/guide/auth` (código de guia), `/partner/login` (credencial de parceiro), `/nps/respond`, `GET /public/store/:slug/distribution/offers`, `GET /club/config`, `GET /club/benefits`, `GET /club/ranking` e as rotas de catálogo, assento, pedido, indicação, cupom, review e alerta de preço sob `/public/store/:slug` em `store-public.ts`.
+- **Webhook/cron (14):** `ALL /cron/:job`; webhooks Evolution, Resend, Stripe e MercadoPago em `webhooks.ts`; `/webhooks/stripe`; callbacks Instagram/Zernio e callbacks de exclusão de dados em `instagram-messaging.ts`; e `POST /public/store/:slug/infinitepay/webhook`.
+- **Autenticadas (563):** todas as demais declarações de método/path nos 67 módulos montados em `routes/index.ts`; incluem sessão Clerk e guardas de domínio, como JWT de guia, `requireClientAccess`, administradores de integração/distribuição e handlers compartilhados. Nenhum router global as autentica implicitamente.
 
 ## Coberto e evidências
 
@@ -29,7 +35,10 @@ O inventário estático identificou 609 declarações `router.get/post/put/patch
 6. **Administração global exige papel explícito.** As rotas administrativas e de gestão de tenants revisadas chamam `requireAuth` e verificam `SUPER_ADMIN`; a promoção inicial também exige correspondência com `SUPERADMIN_CLERK_ID` e usuário local ativo.
 7. **A matriz concede leitura de viagens/reservas a clientes, mas os caminhos revisados restringem os registros ao próprio vínculo.** Viagens são limitadas às viagens associadas às reservas do cliente e formatadas sem custos e dados de documentos de motoristas. Reservas são limitadas ao registro de cliente ligado ao usuário. Listagens administrativas/restritas também adicionam o tenant do usuário.
 8. **Não foi confirmado acesso cruzado nas rotas centrais revisadas.** Os testes direcionados passaram: `inactive-user-auth`, `payments-authz`, `users-auth`, `free-passenger-seat-conflict`, `clients-cpf` e `pipeline-deal-linkage` — 162 testes no total. Há testes com cenários de tenant cruzado em 32 arquivos de teste, mas isso não demonstra cobertura completa da API.
-9. **Foram confirmadas e corrigidas quatro lacunas de autorização.** Os detalhes e os testes de regressão estão em A4–A7; os testes focados atualizados passaram (43 testes em quatro suítes).
+9. **A revisão anterior confirmou e corrigiu quatro lacunas de autorização.** Os detalhes estão em A4–A7; os testes focados daquela rodada passaram (43 testes em quatro suítes). A8 registra a quinta falha confirmada nesta etapa.
+10. **O inventário das rotas não revelou outras rotas públicas acidentais.** As 33 rotas sem sessão foram classificadas como catálogo/loja pública, conteúdo público do clube/NPS, health, autenticação por código/token ou verificação pública; os 14 webhooks/cron permanecem em grupo separado e usam seus próprios mecanismos de validação.
+11. **Uma referência de reserva enviada pelo cliente podia cruzar agências durante o check-in.** Em `POST /trips/:id/checkins` e `POST /guide/trip/:tripId/checkins`, a consulta comprovava que o passageiro pertencia à viagem e ao tenant correto, mas o `reservationId` persistido era aceito do corpo sem comparação com a reserva real do passageiro. A correção usa `passengers.reservationId` da consulta já escopada e rejeita um valor divergente. Um teste negativo com passageiro/reserva da agência A e ID de reserva da agência B confirma que o check-in não é gravado.
+12. **A busca estática de predicados por identificador foi seguida até os handlers candidatos.** Leituras e mutações sem `tenantId` no próprio `where` foram consideradas seguras somente quando precedidas por uma verificação tenant-scoped do pai ou protegidas por `SUPER_ADMIN`; rotas públicas usam slug de loja ou token limitado. As consultas globais restantes estão descritas como exceções abaixo, não como acesso de agência.
 
 ## Achados e riscos
 
@@ -47,7 +56,7 @@ Não foram encontrados `ENABLE ROW LEVEL SECURITY`, `CREATE POLICY` ou `FORCE RO
 
 `routes/index.ts` monta os módulos sem uma guarda de autenticação comum. Portanto, cada endpoint precisa declarar autenticação, papel/permissão e escopo de dados individualmente. A composição é flexível, mas torna fácil uma rota nova esquecer um dos controles.
 
-**Ação recomendada:** completar o inventário endpoint por endpoint, classificando cada rota como pública, webhook/cron ou autenticada e registrando os controles esperados. Só depois avaliar uma guarda global compatível com as rotas públicas.
+**Ação recomendada:** manter o inventário atualizado automaticamente e exigir revisão/teste de autenticação, permissão e tenant para cada rota nova. Só avaliar uma guarda global depois de preservar as rotas públicas e seus controles próprios.
 
 ### A3 — Cobertura de testes cruzados é ampla, mas não foi comprovada como sistemática
 
@@ -89,6 +98,14 @@ As rotas autenticadas de listagem de conversas, leitura de mensagens, criação 
 
 **Correção:** todas as rotas privadas de `/chatbot-conversations` e `/chatbot-messages` agora exigem `ALL_STAFF_ROLES`; as regras administrativas específicas de alteração de operações e clientes foram mantidas. Testes confirmam que clientes não conseguem listar conversas nem enviar respostas.
 
+### A8 — O check-in aceitava uma reserva de outra agência
+
+**Prioridade:** alta para integridade e isolamento de relações; falha confirmada e corrigida nesta rodada.
+
+As rotas de check-in de equipe e de guia confirmavam o passageiro pela viagem e pelo tenant, mas persistiam `reservationId` fornecido pelo chamador. Um operador autorizado na agência A podia, portanto, associar o check-in de um passageiro válido a um ID de reserva da agência B.
+
+**Correção:** ambas as rotas agora selecionam `passengers.reservationId` junto com o passageiro, recusam um ID fornecido que não corresponda e persistem exclusivamente o ID retornado pela consulta tenant-scoped. O teste de regressão em `trip-media-delete.test.ts` cobre o corpo malicioso da agência B e confirma que nenhuma inserção ocorre.
+
 ## Resultado dos scanners
 
 - **Dependências:** concluído; 0 vulnerabilidades retornadas nesta execução.
@@ -99,19 +116,18 @@ As rotas autenticadas de listagem de conversas, leitura de mensagens, criação 
 
 Uma tentativa anterior do workflow `artifacts/api-server: API Server` falhou com `artifacts/api-server/dist/index.mjs has no source fingerprint`. Após a correção das rotas, o workflow foi reiniciado, o bundle foi produzido e o servidor iniciou na porta 8080. A falha anterior não se reproduziu; isso não substitui os smoke checks de publicação previstos para a etapa 8.
 
-## O que ainda falta na etapa 1
+## Limites e itens fora desta conclusão
 
-- Revisar linha a linha os endpoints restantes dos 67 módulos, sobretudo `clients`, `referrals`, `payments`, `store`, `documents`, `reports`, `backup`, `tenant-integrations`, `support-tickets`, `distribution`, SSE e handlers de upload.
-- Conferir cada leitura e escrita por ID: filtro de tenant no registro principal e nos joins, subconsultas, SQL manual, exportações, contagens e operações em lote.
-- Revisar todos os usos de `ADMIN_ROLES`, `MANAGEMENT_ROLES` e verificações de papel antigas contra a matriz atual; documentar cada exceção operacional.
-- Auditar todas as tabelas e relações indiretas por tenant, constraints/índices compostos, workers e caminhos com superadmin ou `tenantId` nulo/vazio.
+- O inventário e a triagem de classificação/guards cobriram os 610 handlers. A revisão de queries de alto risco incluiu leituras, mutações, joins, SQL manual, exports e operações em lote; auditoria de fluxo de negócio de todas as consultas agregadas, exports, workers e integrações permanece nas etapas próprias abaixo.
+- A matriz central foi comparada com os guards de papel encontrados. Exceções intencionais incluem endpoints de plataforma restritos a `SUPER_ADMIN`, rotas de domínio ainda sem recurso equivalente na matriz que usam `ADMIN_ROLES`/`MANAGEMENT_ROLES`, e acesso público ou por credencial em loja, guia, parceiros, webhooks e cron.
+- Avaliar constraints/índices compostos e uma estratégia RLS gradual continua sendo o item A1; a auditoria de todas as tabelas e relações indiretas ainda não está concluída.
 - Reexecutar HoundDog após a falha de esquema e inspecionar os resultados, caso a ferramenta volte a aceitar o formato.
 
 ## Sequência explícita da auditoria completa
 
 | Etapa | Tema | Estado |
 |---|---|---|
-| 1 | Isolamento multi-tenant e permissões | **Em andamento** — controles centrais e amostras de alto risco revisados; falta a inspeção integral das rotas, queries e relações. |
+| 1 | Isolamento multi-tenant e permissões | **Concluída para acesso entre agências nas rotas** — inventário de 610 handlers, revisão dos guards/exceções e correção A8; RLS e auditoria abrangente de relações permanecem como riscos arquiteturais registrados em A1. |
 | 2 | Autenticação, onboarding e administração | **Não iniciada como revisão integral** — esta rodada apenas verificou guardas centrais e provisionamento representativo. |
 | 3 | Loja pública, pedidos e pagamentos | **Não iniciada** — revisar anonimato, lookup por token, preços, estoque, checkout, webhooks e recuperação. |
 | 4 | Finanças, indicações e reservas | **Não iniciada integralmente** — cobertos somente controles de autorização e escopo em amostras/tests; faltam transições e reconciliações. |
