@@ -2243,6 +2243,11 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: clientIds
+          in: query
+          description: Comma-separated client IDs to retrieve payments for (maximum 100 IDs).
+          schema:
+            type: ["string", "null"]
         - name: status
           in: query
           schema:

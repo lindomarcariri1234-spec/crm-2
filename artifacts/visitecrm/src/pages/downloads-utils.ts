@@ -49,19 +49,20 @@ export function prepareClients(
   all: Client[],
   quickStart: string,
   quickEnd: string,
+  refundTotalsByClientId: ReadonlyMap<string, number> = new Map(),
 ): { headers: string[]; rows: string[][]; count: number } {
   const clients = all.filter((c) => inDateRange(c.createdAt, quickStart, quickEnd));
   const headers = [
     "Nome", "E-mail", "WhatsApp", "Telefone", "CPF", "Nascimento", "Gênero",
     "Cidade", "Estado", "Instagram", "Classificação", "Status", "Pipeline",
-    "Total Gasto (R$)", "Saldo Devedor (R$)", "Tags", "Destinos Sonhados",
+    "Total Gasto (R$)", "Estornos Stripe (R$)", "Saldo Devedor (R$)", "Tags", "Destinos Sonhados",
     "Observações", "Cadastrado em",
   ];
   const rows = clients.map((c) => [
     c.name, c.email ?? "", c.whatsapp ?? "", c.phone ?? "", c.cpf ?? "",
     fmtDate(c.birthDate), c.gender ?? "", c.addressCity ?? "", c.addressState ?? "",
     c.instagram ?? "", c.classification ?? "", c.status ?? "", c.pipelineStage ?? "",
-    fmtCur(c.totalSpent), fmtCur(c.outstandingBalance),
+    fmtCur(c.totalSpent), fmtCur((refundTotalsByClientId.get(c.id) ?? 0) / 100), fmtCur(c.outstandingBalance),
     (c.tags ?? []).join("; "), (c.dreamDestinations ?? []).join("; "),
     c.observations ?? "", fmtDate(c.createdAt),
   ]);
@@ -92,6 +93,7 @@ export function prepareTrips(
 
 export interface ReservationPaymentItem {
   reservationId?: string | null;
+  clientId?: string | null;
   type: string;
   category: string;
   amount: number;
@@ -100,13 +102,15 @@ export interface ReservationPaymentItem {
   paidAt?: string | null;
 }
 
-export function chunkReservationIds(reservationIds: string[], batchSize = 100): string[][] {
+export function chunkIds(ids: string[], batchSize = 100): string[][] {
   const chunks: string[][] = [];
-  for (let index = 0; index < reservationIds.length; index += batchSize) {
-    chunks.push(reservationIds.slice(index, index + batchSize));
+  for (let index = 0; index < ids.length; index += batchSize) {
+    chunks.push(ids.slice(index, index + batchSize));
   }
   return chunks;
 }
+
+export const chunkReservationIds = chunkIds;
 
 // Reservation item shape used by prepareManifest / prepareReservations
 export interface ReservationItem {

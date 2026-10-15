@@ -5484,6 +5484,12 @@ export const ListPaymentsQueryParams = zod.object({
       "Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).",
     ),
   clientId: zod.coerce.string().nullish(),
+  clientIds: zod.coerce
+    .string()
+    .nullish()
+    .describe(
+      "Comma-separated client IDs to retrieve payments for (maximum 100 IDs).",
+    ),
   status: zod.coerce.string().nullish(),
   type: zod.coerce.string().nullish(),
   dateFrom: zod.coerce.string().nullish(),

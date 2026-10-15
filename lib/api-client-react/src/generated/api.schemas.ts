@@ -6046,6 +6046,11 @@ export type ListPaymentsParams = {
    */
   clientId?: string | null;
   /**
+   * Comma-separated client IDs to retrieve payments for (maximum 100 IDs).
+   * @nullable
+   */
+  clientIds?: string | null;
+  /**
    * @nullable
    */
   status?: string | null;

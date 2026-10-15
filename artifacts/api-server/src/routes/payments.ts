@@ -748,6 +748,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       reservationId,
       reservationIds: reservationIdsParam,
       clientId: clientIdParam,
+      clientIds: clientIdsParam,
       status,
       type,
       page = "1",
@@ -801,6 +802,22 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       }
       reservationIds = [...new Set(reservationIds)];
     }
+    let clientIds: string[] | undefined;
+    if (clientIdsParam !== undefined) {
+      if (
+        typeof clientIdsParam !== "string"
+        || clientIdParam
+      ) {
+        next(new ValidationError("clientIds must be a comma-separated string and cannot be combined with clientId", "VALIDATION_ERROR"));
+        return;
+      }
+      clientIds = clientIdsParam.split(",").map(id => id.trim());
+      if (clientIds.length === 0 || clientIds.length > 100 || clientIds.some(id => !id || id.length > 200)) {
+        next(new ValidationError("clientIds must contain 1 to 100 valid client IDs", "VALIDATION_ERROR"));
+        return;
+      }
+      clientIds = [...new Set(clientIds)];
+    }
     if ((dateFrom && dateTo && dateFrom > dateTo) || (dueDateFrom && dueDateTo && dueDateFrom > dueDateTo)) {
       next(new ValidationError("The start date must not be after the end date", "VALIDATION_ERROR"));
       return;
@@ -836,6 +853,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
         .limit(1);
       if (clientRecord) {
         conditions.push(eq(paymentsTable.clientId, clientRecord.id));
+        if (clientIds) conditions.push(inArray(paymentsTable.clientId, clientIds));
       } else {
         res.json({ data: [], total: 0, page: pageNum, limit: limitNum });
         return;
@@ -855,6 +873,12 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
           return;
         }
         conditions.push(eq(paymentsTable.clientId, clientIdParam));
+      } else if (clientIds) {
+        if (clientIds.some(clientId => !sellerClientIds.includes(clientId))) {
+          res.json({ data: [], total: 0, page: pageNum, limit: limitNum });
+          return;
+        }
+        conditions.push(inArray(paymentsTable.clientId, clientIds));
       } else {
         conditions.push(inArray(paymentsTable.clientId, sellerClientIds));
       }
@@ -863,6 +887,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
         next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
       }
       if (clientIdParam) conditions.push(eq(paymentsTable.clientId, clientIdParam));
+      else if (clientIds) conditions.push(inArray(paymentsTable.clientId, clientIds));
     }
 
     const payments = await db.select().from(paymentsTable)

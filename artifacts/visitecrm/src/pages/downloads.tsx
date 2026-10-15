@@ -22,7 +22,7 @@ import {
   prepareReferrals,
   prepareCommissions,
   preparePipeline,
-  chunkReservationIds,
+  chunkIds,
   type ReservationPaymentItem,
   downloadXlsx,
   downloadPdf,
@@ -263,8 +263,40 @@ export default function Downloads() {
   // --- Async prepare functions (server-side date filter + full pagination) ---
 
   async function _prepareClients() {
-    const all = await fetchAllPages("/api/clients", { dateFrom: quickStart, dateTo: quickEnd });
-    return prepareClients(all as Parameters<typeof prepareClients>[0], quickStart, quickEnd);
+    type ClientExportItem = Parameters<typeof prepareClients>[0][number];
+    const all = await fetchAllPages<ClientExportItem>("/api/clients", { dateFrom: quickStart, dateTo: quickEnd });
+    const reportClients = all.filter(client => {
+      const date = String(client.createdAt ?? "").slice(0, 10);
+      return date >= quickStart && date <= quickEnd;
+    });
+    const refundTotalsByClientId = new globalThis.Map<string, number>();
+    for (const clientIds of chunkIds(reportClients.map(client => client.id))) {
+      const refunds = await fetchAllPages<ReservationPaymentItem>("/api/payments", {
+        clientIds: clientIds.join(","),
+        dueDateFrom: quickStart,
+        dueDateTo: quickEnd,
+        type: "receivable",
+      });
+      for (const payment of refunds) {
+        if (
+          payment.category !== "stripe_refund"
+          || payment.status !== "paid"
+          || !payment.clientId
+          || payment.amount >= 0
+        ) continue;
+        const cents = Math.abs(Math.round(Number(payment.amount) * 100));
+        refundTotalsByClientId.set(
+          payment.clientId,
+          (refundTotalsByClientId.get(payment.clientId) ?? 0) + cents,
+        );
+      }
+    }
+    return prepareClients(
+      all as Parameters<typeof prepareClients>[0],
+      quickStart,
+      quickEnd,
+      refundTotalsByClientId,
+    );
   }
 
   async function _prepareTrips() {
@@ -315,7 +347,7 @@ export default function Downloads() {
     const olderRefundReservationIds = [...refundReservationIds]
       .filter(reservationId => !existingReservationIds.has(reservationId));
     const olderRefundReservations: typeof createdInPeriod = [];
-    for (const reservationIdsChunk of chunkReservationIds(olderRefundReservationIds)) {
+    for (const reservationIdsChunk of chunkIds(olderRefundReservationIds)) {
       olderRefundReservations.push(...await fetchAllPages<typeof createdInPeriod[number]>(
         "/api/reservations",
         { reservationIds: reservationIdsChunk.join(",") },
@@ -324,7 +356,7 @@ export default function Downloads() {
     const all = [...createdInPeriod, ...olderRefundReservations];
     const reservationIds = all.map(reservation => reservation.id);
     const allPayments: ReservationPaymentItem[] = [];
-    for (const reservationIdsChunk of chunkReservationIds(reservationIds)) {
+    for (const reservationIdsChunk of chunkIds(reservationIds)) {
       const payments = await fetchAllPages<ReservationPaymentItem>(
         "/api/payments",
         { reservationIds: reservationIdsChunk.join(",") },

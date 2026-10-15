@@ -329,6 +329,27 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     expect(inArray).toHaveBeenCalledWith(paymentsTable.reservationId, ["res-1", "res-2"]);
   });
 
+  it("GET /payments → supports a tenant-scoped bulk client filter", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/payments?clientIds=client-1,client-2");
+
+    expect(res.status).toBe(200);
+    expect(inArray).toHaveBeenCalledWith(paymentsTable.clientId, ["client-1", "client-2"]);
+  });
+
+  it("GET /payments → rejects oversized bulk client filters before querying", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+
+    const clientIds = Array.from({ length: 101 }, (_, index) => `client-${index}`).join(",");
+    const res = await request(buildApp(paymentsRouter)).get(`/api/payments?clientIds=${clientIds}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(mockSelect).not.toHaveBeenCalled();
+  });
+
   it("GET /payments → rejects oversized bulk reservation filters before querying", async () => {
     requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
 

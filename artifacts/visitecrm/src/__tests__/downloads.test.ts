@@ -329,13 +329,27 @@ describe("prepareClients", () => {
     expect(count).toBe(2);
   });
 
+  it("shows refund totals separately without changing canonical spending or balance", () => {
+    const client = makeClient({ id: "client-refunded", createdAt: "2025-03-15T00:00:00Z" });
+    const { headers, rows } = prepareClients(
+      [client] as any[],
+      RANGE_START,
+      RANGE_END,
+      new Map([["client-refunded", 1250]]),
+    );
+
+    expect(rows[0][headers.indexOf("Estornos Stripe (R$)")]).toBe("12,50");
+    expect(rows[0][headers.indexOf("Total Gasto (R$)")]).toBe("1.500,00");
+    expect(rows[0][headers.indexOf("Saldo Devedor (R$)")]).toBe("200,00");
+  });
+
   it("maps tags array to semicolon-separated string", () => {
     const c = makeClient({
       tags: ["vip", "fidelizado"],
       createdAt: "2025-03-10T00:00:00Z",
     });
     const { rows } = prepareClients([c] as any[], RANGE_START, RANGE_END);
-    const tagsCol = rows[0][15];
+    const tagsCol = rows[0][16];
     expect(tagsCol).toBe("vip; fidelizado");
   });
 
@@ -345,7 +359,7 @@ describe("prepareClients", () => {
       createdAt: "2025-03-10T00:00:00Z",
     });
     const { rows } = prepareClients([c] as any[], RANGE_START, RANGE_END);
-    const destCol = rows[0][16];
+    const destCol = rows[0][17];
     expect(destCol).toBe("Paris; Roma");
   });
 
