@@ -1,7 +1,7 @@
 # Auditoria técnica — etapa 1: isolamento multi-tenant e permissões
 
 **Data:** 15 de outubro de 2026
-**Situação:** revisão de acesso entre agências concluída no inventário das rotas. Foram corrigidas cinco falhas confirmadas nesta etapa e foram adicionados testes direcionados. As etapas 2–8 da sequência abaixo continuam fora do escopo desta revisão.
+**Situação:** etapa 1 em andamento. O inventário de rotas e as correções de autorização documentadas abaixo foram concluídos, mas a inspeção integral de relações no banco, a implantação das novas constraints em produção e a matriz negativa sistemática por rota/papel ainda estão pendentes. As etapas 2–8 continuam fora do escopo desta revisão.
 
 ## Escopo desta rodada
 
@@ -66,7 +66,9 @@ Não foram encontrados `ENABLE ROW LEVEL SECURITY`, `CREATE POLICY` ou `FORCE RO
 
 Foram localizados cenários multi-tenant em 32 arquivos; não foi verificado nesta rodada se cada endpoint de leitura, exportação, mutação, stream e operação em lote tem controle negativo com dados dos dois tenants. O helper `hasPermission` também não tem suíte própria visível dentro de `lib/permissions`.
 
-**Ação recomendada:** criar uma matriz rota × papel × tenant, usar fixtures simultâneas de dois tenants e exigir teste negativo para IDOR em cada família de endpoint.
+**Atualização:** foi adicionada uma suíte direta para a matriz central em `artifacts/api-server/src/__tests__/permissions-matrix.test.ts`, cobrindo negação por padrão e permissões sensíveis de gerente, vendedor, suporte e cliente. Isso não substitui os testes de rota.
+
+**Ação recomendada:** continuar a matriz rota × papel × tenant, usar fixtures simultâneas de dois tenants e exigir teste negativo para IDOR em cada família de endpoint.
 
 ### A4 — Leitura de faturamento e início de pagamentos não verificavam a permissão financeira
 
@@ -125,11 +127,24 @@ Uma tentativa anterior do workflow `artifacts/api-server: API Server` falhou com
 - Avaliar constraints/índices compostos e uma estratégia RLS gradual continua sendo o item A1; a auditoria de todas as tabelas e relações indiretas ainda não está concluída.
 - Reexecutar HoundDog após a falha de esquema e inspecionar os resultados, caso a ferramenta volte a aceitar o formato.
 
+### Verificação adicional de produção — 15 de outubro de 2026
+
+O deployment Replit está ativo em `visitecrm.com`; a consulta de produção foi feita somente pela réplica SQL somente-leitura do Replit, identificada como `neondb` (PostgreSQL 16.15). Resultado agregado, sem leitura de dados pessoais:
+
+- Reservas com viagem ausente ou `tenant_id` diferente da viagem: **0**.
+- Check-ins com passageiro/reserva ausente, reserva divergente do passageiro, viagem divergente ou tenant divergente: **0**.
+- Check-ins sem `reservation_id`: **0**.
+- Watermark aplicado: `1809960019000` (migração 0119). A migração 0120 ainda não está aplicada e as quatro constraints compostas ainda não existem em produção.
+
+Não houve linha legada a corrigir ou decidir. A proteção relacional está aplicada e validada no banco de desenvolvimento; em produção, depende do fluxo normal de publicação, e deve ser confirmada após a próxima publicação. Isso não autoriza alteração direta da produção.
+
+Na inspeção de relações, `reservation_room_assignments` ainda mantém `tenant_id`, `trip_id`, `reservation_id` e `passenger_id` como referências independentes, sem constraint composta que vincule os pais. A rota encontrada nesta etapa apenas lê a alocação no resumo da viagem; não foi confirmada uma gravação cruzada ativa. A relação deve ser auditada e protegida antes de ser tratada como concluída.
+
 ## Sequência explícita da auditoria completa
 
 | Etapa | Tema | Estado |
 |---|---|---|
-| 1 | Isolamento multi-tenant e permissões | **Concluída para acesso entre agências nas rotas** — inventário de 610 handlers, revisão dos guards/exceções e correção A8; RLS e auditoria abrangente de relações permanecem como riscos arquiteturais registrados em A1. |
+| 1 | Isolamento multi-tenant e permissões | **Em andamento** — inventário e revisão de guards das rotas cobertos; correções A4–A8 e teste da matriz central registrados; contagens de produção sem inconsistências. Faltam a confirmação pós-publicação das constraints, a auditoria abrangente de relações (incluindo alocações de quartos), a avaliação de RLS e testes negativos sistemáticos para todas as famílias. |
 | 2 | Autenticação, onboarding e administração | **Não iniciada como revisão integral** — esta rodada apenas verificou guardas centrais e provisionamento representativo. |
 | 3 | Loja pública, pedidos e pagamentos | **Não iniciada** — revisar anonimato, lookup por token, preços, estoque, checkout, webhooks e recuperação. |
 | 4 | Finanças, indicações e reservas | **Não iniciada integralmente** — cobertos somente controles de autorização e escopo em amostras/tests; faltam transições e reconciliações. |
