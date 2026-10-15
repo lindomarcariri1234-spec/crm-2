@@ -96,6 +96,7 @@ import type {
   CreateNoteBody,
   CreateOperationalCostPayableBody,
   CreateOutboundMessageBody,
+  CreatePartialManualRefundBody,
   CreatePassengerBody,
   CreatePaymentBody,
   CreatePipelineBody,
@@ -14334,6 +14335,131 @@ export const useDeletePayment = <
   TContext
 > => {
   return useMutation(getDeletePaymentMutationOptions(options), queryClient);
+};
+
+export const getCreatePartialManualRefundUrl = (id: string) => {
+  return `/api/payments/${id}/partial-refunds`;
+};
+
+/**
+ * @summary Record a partial manual refund for a reservation payment
+ */
+export const createPartialManualRefund = async (
+  id: string,
+  createPartialManualRefundBody: CreatePartialManualRefundBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<Payment> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return customFetch<Payment>(getCreatePartialManualRefundUrl(id), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(createPartialManualRefundBody),
+  });
+};
+
+export const getCreatePartialManualRefundMutationKey = () =>
+  ["createPartialManualRefund"] as const;
+
+export const getCreatePartialManualRefundMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPartialManualRefund>>,
+    TError,
+    CreatePartialManualRefundMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createPartialManualRefund>>,
+  TError,
+  CreatePartialManualRefundMutationVariables,
+  TContext
+> => {
+  const mutationKey = getCreatePartialManualRefundMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createPartialManualRefund>>,
+    CreatePartialManualRefundMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return createPartialManualRefund(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreatePartialManualRefundMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createPartialManualRefund>>
+>;
+export type CreatePartialManualRefundMutationBody =
+  BodyType<CreatePartialManualRefundBody>;
+export type CreatePartialManualRefundMutationError = ErrorType<unknown>;
+export type CreatePartialManualRefundMutationVariables = {
+  id: string;
+  data: BodyType<CreatePartialManualRefundBody>;
+};
+
+/**
+ * @summary Record a partial manual refund for a reservation payment
+ */
+export const useCreatePartialManualRefund = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof createPartialManualRefund>>,
+      TError,
+      CreatePartialManualRefundMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof createPartialManualRefund>>,
+  TError,
+  CreatePartialManualRefundMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getCreatePartialManualRefundMutationOptions(options),
+    queryClient,
+  );
 };
 
 export const getGetPaymentsSummaryUrl = () => {

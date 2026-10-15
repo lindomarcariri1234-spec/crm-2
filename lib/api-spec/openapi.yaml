@@ -2438,6 +2438,31 @@ paths:
                 required:
                   - success
 
+  /payments/{id}/partial-refunds:
+    post:
+      operationId: createPartialManualRefund
+      tags: [payments]
+      summary: Record a partial manual refund for a reservation payment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePartialManualRefundBody"
+      responses:
+        "201":
+          description: Created manual refund adjustment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+
   /payments/summary:
     get:
       operationId: getPaymentsSummary
@@ -9605,6 +9630,10 @@ components:
           type: string
         paidAt:
           type: ["string", "null"]
+        refundedAt:
+          type: ["string", "null"]
+        refundOfPaymentId:
+          type: ["string", "null"]
         gateway:
           type: ["string", "null"]
         status:
@@ -9693,6 +9722,18 @@ components:
           type: ["string", "null"]
         notes:
           type: ["string", "null"]
+
+    CreatePartialManualRefundBody:
+      type: object
+      properties:
+        amount:
+          type: number
+          exclusiveMinimum: 0
+          multipleOf: 0.01
+        notes:
+          type: string
+          maxLength: 1000
+      required: [amount]
 
     CreateOperationalCostPayableBody:
       type: object

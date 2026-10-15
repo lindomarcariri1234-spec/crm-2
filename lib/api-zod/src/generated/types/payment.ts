@@ -24,6 +24,10 @@ export interface Payment {
   /** @nullable */
   paidAt?: string | null;
   /** @nullable */
+  refundedAt?: string | null;
+  /** @nullable */
+  refundOfPaymentId?: string | null;
+  /** @nullable */
   gateway?: string | null;
   status: PaymentStatus;
   /** @nullable */

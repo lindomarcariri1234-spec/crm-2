@@ -5540,6 +5540,8 @@ export const ListPaymentsResponse = zod.object({
       totalInstallments: zod.number().int(),
       dueDate: zod.string(),
       paidAt: zod.string().nullish(),
+      refundedAt: zod.string().nullish(),
+      refundOfPaymentId: zod.string().nullish(),
       gateway: zod.string().nullish(),
       status: zod.enum([
         "pending",
@@ -5608,6 +5610,8 @@ export const CreatePaymentResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
   gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
@@ -5661,6 +5665,8 @@ export const CreateOperationalCostPayableResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
   gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
@@ -5711,6 +5717,8 @@ export const GetPaymentResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
   gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
@@ -5769,6 +5777,8 @@ export const UpdatePaymentResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
   gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
@@ -5797,6 +5807,59 @@ export const DeletePaymentParams = zod.object({
 
 export const DeletePaymentResponse = zod.object({
   success: zod.boolean(),
+});
+
+/**
+ * @summary Record a partial manual refund for a reservation payment
+ */
+export const CreatePartialManualRefundParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const createPartialManualRefundBodyAmountExclusiveMin = 0;
+export const createPartialManualRefundBodyAmountMultipleOf = 0.01;
+
+export const createPartialManualRefundBodyNotesMax = 1000;
+
+export const CreatePartialManualRefundBody = zod.object({
+  amount: zod
+    .number()
+    .gt(createPartialManualRefundBodyAmountExclusiveMin)
+    .multipleOf(createPartialManualRefundBodyAmountMultipleOf),
+  notes: zod.string().max(createPartialManualRefundBodyNotesMax).optional(),
+});
+
+export const CreatePartialManualRefundResponse = zod.object({
+  id: zod.string(),
+  reservationId: zod.string().nullish(),
+  clientId: zod.string().nullish(),
+  type: zod.enum(["receivable", "payable"]),
+  category: zod.string(),
+  amount: zod.number(),
+  paymentMethod: zod.string(),
+  installmentNumber: zod.number().int(),
+  totalInstallments: zod.number().int(),
+  dueDate: zod.string(),
+  paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
+  gateway: zod.string().nullish(),
+  status: zod.enum([
+    "pending",
+    "paid",
+    "overdue",
+    "cancelled",
+    "approved",
+    "failed",
+    "refunded",
+    "charged_back",
+  ]),
+  description: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  sourceExpenseId: zod.string().nullable(),
+  sourceTripCostId: zod.string().nullable(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
 });
 
 /**

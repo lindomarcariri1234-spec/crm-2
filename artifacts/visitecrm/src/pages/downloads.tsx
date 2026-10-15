@@ -356,6 +356,11 @@ export default function Downloads() {
         && payment.reservationId
       ) refundReservationIds.add(payment.reservationId);
     }
+    for (const payment of paymentActivity) {
+      if (payment.category === "manual_refund" && payment.reservationId) {
+        refundReservationIds.add(payment.reservationId);
+      }
+    }
     const existingReservationIds = new Set(createdInPeriod.map(reservation => reservation.id));
     const olderRefundReservationIds = [...refundReservationIds]
       .filter(reservationId => !existingReservationIds.has(reservationId));

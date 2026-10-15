@@ -114,6 +114,11 @@ vi.mock("@workspace/db", () => ({
     status: "payments.status",
     amount: "payments.amount",
     paidAt: "payments.paidAt",
+    category: "payments.category",
+    clientId: "payments.clientId",
+    orderId: "payments.orderId",
+    gateway: "payments.gateway",
+    refundOfPaymentId: "payments.refundOfPaymentId",
     refundedAt: "payments.refundedAt",
     dueDate: "payments.dueDate",
     reservationId: "payments.reservationId",
@@ -269,6 +274,101 @@ beforeEach(() => {
 });
 
 describe("payments authorization — FINANCIAL permission enforcement", () => {
+  it("POST /payments/:id/partial-refunds inserts a linked negative payment", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const original = {
+      ...FAKE_PAYMENT,
+      id: "payment-partial-refund-original",
+      reservationId: "reservation-partial-refund",
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "reservation",
+      amount: "100.00",
+      status: PAYMENT_STATUS.PAID,
+      gateway: "manual",
+    };
+    const refundDate = new Date("2026-10-15T12:00:00.000Z");
+    const refund = {
+      ...original,
+      id: "payment-partial-refund-row",
+      category: "manual_refund",
+      amount: "-25.00",
+      status: PAYMENT_STATUS.PAID,
+      refundedAt: refundDate,
+      refundOfPaymentId: original.id,
+      dueDate: refundDate,
+      paidAt: refundDate,
+      createdAt: refundDate,
+      updatedAt: refundDate,
+    };
+    let inserted: Record<string, unknown> | undefined;
+    dbState.selectRowsQueue = [
+      [original],
+      [],
+      [{
+        id: original.reservationId,
+        status: RESERVATION_STATUS.CANCELLED,
+        totalValue: "100.00",
+        clientId: null,
+        tripId: null,
+        capacityUnits: 0,
+        seats: [],
+      }],
+    ];
+    dbState.executeRowsQueue = [[{ total_received: "75.00" }]];
+    mockTransaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      select: vi.fn(() => makeChain()),
+      execute: mockExecute,
+      insert: vi.fn(() => ({
+        values: vi.fn((values: Record<string, unknown>) => {
+          inserted = values;
+          return { returning: async () => [refund] };
+        }),
+      })),
+      update: vi.fn(() => makeUpdate()),
+    }));
+
+    const res = await request(buildApp(paymentsRouter))
+      .post(`/api/payments/${original.id}/partial-refunds`)
+      .send({ amount: 25 });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(inserted).toMatchObject({
+      reservationId: original.reservationId,
+      refundOfPaymentId: original.id,
+      category: "manual_refund",
+      amount: "-25.00",
+      status: PAYMENT_STATUS.PAID,
+    });
+    expect(res.body.refundOfPaymentId).toBe(original.id);
+  });
+
+  it("rejects partial refunds that would exceed the original payment", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const original = {
+      ...FAKE_PAYMENT,
+      id: "payment-partial-refund-limit",
+      reservationId: "reservation-partial-refund-limit",
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "reservation",
+      amount: "100.00",
+      status: PAYMENT_STATUS.PAID,
+      gateway: "manual",
+    };
+    dbState.selectRowsQueue = [
+      [original],
+      [{ amount: "-90.00" }],
+    ];
+    mockTransaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      select: vi.fn(() => makeChain()),
+    }));
+
+    const res = await request(buildApp(paymentsRouter))
+      .post(`/api/payments/${original.id}/partial-refunds`)
+      .send({ amount: 20 });
+
+    expect(res.status).toBe(409);
+  });
+
   it("POST /payments stamps the refund date when created already refunded", async () => {
     requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
     let insertedPayment: Record<string, unknown> | undefined;
@@ -310,6 +410,7 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     const firstUpdate = vi.fn();
     dbState.selectRowsQueue = [
       [payment],
+      [],
       [{ ...payment, status: PAYMENT_STATUS.REFUNDED, refundedAt: new Date("2026-09-05T12:00:00.000Z") }],
     ];
     mockTransaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({

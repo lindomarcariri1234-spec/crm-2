@@ -1,4 +1,5 @@
 import { Router, type NextFunction } from "express";
+import { z } from "zod/v4";
 import { db } from "@workspace/db";
 import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, storeOrdersTable, clientsTable, commissionRulesTable, commissionsTable, tripsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
 import { eq, and, sql, asc, desc, inArray, isNull, gte, lt, notExists } from "drizzle-orm";
@@ -362,6 +363,7 @@ function formatPayment(p: typeof paymentsTable.$inferSelect) {
     totalInstallments: p.totalInstallments, dueDate: p.dueDate.toISOString(),
     paidAt: p.paidAt?.toISOString() ?? null, status: p.status,
     refundedAt: p.refundedAt?.toISOString() ?? null,
+    refundOfPaymentId: p.refundOfPaymentId ?? null,
     gateway: p.gateway ?? null,
     receiptUrl: p.receiptUrl ?? null,
     description: p.description, notes: p.notes,
@@ -1475,6 +1477,107 @@ router.get("/payments/:id", async (req, res, next: NextFunction): Promise<void> 
   }
 });
 
+router.post("/payments/:id/partial-refunds", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+    const parsed = z.object({
+      amount: z.number().positive().finite().refine(
+        (amount) => Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-7,
+        "Informe um valor com até duas casas decimais.",
+      ),
+      notes: z.string().trim().max(1000).optional(),
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError(String(parsed.error.message)));
+      return;
+    }
+
+    const createdRefund = await db.transaction(async (tx) => {
+      const [original] = await tx.select().from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.id, req.params.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+        ))
+        .for("update")
+        .limit(1);
+      if (!original) throw new NotFoundError("Payment not found", "NOT_FOUND");
+      if (
+        original.type !== PAYMENT_TYPE.RECEIVABLE
+        || !original.reservationId
+        || original.gateway === "stripe"
+        || original.status === PAYMENT_STATUS.REFUNDED
+        || (
+          original.status !== PAYMENT_STATUS.PAID
+          && original.status !== PAYMENT_STATUS.APPROVED
+        )
+        || Number(original.amount) <= 0
+      ) {
+        throw new ConflictError("Somente pagamentos manuais recebidos de uma reserva podem receber estorno parcial.", "PARTIAL_REFUND_NOT_ALLOWED");
+      }
+
+      const existingRefunds = await tx.select({ amount: paymentsTable.amount })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.refundOfPaymentId, original.id),
+          eq(paymentsTable.category, "manual_refund"),
+          eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+          inArray(paymentsTable.status, [PAYMENT_STATUS.PAID, PAYMENT_STATUS.APPROVED]),
+        ));
+      const originalCents = Math.round(Number(original.amount) * 100);
+      const alreadyRefundedCents = existingRefunds.reduce((sum, refund) => {
+        const amountCents = Math.round(Number(refund.amount) * 100);
+        return amountCents < 0 ? sum - amountCents : sum;
+      }, 0);
+      const refundCents = Math.round(parsed.data.amount * 100);
+      if (alreadyRefundedCents + refundCents > originalCents) {
+        throw new ConflictError("O estorno acumulado não pode exceder o valor original do pagamento.", "PARTIAL_REFUND_EXCEEDS_PAYMENT");
+      }
+
+      const now = new Date();
+      const [refund] = await tx.insert(paymentsTable).values({
+        id: generateId(),
+        tenantId: me.tenantId,
+        reservationId: original.reservationId,
+        clientId: original.clientId,
+        orderId: original.orderId,
+        type: PAYMENT_TYPE.RECEIVABLE,
+        category: "manual_refund",
+        amount: (-refundCents / 100).toFixed(2),
+        paymentMethod: original.paymentMethod,
+        installmentNumber: original.installmentNumber,
+        totalInstallments: original.totalInstallments,
+        dueDate: now,
+        paidAt: now,
+        refundedAt: now,
+        refundOfPaymentId: original.id,
+        status: PAYMENT_STATUS.PAID,
+        gateway: "manual",
+        description: `Estorno parcial do pagamento ${original.id}`,
+        notes: parsed.data.notes?.trim() || null,
+      }).returning();
+      await syncReservationPaymentStatus(original.reservationId, me.tenantId, tx);
+      return { refund, clientId: original.clientId, reservationId: original.reservationId };
+    });
+
+    if (createdRefund.clientId) {
+      recalculateClientFinancials(createdRefund.clientId, me.tenantId)
+        .catch((err) => req.log.error({ err }, "Error recalculating client financials after partial refund"));
+    }
+    res.status(201).json(formatPayment(createdRefund.refund));
+    CalendarSyncService.syncPayment(createdRefund.refund.id)
+      .catch((err) => req.log.warn({ err, context: "payment.partial_refund", paymentId: createdRefund.refund.id }, "Calendar sync failed"));
+  } catch (err) {
+    req.log.error({ err }, "Error recording partial manual refund");
+    next(err);
+  }
+});
+
 router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -1540,6 +1643,26 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         .for("update")
         .limit(1);
       if (!existingPayment) return { payment: null, reversal: null, previousStatus: null };
+
+      if (
+        parsed.data.status === PAYMENT_STATUS.REFUNDED
+        && existingPayment.status !== PAYMENT_STATUS.REFUNDED
+      ) {
+        const [partialRefund] = await tx.select({ id: paymentsTable.id })
+          .from(paymentsTable)
+          .where(and(
+            eq(paymentsTable.tenantId, me.tenantId),
+            eq(paymentsTable.refundOfPaymentId, existingPayment.id),
+            eq(paymentsTable.category, "manual_refund"),
+          ))
+          .limit(1);
+        if (partialRefund) {
+          throw new ConflictError(
+            "Este pagamento já tem estornos parciais. Registre o valor restante como outro estorno parcial.",
+            "PAYMENT_HAS_PARTIAL_REFUNDS",
+          );
+        }
+      }
 
       if (
         parsed.data.status != null

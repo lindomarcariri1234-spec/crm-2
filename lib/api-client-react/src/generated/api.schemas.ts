@@ -2372,6 +2372,10 @@ export interface Payment {
   /** @nullable */
   paidAt?: string | null;
   /** @nullable */
+  refundedAt?: string | null;
+  /** @nullable */
+  refundOfPaymentId?: string | null;
+  /** @nullable */
   gateway?: string | null;
   status: PaymentStatus;
   /** @nullable */
@@ -2419,6 +2423,13 @@ export interface UpdatePaymentBody {
   paidAt?: string | null;
   /** @nullable */
   notes?: string | null;
+}
+
+export interface CreatePartialManualRefundBody {
+  /** @exclusiveMinimum 0 */
+  amount: number;
+  /** @maxLength 1000 */
+  notes?: string;
 }
 
 export type CreateOperationalCostPayableBodySourceType =
@@ -3782,12 +3793,22 @@ export type SystemHealthRedisDailyUsage = {
   warningThresholdPct: number;
 } | null;
 
+/**
+ * @nullable
+ */
+export type SystemHealthRedisQueueDailyUsage = {
+  commandCount: number;
+  maxCommands: number;
+  usagePct: number;
+  warningThresholdPct: number;
+} | null;
+
 export interface SystemHealthRedis {
   status: SystemHealthRedisStatus;
   /** @nullable */
   dailyUsage?: SystemHealthRedisDailyUsage;
   /** @nullable */
-  queueDailyUsage?: SystemHealthRedisDailyUsage;
+  queueDailyUsage?: SystemHealthRedisQueueDailyUsage;
 }
 
 export interface SystemHealthStripeWebhookAuditEndpoint {

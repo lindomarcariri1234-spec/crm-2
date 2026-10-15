@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { SystemHealthRedisDailyUsage } from "./systemHealthRedisDailyUsage";
+import type { SystemHealthRedisQueueDailyUsage } from "./systemHealthRedisQueueDailyUsage";
 import type { SystemHealthRedisStatus } from "./systemHealthRedisStatus";
 
 export interface SystemHealthRedis {
@@ -13,5 +14,5 @@ export interface SystemHealthRedis {
   /** @nullable */
   dailyUsage?: SystemHealthRedisDailyUsage;
   /** @nullable */
-  queueDailyUsage?: SystemHealthRedisDailyUsage;
+  queueDailyUsage?: SystemHealthRedisQueueDailyUsage;
 }

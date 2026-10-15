@@ -191,7 +191,14 @@ export function prepareReservations(
         && p.gateway !== "stripe"
         && p.amount > 0,
     );
-    const manualRefundCents = manualRefunds.reduce((total, p) => total + Math.abs(cents(p.amount)), 0);
+    const manualRefundAdjustments = payments.filter(
+      (p) =>
+        isReceived(p)
+        && p.category === "manual_refund"
+        && p.amount < 0,
+    );
+    const manualRefundCents = [...manualRefunds, ...manualRefundAdjustments]
+      .reduce((total, p) => total + Math.abs(cents(p.amount)), 0);
     const netPaidCents = cents(r.paidValue);
     // Derive gross from the same canonical net paid value shown in the reservation
     // summary, so order-level receipts that lack a reservation link still reconcile.
@@ -199,7 +206,7 @@ export function prepareReservations(
     const refundDetails = refunds
       .map((p) => `${fmtDate(p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
       .join("; ");
-    const manualRefundDetails = manualRefunds
+    const manualRefundDetails = [...manualRefunds, ...manualRefundAdjustments]
       .map((p) => `${fmtDate(p.refundedAt ?? p.updatedAt ?? p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
       .join("; ");
 
