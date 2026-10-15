@@ -90,6 +90,7 @@ import {
   prepareBullMQQueueRedisCutover,
   verifyBullMQWorkerConsumesProbe,
 } from "./index";
+import { REMINDER_SCHEDULER_DEFINITIONS } from "./reminder-schedulers";
 
 describe("prepareBullMQQueueRedisCutover", () => {
   beforeEach(() => {
@@ -164,8 +165,13 @@ describe("prepareBullMQQueueRedisCutover", () => {
   });
 
   it("allows known reminder scheduler jobs because startup recreates their schedules", async () => {
-    state.delayedJobs = [{ name: "boarding_reminder", repeatJobKey: "reminders:boarding-reminder-daily:123" }];
-    state.schedulers = [{ id: "boarding-reminder-daily", name: "boarding_reminder" }];
+    expect(new Set(REMINDER_SCHEDULER_DEFINITIONS.map(({ id }) => id)).size).toBe(REMINDER_SCHEDULER_DEFINITIONS.length);
+    expect(new Set(REMINDER_SCHEDULER_DEFINITIONS.map(({ name }) => name)).size).toBe(REMINDER_SCHEDULER_DEFINITIONS.length);
+    state.delayedJobs = REMINDER_SCHEDULER_DEFINITIONS.map(({ id, name }) => ({
+      name,
+      repeatJobKey: `reminders:${id}:123`,
+    }));
+    state.schedulers = REMINDER_SCHEDULER_DEFINITIONS.map(({ id, name }) => ({ id, name }));
 
     await prepareBullMQQueueRedisCutover();
 

@@ -10,6 +10,7 @@ import {
   rejectSeparateQueueRedisCutover,
   waitForEvictionPolicyCheck,
 } from "../lib/redis";
+import { isKnownReminderSchedulerJob, REMINDER_SCHEDULER_NAME_BY_ID } from "./reminder-schedulers";
 import { logger } from "../lib/logger";
 import type { ReservationConfirmationEmailProps, ReservationCancellationEmailProps, BirthdayEmailProps, NewBookingNotificationEmailProps, ReferralBonusPaidEmailProps, ReferralConvertedEmailProps, ReferralExpiredEmailProps, ReferralExpiringSoonEmailProps, ReferralBonusReleasedEmailProps, ReferralWelcomeEmailProps, ReferralLoyaltyPointsEmailProps } from "@workspace/email";
 
@@ -169,29 +170,6 @@ const QUEUES = {
   OUTBOUND_DELIVERY: "outbound-deliveries",
 } as const;
 
-const REMINDER_SCHEDULERS = new Map([
-  ["boarding-reminder-daily", "boarding_reminder"],
-  ["payment-reminder-daily", "payment_reminder"],
-  ["expired-reservations-cleanup", "expired_reservations_cleanup"],
-  ["failed-email-retry", "failed_email_retry"],
-  ["referral-expiry-notification-daily", "referral_expiry_notification"],
-  ["referral-expiry-warning-daily", "referral_expiry_warning"],
-  ["expiry-warning-email-retry", "expiry_warning_email_retry"],
-  ["referral-bonus-release-notification-daily", "referral_bonus_release_notification"],
-  ["nps-dispatch-hourly", "nps_dispatch"],
-  ["installment-due-reminder-daily", "installment_due_reminder"],
-  ["seat-reconciliation-daily", "seat_reconciliation"],
-  ["trial-expiry-notification-daily", "trial_expiry_notification"],
-  ["uploadthing-orphan-cleanup-nightly", "uploadthing_orphan_cleanup"],
-  ["chatbot-delivery-retry", "chatbot_delivery_retry"],
-]);
-
-function isKnownReminderSchedulerJob(job: { name: string; repeatJobKey?: string }): boolean {
-  return [...REMINDER_SCHEDULERS].some(
-    ([schedulerId, name]) => job.name === name && job.repeatJobKey?.includes(schedulerId),
-  );
-}
-
 export type BullMQRedisCutoverBlocker = {
   queue: string;
   state: string;
@@ -308,7 +286,7 @@ export async function prepareBullMQQueueRedisCutover(): Promise<boolean> {
       if (queue.name === QUEUES.REMINDERS) {
         const schedulers = await queue.getJobSchedulers();
         const unknownSchedulers = schedulers.filter(
-          (scheduler) => REMINDER_SCHEDULERS.get(scheduler.id ?? "") !== scheduler.name,
+          (scheduler) => REMINDER_SCHEDULER_NAME_BY_ID.get(scheduler.id ?? "") !== scheduler.name,
         );
         if (unknownSchedulers.length > 0) {
           blockers.push({ queue: queue.name, state: "unrecognized-schedulers", count: unknownSchedulers.length });
