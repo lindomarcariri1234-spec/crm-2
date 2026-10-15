@@ -5,7 +5,13 @@ import { storeOrdersTable, reservationsTable, paymentsTable, storesTable, tripsT
 import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
-import { syncReservationPaymentStatus, paymentExistsForGatewayTx, type DbExecutor } from "../lib/reservation-payments";
+import {
+  applyCumulativeStripeRefundToPayments,
+  recalculateReservationPaymentAmountsPreservingStatus,
+  syncReservationPaymentStatus,
+  paymentExistsForGatewayTx,
+  type DbExecutor,
+} from "../lib/reservation-payments";
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { runDeferredOrderAccounting, runPostPaymentSideEffects } from "../services/checkout/post-booking";
@@ -28,7 +34,6 @@ import { processEvolutionInbound } from "../services/whatsapp-attendance";
 import { processEvolutionDeliveryStatus } from "../services/whatsapp-attendance";
 import { moveDealToStage } from "../services/pipeline-automation";
 import { updateOutboundDeliveryFromWebhook } from "../services/outbound-delivery";
-import { recomputeClientClassification } from "../services/client-classification.js";
 
 const router = Router();
 
@@ -494,24 +499,50 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
     const paymentIntentId = String(obj["payment_intent"] ?? "");
     if (!paymentIntentId) return;
     // Only treat as a full refund/cancellation when the entire charge was
-    // refunded. Partial refunds are recorded in financial views via the
-    // existing payments rows but must not cancel the reservation.
+    // refunded. Partial refunds reduce net receipts but leave reservations active.
     const amount = Number(obj["amount"] ?? 0);
     const amountRefunded = Number(obj["amount_refunded"] ?? 0);
     if (amount > 0 && amountRefunded < amount) {
       let refundedOrderId: string | null = null;
       await db.transaction(async (tx) => {
-        const [order] = await tx.select({ id: storeOrdersTable.id, tenantId: storeOrdersTable.tenantId })
+        const [order] = await tx.select({
+          id: storeOrdersTable.id,
+          tenantId: storeOrdersTable.tenantId,
+          paymentStatus: storeOrdersTable.paymentStatus,
+          status: storeOrdersTable.status,
+        })
           .from(storeOrdersTable)
           .where(and(eq(storeOrdersTable.paymentIntentId, paymentIntentId), eq(storeOrdersTable.tenantId, store.tenantId)))
+          .for("update")
           .limit(1);
         if (order) {
+          if (
+            order.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+            || order.status === STORE_ORDER_STATUS.CANCELLED
+          ) return;
           refundedOrderId = order.id;
           await adjustOrderSettlement(tx as unknown as DbExecutor, {
             tenantId: order.tenantId, orderId: order.id, amount: amountRefunded,
             totalAmount: amount, eventKey: `partial-refund:stripe:${paymentIntentId}:${amountRefunded}`,
             occurredAt: new Date(), reason: "Reembolso parcial Stripe",
           });
+          const { reservationIds } = await applyCumulativeStripeRefundToPayments(
+            tx as unknown as DbExecutor,
+            {
+              tenantId: order.tenantId,
+              orderId: order.id,
+              paymentIntentId,
+              amountRefundedCents: Math.floor(amountRefunded),
+              chargeAmountCents: Math.floor(amount),
+            },
+          );
+          for (const reservationId of reservationIds) {
+            await recalculateReservationPaymentAmountsPreservingStatus(
+              reservationId,
+              order.tenantId,
+              tx as unknown as DbExecutor,
+            );
+          }
         }
       });
       if (refundedOrderId) {
@@ -526,13 +557,10 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
         `);
         const clients = (affected as unknown as { rows: Array<{ client_id: string }> }).rows;
         for (const client of clients) {
-          await recomputeClientClassification({
-            tenantId: store.tenantId,
-            clientId: client.client_id,
-            trigger: "partial_order_refund",
-            sourceId: refundedOrderId,
-            reason: "Reembolso parcial aplicado; indicadores de classificação recalculados.",
-          });
+          await recalculateClientFinancials(
+            client.client_id,
+            store.tenantId,
+          );
         }
       }
       return;
