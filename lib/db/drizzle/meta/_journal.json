@@ -834,6 +834,13 @@
       "when": 1809960019000,
       "tag": "0119_partial_manual_refunds",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1809960020000,
+      "tag": "0120_trip_tenant_relationship_constraints",
+      "breakpoints": true
     }
   ]
 }

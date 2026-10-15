@@ -205,7 +205,7 @@ router.post("/guide/trip/:tripId/checkins", async (req, res, next: NextFunction)
         tripId: guide.tripId,
         tenantId: guide.tenantId,
         passengerId,
-        reservationId: passenger.reservationId ?? null,
+        reservationId: passenger.reservationId,
         checkedInByUserRef: `guide:${guide.tokenId}:${guide.guideName}`,
         checkedInAt,
         notes: notes ?? null,

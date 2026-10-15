@@ -1,19 +1,36 @@
-import { pgTable, text, timestamp, numeric, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 import { tripsTable } from "./trips";
+import { reservationsTable, passengersTable } from "./reservations";
 
 export const tripCheckinsTable = pgTable("trip_checkins", {
   id: text("id").primaryKey(),
-  tripId: text("trip_id").notNull().references(() => tripsTable.id, { onDelete: "cascade" }),
+  tripId: text("trip_id").notNull(),
   tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   passengerId: text("passenger_id").notNull(),
-  reservationId: text("reservation_id"),
+  reservationId: text("reservation_id").notNull(),
   checkedInByUserRef: text("checked_in_by_user_ref"),
   checkedInAt: timestamp("checked_in_at", { withTimezone: true }).notNull().defaultNow(),
   notes: text("notes"),
   status: text("status").notNull().default("present"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  foreignKey({
+    name: "trip_checkins_trip_tenant_fk",
+    columns: [t.tripId, t.tenantId],
+    foreignColumns: [tripsTable.id, tripsTable.tenantId],
+  }).onDelete("cascade"),
+  foreignKey({
+    name: "trip_checkins_reservation_trip_tenant_fk",
+    columns: [t.reservationId, t.tripId, t.tenantId],
+    foreignColumns: [reservationsTable.id, reservationsTable.tripId, reservationsTable.tenantId],
+  }).onDelete("cascade"),
+  foreignKey({
+    name: "trip_checkins_passenger_reservation_fk",
+    columns: [t.passengerId, t.reservationId],
+    foreignColumns: [passengersTable.id, passengersTable.reservationId],
+  }).onDelete("cascade"),
+]);
 
 export type TripCheckin = typeof tripCheckinsTable.$inferSelect;
 export type InsertTripCheckin = typeof tripCheckinsTable.$inferInsert;

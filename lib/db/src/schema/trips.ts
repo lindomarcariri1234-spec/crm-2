@@ -91,6 +91,7 @@ export const tripsTable = pgTable("trips", {
   index("trips_tenant_id_departure_date_idx").on(t.tenantId, t.departureDate),
   index("trips_tenant_id_status_idx").on(t.tenantId, t.status),
   index("trips_slug_idx").on(t.slug),
+  uniqueIndex("trips_id_tenant_id_unique").on(t.id, t.tenantId),
   uniqueIndex("trips_tenant_import_fingerprint_unique").on(t.tenantId, t.importFingerprint),
 ]);
 

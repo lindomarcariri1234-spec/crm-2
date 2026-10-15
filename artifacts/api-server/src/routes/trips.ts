@@ -3183,7 +3183,7 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
         tripId: req.params.id!,
         tenantId: me.tenantId,
         passengerId,
-        reservationId: passenger.reservationId ?? null,
+        reservationId: passenger.reservationId,
         checkedInByUserRef: me.id,
         checkedInAt,
         notes: notes ?? null,
