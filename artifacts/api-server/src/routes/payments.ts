@@ -361,6 +361,7 @@ function formatPayment(p: typeof paymentsTable.$inferSelect) {
     paymentMethod: p.paymentMethod, installmentNumber: p.installmentNumber,
     totalInstallments: p.totalInstallments, dueDate: p.dueDate.toISOString(),
     paidAt: p.paidAt?.toISOString() ?? null, status: p.status,
+    gateway: p.gateway ?? null,
     receiptUrl: p.receiptUrl ?? null,
     description: p.description, notes: p.notes,
     sourceExpenseId: p.sourceExpenseId ?? null,
@@ -757,6 +758,8 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       dateTo,
       dueDateFrom,
       dueDateTo,
+      updatedAtFrom,
+      updatedAtTo,
       unlinkedOnly,
     } = req.query as Record<string, string>;
     const parsedPage = Number.parseInt(page, 10);
@@ -774,7 +777,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
         && parsed.getUTCMonth() === month - 1
         && parsed.getUTCDate() === day;
     };
-    for (const [name, value] of Object.entries({ dateFrom, dateTo, dueDateFrom, dueDateTo })) {
+    for (const [name, value] of Object.entries({ dateFrom, dateTo, dueDateFrom, dueDateTo, updatedAtFrom, updatedAtTo })) {
       if (value && !isValidIsoDate(value)) {
         next(new ValidationError(`${name} must be a valid ISO date (YYYY-MM-DD)`, "VALIDATION_ERROR"));
         return;
@@ -818,7 +821,11 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       }
       clientIds = [...new Set(clientIds)];
     }
-    if ((dateFrom && dateTo && dateFrom > dateTo) || (dueDateFrom && dueDateTo && dueDateFrom > dueDateTo)) {
+    if (
+      (dateFrom && dateTo && dateFrom > dateTo)
+      || (dueDateFrom && dueDateTo && dueDateFrom > dueDateTo)
+      || (updatedAtFrom && updatedAtTo && updatedAtFrom > updatedAtTo)
+    ) {
       next(new ValidationError("The start date must not be after the end date", "VALIDATION_ERROR"));
       return;
     }
@@ -844,6 +851,14 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       const endExclusive = new Date(`${dueDateTo}T03:00:00.000Z`);
       endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
       conditions.push(lt(paymentsTable.dueDate, endExclusive));
+    }
+    if (updatedAtFrom) {
+      conditions.push(gte(paymentsTable.updatedAt, new Date(`${updatedAtFrom}T03:00:00.000Z`)));
+    }
+    if (updatedAtTo) {
+      const endExclusive = new Date(`${updatedAtTo}T03:00:00.000Z`);
+      endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+      conditions.push(lt(paymentsTable.updatedAt, endExclusive));
     }
 
     if (me.role === ROLES.CLIENT) {

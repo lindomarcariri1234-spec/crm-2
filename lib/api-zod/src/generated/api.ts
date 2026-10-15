@@ -5502,6 +5502,14 @@ export const ListPaymentsQueryParams = zod.object({
     .string()
     .nullish()
     .describe("Inclusive end of the due-date range in America/Sao_Paulo."),
+  updatedAtFrom: zod.coerce
+    .string()
+    .nullish()
+    .describe("Inclusive start of the updated-at range in America/Sao_Paulo."),
+  updatedAtTo: zod.coerce
+    .string()
+    .nullish()
+    .describe("Inclusive end of the updated-at range in America/Sao_Paulo."),
   unlinkedOnly: zod.coerce
     .boolean()
     .optional()
@@ -5524,6 +5532,7 @@ export const ListPaymentsResponse = zod.object({
       totalInstallments: zod.number().int(),
       dueDate: zod.string(),
       paidAt: zod.string().nullish(),
+      gateway: zod.string().nullish(),
       status: zod.enum([
         "pending",
         "paid",
@@ -5591,6 +5600,7 @@ export const CreatePaymentResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
     "paid",
@@ -5643,6 +5653,7 @@ export const CreateOperationalCostPayableResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
     "paid",
@@ -5692,6 +5703,7 @@ export const GetPaymentResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
     "paid",
@@ -5749,6 +5761,7 @@ export const UpdatePaymentResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
     "paid",

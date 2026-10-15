@@ -326,7 +326,7 @@ export default function Downloads() {
   }
 
   async function _prepareReservations() {
-    const [createdInPeriod, paymentActivity] = await Promise.all([
+    const [createdInPeriod, paymentActivity, manualRefundActivity] = await Promise.all([
       fetchAllPages<{
       id: string; client?: { name?: string } | null; trip?: { name?: string; departureDate?: string } | null;
       status: string; seats?: unknown[] | null; totalValue?: number; paidValue?: number; balance?: number;
@@ -337,12 +337,25 @@ export default function Downloads() {
         dueDateTo: quickEnd,
         type: "receivable",
       }),
+      fetchAllPages<ReservationPaymentItem>("/api/payments", {
+        updatedAtFrom: quickStart,
+        updatedAtTo: quickEnd,
+        type: "receivable",
+        status: "refunded",
+      }),
     ]);
     const refundReservationIds = new Set(
-      paymentActivity
+      [...paymentActivity, ...manualRefundActivity]
         .filter(payment => payment.category === "stripe_refund" && payment.status === "paid" && payment.reservationId)
         .map(payment => payment.reservationId!),
     );
+    for (const payment of manualRefundActivity) {
+      if (
+        payment.category !== "stripe_refund"
+        && payment.gateway !== "stripe"
+        && payment.reservationId
+      ) refundReservationIds.add(payment.reservationId);
+    }
     const existingReservationIds = new Set(createdInPeriod.map(reservation => reservation.id));
     const olderRefundReservationIds = [...refundReservationIds]
       .filter(reservationId => !existingReservationIds.has(reservationId));

@@ -2371,6 +2371,8 @@ export interface Payment {
   dueDate: string;
   /** @nullable */
   paidAt?: string | null;
+  /** @nullable */
+  gateway?: string | null;
   status: PaymentStatus;
   /** @nullable */
   description?: string | null;
@@ -6076,6 +6078,16 @@ export type ListPaymentsParams = {
    * @nullable
    */
   dueDateTo?: string | null;
+  /**
+   * Inclusive start of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtFrom?: string | null;
+  /**
+   * Inclusive end of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtTo?: string | null;
   /**
    * Return only payments not linked to an operational cost.
    */

@@ -23,6 +23,8 @@ export interface Payment {
   dueDate: string;
   /** @nullable */
   paidAt?: string | null;
+  /** @nullable */
+  gateway?: string | null;
   status: PaymentStatus;
   /** @nullable */
   description?: string | null;

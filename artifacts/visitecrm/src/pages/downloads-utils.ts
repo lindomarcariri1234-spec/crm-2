@@ -94,12 +94,14 @@ export function prepareTrips(
 export interface ReservationPaymentItem {
   reservationId?: string | null;
   clientId?: string | null;
+  gateway?: string | null;
   type: string;
   category: string;
   amount: number;
   status: string;
   dueDate?: string | null;
   paidAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export function chunkIds(ids: string[], batchSize = 100): string[][] {
@@ -168,8 +170,8 @@ export function prepareReservations(
   const headers = [
     "ID", "Cliente", "Viagem", "Saída", "Status", "Assentos",
     "Valor Total (R$)", "Recebimentos Brutos (R$)", "Estornos Stripe (R$)",
-    "Detalhes dos Estornos Stripe", "Valor Pago Líquido (R$)", "Saldo (R$)", "Forma de Pagamento",
-    "Parcelas", "Criado em",
+    "Detalhes dos Estornos Stripe", "Estornos Manuais (R$)", "Detalhes dos Estornos Manuais",
+    "Valor Pago Líquido (R$)", "Saldo (R$)", "Forma de Pagamento", "Parcelas", "Criado em",
   ];
   const rows = reservations.map((r) => {
     const payments = r.payments ?? [];
@@ -180,12 +182,24 @@ export function prepareReservations(
       (p) => isReceived(p) && p.category === "stripe_refund" && p.amount < 0,
     );
     const refundCents = refunds.reduce((total, p) => total + Math.abs(cents(p.amount)), 0);
+    const manualRefunds = payments.filter(
+      (p) =>
+        p.type === "receivable"
+        && p.status === "refunded"
+        && p.category !== "stripe_refund"
+        && p.gateway !== "stripe"
+        && p.amount > 0,
+    );
+    const manualRefundCents = manualRefunds.reduce((total, p) => total + Math.abs(cents(p.amount)), 0);
     const netPaidCents = cents(r.paidValue);
     // Derive gross from the same canonical net paid value shown in the reservation
     // summary, so order-level receipts that lack a reservation link still reconcile.
-    const grossReceiptsCents = netPaidCents + refundCents;
+    const grossReceiptsCents = netPaidCents + refundCents + manualRefundCents;
     const refundDetails = refunds
       .map((p) => `${fmtDate(p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
+      .join("; ");
+    const manualRefundDetails = manualRefunds
+      .map((p) => `${fmtDate(p.updatedAt ?? p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
       .join("; ");
 
     return [
@@ -199,6 +213,8 @@ export function prepareReservations(
       fmtCur(grossReceiptsCents / 100),
       fmtCur(refundCents / 100),
       refundDetails,
+      fmtCur(-manualRefundCents / 100),
+      manualRefundDetails,
       fmtCur(r.paidValue),
       fmtCur(r.balance),
       r.paymentMethod ?? "",

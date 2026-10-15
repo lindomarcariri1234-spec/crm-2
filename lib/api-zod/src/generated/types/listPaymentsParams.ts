@@ -52,6 +52,16 @@ export type ListPaymentsParams = {
    */
   dueDateTo?: string | null;
   /**
+   * Inclusive start of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtFrom?: string | null;
+  /**
+   * Inclusive end of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtTo?: string | null;
+  /**
    * Return only payments not linked to an operational cost.
    */
   unlinkedOnly?: boolean;

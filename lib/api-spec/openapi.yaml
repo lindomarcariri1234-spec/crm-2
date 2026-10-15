@@ -2274,6 +2274,16 @@ paths:
           description: Inclusive end of the due-date range in America/Sao_Paulo.
           schema:
             type: ["string", "null"]
+        - name: updatedAtFrom
+          in: query
+          description: Inclusive start of the updated-at range in America/Sao_Paulo.
+          schema:
+            type: ["string", "null"]
+        - name: updatedAtTo
+          in: query
+          description: Inclusive end of the updated-at range in America/Sao_Paulo.
+          schema:
+            type: ["string", "null"]
         - name: unlinkedOnly
           in: query
           description: Return only payments not linked to an operational cost.
@@ -9594,6 +9604,8 @@ components:
         dueDate:
           type: string
         paidAt:
+          type: ["string", "null"]
+        gateway:
           type: ["string", "null"]
         status:
           $ref: "#/components/schemas/PaymentStatus"

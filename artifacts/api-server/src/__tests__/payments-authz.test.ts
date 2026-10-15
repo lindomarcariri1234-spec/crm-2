@@ -319,6 +319,17 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     );
   });
 
+  it("GET /payments → supports inclusive São Paulo updated-at boundaries", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/payments?updatedAtFrom=2026-01-31&updatedAtTo=2026-02-01");
+
+    expect(res.status).toBe(200);
+    expect(gte).toHaveBeenCalledWith(paymentsTable.updatedAt, new Date("2026-01-31T03:00:00.000Z"));
+    expect(lt).toHaveBeenCalledWith(paymentsTable.updatedAt, new Date("2026-02-02T03:00:00.000Z"));
+  });
+
   it("GET /payments → supports a tenant-scoped bulk reservation filter", async () => {
     requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
 
