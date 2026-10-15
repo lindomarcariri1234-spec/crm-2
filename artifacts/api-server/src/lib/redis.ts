@@ -11,6 +11,7 @@ import {
 
 let _connection: Redis | null = null;
 let _queueConnection: Redis | null = null;
+let _useSeparateQueueRedis = false;
 export let isQueueEnabled = false;
 
 const redisDailyLimitCircuit = createRedisDailyLimitCircuit({
@@ -62,6 +63,10 @@ export function registerQueueRedisDailyLimitWorker(worker: RedisQuotaWorker): ()
 
 export function reportQueueRedisDailyLimitError(error: unknown): boolean {
   return queueRedisDailyLimitCircuit.reportError(error);
+}
+
+export function approveSeparateQueueRedisCutover(): void {
+  _useSeparateQueueRedis = true;
 }
 
 // ─── Eviction policy ──────────────────────────────────────────────────────────
@@ -561,7 +566,8 @@ export function getRedisConnection(): Redis | null {
  * setup by falling back to REDIS_URL.
  */
 export function getBullMQWorkerConnection(): Redis | null {
-  const raw = (process.env["REDIS_QUEUE_URL"]?.trim() || process.env["REDIS_URL"]?.trim());
+  const raw = (_useSeparateQueueRedis ? process.env["REDIS_QUEUE_URL"]?.trim() : undefined)
+    || process.env["REDIS_URL"]?.trim();
   if (!raw) return null;
 
   const urlMatch = raw.match(/(rediss?:\/\/\S+)/);
@@ -700,6 +706,7 @@ export async function closeRedisConnection(): Promise<void> {
   _producerConnection = null;
   _queueConnection = null;
   _connection = null;
+  _useSeparateQueueRedis = false;
   isQueueEnabled = false;
 }
 

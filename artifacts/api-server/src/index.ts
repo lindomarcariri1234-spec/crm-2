@@ -47,7 +47,7 @@ import { runCapacityIntegrityCheck } from "./services/capacity-integrity";
 import { runStripeHealthCheckCron } from "./lib/stripe-health-check";
 import { getRedisConnection, getBullMQWorkerConnection, waitForEvictionPolicyCheck, fetchUpstashDailyStats, getRedisWarningThresholdPct, maybeSendDailyLimitAlert } from "./lib/redis";
 import { initSeatUpdateSubscriber, closeSeatUpdateSubscriber } from "./lib/realtime";
-import { getReminderQueue, closeQueues } from "./queues/index";
+import { getReminderQueue, closeQueues, prepareBullMQQueueRedisCutover } from "./queues/index";
 import { startEmailWorker, stopEmailWorker } from "./workers/email.worker";
 import { startReminderWorker, stopReminderWorker, retryFailedBookingEmails, retryFailedExpiryWarningEmails } from "./workers/reminder.worker";
 import { startPdfWorker, stopPdfWorker } from "./workers/pdf.worker";
@@ -234,22 +234,24 @@ function warnDevServerSkipped(port: number): Promise<void> {
 
 function listenForRequests(): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    const server = app.listen(port);
-    server.once("listening", () => {
-      logger.info({ port }, "Server listening");
-      resolve(true);
-    });
-    server.once("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EADDRINUSE" && process.env["NODE_ENV"] !== "production") {
-        // Drain stderr fully before exiting so the banner is not silently
-        // discarded when the workflow pipes the process output.
-        void warnDevServerSkipped(port).then(() => process.exit(0));
-        resolve(false);
-        return;
-      }
-      logger.error({ err }, "Error listening on port");
-      reject(err);
-    });
+    void prepareBullMQQueueRedisCutover().then(() => {
+      const server = app.listen(port);
+      server.once("listening", () => {
+        logger.info({ port }, "Server listening");
+        resolve(true);
+      });
+      server.once("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EADDRINUSE" && process.env["NODE_ENV"] !== "production") {
+          // Drain stderr fully before exiting so the banner is not silently
+          // discarded when the workflow pipes the process output.
+          void warnDevServerSkipped(port).then(() => process.exit(0));
+          resolve(false);
+          return;
+        }
+        logger.error({ err }, "Error listening on port");
+        reject(err);
+      });
+    }).catch(reject);
   });
 }
 

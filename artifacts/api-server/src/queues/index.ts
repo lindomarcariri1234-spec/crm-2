@@ -1,5 +1,11 @@
 import { Queue } from "bullmq";
-import { getBullMQQueueConnection } from "../lib/redis";
+import {
+  approveSeparateQueueRedisCutover,
+  areWorkersEnabled,
+  getBullMQQueueConnection,
+  getRedisConnection,
+} from "../lib/redis";
+import { logger } from "../lib/logger";
 import type { ReservationConfirmationEmailProps, ReservationCancellationEmailProps, BirthdayEmailProps, NewBookingNotificationEmailProps, ReferralBonusPaidEmailProps, ReferralConvertedEmailProps, ReferralExpiredEmailProps, ReferralExpiringSoonEmailProps, ReferralBonusReleasedEmailProps, ReferralWelcomeEmailProps, ReferralLoyaltyPointsEmailProps } from "@workspace/email";
 
 export interface ReservationEmailJobData extends ReservationConfirmationEmailProps {
@@ -157,6 +163,111 @@ const QUEUES = {
   CALENDAR_SYNC: "calendar-sync",
   OUTBOUND_DELIVERY: "outbound-deliveries",
 } as const;
+
+const REMINDER_SCHEDULERS = new Map([
+  ["boarding-reminder-daily", "boarding_reminder"],
+  ["payment-reminder-daily", "payment_reminder"],
+  ["expired-reservations-cleanup", "expired_reservations_cleanup"],
+  ["failed-email-retry", "failed_email_retry"],
+  ["referral-expiry-notification-daily", "referral_expiry_notification"],
+  ["referral-expiry-warning-daily", "referral_expiry_warning"],
+  ["expiry-warning-email-retry", "expiry_warning_email_retry"],
+  ["referral-bonus-release-notification-daily", "referral_bonus_release_notification"],
+  ["nps-dispatch-hourly", "nps_dispatch"],
+  ["installment-due-reminder-daily", "installment_due_reminder"],
+  ["seat-reconciliation-daily", "seat_reconciliation"],
+  ["trial-expiry-notification-daily", "trial_expiry_notification"],
+  ["uploadthing-orphan-cleanup-nightly", "uploadthing_orphan_cleanup"],
+  ["chatbot-delivery-retry", "chatbot_delivery_retry"],
+]);
+
+function isKnownReminderSchedulerJob(job: { name: string; repeatJobKey?: string }): boolean {
+  return [...REMINDER_SCHEDULERS].some(
+    ([schedulerId, name]) => job.name === name && job.repeatJobKey?.includes(schedulerId),
+  );
+}
+
+/**
+ * Check the legacy queue store before switching to REDIS_QUEUE_URL. If work
+ * remains or inspection fails, leave routing on REDIS_URL; never strand jobs.
+ */
+export async function prepareBullMQQueueRedisCutover(): Promise<void> {
+  const targetUrl = process.env["REDIS_QUEUE_URL"]?.trim();
+  if (!targetUrl || !areWorkersEnabled()) return;
+
+  const legacyUrl = process.env["REDIS_URL"]?.trim();
+  if (!legacyUrl || targetUrl === legacyUrl) {
+    approveSeparateQueueRedisCutover();
+    return;
+  }
+
+  const legacyRedis = getRedisConnection();
+  if (!legacyRedis) {
+    logger.warn("[queue-cutover] Legacy Redis is configured but unavailable; keeping BullMQ on it");
+    return;
+  }
+
+  const queues: Queue[] = [];
+  const blockers: Array<{ queue: string; state: string; count: number }> = [];
+  try {
+    queues.push(
+      ...[...new Set(Object.values(QUEUES))].map(
+        (name) => new Queue(name, { connection: legacyRedis }),
+      ),
+    );
+    for (const queue of queues) {
+      const counts = await queue.getJobCounts(
+        "wait",
+        "active",
+        "failed",
+        "paused",
+        "waiting-children",
+        "prioritized",
+      );
+      for (const [state, count] of Object.entries(counts)) {
+        if (count > 0) blockers.push({ queue: queue.name, state, count });
+      }
+
+      const delayedJobs = await queue.getJobs(["delayed"], 0, -1, true);
+      const nonMigratableDelayedJobs = delayedJobs.filter(
+        (job) => queue.name !== QUEUES.REMINDERS || !isKnownReminderSchedulerJob(job),
+      );
+      if (nonMigratableDelayedJobs.length > 0) {
+        blockers.push({ queue: queue.name, state: "delayed", count: nonMigratableDelayedJobs.length });
+      }
+
+      if (queue.name === QUEUES.REMINDERS) {
+        const schedulers = await queue.getJobSchedulers();
+        const unknownSchedulers = schedulers.filter(
+          (scheduler) => REMINDER_SCHEDULERS.get(scheduler.id ?? "") !== scheduler.name,
+        );
+        if (unknownSchedulers.length > 0) {
+          blockers.push({ queue: queue.name, state: "unrecognized-schedulers", count: unknownSchedulers.length });
+        }
+      }
+    }
+  } catch (error) {
+    logger.warn(
+      { errorName: error instanceof Error ? error.name : "unknown" },
+      "[queue-cutover] Could not inspect the legacy Redis; continuing on it",
+    );
+    return;
+  } finally {
+    await Promise.all(queues.map((queue) => queue.close().catch(() => {})));
+  }
+
+  if (queues.length === 0) return;
+  if (blockers.length > 0) {
+    logger.warn(
+      { blockers },
+      "[queue-cutover] Legacy queues still contain work; continuing on the existing Redis until drained",
+    );
+    return;
+  }
+
+  approveSeparateQueueRedisCutover();
+  logger.info("[queue-cutover] Legacy queues are clear; BullMQ will use REDIS_QUEUE_URL");
+}
 
 export type ReferralEmailJobData = ReferralBonusPaidEmailJobData | ReferralConvertedEmailJobData | ReferralExpiredEmailJobData | ReferralExpiringSoonEmailJobData | ReferralBonusReleasedEmailJobData | ReferralWelcomeEmailJobData;
 
