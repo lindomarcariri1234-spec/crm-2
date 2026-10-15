@@ -69,6 +69,17 @@ export function approveSeparateQueueRedisCutover(): void {
   _useSeparateQueueRedis = true;
 }
 
+export function rejectSeparateQueueRedisCutover(): void {
+  _useSeparateQueueRedis = false;
+  queueRedisDailyLimitCircuit.stop();
+  _producerConnection?.disconnect();
+  _queueConnection?.disconnect();
+  _producerConnection = null;
+  _queueConnection = null;
+  isQueueEnabled = false;
+  _evictionPolicyPromise = Promise.resolve();
+}
+
 // ─── Eviction policy ──────────────────────────────────────────────────────────
 // Tracked per process so we only attempt the CONFIG SET once at startup (not on
 // every reconnect) and only log the actionable warning once.

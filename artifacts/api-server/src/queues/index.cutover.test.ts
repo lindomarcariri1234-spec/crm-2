@@ -10,6 +10,13 @@ const state = vi.hoisted(() => ({
   queueNames: [] as string[],
   closed: 0,
   inspectionError: null as Error | null,
+  getBullMQWorkerConnection: vi.fn(() => ({ status: "ready" })),
+  getBullMQQueueConnection: vi.fn(() => ({ status: "ready" })),
+  rejectSeparateQueueRedisCutover: vi.fn(),
+  probeConsumes: true,
+  workerInstances: [] as Array<{ emit: (event: string, ...args: unknown[]) => void }>,
+  addedProbeJobs: [] as string[],
+  removedProbeJobs: [] as string[],
 }));
 
 vi.mock("bullmq", () => ({
@@ -29,21 +36,57 @@ vi.mock("bullmq", () => ({
     async getJobSchedulers() {
       return state.schedulers;
     }
+    async add(_name: string, data: { nonce: string }, options: { jobId: string }) {
+      state.addedProbeJobs.push(options.jobId);
+      if (state.probeConsumes) {
+        queueMicrotask(() => {
+          for (const worker of state.workerInstances) {
+            worker.emit("completed", { id: options.jobId }, data.nonce);
+          }
+        });
+      }
+      return { id: options.jobId };
+    }
+    async remove(jobId: string) {
+      state.removedProbeJobs.push(jobId);
+    }
     async close() {
       state.closed += 1;
     }
+  },
+  Worker: class {
+    handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+    constructor() {
+      state.workerInstances.push(this);
+    }
+    on(event: string, handler: (...args: unknown[]) => void) {
+      this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
+      return this;
+    }
+    emit(event: string, ...args: unknown[]) {
+      for (const handler of this.handlers.get(event) ?? []) handler(...args);
+    }
+    async waitUntilReady() {}
+    async close() {}
   },
 }));
 
 vi.mock("../lib/redis", () => ({
   approveSeparateQueueRedisCutover: state.approved,
   areWorkersEnabled: state.areWorkersEnabled,
-  getBullMQQueueConnection: vi.fn(() => null),
+  getBullMQQueueConnection: state.getBullMQQueueConnection,
+  getBullMQWorkerConnection: state.getBullMQWorkerConnection,
   getRedisConnection: state.getRedisConnection,
+  rejectSeparateQueueRedisCutover: state.rejectSeparateQueueRedisCutover,
+  waitForEvictionPolicyCheck: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("../lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn() } }));
 
-import { prepareBullMQQueueRedisCutover } from "./index";
+import {
+  prepareAndVerifyBullMQQueueRedisCutover,
+  prepareBullMQQueueRedisCutover,
+  verifyBullMQWorkerConsumesProbe,
+} from "./index";
 
 describe("prepareBullMQQueueRedisCutover", () => {
   beforeEach(() => {
@@ -59,6 +102,13 @@ describe("prepareBullMQQueueRedisCutover", () => {
     state.queueNames = [];
     state.closed = 0;
     state.inspectionError = null;
+    state.getBullMQWorkerConnection.mockClear();
+    state.getBullMQQueueConnection.mockClear();
+    state.rejectSeparateQueueRedisCutover.mockClear();
+    state.workerInstances = [];
+    state.probeConsumes = true;
+    state.addedProbeJobs = [];
+    state.removedProbeJobs = [];
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -129,5 +179,40 @@ describe("prepareBullMQQueueRedisCutover", () => {
 
     expect(state.getRedisConnection).not.toHaveBeenCalled();
     expect(state.approved).not.toHaveBeenCalled();
+  });
+
+  it("confirms the selected Redis by consuming a harmless probe job", async () => {
+    await expect(verifyBullMQWorkerConsumesProbe(100)).resolves.toBe(true);
+
+    expect(state.getBullMQWorkerConnection).toHaveBeenCalledOnce();
+    expect(state.getBullMQQueueConnection).toHaveBeenCalledOnce();
+    expect(state.addedProbeJobs).toHaveLength(1);
+    expect(state.removedProbeJobs).toHaveLength(0);
+  });
+
+  it("rejects a connected Redis when no worker consumes the probe", async () => {
+    state.probeConsumes = false;
+
+    await expect(verifyBullMQWorkerConsumesProbe(5)).resolves.toBe(false);
+
+    expect(state.addedProbeJobs).toHaveLength(1);
+    expect(state.removedProbeJobs).toEqual(state.addedProbeJobs);
+  });
+
+  it("keeps the new Redis selected only after the preflight and worker probe succeed", async () => {
+    await expect(prepareAndVerifyBullMQQueueRedisCutover(100)).resolves.toBe(true);
+
+    expect(state.approved).toHaveBeenCalledOnce();
+    expect(state.rejectSeparateQueueRedisCutover).not.toHaveBeenCalled();
+    expect(state.addedProbeJobs).toHaveLength(1);
+  });
+
+  it("reverts to REDIS_URL when the cutover probe is not consumed", async () => {
+    state.probeConsumes = false;
+
+    await expect(prepareAndVerifyBullMQQueueRedisCutover(5)).resolves.toBe(false);
+
+    expect(state.approved).toHaveBeenCalledOnce();
+    expect(state.rejectSeparateQueueRedisCutover).toHaveBeenCalledOnce();
   });
 });

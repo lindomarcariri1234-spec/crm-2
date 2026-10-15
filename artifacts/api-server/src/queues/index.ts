@@ -1,9 +1,13 @@
-import { Queue } from "bullmq";
+import { Queue, Worker } from "bullmq";
+import { randomUUID } from "node:crypto";
 import {
   approveSeparateQueueRedisCutover,
   areWorkersEnabled,
+  getBullMQWorkerConnection,
   getBullMQQueueConnection,
   getRedisConnection,
+  rejectSeparateQueueRedisCutover,
+  waitForEvictionPolicyCheck,
 } from "../lib/redis";
 import { logger } from "../lib/logger";
 import type { ReservationConfirmationEmailProps, ReservationCancellationEmailProps, BirthdayEmailProps, NewBookingNotificationEmailProps, ReferralBonusPaidEmailProps, ReferralConvertedEmailProps, ReferralExpiredEmailProps, ReferralExpiringSoonEmailProps, ReferralBonusReleasedEmailProps, ReferralWelcomeEmailProps, ReferralLoyaltyPointsEmailProps } from "@workspace/email";
@@ -191,20 +195,20 @@ function isKnownReminderSchedulerJob(job: { name: string; repeatJobKey?: string 
  * Check the legacy queue store before switching to REDIS_QUEUE_URL. If work
  * remains or inspection fails, leave routing on REDIS_URL; never strand jobs.
  */
-export async function prepareBullMQQueueRedisCutover(): Promise<void> {
+export async function prepareBullMQQueueRedisCutover(): Promise<boolean> {
   const targetUrl = process.env["REDIS_QUEUE_URL"]?.trim();
-  if (!targetUrl || !areWorkersEnabled()) return;
+  if (!targetUrl || !areWorkersEnabled()) return false;
 
   const legacyUrl = process.env["REDIS_URL"]?.trim();
   if (!legacyUrl || targetUrl === legacyUrl) {
     approveSeparateQueueRedisCutover();
-    return;
+    return true;
   }
 
   const legacyRedis = getRedisConnection();
   if (!legacyRedis) {
     logger.warn("[queue-cutover] Legacy Redis is configured but unavailable; keeping BullMQ on it");
-    return;
+    return false;
   }
 
   const queues: Queue[] = [];
@@ -251,25 +255,124 @@ export async function prepareBullMQQueueRedisCutover(): Promise<void> {
       { errorName: error instanceof Error ? error.name : "unknown" },
       "[queue-cutover] Could not inspect the legacy Redis; continuing on it",
     );
-    return;
+    return false;
   } finally {
     await Promise.all(queues.map((queue) => queue.close().catch(() => {})));
   }
 
-  if (queues.length === 0) return;
+  if (queues.length === 0) return false;
   if (blockers.length > 0) {
     logger.warn(
       { blockers },
       "[queue-cutover] Legacy queues still contain work; continuing on the existing Redis until drained",
     );
-    return;
+    return false;
   }
 
   approveSeparateQueueRedisCutover();
   logger.info("[queue-cutover] Legacy queues are clear; BullMQ will use REDIS_QUEUE_URL");
+  return true;
+}
+
+/** Prove a worker can consume from the selected queue Redis before serving traffic. */
+export async function verifyBullMQWorkerConsumesProbe(timeoutMs = 10_000): Promise<boolean> {
+  const queueName = "redis-queue-health";
+  const jobId = `probe-${randomUUID()}`;
+  const probeNonce = randomUUID();
+  let queue: Queue | null = null;
+  let worker: Worker | null = null;
+  let probeWasQueued = false;
+  let consumed = false;
+  let resolveConsumed!: () => void;
+  let rejectConsumed!: (error: Error) => void;
+  const consumedPromise = new Promise<void>((resolve, reject) => {
+    resolveConsumed = resolve;
+    rejectConsumed = reject;
+  });
+  void consumedPromise.catch(() => {});
+
+  const timeout = <T>(promise: Promise<T>): Promise<T> =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("queue_probe_timeout")), timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+
+  try {
+    const workerConnection = getBullMQWorkerConnection();
+    const producerConnection = getBullMQQueueConnection();
+    if (!workerConnection || !producerConnection) return false;
+
+    queue = new Queue(queueName, { connection: producerConnection });
+    worker = new Worker(
+      queueName,
+      async (job) => job.data.nonce,
+      { connection: workerConnection, concurrency: 1 },
+    );
+    worker.on("completed", (job, result) => {
+      if (job.id === jobId) {
+        if (result === probeNonce) {
+          consumed = true;
+          resolveConsumed();
+        } else {
+          rejectConsumed(new Error("queue_probe_result_mismatch"));
+        }
+      }
+    });
+    worker.on("failed", (job, error) => {
+      if (job?.id === jobId) rejectConsumed(error ?? new Error("queue_probe_failed"));
+    });
+    worker.on("error", (error) => {
+      logger.warn(
+        { errorName: error instanceof Error ? error.name : "unknown" },
+        "[queue-cutover] Probe worker error",
+      );
+    });
+
+    await timeout(waitForEvictionPolicyCheck());
+    await timeout(worker.waitUntilReady());
+    probeWasQueued = true;
+    await timeout(queue.add(
+      "redis-queue-startup-probe",
+      { nonce: probeNonce },
+      { jobId, removeOnComplete: true, removeOnFail: true },
+    ));
+    await timeout(consumedPromise);
+    logger.info("[queue-cutover] Probe job was consumed by a BullMQ worker");
+    return true;
+  } catch (error) {
+    logger.warn(
+      { errorName: error instanceof Error ? error.name : "unknown" },
+      "[queue-cutover] Worker did not consume the probe; reverting to REDIS_URL",
+    );
+    return false;
+  } finally {
+    await worker?.close().catch(() => {});
+    if (queue && probeWasQueued && !consumed) {
+      await queue.remove(jobId).catch(() => {});
+    }
+    await queue?.close().catch(() => {});
+  }
 }
 
 export type ReferralEmailJobData = ReferralBonusPaidEmailJobData | ReferralConvertedEmailJobData | ReferralExpiredEmailJobData | ReferralExpiringSoonEmailJobData | ReferralBonusReleasedEmailJobData | ReferralWelcomeEmailJobData;
+
+export async function prepareAndVerifyBullMQQueueRedisCutover(probeTimeoutMs = 10_000): Promise<boolean> {
+  const cutoverApproved = await prepareBullMQQueueRedisCutover();
+  if (!cutoverApproved) return false;
+  if (await verifyBullMQWorkerConsumesProbe(probeTimeoutMs)) return true;
+
+  rejectSeparateQueueRedisCutover();
+  return false;
+}
 
 let _emailQueue: Queue<ReservationEmailJobData> | null = null;
 let _cancellationEmailQueue: Queue<CancellationEmailJobData> | null = null;
