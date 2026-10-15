@@ -193,6 +193,47 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         return error;
       }
     };
+    const expectRejectedMigrationLeftSchemaUnchanged = async () => {
+      const result = await client.query<{
+        reservation_required: boolean;
+        partial_constraint_count: number;
+        partial_index_count: number;
+      }>(
+        `SELECT
+           (SELECT attnotnull
+              FROM pg_attribute
+             WHERE attrelid = 'pg_temp.trip_checkins'::regclass
+               AND attname = 'reservation_id'
+               AND NOT attisdropped) AS reservation_required,
+           (SELECT COUNT(*)::int
+              FROM pg_constraint
+             WHERE connamespace = pg_my_temp_schema()
+               AND conname = ANY($1::text[])) AS partial_constraint_count,
+           (SELECT COUNT(*)::int
+              FROM pg_class
+             WHERE relnamespace = pg_my_temp_schema()
+               AND relkind = 'i'
+               AND relname = ANY($2::text[])) AS partial_index_count`,
+        [
+          [
+            "reservations_trip_tenant_fk",
+            "trip_checkins_trip_tenant_fk",
+            "trip_checkins_reservation_trip_tenant_fk",
+            "trip_checkins_passenger_reservation_fk",
+          ],
+          [
+            "trips_id_tenant_id_unique",
+            "reservations_id_trip_tenant_unique",
+            "passengers_id_reservation_unique",
+          ],
+        ],
+      );
+      expect(result.rows).toEqual([{
+        reservation_required: false,
+        partial_constraint_count: 0,
+        partial_index_count: 0,
+      }]);
+    };
 
     try {
       await client.query("SET search_path TO pg_temp, public");
@@ -220,6 +261,7 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         passenger_id: "passenger-a",
         reservation_id: "reservation-b",
       }]);
+      await expectRejectedMigrationLeftSchemaUnchanged();
 
       await seedScratchTables({ passengerId: "passenger-b", reservationId: null });
       const crossTenantBackfillError = await runMigration();
@@ -234,6 +276,7 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         passenger_id: "passenger-b",
         reservation_id: null,
       }]);
+      await expectRejectedMigrationLeftSchemaUnchanged();
 
       await seedScratchTables({ passengerId: "missing-passenger", reservationId: null });
       const orphanError = await runMigration();
@@ -248,6 +291,7 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         passenger_id: "missing-passenger",
         reservation_id: null,
       }]);
+      await expectRejectedMigrationLeftSchemaUnchanged();
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`
