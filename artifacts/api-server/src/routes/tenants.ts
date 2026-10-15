@@ -159,6 +159,9 @@ router.get("/tenants/:id", async (req, res, next: NextFunction): Promise<void> =
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (me.role === ROLES.CLIENT) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
+    }
     if (me.role !== ROLES.SUPER_ADMIN && me.tenantId !== req.params.id) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
