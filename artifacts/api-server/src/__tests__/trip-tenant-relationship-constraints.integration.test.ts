@@ -367,6 +367,54 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         { id: "reservation-d", trip_id: "trip-a", tenant_id: "tenant-a" },
       ]);
       await expectRejectedMigrationLeftSchemaUnchanged();
+
+      await seedScratchTables({ passengerId: "passenger-a", reservationId: null });
+      await client.query(
+        "UPDATE pg_temp.reservations SET tenant_id = 'tenant-b' WHERE id = 'reservation-a'",
+      );
+      const initialAttemptError = await runMigration();
+      expect(initialAttemptError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining(
+          "1 reservations reference a trip from another tenant or a missing trip",
+        ),
+      });
+      const unchangedBeforeCorrection = await client.query(
+        `SELECT r.trip_id, r.tenant_id, c.reservation_id
+           FROM pg_temp.reservations r
+           CROSS JOIN pg_temp.trip_checkins c
+          WHERE r.id = 'reservation-a' AND c.id = 'legacy-checkin'`,
+      );
+      expect(unchangedBeforeCorrection.rows).toEqual([{
+        trip_id: "trip-a",
+        tenant_id: "tenant-b",
+        reservation_id: null,
+      }]);
+      await expectRejectedMigrationLeftSchemaUnchanged();
+
+      await client.query(
+        "UPDATE pg_temp.reservations SET tenant_id = 'tenant-a' WHERE id = 'reservation-a'",
+      );
+      expect(await runMigration()).toBeNull();
+      const repairedAndMigrated = await client.query(
+        `SELECT r.trip_id, r.tenant_id, c.reservation_id
+           FROM pg_temp.reservations r
+           CROSS JOIN pg_temp.trip_checkins c
+          WHERE r.id = 'reservation-a' AND c.id = 'legacy-checkin'`,
+      );
+      expect(repairedAndMigrated.rows).toEqual([{
+        trip_id: "trip-a",
+        tenant_id: "tenant-a",
+        reservation_id: "reservation-a",
+      }]);
+      const reservationIsRequired = await client.query<{ attnotnull: boolean }>(
+        `SELECT attnotnull
+           FROM pg_attribute
+          WHERE attrelid = 'pg_temp.trip_checkins'::regclass
+            AND attname = 'reservation_id'
+            AND NOT attisdropped`,
+      );
+      expect(reservationIsRequired.rows).toEqual([{ attnotnull: true }]);
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`
