@@ -114,6 +114,7 @@ vi.mock("@workspace/db", () => ({
     status: "payments.status",
     amount: "payments.amount",
     paidAt: "payments.paidAt",
+    refundedAt: "payments.refundedAt",
     dueDate: "payments.dueDate",
     reservationId: "payments.reservationId",
     sourceExpenseId: "payments.sourceExpenseId",
@@ -237,6 +238,7 @@ const FAKE_PAYMENT = {
   totalInstallments: null,
   dueDate: new Date("2025-07-10"),
   paidAt: null,
+  refundedAt: null,
   status: "pending",
   receiptUrl: null,
   description: "Custo teste",
@@ -267,6 +269,91 @@ beforeEach(() => {
 });
 
 describe("payments authorization — FINANCIAL permission enforcement", () => {
+  it("POST /payments stamps the refund date when created already refunded", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    let insertedPayment: Record<string, unknown> | undefined;
+    mockTransaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      insert: vi.fn(() => ({
+        values: vi.fn(async (values: Record<string, unknown>) => {
+          insertedPayment = values;
+        }),
+      })),
+    }));
+
+    const res = await request(buildApp(paymentsRouter))
+      .post("/api/payments")
+      .send({
+        type: PAYMENT_TYPE.RECEIVABLE,
+        category: "reservation",
+        amount: 100,
+        paymentMethod: "pix",
+        dueDate: "2026-09-05",
+        status: PAYMENT_STATUS.REFUNDED,
+      });
+
+    expect(res.status).toBe(201);
+    expect(insertedPayment?.status).toBe(PAYMENT_STATUS.REFUNDED);
+    expect(insertedPayment?.refundedAt).toBeInstanceOf(Date);
+  });
+
+  it("PATCH /payments/:id records a refund date once and keeps it through note edits", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const payment = {
+      ...FAKE_PAYMENT,
+      id: "payment-manual-refund-date",
+      type: PAYMENT_TYPE.RECEIVABLE,
+      status: PAYMENT_STATUS.PAID,
+      gateway: "manual",
+      category: "reservation",
+      amount: "100.00",
+    };
+    const firstUpdate = vi.fn();
+    dbState.selectRowsQueue = [
+      [payment],
+      [{ ...payment, status: PAYMENT_STATUS.REFUNDED, refundedAt: new Date("2026-09-05T12:00:00.000Z") }],
+    ];
+    mockTransaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      select: vi.fn(() => makeChain()),
+      update: vi.fn(() => ({
+        set: vi.fn((values: unknown) => {
+          firstUpdate(values);
+          return { where: () => Promise.resolve(undefined) };
+        }),
+      })),
+    }));
+
+    const refundResponse = await request(buildApp(paymentsRouter))
+      .patch(`/api/payments/${payment.id}`)
+      .send({ status: PAYMENT_STATUS.REFUNDED });
+    expect(refundResponse.status).toBe(200);
+    expect(firstUpdate.mock.calls[0]?.[0]).toMatchObject({
+      status: PAYMENT_STATUS.REFUNDED,
+      refundedAt: expect.any(Date),
+    });
+
+    const refundDate = (firstUpdate.mock.calls[0]?.[0] as { refundedAt: Date }).refundedAt;
+    const refundedPayment = { ...payment, status: PAYMENT_STATUS.REFUNDED, refundedAt: refundDate };
+    const editedPayment = { ...refundedPayment, notes: "Nota posterior", updatedAt: new Date() };
+    const secondUpdate = vi.fn();
+    dbState.selectRowsQueue = [[refundedPayment], [editedPayment]];
+    mockTransaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      select: vi.fn(() => makeChain()),
+      update: vi.fn(() => ({
+        set: vi.fn((values: unknown) => {
+          secondUpdate(values);
+          return { where: () => Promise.resolve(undefined) };
+        }),
+      })),
+    }));
+
+    const notesResponse = await request(buildApp(paymentsRouter))
+      .patch(`/api/payments/${payment.id}`)
+      .send({ notes: editedPayment.notes });
+    expect(notesResponse.status).toBe(200);
+    expect(secondUpdate.mock.calls[0]?.[0]).toEqual({ notes: "Nota posterior" });
+    expect(notesResponse.body.refundedAt).toBe(refundDate.toISOString());
+  });
+
   it("GET /payments/summary → 403 for SUPPORT (no FINANCIAL view)", async () => {
     requireAuthMock.mockResolvedValue(user(ROLES.SUPPORT) as never);
     const res = await request(buildApp(paymentsRouter)).get("/api/payments/summary");

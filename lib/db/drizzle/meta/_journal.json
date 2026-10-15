@@ -820,6 +820,13 @@
       "when": 1809960017000,
       "tag": "0117_store_order_stripe_refunded_amount",
       "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1809960018000,
+      "tag": "0118_manual_refund_timestamp",
+      "breakpoints": true
     }
   ]
 }

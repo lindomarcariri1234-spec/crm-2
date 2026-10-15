@@ -361,6 +361,7 @@ function formatPayment(p: typeof paymentsTable.$inferSelect) {
     paymentMethod: p.paymentMethod, installmentNumber: p.installmentNumber,
     totalInstallments: p.totalInstallments, dueDate: p.dueDate.toISOString(),
     paidAt: p.paidAt?.toISOString() ?? null, status: p.status,
+    refundedAt: p.refundedAt?.toISOString() ?? null,
     gateway: p.gateway ?? null,
     receiptUrl: p.receiptUrl ?? null,
     description: p.description, notes: p.notes,
@@ -1083,6 +1084,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
           notes: parsed.data.notes ?? null,
           receiptUrl,
           ...(explicitStatus ? { status: explicitStatus } : {}),
+          ...(explicitStatus === PAYMENT_STATUS.REFUNDED ? { refundedAt: new Date() } : {}),
           ...(explicitPaidAt ? { paidAt: explicitPaidAt } : {}),
           ...(parsed.data.reservationId && parsed.data.type === PAYMENT_TYPE.RECEIVABLE
             ? { gateway: "manual-reservation", transactionId: paymentId }
@@ -1538,6 +1540,14 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         .for("update")
         .limit(1);
       if (!existingPayment) return { payment: null, reversal: null, previousStatus: null };
+
+      if (
+        parsed.data.status != null
+        && updates.status === PAYMENT_STATUS.REFUNDED
+        && !existingPayment.refundedAt
+      ) {
+        updates.refundedAt = new Date();
+      }
 
       const hasOperationalCostLink = Boolean(existingPayment.sourceExpenseId || existingPayment.sourceTripCostId);
       if (hasOperationalCostLink && (updates.status !== undefined || updates.paidAt !== undefined)) {

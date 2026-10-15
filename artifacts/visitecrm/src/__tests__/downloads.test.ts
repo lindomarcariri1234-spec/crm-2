@@ -568,13 +568,21 @@ describe("prepareReservations", () => {
     expect(col("Saldo (R$)")).toBe("25,00");
   });
 
-  it("exports manual refunds as negative deductions with the status-change date", () => {
+  it("uses the stored refund date even when payment details were edited later", () => {
     const reservation = makeReservation({
       createdAt: "2025-04-10T00:00:00Z",
       paidValue: 60,
       balance: 40,
       payments: [
-        { type: "receivable", category: "reservation", amount: 40, status: "refunded", gateway: "manual", updatedAt: "2025-04-22T12:00:00Z" },
+        {
+          type: "receivable",
+          category: "reservation",
+          amount: 40,
+          status: "refunded",
+          gateway: "manual",
+          refundedAt: "2025-04-20T12:00:00Z",
+          updatedAt: "2025-04-22T12:00:00Z",
+        },
       ],
     });
     const { headers, rows } = prepareReservations([reservation] as any[], RANGE_START, RANGE_END);
@@ -584,10 +592,30 @@ describe("prepareReservations", () => {
     expect(col("Recebimentos Brutos (R$)")).toBe("100,00");
     expect(col("Estornos Stripe (R$)")).toBe("0,00");
     expect(col("Estornos Manuais (R$)")).toBe("-40,00");
-    expect(col("Detalhes dos Estornos Manuais")).toContain("22/04/2025");
+    expect(col("Detalhes dos Estornos Manuais")).toContain("20/04/2025");
     expect(col("Detalhes dos Estornos Manuais")).toContain("40,00");
     expect(col("Valor Pago Líquido (R$)")).toBe("60,00");
     expect(col("Saldo (R$)")).toBe("40,00");
+  });
+
+  it("uses updatedAt for legacy manual refunds without a stored refund date", () => {
+    const reservation = makeReservation({
+      createdAt: "2025-04-10T00:00:00Z",
+      payments: [
+        {
+          type: "receivable",
+          category: "reservation",
+          amount: 40,
+          status: "refunded",
+          gateway: "manual",
+          updatedAt: "2025-04-22T12:00:00Z",
+        },
+      ],
+    });
+    const { headers, rows } = prepareReservations([reservation] as any[], RANGE_START, RANGE_END);
+    const manualRefundDetails = rows[0][headers.indexOf("Detalhes dos Estornos Manuais")];
+
+    expect(manualRefundDetails).toContain("22/04/2025");
   });
 });
 

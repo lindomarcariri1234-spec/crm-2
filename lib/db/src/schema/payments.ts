@@ -24,6 +24,7 @@ export const paymentsTable = pgTable("payments", {
   totalInstallments: integer("total_installments").notNull().default(1),
   dueDate: timestamp("due_date", { withTimezone: true }).notNull(),
   paidAt: timestamp("paid_at", { withTimezone: true }),
+  refundedAt: timestamp("refunded_at", { withTimezone: true }),
   status: text("status").$type<PaymentStatus>().notNull().default("pending"),
   receiptUrl: text("receipt_url"),
   gateway: text("gateway"),
@@ -51,7 +52,7 @@ export const paymentsTable = pgTable("payments", {
   ),
 ]);
 
-export const insertPaymentSchema = createInsertSchema(paymentsTable).omit({ createdAt: true, updatedAt: true });
+export const insertPaymentSchema = createInsertSchema(paymentsTable).omit({ createdAt: true, updatedAt: true, refundedAt: true });
 export type InsertPayment = typeof paymentsTable.$inferInsert;
 export type Payment = typeof paymentsTable.$inferSelect;
 

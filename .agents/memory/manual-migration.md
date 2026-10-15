@@ -3,7 +3,7 @@ name: Manual migration workflow
 description: drizzle-kit is interactive so migrations must be created manually
 ---
 
-drizzle-kit generate/push prompts interactively and cannot be run non-interactively from scripts.
+`drizzle-kit generate/push` is interactive by default. Schema-only generation can run non-interactively, but its output still needs review against the existing incremental migration chain.
 
 **Correct workflow**:
 1. Write the SQL file at `lib/db/drizzle/NNNN_<tag>.sql`
@@ -13,6 +13,12 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 **Why**: The migrate command is non-interactive and reads the journal to determine what to apply. The generate command would overwrite the journal with drizzle's own snapshot.
 
 **How to apply**: Check the last `idx` in `_journal.json` before writing a new migration. Next migration is last idx + 1.
+
+**Generated migration review**: Reject generated SQL that recreates tables or columns already present in the baseline or incremental migration chain; use the documented manual SQL + journal workflow instead.
+
+**Why**: Schema-only generation can emit broad schema recreation when its snapshot does not represent the project's actual migration history, even when the intended change is only additive.
+
+**How to apply**: Review generated statements against the current journal and coverage checks before accepting them; keep only intended additive DDL and matching snapshot history.
 
 **Rule for clean-database prerequisites:** Do not rewrite already-applied baseline or incremental SQL to fix a dependency on a table created later in the journal. Prepare the prerequisite from its original CREATE migration only when the public schema is genuinely empty, and keep command-line and application migration entry points aligned.
 

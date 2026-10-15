@@ -101,6 +101,7 @@ export interface ReservationPaymentItem {
   status: string;
   dueDate?: string | null;
   paidAt?: string | null;
+  refundedAt?: string | null;
   updatedAt?: string | null;
 }
 
@@ -199,7 +200,7 @@ export function prepareReservations(
       .map((p) => `${fmtDate(p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
       .join("; ");
     const manualRefundDetails = manualRefunds
-      .map((p) => `${fmtDate(p.updatedAt ?? p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
+      .map((p) => `${fmtDate(p.refundedAt ?? p.updatedAt ?? p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
       .join("; ");
 
     return [
