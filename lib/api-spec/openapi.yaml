@@ -1841,6 +1841,11 @@ paths:
       tags: [reservations]
       summary: List reservations
       parameters:
+        - name: reservationIds
+          in: query
+          description: Comma-separated reservation IDs to retrieve (maximum 100 IDs).
+          schema:
+            type: ["string", "null"]
         - name: search
           in: query
           schema:

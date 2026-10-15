@@ -156,8 +156,11 @@ export function prepareReservations(
   all: ReservationItem[],
   quickStart: string,
   quickEnd: string,
+  includeReservationIds: ReadonlySet<string> = new Set(),
 ): { headers: string[]; rows: string[][]; count: number } {
-  const reservations = all.filter((r) => inDateRange(r.createdAt, quickStart, quickEnd));
+  const reservations = all.filter((r) =>
+    inDateRange(r.createdAt, quickStart, quickEnd) || includeReservationIds.has(r.id),
+  );
   const headers = [
     "ID", "Cliente", "Viagem", "Saída", "Status", "Assentos",
     "Valor Total (R$)", "Recebimentos Brutos (R$)", "Estornos Stripe (R$)",

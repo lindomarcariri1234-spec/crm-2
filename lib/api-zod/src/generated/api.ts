@@ -4249,6 +4249,10 @@ export const listReservationsQueryPageDefault = 1;
 export const listReservationsQueryLimitDefault = 20;
 
 export const ListReservationsQueryParams = zod.object({
+  reservationIds: zod.coerce
+    .string()
+    .nullish()
+    .describe("Comma-separated reservation IDs to retrieve (maximum 100 IDs)."),
   search: zod.coerce.string().nullish(),
   tripId: zod.coerce.string().nullish(),
   clientId: zod.coerce.string().nullish(),

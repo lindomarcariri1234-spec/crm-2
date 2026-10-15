@@ -491,6 +491,26 @@ describe("prepareReservations", () => {
     expect(rows[0][0]).toBe("r1");
   });
 
+  it("includes an older reservation when its ID has a refund in the selected period", () => {
+    const older = makeReservation({
+      id: "old-reservation",
+      createdAt: "2024-01-15T00:00:00Z",
+      paidValue: 75,
+      balance: 25,
+    });
+    const { headers, rows, count } = prepareReservations(
+      [older] as any[],
+      RANGE_START,
+      RANGE_END,
+      new Set(["old-reservation"]),
+    );
+
+    expect(count).toBe(1);
+    expect(rows[0][headers.indexOf("Criado em")]).toBe("15/01/2024");
+    expect(rows[0][headers.indexOf("Valor Pago Líquido (R$)")]).toBe("75,00");
+    expect(rows[0][headers.indexOf("Saldo (R$)")]).toBe("25,00");
+  });
+
   it("returns empty rows when all reservations fall outside the range", () => {
     const before = makeReservation({ id: "r1", createdAt: "2025-03-31T00:00:00Z" });
     const after = makeReservation({ id: "r2", createdAt: "2025-05-01T00:00:00Z" });

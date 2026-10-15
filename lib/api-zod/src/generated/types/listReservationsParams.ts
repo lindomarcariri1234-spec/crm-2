@@ -8,6 +8,11 @@
 
 export type ListReservationsParams = {
   /**
+   * Comma-separated reservation IDs to retrieve (maximum 100 IDs).
+   * @nullable
+   */
+  reservationIds?: string | null;
+  /**
    * @nullable
    */
   search?: string | null;

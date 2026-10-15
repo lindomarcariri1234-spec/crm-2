@@ -1068,6 +1068,7 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
 
     const {
       tripId, clientId, status, search, createdById, sellerId, dateFrom, dateTo,
+      reservationIds: reservationIdsParam,
       departureDateFrom, departureDateTo, commissionSyncStatus, hasAutoRetry,
       page = "1", limit = "20",
     } = req.query as Record<string, string>;
@@ -1081,7 +1082,22 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
     if (departureDateFrom && !ISO_DATE.test(departureDateFrom)) { next(new ValidationError("departureDateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
     if (departureDateTo && !ISO_DATE.test(departureDateTo)) { next(new ValidationError("departureDateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
 
+    let reservationIds: string[] | undefined;
+    if (reservationIdsParam !== undefined) {
+      if (typeof reservationIdsParam !== "string") {
+        next(new ValidationError("reservationIds must be a comma-separated string", "VALIDATION_ERROR"));
+        return;
+      }
+      reservationIds = reservationIdsParam.split(",").map(id => id.trim());
+      if (reservationIds.length === 0 || reservationIds.length > 100 || reservationIds.some(id => !id || id.length > 200)) {
+        next(new ValidationError("reservationIds must contain 1 to 100 valid reservation IDs", "VALIDATION_ERROR"));
+        return;
+      }
+      reservationIds = [...new Set(reservationIds)];
+    }
+
     const conditions: ReturnType<typeof eq>[] = [eq(reservationsTable.tenantId, me.tenantId)];
+    if (reservationIds) conditions.push(inArray(reservationsTable.id, reservationIds));
     if (tripId) conditions.push(eq(reservationsTable.tripId, tripId));
     if (status) conditions.push(eq(reservationsTable.status, parseReservationStatus(status)));
     if (commissionSyncStatus) conditions.push(eq(reservationsTable.commissionSyncStatus, commissionSyncStatus));

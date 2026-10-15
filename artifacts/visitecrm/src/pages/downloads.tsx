@@ -294,11 +294,34 @@ export default function Downloads() {
   }
 
   async function _prepareReservations() {
-    const all = await fetchAllPages<{
+    const [createdInPeriod, paymentActivity] = await Promise.all([
+      fetchAllPages<{
       id: string; client?: { name?: string } | null; trip?: { name?: string; departureDate?: string } | null;
       status: string; seats?: unknown[] | null; totalValue?: number; paidValue?: number; balance?: number;
       paymentMethod?: string | null; installments?: number | null; createdAt: string;
-    }>("/api/reservations", { dateFrom: quickStart, dateTo: quickEnd });
+      }>("/api/reservations", { dateFrom: quickStart, dateTo: quickEnd }),
+      fetchAllPages<ReservationPaymentItem>("/api/payments", {
+        dueDateFrom: quickStart,
+        dueDateTo: quickEnd,
+        type: "receivable",
+      }),
+    ]);
+    const refundReservationIds = new Set(
+      paymentActivity
+        .filter(payment => payment.category === "stripe_refund" && payment.status === "paid" && payment.reservationId)
+        .map(payment => payment.reservationId!),
+    );
+    const existingReservationIds = new Set(createdInPeriod.map(reservation => reservation.id));
+    const olderRefundReservationIds = [...refundReservationIds]
+      .filter(reservationId => !existingReservationIds.has(reservationId));
+    const olderRefundReservations: typeof createdInPeriod = [];
+    for (const reservationIdsChunk of chunkReservationIds(olderRefundReservationIds)) {
+      olderRefundReservations.push(...await fetchAllPages<typeof createdInPeriod[number]>(
+        "/api/reservations",
+        { reservationIds: reservationIdsChunk.join(",") },
+      ));
+    }
+    const all = [...createdInPeriod, ...olderRefundReservations];
     const reservationIds = all.map(reservation => reservation.id);
     const allPayments: ReservationPaymentItem[] = [];
     for (const reservationIdsChunk of chunkReservationIds(reservationIds)) {
@@ -323,6 +346,7 @@ export default function Downloads() {
       reservationsWithPayments as Parameters<typeof prepareReservations>[0],
       quickStart,
       quickEnd,
+      refundReservationIds,
     );
   }
 
