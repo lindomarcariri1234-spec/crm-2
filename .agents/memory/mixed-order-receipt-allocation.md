@@ -23,5 +23,14 @@ preserves the original receipt while making paid totals net of refunds.
 
 **How to apply:** Select only original positive receipt rows for the order and
 payment intent, allocate the cumulative refund with deterministic cent remainders,
-and refresh affected client totals after commit. Full refunds continue to use
-the existing terminal cancellation path.
+and refresh affected client totals after commit. Persist the cumulative Stripe
+refund amount on the order before allocation; payment confirmation must reconcile
+that saved amount after creating receipt rows. Full refunds continue to use the
+existing terminal cancellation path.
+
+**Why:** Stripe can deliver a charge refund before the payment-success event.
+Without a durable high-water mark, the refund handler sees no receipts and a
+later payment event can incorrectly restore the gross balance.
+
+**How to apply:** Lock the order for both events, only advance the stored
+cumulative amount, and run the same idempotent allocation after receipt creation.

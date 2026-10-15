@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 vi.mock("@workspace/db", () => ({
-  db: { transaction: vi.fn() },
+  db: { transaction: vi.fn(), execute: vi.fn() },
   storeOrdersTable: {
     id: "id",
     orderNumber: "order_number",
@@ -31,6 +31,8 @@ vi.mock("@workspace/db", () => ({
     paidAt: "paid_at",
     status: "status",
     confirmedAt: "confirmed_at",
+    totalAmount: "total_amount",
+    stripeRefundedAmount: "stripe_refunded_amount",
   },
   reservationsTable: {
     id: "id",
@@ -65,9 +67,13 @@ vi.mock("@workspace/permissions", () => ({
 
 const mockPaymentExists = vi.fn();
 const mockSyncReservationPaymentStatus = vi.fn();
+const mockApplyCumulativeStripeRefund = vi.fn();
+const mockRecalculateReservationAmounts = vi.fn();
 vi.mock("../lib/reservation-payments.js", () => ({
   paymentExistsForGatewayTx: (...a: unknown[]) => mockPaymentExists(...a),
   syncReservationPaymentStatus: (...a: unknown[]) => mockSyncReservationPaymentStatus(...a),
+  applyCumulativeStripeRefundToPayments: (...a: unknown[]) => mockApplyCumulativeStripeRefund(...a),
+  recalculateReservationPaymentAmountsPreservingStatus: (...a: unknown[]) => mockRecalculateReservationAmounts(...a),
 }));
 
 const mockCreateReservationsForOrder = vi.fn();
@@ -99,6 +105,8 @@ vi.mock("../lib/pricing.js", () => ({ roundMoney: (n: number) => Math.round(n * 
 vi.mock("../lib/realtime.js", () => ({ broadcastSeatUpdate: vi.fn().mockResolvedValue(undefined) }));
 
 import { applyGatewayPayment } from "../routes/webhooks.js";
+import { handleStripeEvent } from "../routes/webhooks.js";
+import { db } from "@workspace/db";
 
 // Result sets popped, in order, by each tx.select() in applyGatewayPayment:
 //   1. the order lookup (.where().limit(1))
@@ -180,9 +188,13 @@ function callApply(args = BASE_ARGS) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(db.transaction).mockReset();
+  vi.mocked(db.execute).mockReset();
   selectResults = [];
   mockPaymentExists.mockResolvedValue(false);
   mockSyncReservationPaymentStatus.mockResolvedValue(undefined);
+  mockApplyCumulativeStripeRefund.mockResolvedValue({ reservationIds: [] });
+  mockRecalculateReservationAmounts.mockResolvedValue(undefined);
   mockRecordOrderPaymentSettlement.mockResolvedValue(undefined);
   // Return the full CreateReservationsResult shape — applyGatewayPayment now
   // accesses createResult.tripIds, so returning undefined would throw.
@@ -281,6 +293,52 @@ describe("applyGatewayPayment", () => {
     expect(mockRecordOrderPaymentSettlement).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ receivedAmount: 30 }),
+    );
+  });
+
+  it("applies a refund saved by an earlier Stripe event after payment receipts are created", async () => {
+    const tx = makeTx();
+    const orderWithEarlierRefund = { ...ORDER, stripeRefundedAmount: 2500 };
+    selectResults = [[orderWithEarlierRefund], [], []];
+
+    await applyGatewayPayment(tx as any, BASE_ARGS as any);
+
+    expect(mockApplyCumulativeStripeRefund).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tenantId: "tenant-1",
+        orderId: "order-1",
+        paymentIntentId: "pi-1",
+        amountRefundedCents: 2500,
+        chargeAmountCents: 10000,
+      }),
+    );
+    expect(mockRecordOrderPaymentSettlement).toHaveBeenCalledOnce();
+  });
+
+  it("persists the high-water refund amount when Stripe's refund event arrives before payment", async () => {
+    const dbModule = await import("@workspace/db");
+    const tx = makeTx();
+    selectResults = [[{
+      id: "order-1",
+      tenantId: "tenant-1",
+      paymentStatus: "pending",
+      status: "confirmed",
+      stripeRefundedAmount: 0,
+    }]];
+    vi.mocked(dbModule.db.transaction).mockImplementation(async (callback: any) => callback(tx as any));
+    vi.mocked(dbModule.db.execute).mockResolvedValue({ rows: [] } as any);
+
+    await handleStripeEvent({
+      id: "evt-refund-first",
+      type: "charge.refunded",
+      data: { object: { payment_intent: "pi-1", amount: 10000, amount_refunded: 2500 } },
+    } as any, STORE as any);
+
+    expect(tx.updatedValues).toContainEqual({ stripeRefundedAmount: 2500 });
+    expect(mockApplyCumulativeStripeRefund).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ amountRefundedCents: 2500 }),
     );
   });
 

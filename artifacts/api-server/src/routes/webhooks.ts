@@ -510,6 +510,7 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
           tenantId: storeOrdersTable.tenantId,
           paymentStatus: storeOrdersTable.paymentStatus,
           status: storeOrdersTable.status,
+          stripeRefundedAmount: storeOrdersTable.stripeRefundedAmount,
         })
           .from(storeOrdersTable)
           .where(and(eq(storeOrdersTable.paymentIntentId, paymentIntentId), eq(storeOrdersTable.tenantId, store.tenantId)))
@@ -521,28 +522,23 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
             || order.status === STORE_ORDER_STATUS.CANCELLED
           ) return;
           refundedOrderId = order.id;
-          await adjustOrderSettlement(tx as unknown as DbExecutor, {
-            tenantId: order.tenantId, orderId: order.id, amount: amountRefunded,
-            totalAmount: amount, eventKey: `partial-refund:stripe:${paymentIntentId}:${amountRefunded}`,
-            occurredAt: new Date(), reason: "Reembolso parcial Stripe",
-          });
-          const { reservationIds } = await applyCumulativeStripeRefundToPayments(
-            tx as unknown as DbExecutor,
-            {
-              tenantId: order.tenantId,
-              orderId: order.id,
-              paymentIntentId,
-              amountRefundedCents: Math.floor(amountRefunded),
-              chargeAmountCents: Math.floor(amount),
-            },
+          const cumulativeRefundCents = Math.max(
+            order.stripeRefundedAmount,
+            Math.min(Math.floor(amount), Math.floor(amountRefunded)),
           );
-          for (const reservationId of reservationIds) {
-            await recalculateReservationPaymentAmountsPreservingStatus(
-              reservationId,
-              order.tenantId,
-              tx as unknown as DbExecutor,
-            );
-          }
+          await tx.update(storeOrdersTable)
+            .set({ stripeRefundedAmount: cumulativeRefundCents })
+            .where(and(
+              eq(storeOrdersTable.id, order.id),
+              eq(storeOrdersTable.tenantId, order.tenantId),
+            ));
+          await applySavedStripeRefund(
+            tx as unknown as DbExecutor,
+            order,
+            paymentIntentId,
+            cumulativeRefundCents,
+            Math.floor(amount),
+          );
         }
       });
       if (refundedOrderId) {
@@ -887,6 +883,45 @@ interface ApplyResult {
   retryDeferredOnly?: boolean;
 }
 
+async function applySavedStripeRefund(
+  tx: DbExecutor,
+  order: { id: string; tenantId: string },
+  paymentIntentId: string,
+  amountRefundedCents: number,
+  chargeAmountCents: number,
+): Promise<string[]> {
+  const cumulativeRefundCents = Math.min(
+    Math.max(0, Math.floor(amountRefundedCents)),
+    Math.max(0, Math.floor(chargeAmountCents)),
+  );
+  if (cumulativeRefundCents === 0) return [];
+
+  await adjustOrderSettlement(tx, {
+    tenantId: order.tenantId,
+    orderId: order.id,
+    amount: cumulativeRefundCents / 100,
+    totalAmount: chargeAmountCents / 100,
+    eventKey: `partial-refund:stripe:${paymentIntentId}:${cumulativeRefundCents}`,
+    occurredAt: new Date(),
+    reason: "Reembolso parcial Stripe",
+  });
+  const { reservationIds } = await applyCumulativeStripeRefundToPayments(tx, {
+    tenantId: order.tenantId,
+    orderId: order.id,
+    paymentIntentId,
+    amountRefundedCents: cumulativeRefundCents,
+    chargeAmountCents,
+  });
+  for (const reservationId of reservationIds) {
+    await recalculateReservationPaymentAmountsPreservingStatus(
+      reservationId,
+      order.tenantId,
+      tx,
+    );
+  }
+  return reservationIds;
+}
+
 export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Promise<ApplyResult | null> {
   const { store, gateway, transactionId, paymentIntentId, amount, paidAt, stripeLivemode } = args;
   const isTestMode = gateway === "stripe"
@@ -909,7 +944,8 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       paymentMethod: storeOrdersTable.paymentMethod,
       paymentStatus: storeOrdersTable.paymentStatus,
       status: storeOrdersTable.status,
-       totalAmount: storeOrdersTable.totalAmount,
+      totalAmount: storeOrdersTable.totalAmount,
+      stripeRefundedAmount: storeOrdersTable.stripeRefundedAmount,
     })
     .from(storeOrdersTable)
     .where(
@@ -1015,6 +1051,7 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       eq(paymentsTable.tenantId, order.tenantId),
       eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
       eq(paymentsTable.status, PAYMENT_STATUS.PAID),
+      sql`${paymentsTable.category} IS DISTINCT FROM 'stripe_refund'`,
       reservations.length > 0
         ? or(
           eq(paymentsTable.orderId, order.id),
@@ -1095,6 +1132,18 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       occurredAt: paidAt,
       receivedAmount: effectiveReceivedAmount,
     });
+    if (gateway === "stripe" && order.stripeRefundedAmount > 0) {
+      await applySavedStripeRefund(
+        tx,
+        order,
+        paymentIntentId,
+        order.stripeRefundedAmount,
+        Math.round(amount * 100),
+      );
+      if (order.clientId) {
+        await recalculateClientFinancials(order.clientId, order.tenantId, tx);
+      }
+    }
     if (isPartialPayment) {
       await tx.update(storeOrdersTable).set({
         amountRemaining: Math.max(0, totalOrderAmount - receivedAfterEvent).toFixed(2),
@@ -1210,6 +1259,16 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     occurredAt: paidAt,
     receivedAmount: effectiveReceivedAmount,
   });
+
+  if (gateway === "stripe" && order.stripeRefundedAmount > 0) {
+    await applySavedStripeRefund(
+      tx,
+      order,
+      paymentIntentId,
+      order.stripeRefundedAmount,
+      Math.round(amount * 100),
+    );
+  }
 
   if (order.clientId) {
     await recalculateClientFinancials(order.clientId, order.tenantId, tx);
