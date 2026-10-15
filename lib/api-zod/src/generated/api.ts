@@ -1159,6 +1159,34 @@ export const GetSystemHealthResponse = zod.object({
         warningThresholdPct: zod.number(),
       })
       .nullish(),
+    queueCutover: zod
+      .object({
+        selectedRedis: zod.enum(["REDIS_URL", "REDIS_QUEUE_URL", "disabled"]),
+        outcome: zod.enum([
+          "not_checked",
+          "checking",
+          "not_configured",
+          "workers_disabled",
+          "blocked",
+          "approved",
+          "verified",
+          "reverted",
+          "same_resource",
+        ]),
+        reason: zod.string().nullable(),
+        blockerCount: zod.number().int(),
+        blockedWorkCount: zod.number().int(),
+        blockers: zod.array(
+          zod.object({
+            queue: zod.string(),
+            state: zod.string(),
+            count: zod.number().int(),
+            reason: zod.string(),
+          }),
+        ),
+        checkedAt: zod.string().nullable(),
+      })
+      .optional(),
   }),
   stripeWebhookAudit: zod.object({
     status: zod.enum(["ok", "duplicate", "unknown"]),

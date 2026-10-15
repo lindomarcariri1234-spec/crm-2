@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   approveSeparateQueueRedisCutover,
   areWorkersEnabled,
+  getBullMQRedisSelection,
   getBullMQWorkerConnection,
   getBullMQQueueConnection,
   getRedisConnection,
@@ -191,23 +192,87 @@ function isKnownReminderSchedulerJob(job: { name: string; repeatJobKey?: string 
   );
 }
 
+export type BullMQRedisCutoverBlocker = {
+  queue: string;
+  state: string;
+  count: number;
+  reason: string;
+};
+
+export type BullMQRedisCutoverStatus = {
+  selectedRedis: "REDIS_URL" | "REDIS_QUEUE_URL" | "disabled";
+  outcome: "not_checked" | "checking" | "not_configured" | "workers_disabled" | "blocked" | "approved" | "verified" | "reverted" | "same_resource";
+  reason: string | null;
+  blockerCount: number;
+  blockedWorkCount: number;
+  blockers: BullMQRedisCutoverBlocker[];
+  checkedAt: string | null;
+};
+
+let bullMQRedisCutoverStatus: Omit<BullMQRedisCutoverStatus, "selectedRedis"> = {
+  outcome: "not_checked",
+  reason: null,
+  blockerCount: 0,
+  blockedWorkCount: 0,
+  blockers: [],
+  checkedAt: null,
+};
+
+function updateBullMQRedisCutoverStatus(
+  outcome: BullMQRedisCutoverStatus["outcome"],
+  reason: string | null,
+  blockers: BullMQRedisCutoverBlocker[] = [],
+): void {
+  bullMQRedisCutoverStatus = {
+    outcome,
+    reason,
+    blockerCount: blockers.length,
+    blockedWorkCount: blockers.reduce((sum, blocker) => sum + blocker.count, 0),
+    blockers: blockers.map((blocker) => ({ ...blocker })),
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+export function getBullMQRedisCutoverStatus(): BullMQRedisCutoverStatus {
+  return {
+    ...bullMQRedisCutoverStatus,
+    selectedRedis: getBullMQRedisSelection(),
+    blockers: bullMQRedisCutoverStatus.blockers.map((blocker) => ({ ...blocker })),
+  };
+}
+
 /**
  * Check the legacy queue store before switching to REDIS_QUEUE_URL. If work
  * remains or inspection fails, leave routing on REDIS_URL; never strand jobs.
  */
 export async function prepareBullMQQueueRedisCutover(): Promise<boolean> {
+  updateBullMQRedisCutoverStatus("checking", null);
   const targetUrl = process.env["REDIS_QUEUE_URL"]?.trim();
-  if (!targetUrl || !areWorkersEnabled()) return false;
+  if (!targetUrl) {
+    updateBullMQRedisCutoverStatus("not_configured", "REDIS_QUEUE_URL não está configurada");
+    return false;
+  }
+  if (!areWorkersEnabled()) {
+    updateBullMQRedisCutoverStatus("workers_disabled", "Os workers do BullMQ estão desativados");
+    return false;
+  }
 
   const legacyUrl = process.env["REDIS_URL"]?.trim();
   if (!legacyUrl || targetUrl === legacyUrl) {
     approveSeparateQueueRedisCutover();
+    updateBullMQRedisCutoverStatus(
+      legacyUrl ? "same_resource" : "approved",
+      legacyUrl ? "REDIS_QUEUE_URL aponta para o mesmo recurso de REDIS_URL" : "REDIS_URL não está configurada; não há filas legadas para inspecionar",
+    );
     return true;
   }
 
   const legacyRedis = getRedisConnection();
   if (!legacyRedis) {
     logger.warn("[queue-cutover] Legacy Redis is configured but unavailable; keeping BullMQ on it");
+    updateBullMQRedisCutoverStatus("blocked", "REDIS_URL está indisponível; é necessário inspecionar antes da troca", [
+      { queue: "*", state: "inspection", count: 0, reason: "Conexão com o Redis legado indisponível" },
+    ]);
     return false;
   }
 
@@ -255,21 +320,40 @@ export async function prepareBullMQQueueRedisCutover(): Promise<boolean> {
       { errorName: error instanceof Error ? error.name : "unknown" },
       "[queue-cutover] Could not inspect the legacy Redis; continuing on it",
     );
+    updateBullMQRedisCutoverStatus("blocked", "Não foi possível inspecionar as filas legadas; a troca não é segura", [
+      { queue: "*", state: "inspection", count: 0, reason: "Falha ao inspecionar as filas" },
+    ]);
     return false;
   } finally {
     await Promise.all(queues.map((queue) => queue.close().catch(() => {})));
   }
 
-  if (queues.length === 0) return false;
+  if (queues.length === 0) {
+    updateBullMQRedisCutoverStatus("blocked", "Nenhuma fila legada foi inspecionada; a troca não é segura", [
+      { queue: "*", state: "inspection", count: 0, reason: "Nenhuma inspeção de fila foi concluída" },
+    ]);
+    return false;
+  }
   if (blockers.length > 0) {
     logger.warn(
       { blockers },
       "[queue-cutover] Legacy queues still contain work; continuing on the existing Redis until drained",
     );
+    updateBullMQRedisCutoverStatus(
+      "blocked",
+      "Ainda há trabalho nas filas legadas; o BullMQ permanece em REDIS_URL",
+      blockers.map((blocker) => ({
+        ...blocker,
+        reason: blocker.state === "unrecognized-schedulers"
+          ? "Um agendador recorrente não reconhecido pode ser perdido na troca"
+          : `${blocker.count} item(ns) no estado ${blocker.state} permanecem na fila legada`,
+      })),
+    );
     return false;
   }
 
   approveSeparateQueueRedisCutover();
+  updateBullMQRedisCutoverStatus("approved", "As filas legadas estão vazias; verificando o novo Redis com um worker de teste");
   logger.info("[queue-cutover] Legacy queues are clear; BullMQ will use REDIS_QUEUE_URL");
   return true;
 }
@@ -368,9 +452,15 @@ export type ReferralEmailJobData = ReferralBonusPaidEmailJobData | ReferralConve
 export async function prepareAndVerifyBullMQQueueRedisCutover(probeTimeoutMs = 10_000): Promise<boolean> {
   const cutoverApproved = await prepareBullMQQueueRedisCutover();
   if (!cutoverApproved) return false;
-  if (await verifyBullMQWorkerConsumesProbe(probeTimeoutMs)) return true;
+  if (await verifyBullMQWorkerConsumesProbe(probeTimeoutMs)) {
+    updateBullMQRedisCutoverStatus("verified", "Um worker do BullMQ consumiu o teste em REDIS_QUEUE_URL");
+    return true;
+  }
 
   rejectSeparateQueueRedisCutover();
+  updateBullMQRedisCutoverStatus("reverted", "O teste do worker falhou; o BullMQ voltou para REDIS_URL", [
+    { queue: "redis-queue-health", state: "probe", count: 1, reason: "Nenhum worker consumiu o teste da troca" },
+  ]);
   return false;
 }
 

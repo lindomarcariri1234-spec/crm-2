@@ -3803,12 +3803,56 @@ export type SystemHealthRedisQueueDailyUsage = {
   warningThresholdPct: number;
 } | null;
 
+export type SystemHealthBullMQRedisCutoverSelectedRedis =
+  (typeof SystemHealthBullMQRedisCutoverSelectedRedis)[keyof typeof SystemHealthBullMQRedisCutoverSelectedRedis];
+
+export const SystemHealthBullMQRedisCutoverSelectedRedis = {
+  REDIS_URL: "REDIS_URL",
+  REDIS_QUEUE_URL: "REDIS_QUEUE_URL",
+  disabled: "disabled",
+} as const;
+
+export type SystemHealthBullMQRedisCutoverOutcome =
+  (typeof SystemHealthBullMQRedisCutoverOutcome)[keyof typeof SystemHealthBullMQRedisCutoverOutcome];
+
+export const SystemHealthBullMQRedisCutoverOutcome = {
+  not_checked: "not_checked",
+  checking: "checking",
+  not_configured: "not_configured",
+  workers_disabled: "workers_disabled",
+  blocked: "blocked",
+  approved: "approved",
+  verified: "verified",
+  reverted: "reverted",
+  same_resource: "same_resource",
+} as const;
+
+export type SystemHealthBullMQRedisCutoverBlockersItem = {
+  queue: string;
+  state: string;
+  count: number;
+  reason: string;
+};
+
+export interface SystemHealthBullMQRedisCutover {
+  selectedRedis: SystemHealthBullMQRedisCutoverSelectedRedis;
+  outcome: SystemHealthBullMQRedisCutoverOutcome;
+  /** @nullable */
+  reason: string | null;
+  blockerCount: number;
+  blockedWorkCount: number;
+  blockers: SystemHealthBullMQRedisCutoverBlockersItem[];
+  /** @nullable */
+  checkedAt: string | null;
+}
+
 export interface SystemHealthRedis {
   status: SystemHealthRedisStatus;
   /** @nullable */
   dailyUsage?: SystemHealthRedisDailyUsage;
   /** @nullable */
   queueDailyUsage?: SystemHealthRedisQueueDailyUsage;
+  queueCutover?: SystemHealthBullMQRedisCutover;
 }
 
 export interface SystemHealthStripeWebhookAuditEndpoint {

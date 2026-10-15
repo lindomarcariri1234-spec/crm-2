@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   workerInstances: [] as Array<{ emit: (event: string, ...args: unknown[]) => void }>,
   addedProbeJobs: [] as string[],
   removedProbeJobs: [] as string[],
+  selectedRedis: "REDIS_URL" as "REDIS_URL" | "REDIS_QUEUE_URL" | "disabled",
 }));
 
 vi.mock("bullmq", () => ({
@@ -76,6 +77,7 @@ vi.mock("../lib/redis", () => ({
   areWorkersEnabled: state.areWorkersEnabled,
   getBullMQQueueConnection: state.getBullMQQueueConnection,
   getBullMQWorkerConnection: state.getBullMQWorkerConnection,
+  getBullMQRedisSelection: vi.fn(() => state.selectedRedis),
   getRedisConnection: state.getRedisConnection,
   rejectSeparateQueueRedisCutover: state.rejectSeparateQueueRedisCutover,
   waitForEvictionPolicyCheck: vi.fn(() => Promise.resolve()),
@@ -84,6 +86,7 @@ vi.mock("../lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn() } }));
 
 import {
   prepareAndVerifyBullMQQueueRedisCutover,
+  getBullMQRedisCutoverStatus,
   prepareBullMQQueueRedisCutover,
   verifyBullMQWorkerConsumesProbe,
 } from "./index";
@@ -109,6 +112,9 @@ describe("prepareBullMQQueueRedisCutover", () => {
     state.probeConsumes = true;
     state.addedProbeJobs = [];
     state.removedProbeJobs = [];
+    state.selectedRedis = "REDIS_URL";
+    state.approved.mockImplementation(() => { state.selectedRedis = "REDIS_QUEUE_URL"; });
+    state.rejectSeparateQueueRedisCutover.mockImplementation(() => { state.selectedRedis = "REDIS_URL"; });
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -128,6 +134,25 @@ describe("prepareBullMQQueueRedisCutover", () => {
     await prepareBullMQQueueRedisCutover();
 
     expect(state.approved).not.toHaveBeenCalled();
+  });
+
+  it("exposes blocker counts and reasons while safely staying on REDIS_URL", async () => {
+    state.counts = { wait: 3, active: 1 };
+
+    await prepareBullMQQueueRedisCutover();
+
+    expect(getBullMQRedisCutoverStatus()).toMatchObject({
+      selectedRedis: "REDIS_URL",
+      outcome: "blocked",
+      reason: "Ainda há trabalho nas filas legadas; o BullMQ permanece em REDIS_URL",
+    });
+    const status = getBullMQRedisCutoverStatus();
+    expect(status.blockerCount).toBe(status.blockers.length);
+    expect(status.blockedWorkCount).toBe(status.blockers.reduce((sum, blocker) => sum + blocker.count, 0));
+    expect(status.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ queue: "emails", state: "wait", count: 3, reason: expect.stringContaining("3 item(ns)") }),
+      expect.objectContaining({ queue: "emails", state: "active", count: 1 }),
+    ]));
   });
 
   it("keeps delayed non-scheduler work on the legacy resource", async () => {
@@ -205,6 +230,11 @@ describe("prepareBullMQQueueRedisCutover", () => {
     expect(state.approved).toHaveBeenCalledOnce();
     expect(state.rejectSeparateQueueRedisCutover).not.toHaveBeenCalled();
     expect(state.addedProbeJobs).toHaveLength(1);
+    expect(getBullMQRedisCutoverStatus()).toMatchObject({
+      selectedRedis: "REDIS_QUEUE_URL",
+      outcome: "verified",
+      blockerCount: 0,
+    });
   });
 
   it("reverts to REDIS_URL when the cutover probe is not consumed", async () => {
@@ -214,5 +244,11 @@ describe("prepareBullMQQueueRedisCutover", () => {
 
     expect(state.approved).toHaveBeenCalledOnce();
     expect(state.rejectSeparateQueueRedisCutover).toHaveBeenCalledOnce();
+    expect(getBullMQRedisCutoverStatus()).toMatchObject({
+      selectedRedis: "REDIS_URL",
+      outcome: "reverted",
+      blockerCount: 1,
+      blockedWorkCount: 1,
+    });
   });
 });

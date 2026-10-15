@@ -19,18 +19,21 @@ import { ROLES } from "@workspace/permissions";
 const {
   mockRequireAuth,
   mockGetStripeSyncTablesStatus,
+  mockGetBullMQRedisCutoverStatus,
   mockCleanupOrphanDeals,
   mockRepairSeatDriftOnly,
   mockRunSeatReconciliationCron,
 } = vi.hoisted(() => {
   const mockRequireAuth = vi.fn();
   const mockGetStripeSyncTablesStatus = vi.fn();
+  const mockGetBullMQRedisCutoverStatus = vi.fn();
   const mockCleanupOrphanDeals = vi.fn();
   const mockRepairSeatDriftOnly = vi.fn();
   const mockRunSeatReconciliationCron = vi.fn();
   return {
     mockRequireAuth,
     mockGetStripeSyncTablesStatus,
+    mockGetBullMQRedisCutoverStatus,
     mockCleanupOrphanDeals,
     mockRepairSeatDriftOnly,
     mockRunSeatReconciliationCron,
@@ -67,6 +70,10 @@ vi.mock("../lib/stripeSync.js", () => ({
     endpoints: [],
     checkedAt: null,
   })),
+}));
+
+vi.mock("../queues/index.js", () => ({
+  getBullMQRedisCutoverStatus: mockGetBullMQRedisCutoverStatus,
 }));
 
 vi.mock("@clerk/express", () => ({
@@ -237,6 +244,36 @@ describe("GET /admin/system-health", () => {
     expect(res.body.stripeSyncTables).toEqual({
       ok: false,
       checkedAt: "2026-08-24T12:00:00.000Z",
+    });
+  });
+
+  it("includes the selected queue Redis and cutover blockers", async () => {
+    mockRequireAuth.mockResolvedValue(makeSuperAdmin());
+    mockGetStripeSyncTablesStatus.mockReturnValue({ ok: true, checkedAt: null });
+    mockGetBullMQRedisCutoverStatus.mockReturnValue({
+      selectedRedis: "REDIS_URL",
+      outcome: "blocked",
+      reason: "Ainda há trabalho nas filas legadas; o BullMQ permanece em REDIS_URL",
+      blockerCount: 1,
+      blockedWorkCount: 4,
+      blockers: [{
+        queue: "emails",
+        state: "wait",
+        count: 4,
+        reason: "4 item(ns) no estado wait permanecem na fila legada",
+      }],
+      checkedAt: "2026-10-15T12:00:00.000Z",
+    });
+
+    const res = await request(buildApp()).get("/admin/system-health");
+
+    expect(res.status).toBe(200);
+    expect(res.body.redis.queueCutover).toMatchObject({
+      selectedRedis: "REDIS_URL",
+      outcome: "blocked",
+      blockerCount: 1,
+      blockedWorkCount: 4,
+      blockers: [expect.objectContaining({ queue: "emails", state: "wait", count: 4 })],
     });
   });
 });

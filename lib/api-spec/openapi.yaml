@@ -11481,7 +11481,42 @@ components:
             warningThresholdPct:
               type: number
           required: [commandCount, maxCommands, usagePct, warningThresholdPct]
+        queueCutover:
+          $ref: "#/components/schemas/SystemHealthBullMQRedisCutover"
       required: [status]
+
+    SystemHealthBullMQRedisCutover:
+      type: object
+      properties:
+        selectedRedis:
+          type: string
+          enum: [REDIS_URL, REDIS_QUEUE_URL, disabled]
+        outcome:
+          type: string
+          enum: [not_checked, checking, not_configured, workers_disabled, blocked, approved, verified, reverted, same_resource]
+        reason:
+          type: ["string", "null"]
+        blockerCount:
+          type: integer
+        blockedWorkCount:
+          type: integer
+        blockers:
+          type: array
+          items:
+            type: object
+            properties:
+              queue:
+                type: string
+              state:
+                type: string
+              count:
+                type: integer
+              reason:
+                type: string
+            required: [queue, state, count, reason]
+        checkedAt:
+          type: ["string", "null"]
+      required: [selectedRedis, outcome, reason, blockerCount, blockedWorkCount, blockers, checkedAt]
 
     SystemHealthStripeWebhookAuditEndpoint:
       type: object

@@ -5,6 +5,7 @@ import { getRedisStatus, fetchUpstashDailyStats, areWorkersEnabled } from "../li
 import { getStripeSyncTablesStatus, getWebhookAuditStatus, recheckWebhookAudit } from "../lib/stripeSync";
 import { getDriftSnapshot, getOrphanDealsCount, getClientFinancialDriftCount, cleanupOrphanDeals, repairSeatDriftOnly } from "../lib/seat-reconciliation";
 import { ROLES } from "@workspace/permissions";
+import { getBullMQRedisCutoverStatus } from "../queues/index.js";
 
 const router = Router();
 
@@ -31,6 +32,7 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
     res.json({
       redis: {
         status: redisStatus,
+        queueCutover: getBullMQRedisCutoverStatus(),
         ...(dailyStats !== null
           ? {
               dailyUsage: {

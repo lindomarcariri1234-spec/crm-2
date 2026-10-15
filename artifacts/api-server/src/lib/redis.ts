@@ -80,6 +80,13 @@ export function rejectSeparateQueueRedisCutover(): void {
   _evictionPolicyPromise = Promise.resolve();
 }
 
+export function getBullMQRedisSelection(): "REDIS_URL" | "REDIS_QUEUE_URL" | "disabled" {
+  if (!areWorkersEnabled()) return "disabled";
+  if (_useSeparateQueueRedis && process.env["REDIS_QUEUE_URL"]?.trim()) return "REDIS_QUEUE_URL";
+  if (process.env["REDIS_URL"]?.trim()) return "REDIS_URL";
+  return "disabled";
+}
+
 // ─── Eviction policy ──────────────────────────────────────────────────────────
 // Tracked per process so we only attempt the CONFIG SET once at startup (not on
 // every reconnect) and only log the actionable warning once.

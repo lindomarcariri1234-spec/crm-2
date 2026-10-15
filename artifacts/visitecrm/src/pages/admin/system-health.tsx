@@ -143,6 +143,7 @@ export default function SystemHealthPage() {
   const orphans = data?.pipelineOrphans;
   const clientDrift = data?.clientFinancialDrift;
   const stripeSyncTables = data?.stripeSyncTables;
+  const queueCutover = data?.redis?.queueCutover;
 
   const seatStatus: StatusLevel = isLoading
     ? "loading"
@@ -169,6 +170,26 @@ export default function SystemHealthPage() {
     : stripeSyncTables?.ok === false
     ? "degraded"
     : "unknown";
+  const queueCutoverStatus: StatusLevel = isLoading
+    ? "loading"
+    : queueCutover?.outcome === "verified" || queueCutover?.outcome === "same_resource"
+    ? "ok"
+    : queueCutover?.outcome === "blocked" || queueCutover?.outcome === "reverted"
+    ? "degraded"
+    : "unknown";
+  const queueCutoverOutcomeLabel = queueCutover
+    ? ({
+        not_checked: "Ainda não verificado",
+        checking: "Verificando",
+        not_configured: "Redis separado não configurado",
+        workers_disabled: "Workers desativados",
+        blocked: "Troca bloqueada com segurança",
+        approved: "Aprovado, aguardando teste",
+        verified: "Redis separado confirmado",
+        reverted: "Retornado ao Redis anterior",
+        same_resource: "Mesmo recurso Redis",
+      }[queueCutover.outcome] ?? queueCutover.outcome)
+    : undefined;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -224,6 +245,45 @@ export default function SystemHealthPage() {
                 : undefined
             }
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Database className="w-4 h-4 text-primary" />
+            Redis das filas BullMQ
+          </CardTitle>
+          <CardDescription>
+            Mostra qual Redis as filas usam e por que a troca de recurso foi aprovada ou bloqueada.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 -mt-2">
+          <MetricRow
+            icon={Activity}
+            label="Redis selecionado"
+            description={queueCutover?.reason ?? (isLoading ? "Aguardando verificação..." : "Resultado de cutover indisponível.")}
+            status={queueCutoverStatus}
+            value={queueCutover ? `${queueCutover.selectedRedis} · ${queueCutoverOutcomeLabel}` : undefined}
+          />
+          {queueCutover && (queueCutover.blockerCount > 0 || queueCutover.blockedWorkCount > 0) && (
+            <div className="rounded-md border border-amber-300/70 bg-amber-50/60 p-3 text-sm dark:bg-amber-950/20">
+              <p className="font-medium">
+                {queueCutover.blockerCount} bloqueador(es) · {queueCutover.blockedWorkCount} item(ns) na fila legada
+              </p>
+              <ul className="mt-2 space-y-2">
+                {queueCutover.blockers.map((blocker, index) => (
+                  <li key={`${blocker.queue}-${blocker.state}-${index}`} className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">
+                      {blocker.queue === "*" ? "Inspeção" : blocker.queue}
+                      {blocker.count > 0 ? ` · ${blocker.count} ${blocker.state}` : ""}
+                    </span>
+                    <span className="block">{blocker.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </CardContent>
       </Card>
 
