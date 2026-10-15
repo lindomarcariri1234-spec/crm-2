@@ -90,6 +90,15 @@ export function prepareTrips(
   return { headers, rows, count: trips.length };
 }
 
+export interface ReservationPaymentItem {
+  type: string;
+  category: string;
+  amount: number;
+  status: string;
+  dueDate?: string | null;
+  paidAt?: string | null;
+}
+
 // Reservation item shape used by prepareManifest / prepareReservations
 export interface ReservationItem {
   id: string;
@@ -99,6 +108,7 @@ export interface ReservationItem {
   totalValue: number;
   paidValue: number;
   balance: number;
+  payments?: ReservationPaymentItem[];
   paymentMethod?: string | null;
   installments?: number | null;
   client?: { name?: string; whatsapp?: string } | null;
@@ -141,23 +151,45 @@ export function prepareReservations(
   const reservations = all.filter((r) => inDateRange(r.createdAt, quickStart, quickEnd));
   const headers = [
     "ID", "Cliente", "Viagem", "Saída", "Status", "Assentos",
-    "Valor Total (R$)", "Valor Pago (R$)", "Saldo (R$)", "Forma de Pagamento",
+    "Valor Total (R$)", "Recebimentos Brutos (R$)", "Estornos Stripe (R$)",
+    "Detalhes dos Estornos Stripe", "Valor Pago Líquido (R$)", "Saldo (R$)", "Forma de Pagamento",
     "Parcelas", "Criado em",
   ];
-  const rows = reservations.map((r) => [
-    r.id,
-    r.client?.name ?? "",
-    r.trip?.name ?? "",
-    fmtDate(r.trip?.departureDate),
-    r.status,
-    String(r.seats?.length ?? 0),
-    fmtCur(r.totalValue),
-    fmtCur(r.paidValue),
-    fmtCur(r.balance),
-    r.paymentMethod ?? "",
-    String(r.installments ?? 1),
-    fmtDate(r.createdAt),
-  ]);
+  const rows = reservations.map((r) => {
+    const payments = r.payments ?? [];
+    const isReceived = (p: ReservationPaymentItem) =>
+      p.type === "receivable" && ["paid", "approved"].includes(p.status);
+    const cents = (amount: number) => Math.round(Number(amount) * 100);
+    const refunds = payments.filter(
+      (p) => isReceived(p) && p.category === "stripe_refund" && p.amount < 0,
+    );
+    const refundCents = refunds.reduce((total, p) => total + Math.abs(cents(p.amount)), 0);
+    const netPaidCents = cents(r.paidValue);
+    // Derive gross from the same canonical net paid value shown in the reservation
+    // summary, so order-level receipts that lack a reservation link still reconcile.
+    const grossReceiptsCents = netPaidCents + refundCents;
+    const refundDetails = refunds
+      .map((p) => `${fmtDate(p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
+      .join("; ");
+
+    return [
+      r.id,
+      r.client?.name ?? "",
+      r.trip?.name ?? "",
+      fmtDate(r.trip?.departureDate),
+      r.status,
+      String(r.seats?.length ?? 0),
+      fmtCur(r.totalValue),
+      fmtCur(grossReceiptsCents / 100),
+      fmtCur(refundCents / 100),
+      refundDetails,
+      fmtCur(r.paidValue),
+      fmtCur(r.balance),
+      r.paymentMethod ?? "",
+      String(r.installments ?? 1),
+      fmtDate(r.createdAt),
+    ];
+  });
   return { headers, rows, count: reservations.length };
 }
 

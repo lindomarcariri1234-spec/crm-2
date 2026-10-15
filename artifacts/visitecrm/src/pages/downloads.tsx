@@ -22,6 +22,7 @@ import {
   prepareReferrals,
   prepareCommissions,
   preparePipeline,
+  type ReservationPaymentItem,
   downloadXlsx,
   downloadPdf,
 } from "./downloads-utils.js";
@@ -292,13 +293,30 @@ export default function Downloads() {
   }
 
   async function _prepareReservations() {
-    const all = await fetchAllPages<{
+    const [all, allPayments] = await Promise.all([
+      fetchAllPages<{
       id: string; client?: { name?: string } | null; trip?: { name?: string; departureDate?: string } | null;
       status: string; seats?: unknown[] | null; totalValue?: number; paidValue?: number; balance?: number;
       paymentMethod?: string | null; installments?: number | null; createdAt: string;
-    }>("/api/reservations", { dateFrom: quickStart, dateTo: quickEnd });
+      }>("/api/reservations", { dateFrom: quickStart, dateTo: quickEnd }),
+      fetchAllPages<{
+        reservationId?: string | null; type: string; category: string; amount: number;
+        status: string; dueDate?: string | null; paidAt?: string | null;
+      }>("/api/payments", {}),
+    ]);
+    const paymentsByReservation = new globalThis.Map<string, ReservationPaymentItem[]>();
+    for (const payment of allPayments) {
+      if (!payment.reservationId) continue;
+      const list = paymentsByReservation.get(payment.reservationId) ?? [];
+      list.push(payment);
+      paymentsByReservation.set(payment.reservationId, list);
+    }
+    const reservationsWithPayments = all.map((reservation) => ({
+      ...reservation,
+      payments: paymentsByReservation.get(reservation.id) ?? [],
+    }));
     return prepareReservations(
-      all as Parameters<typeof prepareReservations>[0],
+      reservationsWithPayments as Parameters<typeof prepareReservations>[0],
       quickStart,
       quickEnd,
     );
@@ -306,13 +324,15 @@ export default function Downloads() {
 
   async function preparePayments() {
     const all = await fetchAllPages<{
-      id: string; type: string; category: string; description?: string | null;
+      id: string; reservationId?: string | null; type: string; category: string; description?: string | null;
       amount?: number; status: string; dueDate?: string; paidAt?: string | null;
       paymentMethod?: string | null; installmentNumber?: number | null; createdAt: string;
     }>("/api/payments", { dateFrom: quickStart, dateTo: quickEnd });
-    const headers = ["ID", "Tipo", "Categoria", "Descrição", "Valor (R$)", "Status", "Vencimento", "Pagamento", "Forma", "Parcela", "Criado em"];
+    const headers = ["ID", "Reserva", "Tipo", "Categoria", "Descrição", "Valor (R$)", "Status", "Vencimento", "Pagamento", "Forma", "Parcela", "Criado em"];
     const rows = all.map(p => [
-      p.id, p.type, p.category, p.description ?? "",
+      p.id, p.reservationId ?? "", p.type,
+      p.category === "stripe_refund" ? "Estorno Stripe" : p.category,
+      p.description ?? "",
       fmtCur(p.amount), p.status,
       fmtDate(p.dueDate), fmtDate(p.paidAt ?? undefined),
       p.paymentMethod ?? "",

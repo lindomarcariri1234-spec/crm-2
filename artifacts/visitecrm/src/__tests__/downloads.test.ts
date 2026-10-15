@@ -505,7 +505,32 @@ describe("prepareReservations", () => {
 
     expect(headers).toContain("Cliente");
     expect(headers).toContain("Valor Total (R$)");
+    expect(headers).toContain("Recebimentos Brutos (R$)");
+    expect(headers).toContain("Detalhes dos Estornos Stripe");
+    expect(headers).toContain("Valor Pago Líquido (R$)");
     expect(headers).toContain("Criado em");
+  });
+
+  it("exports Stripe refunds with their dates while reconciling gross receipts to canonical net paid", () => {
+    const reservation = makeReservation({
+      createdAt: "2025-04-10T00:00:00Z",
+      paidValue: 75,
+      balance: 25,
+      payments: [
+        { type: "receivable", category: "reservation", amount: 100, status: "paid", paidAt: "2025-04-10T12:00:00Z" },
+        { type: "receivable", category: "stripe_refund", amount: -25, status: "paid", paidAt: "2025-04-20T12:00:00Z" },
+      ],
+    });
+    const { headers, rows } = prepareReservations([reservation] as any[], RANGE_START, RANGE_END);
+    const row = rows[0];
+    const col = (name: string) => row[headers.indexOf(name)];
+
+    expect(col("Recebimentos Brutos (R$)")).toBe("100,00");
+    expect(col("Estornos Stripe (R$)")).toBe("25,00");
+    expect(col("Detalhes dos Estornos Stripe")).toContain("20/04/2025");
+    expect(col("Detalhes dos Estornos Stripe")).toContain("25,00");
+    expect(col("Valor Pago Líquido (R$)")).toBe("75,00");
+    expect(col("Saldo (R$)")).toBe("25,00");
   });
 });
 
