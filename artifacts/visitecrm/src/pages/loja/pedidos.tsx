@@ -608,6 +608,13 @@ export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; 
               )}
             </div>
           )}
+          {status === STORE_ORDER_STATUS.CANCELLED
+            && summary.paidAmount > 0
+            && paymentStatus !== STORE_PAYMENT_STATUS.REFUNDED && (
+            <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Registre o estorno do pagamento antes de cancelar um pedido pago.
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Status do Pedido</label>

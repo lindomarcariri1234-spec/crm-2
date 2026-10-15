@@ -55,6 +55,7 @@ import {
 } from "../lib/linked-data";
 import { syncPaidProductOrderDeal } from "../services/pipeline-deal-sync";
 import { syncStoreOrderFromOrderPayment } from "../services/reservation-order-payment-sync";
+import { syncReservationPaymentStatus } from "../lib/reservation-payments";
 import { roundMoney } from "../lib/pricing";
 
 // Storefront public base for links inside price-drop alert e-mails. Product
@@ -1458,6 +1459,16 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
       internalNotes: z.string().optional(),
     }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    if (
+      parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+      && parsed.data.status !== STORE_ORDER_STATUS.CANCELLED
+    ) {
+      next(new ConflictError(
+        "Registre o estorno junto com o cancelamento do pedido.",
+        "REFUND_REQUIRES_ORDER_CANCELLATION",
+      ));
+      return;
+    }
     const updates: Record<string, unknown> = {};
     if (parsed.data.status) updates.status = parsed.data.status;
     if (parsed.data.paymentStatus) updates.paymentStatus = parsed.data.paymentStatus;
@@ -1469,6 +1480,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     if (parsed.data.status === STORE_ORDER_STATUS.COMPLETED) updates.completedAt = new Date();
     if (parsed.data.status === STORE_ORDER_STATUS.CANCELLED) updates.cancelledAt = new Date();
     if (parsed.data.paymentStatus === STORE_PAYMENT_STATUS.PAID) updates.paidAt = new Date();
+    if (parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED) updates.refundedAt = new Date();
 
     // When transitioning to PAID, add a conditional WHERE to make the inventory
     // effects idempotent under concurrency. The WHERE `paymentStatus != PAID`
@@ -1484,6 +1496,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     let didTransitionToPaid = false;
     let didTransitionToCancelled = false;
     let order: typeof storeOrdersTable.$inferSelect | undefined;
+    let cancelledTripIds: string[] = [];
     let manualCreateResult: Awaited<ReturnType<typeof createReservationsForOrder>> | null = null;
     if (isTransitioningToPaid) {
       await db.transaction(async (tx) => {
@@ -1586,15 +1599,53 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           .limit(1);
         if (!lockedOrder) throw new NotFoundError("Order not found", "NOT_FOUND");
         order = lockedOrder;
-        if (lockedOrder.status === STORE_ORDER_STATUS.CANCELLED) return;
+        const refundRecorded = parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+          || lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED;
 
         const linkedReservations = await tx
-          .select({ id: reservationsTable.id })
+          .select({
+            id: reservationsTable.id,
+            clientId: reservationsTable.clientId,
+            status: reservationsTable.status,
+            tripId: reservationsTable.tripId,
+            seats: reservationsTable.seats,
+            capacityUnits: reservationsTable.capacityUnits,
+          })
           .from(reservationsTable)
           .where(and(
             eq(reservationsTable.tenantId, me.tenantId),
             eq(reservationsTable.storeOrderId, lockedOrder.orderNumber),
           ));
+        const paymentScope = linkedReservations.length > 0
+          ? or(
+            eq(paymentsTable.orderId, lockedOrder.id),
+            inArray(paymentsTable.reservationId, linkedReservations.map((reservation) => reservation.id)),
+          )
+          : eq(paymentsTable.orderId, lockedOrder.id);
+        const receivedPayments = await tx.select({ id: paymentsTable.id })
+          .from(paymentsTable)
+          .where(and(
+            eq(paymentsTable.tenantId, lockedOrder.tenantId),
+            eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+            inArray(paymentsTable.status, [PAYMENT_STATUS.PAID, PAYMENT_STATUS.APPROVED]),
+            paymentScope,
+          ));
+        const hasReceivedPayment = receivedPayments.length > 0;
+        if (
+          (lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID || hasReceivedPayment)
+          && !refundRecorded
+        ) {
+          throw new ConflictError(
+            "Registre o estorno do pagamento antes de cancelar um pedido com recebimentos.",
+            "ORDER_REFUND_REQUIRED",
+          );
+        }
+        const cancellableReservations = linkedReservations.filter(
+          (reservation) =>
+            reservation.status !== RESERVATION_STATUS.CANCELLED
+            && reservation.status !== RESERVATION_STATUS.COMPLETED,
+        );
+        const cancellableIds = cancellableReservations.map((reservation) => reservation.id);
 
         const ref = lockedOrder.pendingReferral;
         if (lockedOrder.referralEffectsAppliedAt != null && ref?.code) {
@@ -1610,7 +1661,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
             await reverseTripOrderReferrals(tx, {
               tenantId: me.tenantId,
               orderId: lockedOrder.id,
-              cancellableReservationIds: linkedReservations.map((reservation) => reservation.id),
+              cancellableReservationIds: cancellableIds,
               reversalReason: "order_cancelled",
             });
           }
@@ -1630,9 +1681,9 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           );
         }
 
-        const shouldReverseFinancials =
-          lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID
-          || parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED;
+        const shouldReverseFinancials = lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID
+          || hasReceivedPayment
+          || refundRecorded;
         if (shouldReverseFinancials) {
           await reverseOrderInventoryEffects(
             lockedOrder.id,
@@ -1652,6 +1703,59 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
             occurredAt: new Date(),
             reason: "Pedido cancelado pela agência",
           });
+          await tx.update(paymentsTable)
+            .set({ status: PAYMENT_STATUS.REFUNDED })
+            .where(and(
+              eq(paymentsTable.tenantId, lockedOrder.tenantId),
+              eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+              inArray(paymentsTable.status, [PAYMENT_STATUS.PAID, PAYMENT_STATUS.APPROVED]),
+              paymentScope,
+            ));
+        }
+
+        if (cancellableIds.length > 0) {
+          const seatDeltaByTrip = new Map<string, { confirmed: number; reserved: number }>();
+          for (const reservation of cancellableReservations) {
+            if (
+              reservation.status !== RESERVATION_STATUS.PENDING
+              && reservation.status !== RESERVATION_STATUS.CONFIRMED
+            ) continue;
+            const seats = reservation.capacityUnits > 0
+              ? reservation.capacityUnits
+              : (Array.isArray(reservation.seats) ? reservation.seats.length : 0);
+            if (!reservation.tripId || seats <= 0) continue;
+            const delta = seatDeltaByTrip.get(reservation.tripId) ?? { confirmed: 0, reserved: 0 };
+            if (reservation.status === RESERVATION_STATUS.CONFIRMED) {
+              delta.confirmed += seats;
+            } else {
+              delta.reserved += seats;
+            }
+            seatDeltaByTrip.set(reservation.tripId, delta);
+          }
+          for (const [tripId, { confirmed, reserved }] of seatDeltaByTrip) {
+            await tx.update(tripsTable).set({
+              availableSeats: sql`LEAST(total_capacity, GREATEST(0, available_seats + ${confirmed + reserved}))`,
+              ...(confirmed > 0 ? { confirmedSeats: sql`GREATEST(0, confirmed_seats - ${confirmed})` } : {}),
+              ...(reserved > 0 ? { reservedSeats: sql`GREATEST(0, reserved_seats - ${reserved})` } : {}),
+            }).where(and(eq(tripsTable.id, tripId), eq(tripsTable.tenantId, lockedOrder.tenantId)));
+            cancelledTripIds.push(tripId);
+          }
+          await tx.update(reservationsTable)
+            .set({ status: RESERVATION_STATUS.CANCELLED, cancelledAt: new Date() })
+            .where(and(
+              eq(reservationsTable.tenantId, lockedOrder.tenantId),
+              inArray(reservationsTable.id, cancellableIds),
+            ));
+        }
+        for (const reservation of linkedReservations) {
+          await syncReservationPaymentStatus(reservation.id, lockedOrder.tenantId, tx);
+        }
+        const affectedClientIds = new Set([
+          lockedOrder.clientId,
+          ...linkedReservations.map((reservation) => reservation.clientId),
+        ].filter((clientId): clientId is string => Boolean(clientId)));
+        for (const clientId of affectedClientIds) {
+          await recalculateClientFinancials(clientId, lockedOrder.tenantId, tx);
         }
 
         await restoreSpentCreditForOrder(
@@ -1674,6 +1778,13 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     }
     if (!order) { next(new NotFoundError("Order not found", "NOT_FOUND")); return; }
     const currentOrder = order;
+    if (didTransitionToCancelled) {
+      for (const tripId of cancelledTripIds) {
+        broadcastSeatUpdate(tripId, currentOrder.tenantId).catch((err) => {
+          req.log.warn({ err, tripId }, "[store/orders] Failed to broadcast seat update on cancellation");
+        });
+      }
+    }
 
     // Payment-gated reservation: reservations are normally already created at
     // checkout time (createReservationsForOrder is idempotent, so this call is
