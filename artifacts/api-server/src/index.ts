@@ -41,6 +41,7 @@ import { runCampaignAutomationCron } from "./lib/campaign-automation";
 import { runGemeoAlertsCron, runGemeoOpportunitiesCron } from "./lib/gemeo-cron";
 import { runFavoriteLowAvailabilityAlertCron } from "./lib/favorite-alerts";
 import { runAbandonedOrderReferralCleanup } from "./lib/abandoned-order-referrals";
+import { retryPendingDeferredOrderAccounting } from "./services/checkout/deferred-accounting-recovery";
 import { runSeatReconciliationCron } from "./lib/seat-reconciliation";
 import { runCapacityIntegrityCheck } from "./services/capacity-integrity";
 import { runStripeHealthCheckCron } from "./lib/stripe-health-check";
@@ -337,6 +338,10 @@ void runApiStartup(process.env, {
       scheduleDistributedCron("abandoned-referrals", "0 5 * * *", async () => {
         logger.info("[abandoned-referrals] Daily sweep triggered");
         await runAbandonedOrderReferralCleanup();
+      }, { timezone: "America/Sao_Paulo" });
+
+      scheduleDistributedCron("deferred-order-accounting-recovery", "*/15 * * * *", async () => {
+        await retryPendingDeferredOrderAccounting();
       }, { timezone: "America/Sao_Paulo" });
 
       scheduleDistributedCron("referral-attempt-log-cleanup", "30 5 * * *", async () => {

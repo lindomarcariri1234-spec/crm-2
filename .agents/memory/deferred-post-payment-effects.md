@@ -43,6 +43,22 @@ marker/state — do NOT rely on `paymentExistsForGatewayTx` to gate it, especial
 product-only orders. The manual mark-paid path (store.ts order status PUT) already
 calls `runPostPaymentSideEffects` unconditionally on the PAID transition.
 
+## Recovery after committed manual receipts
+
+When deferred referral/cashback accounting fails after a manual receipt commits,
+do not turn the request into a failure that could prompt the user to create a
+second receipt. Keep the applied marker unset and recover from durable paid
+receivable rows with a bounded scheduled sweep; the accounting transaction's
+order lock and marker make replays safe.
+
+**Why:** A post-commit error cannot roll back the receipt, and a client retry of
+the payment request can duplicate money records. A durable scan separates
+receipt idempotency from accounting recovery.
+
+**How to apply:** Recovery must select only active orders with an unapplied
+deferred intent and a real paid/approved receivable, invoke accounting with
+partial-payment eligibility, and never insert or update payment rows.
+
 ## CRM and storefront reservation referrals follow the same rule
 
 Creating a reservation directly in the CRM may apply the customer's referral

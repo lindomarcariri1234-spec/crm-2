@@ -6,6 +6,7 @@ import { calculateScoresForAllTenants } from "../lib/client-scores";
 import { runGemeoAlertsCron, runGemeoOpportunitiesCron } from "../lib/gemeo-cron";
 import { runFavoriteLowAvailabilityAlertCron } from "../lib/favorite-alerts";
 import { runAbandonedOrderReferralCleanup } from "../lib/abandoned-order-referrals";
+import { retryPendingDeferredOrderAccounting } from "../services/checkout/deferred-accounting-recovery";
 import { runSeatReconciliationCron } from "../lib/seat-reconciliation";
 import { runStripeHealthCheckCron } from "../lib/stripe-health-check";
 import { runCampaignAutomationCron } from "../lib/campaign-automation";
@@ -49,6 +50,7 @@ const JOBS: Record<string, () => Promise<unknown>> = {
   "gemeo-opportunities": runGemeoOpportunitiesCron,
   "favorite-alerts": runFavoriteLowAvailabilityAlertCron,
   "abandoned-referrals": runAbandonedOrderReferralCleanup,
+  "deferred-order-accounting-recovery": retryPendingDeferredOrderAccounting,
   "seat-reconciliation": runSeatReconciliationCron,
   "stripe-health": runStripeHealthCheckCron,
   "installment-due-reminder": processInstallmentDueReminders,
