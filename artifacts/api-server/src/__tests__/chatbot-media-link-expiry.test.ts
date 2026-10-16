@@ -10,6 +10,7 @@ const mockState = vi.hoisted(() => ({
   conversation: null as Record<string, unknown> | null,
   messages: [] as Record<string, unknown>[],
   eq: vi.fn((column: unknown, value: unknown) => ({ operator: "eq", column, value })),
+  lt: vi.fn((column: unknown, value: unknown) => ({ operator: "lt", column, value })),
   outboundRows: [] as Record<string, unknown>[],
   attempts: [] as Record<string, unknown>[],
   chatbotConversationsTable: {
@@ -76,6 +77,8 @@ vi.mock("drizzle-orm", async (importOriginal) => {
     and: (...conditions: unknown[]) => ({ operator: "and", conditions }),
     or: (...conditions: unknown[]) => ({ operator: "or", conditions }),
     eq: mockState.eq,
+    lt: mockState.lt,
+    desc: (column: unknown) => ({ operator: "desc", column }),
     inArray: (column: unknown, values: unknown[]) => ({ operator: "inArray", column, values }),
     sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ operator: "sql", strings, values }),
   };
@@ -491,6 +494,7 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       attempts: 1,
       provider: "evolution",
       externalId: "provider-message-accepted",
+      createdAt: new Date(sentAt.getTime() + 2000),
       acceptedAt: new Date(sentAt.getTime() + 2000),
       origin: "whatsapp-attendance",
       metadata: { conversationId: CONVERSATION_ID },
@@ -505,9 +509,16 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       startedAt: sentAt,
       completedAt: sentAt,
     };
+    const previousAttempt = {
+      ...attempt,
+      attemptNumber: 1,
+      status: "failed",
+      externalId: "provider-message-retry",
+      error: "raw retry failure",
+    };
     mockState.conversation = conversation;
     mockState.messages = messages;
-    const makeBuilder = (result: unknown[], finalMethod: "limit" | "orderBy") => {
+    const makeBuilder = (result: unknown[], finalMethod: "limit" | "orderBy" | "where") => {
       const builder: Record<string, ReturnType<typeof vi.fn>> = {};
       for (const method of ["from", "where", "innerJoin", "limit", "orderBy"]) {
         builder[method] = vi.fn().mockReturnValue(builder);
@@ -516,22 +527,26 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       return builder;
     };
     const conversationQuery = makeBuilder([conversation], "limit");
-    const messagesQuery = makeBuilder(messages, "orderBy");
-    const outboundQuery = makeBuilder([delivery, acceptedDelivery], "orderBy");
-    const attemptsQuery = makeBuilder([attempt], "orderBy");
+    const messagesQuery = makeBuilder(messages, "limit");
+    const outboundQuery = makeBuilder([acceptedDelivery], "limit");
+    const linkedOutboundQuery = makeBuilder([delivery], "where");
+    const attemptsQuery = makeBuilder([previousAttempt, attempt], "orderBy");
     mockState.dbSelect.mockReset()
       .mockImplementationOnce(() => conversationQuery)
       .mockImplementationOnce(() => messagesQuery)
       .mockImplementationOnce(() => outboundQuery)
+      .mockImplementationOnce(() => linkedOutboundQuery)
       .mockImplementationOnce(() => attemptsQuery);
 
     const response = await request(buildApp())
-      .get(`/api/chatbot-conversations/${CONVERSATION_ID}/timeline`);
+      .get(`/api/chatbot-conversations/${CONVERSATION_ID}/timeline?limit=3`);
 
     expect(response.status).toBe(200);
-    expect(response.body).toHaveLength(3);
-    expect(response.body[0]).toMatchObject({ id: "inbound-a", direction: "inbound" });
-    expect(response.body[1]).toMatchObject({
+    expect(response.body.items).toHaveLength(3);
+    expect(response.body.hasMore).toBe(false);
+    expect(response.body.nextCursor).toBeNull();
+    expect(response.body.items[0]).toMatchObject({ id: "inbound-a", direction: "inbound" });
+    expect(response.body.items[1]).toMatchObject({
       id: "reply-a",
       direction: "outbound",
       deliveryStatus: "unknown",
@@ -540,13 +555,12 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       provider: "zernio",
       externalId: "provider-message-a",
       deliveryAttempts: 2,
-      deliveryHistory: [{
-        attemptNumber: 2,
-        status: "unknown",
-        error: "provider_error",
-      }],
+      deliveryHistory: [
+        { attemptNumber: 1, status: "failed", error: "provider_error" },
+        { attemptNumber: 2, status: "unknown", error: "provider_error" },
+      ],
     });
-    expect(response.body[2]).toMatchObject({
+    expect(response.body.items[2]).toMatchObject({
       id: "delivery:delivery-accepted",
       direction: "outbound",
       deliveryStatus: "sent",
@@ -555,11 +569,79 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       origin: "whatsapp-attendance",
       deliveryAttempts: 1,
     });
-    expect(JSON.stringify(response.body)).not.toContain("provider secret detail");
-    expect(JSON.stringify(response.body)).not.toContain("raw provider failure");
+    expect(JSON.stringify(response.body.items)).not.toContain("provider secret detail");
+    expect(JSON.stringify(response.body.items)).not.toContain("raw provider failure");
+    expect(JSON.stringify(response.body.items)).not.toContain("raw retry failure");
     expect(mockState.eq).toHaveBeenCalledWith(mockState.chatbotConversationsTable.tenantId, TENANT_ID);
     expect(mockState.eq).toHaveBeenCalledWith(mockState.outboundDeliveriesTable.tenantId, TENANT_ID);
     expect(mockState.eq).toHaveBeenCalledWith(mockState.outboundDeliveryAttemptsTable.tenantId, TENANT_ID);
+  });
+
+  it("pages through equal timestamps with a stable ID cursor", async () => {
+    const sentAt = new Date("2026-10-15T12:00:00.000Z");
+    const conversation = {
+      id: CONVERSATION_ID,
+      tenantId: TENANT_ID,
+      clientId: null,
+      channel: "whatsapp",
+    };
+    const messageZ = makeMessage("message-z", sentAt, { mediaUrl: null });
+    const messageA = makeMessage("message-a", sentAt, { mediaUrl: null });
+    const makeBuilder = (result: unknown[], finalMethod: "limit" | "where") => {
+      const builder: Record<string, ReturnType<typeof vi.fn>> = {};
+      for (const method of ["from", "where", "innerJoin", "limit", "orderBy"]) {
+        builder[method] = vi.fn().mockReturnValue(builder);
+      }
+      builder[finalMethod]!.mockResolvedValue(result);
+      return builder;
+    };
+    const configurePageQueries = (messages: Record<string, unknown>[]) => {
+      const conversationQuery = makeBuilder([conversation], "limit");
+      const messageQuery = makeBuilder(messages, "limit");
+      const standaloneQuery = makeBuilder([], "limit");
+      const linkedQuery = makeBuilder([], "where");
+      mockState.dbSelect.mockReset()
+        .mockImplementationOnce(() => conversationQuery)
+        .mockImplementationOnce(() => messageQuery)
+        .mockImplementationOnce(() => standaloneQuery)
+        .mockImplementationOnce(() => linkedQuery);
+      return { messageQuery, standaloneQuery };
+    };
+
+    const firstPageQueries = configurePageQueries([messageZ, messageA]);
+    const firstPage = await request(buildApp())
+      .get(`/api/chatbot-conversations/${CONVERSATION_ID}/timeline?limit=1`);
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.items.map((item: { id: string }) => item.id)).toEqual(["message-z"]);
+    expect(firstPage.body.hasMore).toBe(true);
+    expect(firstPageQueries.messageQuery.limit).toHaveBeenCalledWith(2);
+    expect(firstPageQueries.standaloneQuery.limit).toHaveBeenCalledWith(2);
+    const decodedCursor = JSON.parse(Buffer.from(firstPage.body.nextCursor, "base64url").toString("utf8"));
+    expect(decodedCursor).toEqual({ at: sentAt.toISOString(), id: "message-z" });
+
+    mockState.lt.mockClear();
+    configurePageQueries([messageA]);
+    const secondPage = await request(buildApp())
+      .get(`/api/chatbot-conversations/${CONVERSATION_ID}/timeline`)
+      .query({ limit: "1", cursor: firstPage.body.nextCursor });
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.items.map((item: { id: string }) => item.id)).toEqual(["message-a"]);
+    expect(secondPage.body.hasMore).toBe(false);
+    expect(mockState.lt).toHaveBeenCalledWith(mockState.chatbotMessagesTable.sentAt, sentAt);
+    expect(mockState.lt.mock.calls.some(([column, value]) =>
+      value === "message-z" && (column as { operator?: string }).operator === "sql",
+    )).toBe(true);
+  });
+
+  it("rejects invalid cursors and page limits before querying message or delivery history", async () => {
+    const invalidLimit = await request(buildApp())
+      .get(`/api/chatbot-conversations/${CONVERSATION_ID}/timeline?limit=101`);
+    const invalidCursor = await request(buildApp())
+      .get(`/api/chatbot-conversations/${CONVERSATION_ID}/timeline?cursor=not-a-cursor`);
+
+    expect(invalidLimit.status).toBe(400);
+    expect(invalidCursor.status).toBe(400);
+    expect(mockState.dbSelect).not.toHaveBeenCalled();
   });
 
   it("returns not found for a conversation outside the authenticated tenant before reading either history table", async () => {

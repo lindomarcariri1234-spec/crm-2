@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef, type Dispatch, type SetStateAction } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   getListClientsQueryKey,
@@ -278,6 +278,9 @@ export default function Communication() {
   const [aiInboxSearch, setAiInboxSearch] = useState("");
   const [selectedAiConversationId, setSelectedAiConversationId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
+  const [aiTimelineCursor, setAiTimelineCursor] = useState<string | null>(null);
+  const [aiTimelineHasMore, setAiTimelineHasMore] = useState(false);
+  const [loadingOlderAiMessages, setLoadingOlderAiMessages] = useState(false);
   const [loadingAiMessages, setLoadingAiMessages] = useState(false);
   const [aiMessagesError, setAiMessagesError] = useState<string | null>(null);
   const {
@@ -326,6 +329,20 @@ export default function Communication() {
   const aiReplyKeys = useRef(new Map<string, { conversationId: string; content: string; idempotencyKey: string }>());
   const aiConversationRequestId = useRef(0);
   const aiInboxRequestId = useRef(0);
+  const aiMessagesScrollRef = useRef<HTMLDivElement>(null);
+  const pendingTimelinePrependScroll = useRef<{ height: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const element = aiMessagesScrollRef.current;
+    const pending = pendingTimelinePrependScroll.current;
+    if (!element) return;
+    if (pending) {
+      element.scrollTop = pending.top + (element.scrollHeight - pending.height);
+      pendingTimelinePrependScroll.current = null;
+    } else if (!loadingAiMessages) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [aiMessages, loadingAiMessages]);
 
   const [resendingId, setResendingId] = useState<string | null>(null);
   const [historyChannel, setHistoryChannel] = useState<"all" | "email" | "whatsapp">("all");
@@ -433,18 +450,29 @@ export default function Communication() {
 
   const selectAiConversation = useCallback(async (id: string, silent = false) => {
     const requestId = ++aiConversationRequestId.current;
+    setLoadingOlderAiMessages(false);
+    pendingTimelinePrependScroll.current = null;
     if (!silent) {
       setSelectedAiConversationId(id);
       setAiMessages([]);
+      setAiTimelineCursor(null);
+      setAiTimelineHasMore(false);
       setLoadingAiMessages(true);
       setAiMessagesError(null);
     }
     try {
-      const res = await fetch(`${BASE}/api/chatbot-conversations/${id}/timeline`, { credentials: "include" });
+      const res = await fetch(`${BASE}/api/chatbot-conversations/${id}/timeline?limit=50`, { credentials: "include" });
       if (!res.ok) throw new Error("failed");
-      const messages = await res.json() as AiMessage[];
+      const page = await res.json() as {
+        items: AiMessage[];
+        hasMore: boolean;
+        nextCursor: string | null;
+      };
+      if (!Array.isArray(page.items) || typeof page.hasMore !== "boolean") throw new Error("invalid timeline response");
       if (requestId === aiConversationRequestId.current) {
-        setAiMessages(messages);
+        setAiMessages(page.items);
+        setAiTimelineCursor(page.nextCursor);
+        setAiTimelineHasMore(page.hasMore);
         setAiMessagesError(null);
       }
     } catch {
@@ -456,6 +484,55 @@ export default function Communication() {
       if (!silent && requestId === aiConversationRequestId.current) setLoadingAiMessages(false);
     }
   }, [toast]);
+
+  const loadOlderAiMessages = useCallback(async () => {
+    const conversationId = selectedAiConversationId;
+    const cursor = aiTimelineCursor;
+    if (!conversationId || !cursor || !aiTimelineHasMore || loadingOlderAiMessages) return;
+    const requestId = aiConversationRequestId.current;
+    setLoadingOlderAiMessages(true);
+    try {
+      const query = new URLSearchParams({ limit: "50", cursor });
+      const res = await fetch(
+        `${BASE}/api/chatbot-conversations/${conversationId}/timeline?${query.toString()}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error("failed");
+      const page = await res.json() as {
+        items: AiMessage[];
+        hasMore: boolean;
+        nextCursor: string | null;
+      };
+      if (!Array.isArray(page.items) || typeof page.hasMore !== "boolean") throw new Error("invalid timeline response");
+      if (
+        requestId !== aiConversationRequestId.current ||
+        conversationId !== selectedAiConversationId
+      ) return;
+      const element = aiMessagesScrollRef.current;
+      if (element) {
+        pendingTimelinePrependScroll.current = {
+          height: element.scrollHeight,
+          top: element.scrollTop,
+        };
+      }
+      setAiMessages((current) => {
+        const currentIds = new Set(current.map((message) => message.id));
+        return [...page.items.filter((message) => !currentIds.has(message.id)), ...current];
+      });
+      setAiTimelineCursor(page.nextCursor);
+      setAiTimelineHasMore(page.hasMore);
+    } catch {
+      if (requestId === aiConversationRequestId.current) {
+        toast({
+          title: "Não foi possível carregar mensagens anteriores.",
+          description: "Tente novamente sem sair desta conversa.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      if (requestId === aiConversationRequestId.current) setLoadingOlderAiMessages(false);
+    }
+  }, [selectedAiConversationId, aiTimelineCursor, aiTimelineHasMore, loadingOlderAiMessages, toast]);
 
   useEffect(() => () => {
     aiConversationRequestId.current += 1;
@@ -1961,7 +2038,21 @@ export default function Communication() {
                         </Popover>
                       </div>
                     </div>
-                    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background/55 px-3 py-4 sm:px-5" aria-label="Mensagens do atendimento" role="log" aria-live="polite">
+                    <div ref={aiMessagesScrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background/55 px-3 py-4 sm:px-5" aria-label="Mensagens do atendimento" role="log" aria-live="polite">
+                      {!loadingAiMessages && !aiMessagesError && aiTimelineHasMore && (
+                        <div className="flex justify-center">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => { void loadOlderAiMessages(); }}
+                            disabled={loadingOlderAiMessages}
+                            aria-busy={loadingOlderAiMessages}
+                          >
+                            {loadingOlderAiMessages ? "Carregando mensagens anteriores..." : "Carregar mensagens anteriores"}
+                          </Button>
+                        </div>
+                      )}
                       {loadingAiMessages ? (
                         <div className="space-y-3" aria-label="Carregando histórico"><Skeleton className="h-16 w-3/4 rounded-2xl" /><Skeleton className="ml-auto h-16 w-2/3 rounded-2xl" /><Skeleton className="h-16 w-1/2 rounded-2xl" /></div>
                       ) : aiMessagesError ? (
