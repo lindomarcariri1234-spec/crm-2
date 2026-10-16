@@ -15,7 +15,11 @@ export function getAiReplyAttempt(
 }
 
 export function shouldRetainAiReplyAttempt(status: number, code: string): boolean {
-  if (code === "INSTAGRAM_DELIVERY_UNKNOWN" || code === "INSTAGRAM_DELIVERY_UNRESOLVED") {
+  if (
+    code === "INSTAGRAM_DELIVERY_UNKNOWN"
+    || code === "INSTAGRAM_DELIVERY_UNRESOLVED"
+    || code === "WHATSAPP_DELIVERY_UNKNOWN"
+  ) {
     return true;
   }
   return status === 408 || status === 425 || status === 429 || status >= 500;

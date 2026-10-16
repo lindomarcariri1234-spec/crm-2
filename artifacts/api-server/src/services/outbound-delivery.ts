@@ -22,6 +22,7 @@ import { normalizeBrazilPhone } from "@workspace/shared";
 import { sendReminderHtmlEmail } from "@workspace/email";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
+import { isQueueRedisDailyLimitCircuitOpen } from "../lib/redis";
 import { getOutboundDeliveryQueue } from "../queues";
 import { reconcileTenantWhatsAppMessage, sendTenantWhatsAppMessage } from "../lib/whatsapp";
 import { emitOutboundDeliveryUpdate } from "../lib/outbound-sse";
@@ -418,6 +419,14 @@ export async function enqueueOutboundDelivery(
     .from(outboundDeliveriesTable)
     .where(and(eq(outboundDeliveriesTable.id, deliveryId), eq(outboundDeliveriesTable.tenantId, tenantId))).limit(1);
   if (!delivery || delivery.status !== "pending") return "skipped";
+  if (options.inlineOnQueueFailure && isQueueRedisDailyLimitCircuitOpen()) {
+    logger.warn(
+      { tenantId, deliveryId },
+      "[outbound-delivery] Queue Redis circuit is open; processing manual WhatsApp delivery inline",
+    );
+    await processOutboundDelivery(deliveryId, tenantId);
+    return "inline";
+  }
   const queue = getOutboundDeliveryQueue();
   if (queue) {
     try {
@@ -541,27 +550,34 @@ async function getWhatsAppBlockReason(
     if (!integrationId) {
       // Pre-migration conversations belonged to the only permitted connection.
       // Their original connection was retained as the tenant default by migration.
-      const [defaultIntegration] = await db.select({ id: tenantIntegrationsTable.id })
+      const defaultIntegrations = await db.select({ id: tenantIntegrationsTable.id })
         .from(tenantIntegrationsTable)
         .where(and(
           eq(tenantIntegrationsTable.tenantId, tenantId),
           eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
           eq(tenantIntegrationsTable.isDefault, true),
+          eq(tenantIntegrationsTable.enabled, true),
+          eq(tenantIntegrationsTable.status, "connected"),
         ))
-        .limit(1);
-      integrationId = defaultIntegration?.id;
+        .limit(2);
+      if (defaultIntegrations.length > 1) return blocked("whatsapp_connection_ambiguous");
+      integrationId = defaultIntegrations[0]?.id;
     }
     return { reason: null, integrationId, requireEvolution: true };
   }
 
-  const [defaultIntegration] = await db.select({ id: tenantIntegrationsTable.id })
+  const defaultIntegrations = await db.select({ id: tenantIntegrationsTable.id })
     .from(tenantIntegrationsTable)
     .where(and(
       eq(tenantIntegrationsTable.tenantId, tenantId),
       eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
       eq(tenantIntegrationsTable.isDefault, true),
+      eq(tenantIntegrationsTable.enabled, true),
+      eq(tenantIntegrationsTable.status, "connected"),
     ))
-    .limit(1);
+    .limit(2);
+  if (defaultIntegrations.length > 1) return blocked("whatsapp_connection_ambiguous");
+  const defaultIntegration = defaultIntegrations[0];
   if (defaultIntegration) {
     return { reason: null, integrationId: defaultIntegration.id, requireEvolution: false };
   }
@@ -570,6 +586,8 @@ async function getWhatsAppBlockReason(
     .where(and(
       eq(tenantIntegrationsTable.tenantId, tenantId),
       eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+      eq(tenantIntegrationsTable.enabled, true),
+      eq(tenantIntegrationsTable.status, "connected"),
     ))
     .limit(2);
   return {
@@ -609,13 +627,15 @@ async function getWhatsAppIntegrationIdForMessage(
     if (conversation?.whatsappIntegrationId) return conversation.whatsappIntegrationId;
   }
 
-  const [defaultIntegration] = await db.select({ id: tenantIntegrationsTable.id })
+  const defaultIntegrations = await db.select({ id: tenantIntegrationsTable.id })
     .from(tenantIntegrationsTable).where(and(
       eq(tenantIntegrationsTable.tenantId, tenantId),
       eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
       eq(tenantIntegrationsTable.isDefault, true),
-    )).limit(1);
-  return defaultIntegration?.id;
+      eq(tenantIntegrationsTable.enabled, true),
+      eq(tenantIntegrationsTable.status, "connected"),
+    )).limit(2);
+  return defaultIntegrations.length === 1 ? defaultIntegrations[0]?.id : undefined;
 }
 
 function isPermanentSkip(channel: OutboundDeliveryChannel, error: string) {
@@ -836,6 +856,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
   let externalId: string | null = null;
   let error: string | null = null;
   let outcomeUnknown = false;
+  let whatsappProviderCallStarted = false;
   try {
     const whatsappRoute = delivery.channel === "whatsapp"
       ? await getWhatsAppBlockReason(tenantId, delivery)
@@ -892,6 +913,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
           eq(outboundMessagesTable.tenantId, tenantId),
         ));
       }
+      whatsappProviderCallStarted = true;
       const result = await sendTenantWhatsAppMessage(
         tenantId,
         delivery.recipient,
@@ -909,7 +931,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
     }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
-    outcomeUnknown = delivery.channel === "whatsapp";
+    outcomeUnknown = delivery.channel === "whatsapp" && whatsappProviderCallStarted;
     const errorCode = err && typeof err === "object" && "code" in err && typeof err.code === "string"
       ? err.code
       : undefined;

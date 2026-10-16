@@ -1986,7 +1986,7 @@ export default function Communication() {
                               : message.deliveryStatus === "cancelled"
                                 ? "Cancelada"
                               : message.deliveryStatus === "unknown"
-                                ? "Confirmando"
+                                ? "Sem confirmação"
                                 : message.deliveryStatus === "sending" || message.deliveryStatus === "pending" || message.deliveryStatus === "processing"
                                   ? "Na fila"
                                 : message.deliveryStatus === "sent"

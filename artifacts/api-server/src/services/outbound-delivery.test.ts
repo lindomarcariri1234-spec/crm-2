@@ -10,6 +10,7 @@ const {
   mockSendTenantWhatsAppMessage,
   mockReconcileTenantWhatsAppMessage,
   mockGetOutboundDeliveryQueue,
+  mockQueueCircuitOpen,
   mockLoggerWarn,
   mockAnd,
   mockEq,
@@ -24,6 +25,7 @@ const {
   mockSendTenantWhatsAppMessage: vi.fn(),
   mockReconcileTenantWhatsAppMessage: vi.fn(),
   mockGetOutboundDeliveryQueue: vi.fn(() => null),
+  mockQueueCircuitOpen: vi.fn(() => false),
   mockLoggerWarn: vi.fn(),
   mockAnd: vi.fn((...conditions: unknown[]) => ({ conditions })),
   mockEq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
@@ -58,6 +60,8 @@ vi.mock("@workspace/db", () => ({
     tenantId: "tenant_integrations.tenant_id",
     type: "tenant_integrations.type",
     isDefault: "tenant_integrations.is_default",
+    enabled: "tenant_integrations.enabled",
+    status: "tenant_integrations.status",
   },
   tenantsTable: {},
   usersTable: {},
@@ -114,6 +118,10 @@ vi.mock("@workspace/email", () => ({
 
 vi.mock("../queues", () => ({
   getOutboundDeliveryQueue: mockGetOutboundDeliveryQueue,
+}));
+
+vi.mock("../lib/redis", () => ({
+  isQueueRedisDailyLimitCircuitOpen: mockQueueCircuitOpen,
 }));
 
 vi.mock("../lib/whatsapp", () => ({
@@ -208,6 +216,8 @@ beforeEach(() => {
   mockReconcileTenantWhatsAppMessage.mockReset();
   mockGetOutboundDeliveryQueue.mockReset();
   mockGetOutboundDeliveryQueue.mockReturnValue(null);
+  mockQueueCircuitOpen.mockReset();
+  mockQueueCircuitOpen.mockReturnValue(false);
   mockUpdateSets.length = 0;
   mockAuditValues.mockResolvedValue([]);
   mockDbInsert.mockReturnValue({ values: mockAuditValues });
@@ -1020,6 +1030,55 @@ describe("legacy email history synchronization", () => {
 });
 
 describe("manual WhatsApp queue fallback", () => {
+  it("processes staff WhatsApp inline while the queue circuit is open", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "pending",
+    });
+    const accepted = makeDelivery({
+      ...delivery,
+      status: "accepted",
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    });
+    mockQueueCircuitOpen.mockReturnValue(true);
+    mockProcessQueries(delivery, accepted);
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        origin: "user",
+        recipientType: "client",
+        recipientId: "client-1",
+        emailAddress: null,
+        metadata: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        whatsappOptIn: true,
+        whatsapp: delivery.recipient,
+        phone: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockSendTenantWhatsAppMessage.mockResolvedValue({
+      success: true,
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    });
+
+    await expect(enqueueOutboundDelivery("delivery-1", "tenant-a", {
+      inlineOnQueueFailure: true,
+    })).resolves.toBe("inline");
+
+    expect(mockGetOutboundDeliveryQueue).not.toHaveBeenCalled();
+    expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledOnce();
+    expect(mockUpdateSets).toContainEqual(expect.objectContaining({
+      status: "accepted",
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    }));
+  });
+
   it("uses the atomic delivery claim when BullMQ rejects a manual WhatsApp job", async () => {
     const delivery = makeDelivery({
       channel: "whatsapp",

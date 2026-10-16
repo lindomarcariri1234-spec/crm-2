@@ -60,6 +60,7 @@ const CHATBOT_DELIVERY_ISSUES = {
   connectionUnavailable: "Conexão do WhatsApp indisponível. Revise a integração e tente novamente.",
   providerUnavailable: "O serviço do WhatsApp está indisponível. Tente novamente mais tarde.",
   rateLimited: "O provedor limitou o envio. Aguarde alguns minutos antes de tentar novamente.",
+  deliveryUnknown: "O WhatsApp não confirmou o resultado do envio. Confira o status antes de enviar outra vez.",
   rejected: "O WhatsApp não aceitou a mensagem. Revise o contato e a integração antes de tentar novamente.",
 } as const;
 
@@ -68,6 +69,9 @@ function safeChatbotDeliveryIssue(
   status: string | null | undefined,
   rawReason: unknown,
 ): string | null {
+  if (status === "unknown" && channel === "whatsapp") {
+    return CHATBOT_DELIVERY_ISSUES.deliveryUnknown;
+  }
   if (status !== "failed" && status !== "cancelled") return null;
   if (channel !== "whatsapp") {
     return "A plataforma não aceitou a mensagem. Revise a conexão da conta e tente novamente.";
@@ -821,6 +825,14 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
           ?? CHATBOT_DELIVERY_ISSUES.optedOut,
         "WHATSAPP_OPTED_OUT",
       ));
+      return;
+    }
+    if (!delivered && message.deliveryStatus === "unknown") {
+      res.status(502).json({
+        code: "WHATSAPP_DELIVERY_UNKNOWN",
+        error: safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, message.lastDeliveryError)
+          ?? CHATBOT_DELIVERY_ISSUES.deliveryUnknown,
+      });
       return;
     }
     if (!delivered && message.deliveryStatus === "failed") {

@@ -32,6 +32,7 @@ describe("AI inbox reply retry policy", () => {
   it("keeps the key when the result may be ambiguous or transient", () => {
     expect(shouldRetainAiReplyAttempt(502, "INSTAGRAM_DELIVERY_UNKNOWN")).toBe(true);
     expect(shouldRetainAiReplyAttempt(409, "INSTAGRAM_DELIVERY_UNRESOLVED")).toBe(true);
+    expect(shouldRetainAiReplyAttempt(502, "WHATSAPP_DELIVERY_UNKNOWN")).toBe(true);
     expect(shouldRetainAiReplyAttempt(503, "UPSTREAM_UNAVAILABLE")).toBe(true);
     expect(shouldRetainAiReplyAttempt(429, "RATE_LIMITED")).toBe(true);
   });

@@ -369,4 +369,50 @@ describe("Evolution inbound attendance consent", () => {
       { inlineOnQueueFailure: true },
     );
   });
+
+  it("keeps an unknown provider outcome out of the automatic attendance retry queue", async () => {
+    const claimedMessage = {
+      id: "reply-1",
+      conversationId: "conversation-1",
+      ticketId: null,
+      content: "Sua reserva está confirmada.",
+      deliveryAttempts: 1,
+    };
+    const claimQuery: Record<string, ReturnType<typeof vi.fn>> = {};
+    claimQuery["set"] = vi.fn(() => claimQuery);
+    claimQuery["where"] = vi.fn(() => claimQuery);
+    claimQuery["returning"] = vi.fn(async () => [claimedMessage]);
+
+    const finalizeQuery: Record<string, ReturnType<typeof vi.fn>> = {};
+    finalizeQuery["set"] = vi.fn(() => finalizeQuery);
+    finalizeQuery["where"] = vi.fn(async () => undefined);
+    mockDbUpdate
+      .mockReturnValueOnce(claimQuery)
+      .mockReturnValueOnce(finalizeQuery);
+    mockDbSelect.mockReturnValueOnce(makeQuery([{
+      sessionId: "5511999999999",
+      status: "human_handoff",
+      clientId: "client-1",
+      whatsappIntegrationId: "integration-1",
+      clientWhatsappOptIn: true,
+    }]));
+    mockDispatchOutboundMessage.mockResolvedValue({
+      deliveries: [{
+        channel: "whatsapp",
+        status: "unknown",
+        lastError: "delivery_result_unknown",
+      }],
+    });
+
+    await expect(deliverAttendanceReply({
+      tenantId: "tenant-1",
+      messageId: "reply-1",
+      inlineOnQueueFailure: true,
+    })).resolves.toBe(false);
+
+    expect(finalizeQuery["set"]).toHaveBeenCalledWith(expect.objectContaining({
+      deliveryStatus: "unknown",
+      lastDeliveryError: "delivery_result_unknown",
+    }));
+  });
 });

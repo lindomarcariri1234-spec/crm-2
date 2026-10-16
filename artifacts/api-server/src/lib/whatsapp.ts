@@ -96,25 +96,41 @@ export async function sendTenantWhatsAppMessage(
   // Each ticket reply supplies the stored conversation connection. General
   // messages use the tenant's explicit default; ambiguous connections never
   // fall through to an unrelated sender.
-  const integrations = await db
-    .select()
-    .from(tenantIntegrationsTable)
-    .where(
-      and(
-        eq(tenantIntegrationsTable.tenantId, tenantId),
-        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
-      ),
-    )
-    .limit(100);
+  let integrations: (typeof tenantIntegrationsTable.$inferSelect)[];
+  try {
+    integrations = await db
+      .select()
+      .from(tenantIntegrationsTable)
+      .where(
+        and(
+          eq(tenantIntegrationsTable.tenantId, tenantId),
+          eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+        ),
+      )
+      .limit(100);
+  } catch (err) {
+    logger.warn(
+      { tenantId, providerError: safeErrorLogFields(err) },
+      "[whatsapp] Could not resolve the Evolution connection before sending",
+    );
+    return { success: false, error: "whatsapp_connection_lookup_failed", provider: "evolution" };
+  }
+  const usableIntegrations = integrations.filter(
+    (row) => row.enabled && row.status === "connected" && Boolean(row.secretsEncrypted),
+  );
+  const defaultIntegrations = usableIntegrations.filter((row) => row.isDefault);
+  if (!route.integrationId && defaultIntegrations.length > 1) {
+    return { success: false, error: "whatsapp_connection_ambiguous", provider: "evolution" };
+  }
   let integration = route.integrationId
-    ? integrations.find((row) => row.id === route.integrationId)
-    : integrations.find((row) => row.isDefault)
-      ?? (integrations.length === 1 ? integrations[0] : undefined);
+    ? usableIntegrations.find((row) => row.id === route.integrationId)
+    : defaultIntegrations[0]
+      ?? (usableIntegrations.length === 1 ? usableIntegrations[0] : undefined);
 
   if (!integration && route.requireEvolution) {
     return { success: false, error: "whatsapp_connection_unavailable", provider: "evolution" };
   }
-  if (integrations.length > 1 && !integration) {
+  if (usableIntegrations.length > 1 && !integration) {
     return { success: false, error: "whatsapp_connection_ambiguous", provider: "evolution" };
   }
 
