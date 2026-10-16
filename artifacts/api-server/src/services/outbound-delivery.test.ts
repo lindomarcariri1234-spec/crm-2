@@ -645,7 +645,7 @@ describe("legacy email history synchronization", () => {
     expect(mockAnd).toHaveBeenCalledWith(
       { column: "outbound_deliveries.status", value: "pending" },
       expect.anything(),
-      { column: "outbound_deliveries.channel", value: "whatsapp" },
+      "inArray",
     );
   });
 

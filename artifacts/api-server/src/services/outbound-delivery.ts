@@ -20,7 +20,7 @@ import {
 } from "@workspace/db";
 import { normalizeBrazilPhone } from "@workspace/shared";
 import { sendReminderHtmlEmail } from "@workspace/email";
-import { getInstagramMetaConfig, isInstagramReplyWindowOpen, readInstagramAccessToken, sendInstagramText, INSTAGRAM_MESSAGING_TYPE } from "./instagram-messaging.js";
+import { getInstagramMetaConfig, isInstagramReplyWindowOpen, readInstagramAccessToken, sendInstagramText, INSTAGRAM_MESSAGING_TYPE, InstagramProviderError } from "./instagram-messaging.js";
 import { INSTAGRAM_ZERNIO_TYPE, sendZernioInstagramText } from "./instagram-zernio.js";
 import { decryptCredential } from "../lib/crypto";
 import { generateId } from "../lib/id";
@@ -238,7 +238,6 @@ function skippedReason(channel: OutboundDeliveryChannel, recipient: ReturnType<t
   if (!recipient) return `${channel}_address_missing`;
   if (!optedIn) return `${channel}_opted_out`;
   if (channel === "whatsapp" && !normalizeBrazilPhone(recipient)) return "whatsapp_invalid_phone";
-  if (channel === "instagram" && (!recipient || !/^\d+$/.test(recipient))) return "instagram_invalid_recipient";
   return null;
 }
 
@@ -281,7 +280,7 @@ async function syncAttendanceChatbotMessage(
   const chatbotMessageId = metadataRecord["chatbotMessageId"];
   const conversationId = metadataRecord["conversationId"];
   if (typeof chatbotMessageId !== "string" || typeof conversationId !== "string") return;
-  const optedOut = ["whatsapp_opted_out", "contact_opted_out"].includes(skippedReason ?? error ?? "");
+  const optedOut = ["whatsapp_opted_out", "instagram_opted_out", "contact_opted_out"].includes(skippedReason ?? error ?? "");
   const deliveryStatus = ["accepted", "delivered", "read", "sent"].includes(status)
     ? "sent"
     : status === "unknown"
@@ -647,6 +646,7 @@ async function getInstagramRoute(tenantId: string, delivery: OutboundDelivery) {
     eq(chatbotConversationsTable.id, conversationId), eq(chatbotConversationsTable.tenantId, tenantId),
   )).limit(1);
   if (!conversation || conversation.channel !== "instagram" || !conversation.sessionId || conversation.sessionId !== delivery.recipient) return blocked("instagram_conversation_unavailable");
+  if (conversation.status === "opted_out") return blocked("instagram_opted_out");
   const [lastInbound] = await db.select({ sentAt: chatbotMessagesTable.sentAt }).from(chatbotMessagesTable).where(and(
     eq(chatbotMessagesTable.tenantId, tenantId), eq(chatbotMessagesTable.conversationId, conversationId), eq(chatbotMessagesTable.role, "user"),
   )).orderBy(desc(chatbotMessagesTable.sentAt), desc(chatbotMessagesTable.id)).limit(1);
@@ -657,6 +657,15 @@ async function getInstagramRoute(tenantId: string, delivery: OutboundDelivery) {
     eq(tenantIntegrationsTable.status, "connected"),
   )).limit(1);
   if (!integration) return blocked("instagram_connection_unavailable");
+  const config = (integration.config ?? {}) as Record<string, string>;
+  if (provider === "meta" && (
+    typeof metadata.instagramUserId !== "string" ||
+    config.instagramUserId !== metadata.instagramUserId
+  )) return blocked("instagram_account_changed");
+  if (provider === "zernio" && (
+    config.accountId !== metadata.zernioAccountId ||
+    config.profileId !== metadata.zernioProfileId
+  )) return blocked("instagram_account_changed");
   return { reason: null, provider, integration, conversation, metadata };
 }
 
@@ -991,8 +1000,23 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
         const meta = getInstagramMetaConfig();
         const instagramUserId = config.instagramUserId;
         if (!meta.appConfigured || !instagramUserId) throw new Error("instagram_connection_unavailable");
+        const accessToken = readInstagramAccessToken(integration);
         whatsappProviderCallStarted = true;
-        await sendInstagramText(meta, readInstagramAccessToken(integration), instagramUserId, delivery.recipient, delivery.content);
+        try {
+          await sendInstagramText(meta, accessToken, instagramUserId, delivery.recipient, delivery.content);
+        } catch (sendError) {
+          if (sendError instanceof InstagramProviderError && sendError.httpStatus === 401) {
+            await db.update(tenantIntegrationsTable).set({
+              enabled: false,
+              status: "error",
+              lastError: "O acesso ao Instagram expirou. Reconecte a conta.",
+            }).where(and(
+              eq(tenantIntegrationsTable.id, integration.id),
+              eq(tenantIntegrationsTable.tenantId, tenantId),
+            ));
+          }
+          throw sendError;
+        }
       }
       success = true;
     } else {
@@ -1581,7 +1605,7 @@ export async function recoverOutboundDeliveries(
     eq(outboundDeliveriesTable.status, "pending"),
     lte(outboundDeliveriesTable.nextAttemptAt, new Date()),
     ...(options.databaseFallback
-      ? [eq(outboundDeliveriesTable.channel, "whatsapp")]
+      ? [inArray(outboundDeliveriesTable.channel, ["whatsapp", "instagram"])]
       : []),
   ];
   const pending = await db.select({

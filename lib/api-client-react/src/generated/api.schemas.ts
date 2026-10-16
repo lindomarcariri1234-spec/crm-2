@@ -2727,6 +2727,7 @@ export type OutboundDeliveryChannel =
 export const OutboundDeliveryChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export type OutboundDeliveryStatus =

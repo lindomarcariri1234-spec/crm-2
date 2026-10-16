@@ -699,7 +699,12 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
           instagramRecipientId: conversation.sessionId,
           instagramIntegrationId: integration.id,
           instagramProvider: provider,
+          instagramUserId: provider === "meta"
+            ? ((integration.config ?? {}) as Record<string, string>).instagramUserId
+            : null,
           zernioConversationId: metadata["zernioConversationId"],
+          zernioAccountId: metadata["zernioAccountId"],
+          zernioProfileId: metadata["zernioProfileId"],
         },
       });
       const [message] = await db.select().from(chatbotMessagesTable)

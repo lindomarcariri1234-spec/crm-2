@@ -6539,7 +6539,7 @@ export const ListMessagesResponse = zod.array(ListMessagesResponseItem);
  */
 export const SendMessageBody = zod.object({
   toClientId: zod.string(),
-  channel: zod.enum(["email", "whatsapp"]),
+  channel: zod.enum(["email", "whatsapp", "instagram"]),
   content: zod.string(),
   mediaUrl: zod.string().nullish(),
 });
@@ -6579,7 +6579,7 @@ export const listOutboundMessagesQueryOffsetMin = 0;
 
 export const ListOutboundMessagesQueryParams = zod.object({
   status: zod.coerce.string().optional(),
-  channel: zod.enum(["email", "whatsapp"]).optional(),
+  channel: zod.enum(["email", "whatsapp", "instagram"]).optional(),
   deliveryStatus: zod
     .enum(["pending", "processing", "accepted", "failed", "skipped", "unknown"])
     .optional()
@@ -6636,7 +6636,7 @@ export const ListOutboundMessagesResponseItem = zod.object({
     zod.object({
       id: zod.string(),
       outboundMessageId: zod.string(),
-      channel: zod.enum(["email", "whatsapp"]),
+      channel: zod.enum(["email", "whatsapp", "instagram"]),
       recipient: zod.string().nullish(),
       subject: zod.string().nullish(),
       content: zod.string(),
@@ -6759,7 +6759,7 @@ export const CreateOutboundMessageResponse = zod
       zod.object({
         id: zod.string(),
         outboundMessageId: zod.string(),
-        channel: zod.enum(["email", "whatsapp"]),
+        channel: zod.enum(["email", "whatsapp", "instagram"]),
         recipient: zod.string().nullish(),
         subject: zod.string().nullish(),
         content: zod.string(),
@@ -6817,7 +6817,7 @@ export const CreateOutboundMessageResponse = zod
  */
 export const ListOutboundProviderFailureSummaryQueryParams = zod.object({
   status: zod.coerce.string().optional(),
-  channel: zod.enum(["email", "whatsapp"]).optional(),
+  channel: zod.enum(["email", "whatsapp", "instagram"]).optional(),
   deliveryStatus: zod
     .enum(["pending", "processing", "accepted", "failed", "skipped", "unknown"])
     .optional()
@@ -6857,7 +6857,7 @@ export const ListOutboundProviderFailureSummaryResponse = zod.array(
 export const ExportOutboundMessagesQueryParams = zod.object({
   format: zod.enum(["csv", "pdf"]),
   status: zod.coerce.string().optional(),
-  channel: zod.enum(["email", "whatsapp"]).optional(),
+  channel: zod.enum(["email", "whatsapp", "instagram"]).optional(),
   deliveryStatus: zod
     .enum(["pending", "processing", "accepted", "failed", "skipped", "unknown"])
     .optional()
@@ -6954,7 +6954,7 @@ export const ListMessageTemplatesResponse = zod.array(
  */
 export const CreateMessageTemplateBody = zod.object({
   name: zod.string(),
-  channel: zod.enum(["email", "whatsapp"]),
+  channel: zod.enum(["email", "whatsapp", "instagram"]),
   subject: zod.string().nullish(),
   content: zod.string(),
   variables: zod.array(zod.string()).optional(),

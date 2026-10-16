@@ -88,6 +88,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: mockState.requireAuth,
   ADMIN_ROLES: [],
+  ALL_STAFF_ROLES: ["agency_admin"],
 }));
 
 vi.mock("../lib/id.js", () => ({
@@ -252,7 +253,7 @@ beforeEach(() => {
   mockState.sendInstagramText.mockResolvedValue(undefined);
   mockState.sendZernioInstagramText.mockResolvedValue("zernio-message-id");
   mockState.dispatchOutboundMessage.mockReset().mockResolvedValue({
-    deliveries: [{ status: "pending", channel: "instagram" }],
+    deliveries: [{ status: "accepted", channel: "instagram" }],
   });
   mockState.decryptCredential.mockReturnValue(JSON.stringify({ apiKey: "test-zernio-key" }));
 
@@ -440,13 +441,19 @@ describe("POST /chatbot-conversations/:id/reply for Instagram", () => {
     expect(mockState.isInstagramReplyWindowOpen).toHaveBeenCalledWith(
       lastInboundAt,
     );
-    expect(mockState.sendInstagramText).toHaveBeenCalledWith(
-      { appConfigured: true },
-      "test-access-token",
-      AGENCY_INSTAGRAM_ID,
-      CUSTOMER_INSTAGRAM_ID,
-      REPLY_BODY.content,
-    );
+    expect(mockState.dispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: "instagram_human_reply",
+      idempotencyKey: `instagram:staff:${REPLY_BODY.idempotencyKey}`,
+      channels: ["instagram"],
+      instagram: { text: REPLY_BODY.content },
+      metadata: expect.objectContaining({
+        conversationId: CONVERSATION_ID,
+        chatbotMessageId: "instagram-staff-reply-id",
+        instagramRecipientId: CUSTOMER_INSTAGRAM_ID,
+        instagramIntegrationId: INTEGRATION_ID,
+        instagramProvider: "meta",
+      }),
+    }));
     expect(mockState.dbInsert).toHaveBeenCalledTimes(1);
     const insertBuilder = mockState.dbInsert.mock.results[0]?.value as {
       values: ReturnType<typeof vi.fn>;
@@ -461,14 +468,8 @@ describe("POST /chatbot-conversations/:id/reply for Instagram", () => {
         deliveryStatus: "pending",
       }),
     );
-    expect(updateWrites).toHaveLength(2);
+    expect(updateWrites).toHaveLength(1);
     expect(updateWrites[0]).toMatchObject({
-      deliveryStatus: "sent",
-      deliveryAttempts: 1,
-      lastDeliveryError: null,
-    });
-    expect(updateWrites[0]?.deliveryUpdatedAt).toBeInstanceOf(Date);
-    expect(updateWrites[1]).toMatchObject({
       status: "human_handoff",
       assignedUserId: STAFF_ID,
     });
@@ -534,17 +535,16 @@ describe("POST /chatbot-conversations/:id/reply for Instagram", () => {
       .send(REPLY_BODY);
 
     expect(response.status).toBe(201);
-    expect(mockState.sendZernioInstagramText).toHaveBeenCalledWith(
-      "test-zernio-key",
-      "zernio-account",
-      "zernio-conversation",
-      REPLY_BODY.content,
-      REPLY_BODY.idempotencyKey,
-    );
+    expect(mockState.dispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channels: ["instagram"],
+      instagram: { text: REPLY_BODY.content },
+      metadata: expect.objectContaining({ instagramProvider: "zernio", zernioConversationId: "zernio-conversation" }),
+    }));
     expect(mockState.sendInstagramText).not.toHaveBeenCalled();
+    expect(updateWrites).toHaveLength(1);
     expect(updateWrites[0]).toMatchObject({
-      providerMessageId: "zernio-message-id",
-      deliveryStatus: "sent",
+      status: "human_handoff",
+      assignedUserId: STAFF_ID,
     });
   });
 });
