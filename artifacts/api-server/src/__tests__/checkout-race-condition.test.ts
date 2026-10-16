@@ -333,7 +333,7 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
     vi.clearAllMocks();
   });
 
-  it("returns 409 DUPLICATE_RESERVATION (not 500/502) when PG 23505 fires on reservations_active_client_trip_unique during checkout", async () => {
+  it("returns 409 DUPLICATE_RESERVATION when PG 23505 fires on reservations_active_client_trip_unique during checkout", async () => {
     setupStoreAndOrderLookup();
     mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
     mockResolveDiscounts.mockResolvedValueOnce(NO_DISCOUNT);
@@ -341,7 +341,7 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
 
     const pgErr = Object.assign(new Error("duplicate key value violates unique constraint"), {
       code: "23505",
-      constraint: "some_other_unique_index",
+      constraint: "reservations_active_client_trip_unique",
     });
     mockCreateReservations.mockRejectedValueOnce(pgErr);
 
@@ -349,8 +349,8 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
       .post("/api/public/store/minha-loja/orders")
       .send(VALID_BODY);
 
-    expect(res.status).toBe(502);
-    expect(res.body.code).toBe("RESERVATION_SYNC_FAILED");
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("DUPLICATE_RESERVATION");
   });
 
   it("does not treat a 23505 on a different constraint as DUPLICATE_RESERVATION", async () => {

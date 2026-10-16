@@ -41,6 +41,7 @@ import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, STORE_ORDER_STATUS, S
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
 import { decryptOrPassthrough, encryptCredential } from "../lib/crypto";
 import { sendPriceDropAlertEmail } from "../queues/email-helpers";
+import { logger } from "../lib/logger";
 import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
 import { recalculateClientFinancials } from "../services/client-financials";
 import {
@@ -54,6 +55,7 @@ import {
 } from "../lib/linked-data";
 import { syncPaidProductOrderDeal } from "../services/pipeline-deal-sync";
 import { syncStoreOrderFromOrderPayment } from "../services/reservation-order-payment-sync";
+import { syncReservationPaymentStatus } from "../lib/reservation-payments";
 import { roundMoney } from "../lib/pricing";
 
 // Storefront public base for links inside price-drop alert e-mails. Product
@@ -723,6 +725,7 @@ router.post("/store/products", async (req, res, next: NextFunction): Promise<voi
       ...(data.isFeatured != null && { isFeatured: data.isFeatured }),
       ...(data.order != null && { order: data.order }),
       ...(data.status && { status: data.status }),
+      ...(data.status === "active" && { publishedAt: new Date() }),
       ...(data.partnerProductId !== undefined && { partnerProductId: data.partnerProductId ?? null }),
     });
     const [product] = await db.select().from(storeProductsTable)
@@ -767,6 +770,9 @@ router.put("/store/products/:id", async (req, res, next: NextFunction): Promise<
       if (!pp) { next(new ValidationError(String("Produto de parceiro não encontrado" ), "VALIDATION_ERROR")); return; }
     }
     const updates: Record<string, unknown> = { ...parsed.data };
+    if (parsed.data.status === "active" && existingProduct.status !== "active") {
+      updates.publishedAt = new Date();
+    }
     if (parsed.data.saleStartsAt) updates.saleStartsAt = new Date(parsed.data.saleStartsAt);
     if (parsed.data.saleEndsAt) updates.saleEndsAt = new Date(parsed.data.saleEndsAt);
     if (parsed.data.startDate) updates.startDate = new Date(parsed.data.startDate);
@@ -832,6 +838,106 @@ router.delete("/store/products/:id", async (req, res, next: NextFunction): Promi
   } catch (err) {
     next(err);
   }
+});
+
+router.get("/store/late-payments", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const store = await getStoreForTenant(me.tenantId);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    const data = await db.select({
+      id: paymentsTable.id,
+      amount: paymentsTable.amount,
+      status: paymentsTable.status,
+      gateway: paymentsTable.gateway,
+      transactionId: paymentsTable.transactionId,
+      notes: paymentsTable.notes,
+      createdAt: paymentsTable.createdAt,
+      orderId: storeOrdersTable.id,
+      orderNumber: storeOrdersTable.orderNumber,
+      customerName: storeOrdersTable.customerName,
+      isTestMode: paymentsTable.isTestMode,
+    }).from(paymentsTable).innerJoin(storeOrdersTable, eq(storeOrdersTable.id, paymentsTable.orderId))
+      .where(and(
+        eq(storeOrdersTable.storeId, store.id),
+        eq(storeOrdersTable.tenantId, me.tenantId),
+        ilike(paymentsTable.notes, "%Pagamento tardio confirmado pelo provedor%"),
+        ne(paymentsTable.status, PAYMENT_STATUS.REFUNDED),
+      )).orderBy(desc(paymentsTable.createdAt)).limit(100);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
+router.post("/store/late-payments/:id/refund", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const store = await getStoreForTenant(me.tenantId);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    const [payment] = await db.select({
+      id: paymentsTable.id, amount: paymentsTable.amount, status: paymentsTable.status,
+      gateway: paymentsTable.gateway, transactionId: paymentsTable.transactionId,
+      isTestMode: paymentsTable.isTestMode, notes: paymentsTable.notes,
+      orderId: storeOrdersTable.id, orderStatus: storeOrdersTable.status,
+    }).from(paymentsTable).innerJoin(storeOrdersTable, eq(storeOrdersTable.id, paymentsTable.orderId))
+      .where(and(
+        eq(paymentsTable.id, req.params.id),
+        eq(paymentsTable.tenantId, me.tenantId),
+        eq(storeOrdersTable.storeId, store.id),
+        eq(storeOrdersTable.tenantId, me.tenantId),
+        ilike(paymentsTable.notes, "%Pagamento tardio confirmado pelo provedor%"),
+      )).limit(1);
+    if (!payment) { next(new NotFoundError("Late payment not found", "NOT_FOUND")); return; }
+    if (payment.orderStatus !== STORE_ORDER_STATUS.CANCELLED) {
+      res.status(409).json({ error: "O pedido não está cancelado; este fluxo é reservado a pagamentos recebidos após o cancelamento." });
+      return;
+    }
+    if (payment.gateway !== "stripe") {
+      res.status(409).json({ error: "Este provedor exige reembolso manual. Confira o recebimento no painel do provedor e registre a devolução por lá." });
+      return;
+    }
+    if (payment.status === PAYMENT_STATUS.REFUNDED || payment.notes?.includes("Reembolso Stripe confirmado:")) {
+      res.status(409).json({ error: "Este pagamento já foi reembolsado." });
+      return;
+    }
+    if (!payment.transactionId?.startsWith("pi_") || payment.isTestMode == null) {
+      res.status(409).json({ error: "Não foi possível confirmar o modo Stripe do pagamento. Revise-o manualmente no painel Stripe." });
+      return;
+    }
+    const secretKey = decryptOrPassthrough(store.stripeSecretKey);
+    if (!secretKey || (payment.isTestMode ? !secretKey.startsWith("sk_test_") : !secretKey.startsWith("sk_live_"))) {
+      res.status(409).json({ error: "A chave Stripe configurada não corresponde ao modo deste pagamento. Revise-o no painel Stripe correto." });
+      return;
+    }
+    try {
+      const stripe = new Stripe(secretKey, {
+        apiVersion: "2025-08-27.basil" as Stripe.LatestApiVersion,
+        maxNetworkRetries: 0,
+        timeout: 15_000,
+      });
+      const refund = await stripe.refunds.create({
+        payment_intent: payment.transactionId,
+        amount: Math.round(Number(payment.amount) * 100),
+      }, { idempotencyKey: `late-payment-refund-${payment.id}` });
+      const note = `Reembolso Stripe ${refund.status}: ${refund.id}`;
+      await db.update(paymentsTable).set({
+        status: refund.status === "succeeded" ? PAYMENT_STATUS.REFUNDED : payment.status,
+        notes: sql`concat_ws(E'\\n', NULLIF(${paymentsTable.notes}, ''), ${note})`,
+      }).where(and(eq(paymentsTable.id, payment.id), eq(paymentsTable.tenantId, me.tenantId)));
+      res.json({ success: refund.status !== "failed", status: refund.status, refundId: refund.id });
+    } catch (err) {
+      // Keep the late-payment marker visible. Retry uses the same Stripe key and cannot create a second refund.
+      logger.error({ paymentId: payment.id, errorType: err instanceof Error ? err.name : "unknown" }, "[store] Stripe late-payment refund failed");
+      await db.update(paymentsTable).set({
+        notes: sql`concat_ws(E'\\n', NULLIF(${paymentsTable.notes}, ''), 'Reembolso Stripe não confirmado; revisar no painel Stripe antes de uma nova tentativa.')`,
+      }).where(and(eq(paymentsTable.id, payment.id), eq(paymentsTable.tenantId, me.tenantId)));
+      res.status(502).json({ error: "O Stripe não confirmou o reembolso. O pagamento continua na fila para nova tentativa ou revisão manual." });
+    }
+  } catch (err) { next(err); }
 });
 
 router.get("/store/orders", async (req, res, next: NextFunction): Promise<void> => {
@@ -1353,6 +1459,16 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
       internalNotes: z.string().optional(),
     }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    if (
+      parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+      && parsed.data.status !== STORE_ORDER_STATUS.CANCELLED
+    ) {
+      next(new ConflictError(
+        "Registre o estorno junto com o cancelamento do pedido.",
+        "REFUND_REQUIRES_ORDER_CANCELLATION",
+      ));
+      return;
+    }
     const updates: Record<string, unknown> = {};
     if (parsed.data.status) updates.status = parsed.data.status;
     if (parsed.data.paymentStatus) updates.paymentStatus = parsed.data.paymentStatus;
@@ -1364,6 +1480,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     if (parsed.data.status === STORE_ORDER_STATUS.COMPLETED) updates.completedAt = new Date();
     if (parsed.data.status === STORE_ORDER_STATUS.CANCELLED) updates.cancelledAt = new Date();
     if (parsed.data.paymentStatus === STORE_PAYMENT_STATUS.PAID) updates.paidAt = new Date();
+    if (parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED) updates.refundedAt = new Date();
 
     // When transitioning to PAID, add a conditional WHERE to make the inventory
     // effects idempotent under concurrency. The WHERE `paymentStatus != PAID`
@@ -1379,6 +1496,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     let didTransitionToPaid = false;
     let didTransitionToCancelled = false;
     let order: typeof storeOrdersTable.$inferSelect | undefined;
+    let cancelledTripIds: string[] = [];
     let manualCreateResult: Awaited<ReturnType<typeof createReservationsForOrder>> | null = null;
     if (isTransitioningToPaid) {
       await db.transaction(async (tx) => {
@@ -1481,15 +1599,53 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           .limit(1);
         if (!lockedOrder) throw new NotFoundError("Order not found", "NOT_FOUND");
         order = lockedOrder;
-        if (lockedOrder.status === STORE_ORDER_STATUS.CANCELLED) return;
+        const refundRecorded = parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+          || lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED;
 
         const linkedReservations = await tx
-          .select({ id: reservationsTable.id })
+          .select({
+            id: reservationsTable.id,
+            clientId: reservationsTable.clientId,
+            status: reservationsTable.status,
+            tripId: reservationsTable.tripId,
+            seats: reservationsTable.seats,
+            capacityUnits: reservationsTable.capacityUnits,
+          })
           .from(reservationsTable)
           .where(and(
             eq(reservationsTable.tenantId, me.tenantId),
             eq(reservationsTable.storeOrderId, lockedOrder.orderNumber),
           ));
+        const paymentScope = linkedReservations.length > 0
+          ? or(
+            eq(paymentsTable.orderId, lockedOrder.id),
+            inArray(paymentsTable.reservationId, linkedReservations.map((reservation) => reservation.id)),
+          )
+          : eq(paymentsTable.orderId, lockedOrder.id);
+        const receivedPayments = await tx.select({ id: paymentsTable.id })
+          .from(paymentsTable)
+          .where(and(
+            eq(paymentsTable.tenantId, lockedOrder.tenantId),
+            eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+            inArray(paymentsTable.status, [PAYMENT_STATUS.PAID, PAYMENT_STATUS.APPROVED]),
+            paymentScope,
+          ));
+        const hasReceivedPayment = receivedPayments.length > 0;
+        if (
+          (lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID || hasReceivedPayment)
+          && !refundRecorded
+        ) {
+          throw new ConflictError(
+            "Registre o estorno do pagamento antes de cancelar um pedido com recebimentos.",
+            "ORDER_REFUND_REQUIRED",
+          );
+        }
+        const cancellableReservations = linkedReservations.filter(
+          (reservation) =>
+            reservation.status !== RESERVATION_STATUS.CANCELLED
+            && reservation.status !== RESERVATION_STATUS.COMPLETED,
+        );
+        const cancellableIds = cancellableReservations.map((reservation) => reservation.id);
 
         const ref = lockedOrder.pendingReferral;
         if (lockedOrder.referralEffectsAppliedAt != null && ref?.code) {
@@ -1505,7 +1661,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
             await reverseTripOrderReferrals(tx, {
               tenantId: me.tenantId,
               orderId: lockedOrder.id,
-              cancellableReservationIds: linkedReservations.map((reservation) => reservation.id),
+              cancellableReservationIds: cancellableIds,
               reversalReason: "order_cancelled",
             });
           }
@@ -1525,9 +1681,9 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           );
         }
 
-        const shouldReverseFinancials =
-          lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID
-          || parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED;
+        const shouldReverseFinancials = lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID
+          || hasReceivedPayment
+          || refundRecorded;
         if (shouldReverseFinancials) {
           await reverseOrderInventoryEffects(
             lockedOrder.id,
@@ -1547,6 +1703,59 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
             occurredAt: new Date(),
             reason: "Pedido cancelado pela agência",
           });
+          await tx.update(paymentsTable)
+            .set({ status: PAYMENT_STATUS.REFUNDED })
+            .where(and(
+              eq(paymentsTable.tenantId, lockedOrder.tenantId),
+              eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+              inArray(paymentsTable.status, [PAYMENT_STATUS.PAID, PAYMENT_STATUS.APPROVED]),
+              paymentScope,
+            ));
+        }
+
+        if (cancellableIds.length > 0) {
+          const seatDeltaByTrip = new Map<string, { confirmed: number; reserved: number }>();
+          for (const reservation of cancellableReservations) {
+            if (
+              reservation.status !== RESERVATION_STATUS.PENDING
+              && reservation.status !== RESERVATION_STATUS.CONFIRMED
+            ) continue;
+            const seats = reservation.capacityUnits > 0
+              ? reservation.capacityUnits
+              : (Array.isArray(reservation.seats) ? reservation.seats.length : 0);
+            if (!reservation.tripId || seats <= 0) continue;
+            const delta = seatDeltaByTrip.get(reservation.tripId) ?? { confirmed: 0, reserved: 0 };
+            if (reservation.status === RESERVATION_STATUS.CONFIRMED) {
+              delta.confirmed += seats;
+            } else {
+              delta.reserved += seats;
+            }
+            seatDeltaByTrip.set(reservation.tripId, delta);
+          }
+          for (const [tripId, { confirmed, reserved }] of seatDeltaByTrip) {
+            await tx.update(tripsTable).set({
+              availableSeats: sql`LEAST(total_capacity, GREATEST(0, available_seats + ${confirmed + reserved}))`,
+              ...(confirmed > 0 ? { confirmedSeats: sql`GREATEST(0, confirmed_seats - ${confirmed})` } : {}),
+              ...(reserved > 0 ? { reservedSeats: sql`GREATEST(0, reserved_seats - ${reserved})` } : {}),
+            }).where(and(eq(tripsTable.id, tripId), eq(tripsTable.tenantId, lockedOrder.tenantId)));
+            cancelledTripIds.push(tripId);
+          }
+          await tx.update(reservationsTable)
+            .set({ status: RESERVATION_STATUS.CANCELLED, cancelledAt: new Date() })
+            .where(and(
+              eq(reservationsTable.tenantId, lockedOrder.tenantId),
+              inArray(reservationsTable.id, cancellableIds),
+            ));
+        }
+        for (const reservation of linkedReservations) {
+          await syncReservationPaymentStatus(reservation.id, lockedOrder.tenantId, tx);
+        }
+        const affectedClientIds = new Set([
+          lockedOrder.clientId,
+          ...linkedReservations.map((reservation) => reservation.clientId),
+        ].filter((clientId): clientId is string => Boolean(clientId)));
+        for (const clientId of affectedClientIds) {
+          await recalculateClientFinancials(clientId, lockedOrder.tenantId, tx);
         }
 
         await restoreSpentCreditForOrder(
@@ -1569,6 +1778,13 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     }
     if (!order) { next(new NotFoundError("Order not found", "NOT_FOUND")); return; }
     const currentOrder = order;
+    if (didTransitionToCancelled) {
+      for (const tripId of cancelledTripIds) {
+        broadcastSeatUpdate(tripId, currentOrder.tenantId).catch((err) => {
+          req.log.warn({ err, tripId }, "[store/orders] Failed to broadcast seat update on cancellation");
+        });
+      }
+    }
 
     // Payment-gated reservation: reservations are normally already created at
     // checkout time (createReservationsForOrder is idempotent, so this call is

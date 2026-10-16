@@ -13,6 +13,20 @@ import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 const router = Router();
 
+async function requireCommunicationStaff(
+  req: Parameters<typeof requireAuth>[0],
+  res: Parameters<typeof requireAuth>[1],
+  next: NextFunction,
+) {
+  const me = await requireAuth(req, res);
+  if (!me) return null;
+  if (!ALL_STAFF_ROLES.includes(me.role)) {
+    next(new ForbiddenError("Apenas membros da equipe podem acessar a comunicação da agência.", "FORBIDDEN_ROLE"));
+    return null;
+  }
+  return me;
+}
+
 const CreateMessageBody = z.object({
   toClientId: z.string().optional(),
   channel: z.enum(["email", "whatsapp"]),
@@ -84,7 +98,7 @@ function formatAutomation(a: typeof automationsTable.$inferSelect) {
 
 router.get("/messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireCommunicationStaff(req, res, next);
     if (!me) return;
     const { clientId } = req.query as Record<string, string>;
     const conditions: ReturnType<typeof eq>[] = [eq(messagesTable.tenantId, me.tenantId)];
@@ -107,7 +121,7 @@ router.get("/messages", async (req, res, next: NextFunction): Promise<void> => {
 
 router.get("/messages/client-status/:clientId", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireCommunicationStaff(req, res, next);
     if (!me) return;
     const [client] = await db.select({ id: clientsTable.id }).from(clientsTable)
       .where(and(
@@ -123,7 +137,7 @@ router.get("/messages/client-status/:clientId", async (req, res, next: NextFunct
 
 router.post("/messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireCommunicationStaff(req, res, next);
     if (!me) return;
     const parsed = CreateMessageBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
@@ -176,7 +190,7 @@ router.post("/messages", async (req, res, next: NextFunction): Promise<void> => 
 
 router.get("/message-templates", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireCommunicationStaff(req, res, next);
     if (!me) return;
     const templates = await db.select().from(messageTemplatesTable)
       .where(eq(messageTemplatesTable.tenantId, me.tenantId))
@@ -255,7 +269,7 @@ router.delete("/message-templates/:id", async (req, res, next: NextFunction): Pr
 
 router.get("/automations", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireCommunicationStaff(req, res, next);
     if (!me) return;
     const automations = await db.select().from(automationsTable)
       .where(eq(automationsTable.tenantId, me.tenantId))
@@ -355,7 +369,7 @@ router.patch("/automations/:id/toggle", async (req, res, next: NextFunction): Pr
 
 router.get("/clients-for-messaging", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireCommunicationStaff(req, res, next);
     if (!me) return;
     const clients = await db.select().from(clientsTable)
       .where(eq(clientsTable.tenantId, me.tenantId));

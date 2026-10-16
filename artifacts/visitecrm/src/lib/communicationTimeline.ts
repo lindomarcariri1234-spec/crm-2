@@ -26,6 +26,7 @@ export interface AiConversationMessage {
   mediaMimeType?: string | null;
   mediaFileName?: string | null;
   mediaExpiredAt?: string | null;
+  mediaExpiresAt?: string | null;
 }
 
 interface SentMessage {
@@ -72,6 +73,7 @@ export interface CommunicationTimelineEntry {
   mediaMimeType?: string | null;
   mediaFileName?: string | null;
   mediaExpiredAt?: string | null;
+  mediaExpiresAt?: string | null;
 }
 
 export interface ClientConversationSummary {
@@ -174,6 +176,7 @@ function chatbotEntry(
     mediaMimeType: message.mediaMimeType ?? null,
     mediaFileName: message.mediaFileName ?? null,
     mediaExpiredAt: message.mediaExpiredAt ?? null,
+    mediaExpiresAt: message.mediaExpiresAt ?? null,
   };
 }
 

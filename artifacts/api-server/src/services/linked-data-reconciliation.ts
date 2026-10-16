@@ -89,6 +89,12 @@ function normalizedEmail(email: string | null): string | null {
   return normalized || null;
 }
 
+function appendIndex<K, V>(index: Map<K, V[]>, key: K, value: V): void {
+  const values = index.get(key);
+  if (values) values.push(value);
+  else index.set(key, [value]);
+}
+
 /** Conservative tenant-local integrity pass. It never deletes or guesses. */
 export async function reconcileLinkedData(tenantId: string, repair = false): Promise<LinkReconciliationResult> {
   const checked: Record<string, number> = {};
@@ -138,20 +144,35 @@ export async function reconcileLinkedData(tenantId: string, repair = false): Pro
   const tripsById = new Map(trips.map(t => [t.id, t]));
   const orderByNumber = new Map(orders.map(o => [o.orderNumber, o]));
   const checkedOrderPayments = new Set<string>();
+  const clientReceivables = new Map<string, { totalSpent: number; outstandingBalance: number }>();
+  for (const payment of payments) {
+    if (payment.type !== PAYMENT_TYPE.RECEIVABLE || payment.isTestMode !== false || !payment.clientId) continue;
+    const totals = clientReceivables.get(payment.clientId) ?? { totalSpent: 0, outstandingBalance: 0 };
+    if (payment.status === PAYMENT_STATUS.PAID) totals.totalSpent += Number(payment.amount);
+    if (payment.status === PAYMENT_STATUS.PENDING || payment.status === PAYMENT_STATUS.OVERDUE) {
+      totals.outstandingBalance += Number(payment.amount);
+    }
+    clientReceivables.set(payment.clientId, totals);
+  }
+  const activeSeatTotalsByTrip = new Map<string, { reservedSeats: number; confirmedSeats: number }>();
+  const reservationsByStoreOrder = new Map<string, typeof reservations>();
+  for (const reservation of reservations) {
+    if (reservation.status === RESERVATION_STATUS.PENDING || reservation.status === RESERVATION_STATUS.CONFIRMED) {
+      const totals = activeSeatTotalsByTrip.get(reservation.tripId) ?? { reservedSeats: 0, confirmedSeats: 0 };
+      const seats = (reservation.seats ?? []).length;
+      if (reservation.status === RESERVATION_STATUS.PENDING) totals.reservedSeats += seats;
+      else totals.confirmedSeats += seats;
+      activeSeatTotalsByTrip.set(reservation.tripId, totals);
+    }
+    if (reservation.storeOrderId !== null) appendIndex(reservationsByStoreOrder, reservation.storeOrderId, reservation);
+  }
 
   // Canonical client financial semantics deliberately match
   // recalculateClientFinancials: all payment types are included there, while
   // this reconciliation restricts to receivables as its stated source.
   for (const client of clients) {
     check("client-financial");
-    const clientPayments = payments.filter(
-      p => p.clientId === client.id && p.type === PAYMENT_TYPE.RECEIVABLE && p.isTestMode === false,
-    );
-    const totalSpent = clientPayments.filter(p => p.status === PAYMENT_STATUS.PAID)
-      .reduce((sum, p) => sum + Number(p.amount), 0);
-    const outstandingBalance = clientPayments
-      .filter(p => p.status === PAYMENT_STATUS.PENDING || p.status === PAYMENT_STATUS.OVERDUE)
-      .reduce((sum, p) => sum + Number(p.amount), 0);
+    const { totalSpent = 0, outstandingBalance = 0 } = clientReceivables.get(client.id) ?? {};
     if (Number(client.totalSpent) !== totalSpent || Number(client.outstandingBalance) !== outstandingBalance) {
       if (repair) {
         await db.update(clientsTable).set({ totalSpent: String(totalSpent), outstandingBalance: String(outstandingBalance) })
@@ -164,10 +185,7 @@ export async function reconcileLinkedData(tenantId: string, repair = false): Pro
   for (const trip of trips) {
     check("trip-seats");
     if (trip.status === "cancelled" || trip.status === "completed") continue;
-    const active = reservations.filter(r => r.tripId === trip.id &&
-      (r.status === RESERVATION_STATUS.PENDING || r.status === RESERVATION_STATUS.CONFIRMED));
-    const reservedSeats = active.filter(r => r.status === RESERVATION_STATUS.PENDING).reduce((n, r) => n + (r.seats ?? []).length, 0);
-    const confirmedSeats = active.filter(r => r.status === RESERVATION_STATUS.CONFIRMED).reduce((n, r) => n + (r.seats ?? []).length, 0);
+    const { reservedSeats = 0, confirmedSeats = 0 } = activeSeatTotalsByTrip.get(trip.id) ?? {};
     const availableSeats = Math.max(0, Number(trip.totalCapacity) - reservedSeats - confirmedSeats -
       (Array.isArray(trip.freePassengers) ? trip.freePassengers.length : 0));
     if (Number(trip.reservedSeats) !== reservedSeats || Number(trip.confirmedSeats) !== confirmedSeats || Number(trip.availableSeats) !== availableSeats) {
@@ -182,9 +200,11 @@ export async function reconcileLinkedData(tenantId: string, repair = false): Pro
   const passengerRows = reservations.length
     ? await db.select().from(passengersTable).where(inArray(passengersTable.reservationId, reservations.map(r => r.id)))
     : [];
+  const passengersByReservation = new Map<string, typeof passengerRows>();
+  for (const passenger of passengerRows) appendIndex(passengersByReservation, passenger.reservationId, passenger);
   for (const reservation of reservations) {
     check("reservation-passengers");
-    const passengers = passengerRows.filter(p => p.reservationId === reservation.id);
+    const passengers = passengersByReservation.get(reservation.id) ?? [];
     const seats = reservation.seats ?? [];
     if (passengers.length === seats.length) continue;
     // A missing primary is the only passenger correction that has a unique,
@@ -207,6 +227,12 @@ export async function reconcileLinkedData(tenantId: string, repair = false): Pro
   // An email group is repairable only when it maps exactly one unlinked client,
   // one active CLIENT account, and that account is not already linked elsewhere.
   const linkedUserIds = new Set(clients.map(c => c.userId).filter((id): id is string => !!id));
+  const activeClientUsersByEmail = new Map<string, typeof users>();
+  for (const user of users) {
+    if (user.role !== ROLES.CLIENT || !user.isActive) continue;
+    const email = normalizedEmail(user.email);
+    if (email) appendIndex(activeClientUsersByEmail, email, user);
+  }
   const clientEmailGroups = new Map<string, typeof clients>();
   for (const client of clients.filter(c => !c.userId)) {
     const email = normalizedEmail(client.email);
@@ -214,7 +240,7 @@ export async function reconcileLinkedData(tenantId: string, repair = false): Pro
   }
   for (const [email, candidates] of clientEmailGroups) {
     check("client-user");
-    const matchingUsers = users.filter(u => u.role === ROLES.CLIENT && u.isActive && normalizedEmail(u.email) === email);
+    const matchingUsers = activeClientUsersByEmail.get(email) ?? [];
     if (candidates.length === 1 && matchingUsers.length === 1 && !linkedUserIds.has(matchingUsers[0]!.id)) {
       const client = candidates[0]!, user = matchingUsers[0]!;
       if (repair) {
@@ -228,12 +254,17 @@ export async function reconcileLinkedData(tenantId: string, repair = false): Pro
     }
   }
 
+  const ordersByReferralId = new Map<string, typeof orders>();
+  for (const order of orders) {
+    const referralId = (order.pendingReferral as { referralId?: unknown } | null)?.referralId;
+    if (typeof referralId === "string") appendIndex(ordersByReferralId, referralId, order);
+  }
   for (const reservation of reservations) {
     if (!reservation.storeOrderId) continue;
     check("reservation-order");
     const order = orderByNumber.get(reservation.storeOrderId);
     if (!order) { issue("reservation-order", reservation.id, "order_missing_in_tenant"); continue; }
-    const siblings = reservations.filter(r => r.storeOrderId === order.orderNumber);
+    const siblings = reservationsByStoreOrder.get(order.orderNumber) ?? [];
     if (!order.clientId && reservation.clientId && siblings.length === 1) {
       if (repair) {
         await db.update(storeOrdersTable).set({ clientId: reservation.clientId }).where(and(
@@ -261,9 +292,9 @@ export async function reconcileLinkedData(tenantId: string, repair = false): Pro
     check("referral-reservation");
     if (referral.reservationId && !byReservationId.has(referral.reservationId)) issue("referral-reservation", referral.id, "reservation_missing_in_tenant");
     if (!referral.reservationId && (referral.status === REFERRAL_STATUS.PENDING || referral.status === REFERRAL_STATUS.COMPLETED)) {
-      const candidateOrders = orders.filter(o => (o.pendingReferral as { referralId?: unknown } | null)?.referralId === referral.id);
+      const candidateOrders = ordersByReferralId.get(referral.id) ?? [];
       if (candidateOrders.length !== 1) { if (candidateOrders.length > 1) issue("referral-reservation", referral.id, "ambiguous_order_candidates"); continue; }
-      const candidates = reservations.filter(r => r.storeOrderId === candidateOrders[0]!.orderNumber);
+      const candidates = reservationsByStoreOrder.get(candidateOrders[0]!.orderNumber) ?? [];
       if (candidates.length !== 1) { issue("referral-reservation", referral.id, candidates.length ? "ambiguous_multi_reservation_order" : "referral_order_has_no_trip_reservations"); continue; }
       if (repair) {
         const candidate = candidates[0]!;
@@ -290,9 +321,13 @@ export async function reconcileLinkedData(tenantId: string, repair = false): Pro
     }
   }
 
+  const dealsByReservation = new Map<string, typeof deals>();
+  for (const deal of deals) {
+    if (deal.reservationId) appendIndex(dealsByReservation, deal.reservationId, deal);
+  }
   for (const reservation of reservations) {
     check("pipeline-deal");
-    const reservationDeals = deals.filter(d => d.reservationId === reservation.id);
+    const reservationDeals = dealsByReservation.get(reservation.id) ?? [];
     if (reservationDeals.length > 1) { issue("pipeline-deal", reservation.id, "duplicate_reservation_deals"); continue; }
     if (reservationDeals.length === 1) {
       const deal = reservationDeals[0]!;

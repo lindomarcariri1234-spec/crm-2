@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db, tenantsTable, usersTable, plansTable, storesTable } from "@workspace/db";
-import { eq, asc, ilike } from "drizzle-orm";
+import { eq, and, asc, ilike, isNull } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { getAuth, clerkClient } from "@clerk/express";
@@ -124,6 +124,10 @@ router.post("/onboarding/agency", async (req, res, next: NextFunction): Promise<
       next(new ConflictError("User already has a tenant assigned", "TENANT_ALREADY_ASSIGNED"));
       return;
     }
+    if (user.role !== ROLES.AGENCY_ADMIN) {
+      next(new ForbiddenError("Only an agency administrator can create an agency during onboarding", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     // ── Determine name/slug/planId — either from the form or auto-generated ──
     let name: string, cnpj: string | undefined, phone: string | undefined, slug: string, planId: string;
@@ -170,6 +174,29 @@ router.post("/onboarding/agency", async (req, res, next: NextFunction): Promise<
     let tenant: typeof tenantsTable.$inferSelect;
     try {
       [tenant] = await db.transaction(async (tx) => {
+        // Serialize onboarding for this Clerk identity. Without locking the
+        // user row, two requests can both pass the earlier tenantId check and
+        // create separate tenants before either one assigns the user.
+        const [lockedUser] = await tx.select({
+          id: usersTable.id,
+          tenantId: usersTable.tenantId,
+          role: usersTable.role,
+          isActive: usersTable.isActive,
+        }).from(usersTable)
+          .where(eq(usersTable.clerkId, auth.clerkId))
+          .for("update")
+          .limit(1);
+        if (!lockedUser) throw new NotFoundError("User not found", "USER_NOT_FOUND");
+        if (!lockedUser.isActive) {
+          throw new ForbiddenError("Sua conta está desativada.", "USER_INACTIVE");
+        }
+        if (lockedUser.tenantId) {
+          throw new ConflictError("User already has a tenant assigned", "TENANT_ALREADY_ASSIGNED");
+        }
+        if (lockedUser.role !== ROLES.AGENCY_ADMIN) {
+          throw new ForbiddenError("Only an agency administrator can create an agency during onboarding", "FORBIDDEN_ROLE");
+        }
+
         await tx.insert(tenantsTable).values({
           id: tenantId,
           name,
@@ -183,9 +210,17 @@ router.post("/onboarding/agency", async (req, res, next: NextFunction): Promise<
           limits: { users: 10, clients: 1000, trips: 50 },
           settings: { onboardingCompleted: true },
         });
-        await tx.update(usersTable)
+        const [assignedUser] = await tx.update(usersTable)
           .set({ tenantId, role: ROLES.AGENCY_ADMIN })
-          .where(eq(usersTable.clerkId, auth.clerkId));
+          .where(and(
+            eq(usersTable.clerkId, auth.clerkId),
+            isNull(usersTable.tenantId),
+            eq(usersTable.role, ROLES.AGENCY_ADMIN),
+          ))
+          .returning({ id: usersTable.id });
+        if (!assignedUser) {
+          throw new ConflictError("User onboarding state changed; retry the request", "ONBOARDING_STATE_CHANGED");
+        }
 
         const [existingStore] = await tx
           .select({ id: storesTable.id })
@@ -211,6 +246,10 @@ router.post("/onboarding/agency", async (req, res, next: NextFunction): Promise<
         return tx.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId)).limit(1);
       });
     } catch (txErr) {
+      if (txErr instanceof AppError) {
+        next(txErr);
+        return;
+      }
       const dbErr = txErr as { code?: string };
       if (dbErr?.code === "23505") {
         next(new ConflictError("Esse slug já está em uso. Escolha outro.", "SLUG_CONFLICT"));

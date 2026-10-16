@@ -1,4 +1,5 @@
 import { Router, type NextFunction } from "express";
+import { z } from "zod/v4";
 import { db } from "@workspace/db";
 import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, storeOrdersTable, clientsTable, commissionRulesTable, commissionsTable, tripsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
 import { eq, and, sql, asc, desc, inArray, isNull, gte, lt, notExists } from "drizzle-orm";
@@ -12,7 +13,7 @@ import { roundMoney } from "../lib/pricing";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
 import { ALL_STAFF_ROLES } from '../lib/tenant';
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { sumPaidReservationPayments, syncReservationPaymentStatus } from "../lib/reservation-payments";
+import { sumReceivedReservationPayments, syncReservationPaymentStatus } from "../lib/reservation-payments";
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
 import { enqueueNewBookingNotificationEmail, dispatchReferralReversedEmail } from "../queues/email-helpers";
 import { dispatchWhatsAppPaymentReceived } from "../queues/whatsapp-helpers";
@@ -361,6 +362,9 @@ function formatPayment(p: typeof paymentsTable.$inferSelect) {
     paymentMethod: p.paymentMethod, installmentNumber: p.installmentNumber,
     totalInstallments: p.totalInstallments, dueDate: p.dueDate.toISOString(),
     paidAt: p.paidAt?.toISOString() ?? null, status: p.status,
+    refundedAt: p.refundedAt?.toISOString() ?? null,
+    refundOfPaymentId: p.refundOfPaymentId ?? null,
+    gateway: p.gateway ?? null,
     receiptUrl: p.receiptUrl ?? null,
     description: p.description, notes: p.notes,
     sourceExpenseId: p.sourceExpenseId ?? null,
@@ -746,7 +750,9 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
 
     const {
       reservationId,
+      reservationIds: reservationIdsParam,
       clientId: clientIdParam,
+      clientIds: clientIdsParam,
       status,
       type,
       page = "1",
@@ -755,6 +761,8 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       dateTo,
       dueDateFrom,
       dueDateTo,
+      updatedAtFrom,
+      updatedAtTo,
       unlinkedOnly,
     } = req.query as Record<string, string>;
     const parsedPage = Number.parseInt(page, 10);
@@ -772,7 +780,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
         && parsed.getUTCMonth() === month - 1
         && parsed.getUTCDate() === day;
     };
-    for (const [name, value] of Object.entries({ dateFrom, dateTo, dueDateFrom, dueDateTo })) {
+    for (const [name, value] of Object.entries({ dateFrom, dateTo, dueDateFrom, dueDateTo, updatedAtFrom, updatedAtTo })) {
       if (value && !isValidIsoDate(value)) {
         next(new ValidationError(`${name} must be a valid ISO date (YYYY-MM-DD)`, "VALIDATION_ERROR"));
         return;
@@ -782,7 +790,45 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       next(new ValidationError("unlinkedOnly must be true or false", "VALIDATION_ERROR"));
       return;
     }
-    if ((dateFrom && dateTo && dateFrom > dateTo) || (dueDateFrom && dueDateTo && dueDateFrom > dueDateTo)) {
+    let reservationIds: string[] | undefined;
+    if (reservationIdsParam !== undefined) {
+      if (typeof reservationIdsParam !== "string") {
+        next(new ValidationError("reservationIds must be a comma-separated string", "VALIDATION_ERROR"));
+        return;
+      }
+      reservationIds = reservationIdsParam.split(",").map(id => id.trim());
+      if (
+        reservationId
+        || reservationIds.length === 0
+        || reservationIds.length > 100
+        || reservationIds.some(id => !id || id.length > 200)
+      ) {
+        next(new ValidationError("reservationIds must contain 1 to 100 valid reservation IDs and cannot be combined with reservationId", "VALIDATION_ERROR"));
+        return;
+      }
+      reservationIds = [...new Set(reservationIds)];
+    }
+    let clientIds: string[] | undefined;
+    if (clientIdsParam !== undefined) {
+      if (
+        typeof clientIdsParam !== "string"
+        || clientIdParam
+      ) {
+        next(new ValidationError("clientIds must be a comma-separated string and cannot be combined with clientId", "VALIDATION_ERROR"));
+        return;
+      }
+      clientIds = clientIdsParam.split(",").map(id => id.trim());
+      if (clientIds.length === 0 || clientIds.length > 100 || clientIds.some(id => !id || id.length > 200)) {
+        next(new ValidationError("clientIds must contain 1 to 100 valid client IDs", "VALIDATION_ERROR"));
+        return;
+      }
+      clientIds = [...new Set(clientIds)];
+    }
+    if (
+      (dateFrom && dateTo && dateFrom > dateTo)
+      || (dueDateFrom && dueDateTo && dueDateFrom > dueDateTo)
+      || (updatedAtFrom && updatedAtTo && updatedAtFrom > updatedAtTo)
+    ) {
       next(new ValidationError("The start date must not be after the end date", "VALIDATION_ERROR"));
       return;
     }
@@ -790,6 +836,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
     const conditions: ReturnType<typeof eq>[] = [eq(paymentsTable.tenantId, me.tenantId)];
     conditions.push(eq(paymentsTable.isTestMode, false));
     if (reservationId) conditions.push(eq(paymentsTable.reservationId, reservationId));
+    else if (reservationIds) conditions.push(inArray(paymentsTable.reservationId, reservationIds));
     if (status) conditions.push(eq(paymentsTable.status, parsePaymentStatus(status)));
     if (type) conditions.push(eq(paymentsTable.type, parsePaymentType(type)));
     if (unlinkedOnly === "true") {
@@ -808,6 +855,14 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
       conditions.push(lt(paymentsTable.dueDate, endExclusive));
     }
+    if (updatedAtFrom) {
+      conditions.push(gte(paymentsTable.updatedAt, new Date(`${updatedAtFrom}T03:00:00.000Z`)));
+    }
+    if (updatedAtTo) {
+      const endExclusive = new Date(`${updatedAtTo}T03:00:00.000Z`);
+      endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+      conditions.push(lt(paymentsTable.updatedAt, endExclusive));
+    }
 
     if (me.role === ROLES.CLIENT) {
       const [clientRecord] = await db.select({ id: clientsTable.id })
@@ -816,6 +871,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
         .limit(1);
       if (clientRecord) {
         conditions.push(eq(paymentsTable.clientId, clientRecord.id));
+        if (clientIds) conditions.push(inArray(paymentsTable.clientId, clientIds));
       } else {
         res.json({ data: [], total: 0, page: pageNum, limit: limitNum });
         return;
@@ -835,6 +891,12 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
           return;
         }
         conditions.push(eq(paymentsTable.clientId, clientIdParam));
+      } else if (clientIds) {
+        if (clientIds.some(clientId => !sellerClientIds.includes(clientId))) {
+          res.json({ data: [], total: 0, page: pageNum, limit: limitNum });
+          return;
+        }
+        conditions.push(inArray(paymentsTable.clientId, clientIds));
       } else {
         conditions.push(inArray(paymentsTable.clientId, sellerClientIds));
       }
@@ -843,6 +905,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
         next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
       }
       if (clientIdParam) conditions.push(eq(paymentsTable.clientId, clientIdParam));
+      else if (clientIds) conditions.push(inArray(paymentsTable.clientId, clientIds));
     }
 
     const payments = await db.select().from(paymentsTable)
@@ -983,7 +1046,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
           );
         }
         if (isReceivedPayment) {
-          const paidValue = await sumPaidReservationPayments(
+          const paidValue = await sumReceivedReservationPayments(
             tx,
             parsed.data.reservationId,
             me.tenantId,
@@ -1023,6 +1086,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
           notes: parsed.data.notes ?? null,
           receiptUrl,
           ...(explicitStatus ? { status: explicitStatus } : {}),
+          ...(explicitStatus === PAYMENT_STATUS.REFUNDED ? { refundedAt: new Date() } : {}),
           ...(explicitPaidAt ? { paidAt: explicitPaidAt } : {}),
           ...(parsed.data.reservationId && parsed.data.type === PAYMENT_TYPE.RECEIVABLE
             ? { gateway: "manual-reservation", transactionId: paymentId }
@@ -1413,6 +1477,107 @@ router.get("/payments/:id", async (req, res, next: NextFunction): Promise<void> 
   }
 });
 
+router.post("/payments/:id/partial-refunds", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+    const parsed = z.object({
+      amount: z.number().positive().finite().refine(
+        (amount) => Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-7,
+        "Informe um valor com até duas casas decimais.",
+      ),
+      notes: z.string().trim().max(1000).optional(),
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError(String(parsed.error.message)));
+      return;
+    }
+
+    const createdRefund = await db.transaction(async (tx) => {
+      const [original] = await tx.select().from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.id, req.params.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+        ))
+        .for("update")
+        .limit(1);
+      if (!original) throw new NotFoundError("Payment not found", "NOT_FOUND");
+      if (
+        original.type !== PAYMENT_TYPE.RECEIVABLE
+        || !original.reservationId
+        || original.gateway === "stripe"
+        || original.status === PAYMENT_STATUS.REFUNDED
+        || (
+          original.status !== PAYMENT_STATUS.PAID
+          && original.status !== PAYMENT_STATUS.APPROVED
+        )
+        || Number(original.amount) <= 0
+      ) {
+        throw new ConflictError("Somente pagamentos manuais recebidos de uma reserva podem receber estorno parcial.", "PARTIAL_REFUND_NOT_ALLOWED");
+      }
+
+      const existingRefunds = await tx.select({ amount: paymentsTable.amount })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.refundOfPaymentId, original.id),
+          eq(paymentsTable.category, "manual_refund"),
+          eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+          inArray(paymentsTable.status, [PAYMENT_STATUS.PAID, PAYMENT_STATUS.APPROVED]),
+        ));
+      const originalCents = Math.round(Number(original.amount) * 100);
+      const alreadyRefundedCents = existingRefunds.reduce((sum, refund) => {
+        const amountCents = Math.round(Number(refund.amount) * 100);
+        return amountCents < 0 ? sum - amountCents : sum;
+      }, 0);
+      const refundCents = Math.round(parsed.data.amount * 100);
+      if (alreadyRefundedCents + refundCents > originalCents) {
+        throw new ConflictError("O estorno acumulado não pode exceder o valor original do pagamento.", "PARTIAL_REFUND_EXCEEDS_PAYMENT");
+      }
+
+      const now = new Date();
+      const [refund] = await tx.insert(paymentsTable).values({
+        id: generateId(),
+        tenantId: me.tenantId,
+        reservationId: original.reservationId,
+        clientId: original.clientId,
+        orderId: original.orderId,
+        type: PAYMENT_TYPE.RECEIVABLE,
+        category: "manual_refund",
+        amount: (-refundCents / 100).toFixed(2),
+        paymentMethod: original.paymentMethod,
+        installmentNumber: original.installmentNumber,
+        totalInstallments: original.totalInstallments,
+        dueDate: now,
+        paidAt: now,
+        refundedAt: now,
+        refundOfPaymentId: original.id,
+        status: PAYMENT_STATUS.PAID,
+        gateway: "manual",
+        description: `Estorno parcial do pagamento ${original.id}`,
+        notes: parsed.data.notes?.trim() || null,
+      }).returning();
+      await syncReservationPaymentStatus(original.reservationId, me.tenantId, tx);
+      return { refund, clientId: original.clientId, reservationId: original.reservationId };
+    });
+
+    if (createdRefund.clientId) {
+      recalculateClientFinancials(createdRefund.clientId, me.tenantId)
+        .catch((err) => req.log.error({ err }, "Error recalculating client financials after partial refund"));
+    }
+    res.status(201).json(formatPayment(createdRefund.refund));
+    CalendarSyncService.syncPayment(createdRefund.refund.id)
+      .catch((err) => req.log.warn({ err, context: "payment.partial_refund", paymentId: createdRefund.refund.id }, "Calendar sync failed"));
+  } catch (err) {
+    req.log.error({ err }, "Error recording partial manual refund");
+    next(err);
+  }
+});
+
 router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -1478,6 +1643,34 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         .for("update")
         .limit(1);
       if (!existingPayment) return { payment: null, reversal: null, previousStatus: null };
+
+      if (
+        parsed.data.status === PAYMENT_STATUS.REFUNDED
+        && existingPayment.status !== PAYMENT_STATUS.REFUNDED
+      ) {
+        const [partialRefund] = await tx.select({ id: paymentsTable.id })
+          .from(paymentsTable)
+          .where(and(
+            eq(paymentsTable.tenantId, me.tenantId),
+            eq(paymentsTable.refundOfPaymentId, existingPayment.id),
+            eq(paymentsTable.category, "manual_refund"),
+          ))
+          .limit(1);
+        if (partialRefund) {
+          throw new ConflictError(
+            "Este pagamento já tem estornos parciais. Registre o valor restante como outro estorno parcial.",
+            "PAYMENT_HAS_PARTIAL_REFUNDS",
+          );
+        }
+      }
+
+      if (
+        parsed.data.status != null
+        && updates.status === PAYMENT_STATUS.REFUNDED
+        && !existingPayment.refundedAt
+      ) {
+        updates.refundedAt = new Date();
+      }
 
       const hasOperationalCostLink = Boolean(existingPayment.sourceExpenseId || existingPayment.sourceTripCostId);
       if (hasOperationalCostLink && (updates.status !== undefined || updates.paidAt !== undefined)) {
@@ -1554,20 +1747,26 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
                 );
               }
               assertOpen(reservation);
-              const paidValue = await sumPaidReservationPayments(
-                tx,
-                existingPayment.reservationId,
-                me.tenantId,
-              );
-              const currentBalance = roundMoney(Math.max(
-                0,
-                roundMoney(Number(reservation.totalValue)) - paidValue,
-              ));
-              if (roundMoney(Number(existingPayment.amount)) > currentBalance) {
-                throw new ValidationError(
-                  "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
-                  "PAYMENT_EXCEEDS_BALANCE",
+              const wasReceived = existingPayment.status === PAYMENT_STATUS.PAID
+                || existingPayment.status === PAYMENT_STATUS.APPROVED;
+              const willBeReceived = updates.status === PAYMENT_STATUS.PAID
+                || updates.status === PAYMENT_STATUS.APPROVED;
+              if (!wasReceived && willBeReceived) {
+                const receivedValue = await sumReceivedReservationPayments(
+                  tx,
+                  existingPayment.reservationId,
+                  me.tenantId,
                 );
+                const currentBalance = roundMoney(Math.max(
+                  0,
+                  roundMoney(Number(reservation.totalValue)) - receivedValue,
+                ));
+                if (roundMoney(Number(existingPayment.amount)) > currentBalance) {
+                  throw new ValidationError(
+                    "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
+                    "PAYMENT_EXCEEDS_BALANCE",
+                  );
+                }
               }
             } else if (lockedOrder) {
               const reservations = await tx.select({
@@ -1930,7 +2129,7 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
 
     const {
       tripId, status, category, supplierId, dateFrom, dateTo,
-      page = "1", limit = "20", includeTripCosts, summaryPeriod = "all",
+      sourceId, sourceType, page = "1", limit = "20", includeTripCosts, summaryPeriod = "all",
     } = req.query as Record<string, string>;
     const parsedPage = Number.parseInt(page, 10);
     const parsedLimit = Number.parseInt(limit, 10);
@@ -1941,10 +2140,20 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
       next(new ValidationError("O deslocamento da paginação é muito grande"));
       return;
     }
-    const shouldIncludeTripCosts = includeTripCosts === "true";
+    if ((sourceId && !sourceType) || (!sourceId && sourceType)) {
+      next(new ValidationError("sourceId e sourceType devem ser informados juntos", "VALIDATION_ERROR"));
+      return;
+    }
+    if (sourceType && sourceType !== "agency" && sourceType !== "trip") {
+      next(new ValidationError("sourceType deve ser agency ou trip", "VALIDATION_ERROR"));
+      return;
+    }
+    const shouldIncludeTripCosts = includeTripCosts === "true" || sourceType === "trip";
 
     const conditions: ReturnType<typeof eq>[] = [eq(expensesTable.tenantId, me.tenantId)];
     if (tripId) conditions.push(eq(expensesTable.tripId, tripId));
+    if (sourceType === "agency" && sourceId) conditions.push(eq(expensesTable.id, sourceId));
+    if (sourceType === "trip") conditions.push(sql`FALSE` as ReturnType<typeof eq>);
     if (status) conditions.push(eq(expensesTable.status, parseExpenseStatus(status)));
     if (category) conditions.push(eq(expensesTable.category, category));
     if (supplierId) conditions.push(eq(expensesTable.supplierId, supplierId));
@@ -1958,6 +2167,8 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
 
     if (shouldIncludeTripCosts) {
       const tripCostConditions: ReturnType<typeof eq>[] = [eq(tripCostsTable.tenantId, me.tenantId)];
+      if (sourceType === "trip" && sourceId) tripCostConditions.push(eq(tripCostsTable.id, sourceId));
+      if (sourceType === "agency") tripCostConditions.push(sql`FALSE` as ReturnType<typeof eq>);
       const tripCostDueDate = sql`COALESCE(
         ${tripCostsTable.dueDate},
         date_trunc('day', ${tripCostsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'UTC'
@@ -1969,12 +2180,14 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
       if (fromDate && !Number.isNaN(fromDate.getTime())) tripCostConditions.push(gte(tripCostDueDate, fromDate));
       if (toDate && !Number.isNaN(toDate.getTime())) tripCostConditions.push(lt(tripCostDueDate, toDate));
 
-      const unlinkedTripCostCondition = sql`NOT EXISTS (
-        SELECT 1
-        FROM ${expensesTable}
-        WHERE ${expensesTable.linkedTripCostId} = ${tripCostsTable.id}
-          AND ${expensesTable.tenantId} = ${me.tenantId}
-      )`;
+      const unlinkedTripCostCondition = sourceType === "trip"
+        ? sql`TRUE`
+        : sql`NOT EXISTS (
+          SELECT 1
+          FROM ${expensesTable}
+          WHERE ${expensesTable.linkedTripCostId} = ${tripCostsTable.id}
+            AND ${expensesTable.tenantId} = ${me.tenantId}
+        )`;
       const tripCostWhere = and(...tripCostConditions, unlinkedTripCostCondition);
       const validatedSummaryPeriod = ["all", "month", "quarter", "year"].includes(summaryPeriod)
         ? summaryPeriod

@@ -248,6 +248,49 @@ beforeEach(() => {
 // Tests
 // ---------------------------------------------------------------------------
 
+describe("billing routes enforce the financial permission matrix", () => {
+  it.each(["cliente", "vendedor", "suporte"])(
+    "denies %s from reading invoices and subscription details",
+    async (role) => {
+      mockRequireAuth.mockResolvedValueOnce({ ...ME, role });
+
+      const res = await request(buildApp()).get("/api/subscriptions/current");
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe("FORBIDDEN_ROLE");
+      expect(mockSelect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["cliente", "vendedor", "gerente", "suporte"])(
+    "denies %s from generating a Pix invoice payment",
+    async (role) => {
+      mockRequireAuth.mockResolvedValueOnce({ ...ME, role });
+
+      const res = await request(buildApp()).post("/api/invoices/invoice-1/pix");
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe("FORBIDDEN_ROLE");
+      expect(mockSelect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["cliente", "vendedor", "gerente", "suporte"])(
+    "denies %s from creating a Stripe invoice payment intent",
+    async (role) => {
+      mockRequireAuth.mockResolvedValueOnce({ ...ME, role });
+
+      const res = await request(buildApp())
+        .post("/api/invoices/invoice-1/stripe/checkout");
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe("FORBIDDEN_ROLE");
+      expect(mockSelect).not.toHaveBeenCalled();
+      expect(mockGetUncachableStripeClient).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("POST /api/subscriptions/upgrade — STRIPE_PRICE_NOT_FOUND guard", () => {
   it("returns 400 STRIPE_PRICE_NOT_FOUND when no recurring Stripe price matches the plan + billing cycle", async () => {
     // Select queue for the upgrade path:

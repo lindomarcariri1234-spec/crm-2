@@ -9,7 +9,15 @@ import { logger } from "../lib/logger";
 import { generatePixEMV, generatePixQrCodeUrl } from "../lib/pix";
 import { persistUsageSnapshot } from "../lib/planLimits";
 import { generateInvoiceNumber } from "../lib/invoiceNumber";
-import { ROLES, INVOICE_STATUS, TENANT_STATUS, SUBSCRIPTION_STATUS } from "@workspace/permissions";
+import {
+  ROLES,
+  RESOURCES,
+  ACTIONS,
+  hasPermission,
+  INVOICE_STATUS,
+  TENANT_STATUS,
+  SUBSCRIPTION_STATUS,
+} from "@workspace/permissions";
 import { getUncachableStripeClient, getStripePublishableKey } from "../lib/stripeClient";
 import { handleStripeWebhook } from "../lib/stripeWebhookHandler";
 import { hasSeatMapFeature } from "../lib/plan-features";
@@ -17,10 +25,18 @@ import { acquireSubscriptionUpgradeLock } from "../lib/subscription-upgrade-lock
 
 const router = Router();
 
+function isBillingAdmin(role: string): boolean {
+  return role === ROLES.AGENCY_ADMIN || role === ROLES.SUPER_ADMIN;
+}
+
 router.get("/subscriptions/current", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res, { skipTenantStatusCheck: true });
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.VIEW)) {
+      next(new ForbiddenError("Você não tem permissão para visualizar o faturamento.", "FORBIDDEN_ROLE"));
+      return;
+    }
     if (!me.tenantId) { next(new NotFoundError("No tenant", "NOT_FOUND")); return; }
 
     const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, me.tenantId)).limit(1);
@@ -99,7 +115,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
     const me = await requireAuth(req, res, { skipTenantStatusCheck: true });
     if (!me) return;
     if (!me.tenantId) { next(new ValidationError(String("No tenant" ), "VALIDATION_ERROR")); return; }
-    if (me.role !== ROLES.AGENCY_ADMIN && me.role !== ROLES.SUPER_ADMIN) {
+    if (!isBillingAdmin(me.role)) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
 
@@ -575,6 +591,10 @@ router.post("/invoices/:id/pix", async (req, res, next: NextFunction): Promise<v
   try {
     const me = await requireAuth(req, res, { skipTenantStatusCheck: true });
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Você não tem permissão para iniciar pagamentos de faturas.", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const [invoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, req.params.id)).limit(1);
     if (!invoice) { next(new NotFoundError("Fatura não encontrada", "NOT_FOUND")); return; }
@@ -619,6 +639,10 @@ router.post("/invoices/:id/stripe/checkout", async (req, res, next: NextFunction
   try {
     const me = await requireAuth(req, res, { skipTenantStatusCheck: true });
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Você não tem permissão para iniciar pagamentos de faturas.", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const [invoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, req.params.id)).limit(1);
     if (!invoice) { next(new NotFoundError("Fatura não encontrada", "NOT_FOUND")); return; }
@@ -654,13 +678,13 @@ router.post("/invoices/:id/stripe/checkout", async (req, res, next: NextFunction
       const [adminUser] = await db
         .select({ email: usersTable.email, name: usersTable.name })
         .from(usersTable)
-        .where(and(eq(usersTable.tenantId, me.tenantId), eq(usersTable.role, ROLES.AGENCY_ADMIN)))
+        .where(and(eq(usersTable.tenantId, invoice.tenantId), eq(usersTable.role, ROLES.AGENCY_ADMIN)))
         .limit(1);
 
       const customer = await stripe.customers.create({
         email: adminUser?.email ?? undefined,
         name: adminUser?.name ?? undefined,
-        metadata: { tenantId: me.tenantId },
+        metadata: { tenantId: invoice.tenantId },
       });
       stripeCustomerId = customer.id;
 
@@ -700,7 +724,7 @@ router.post("/subscriptions/portal", async (req, res, next: NextFunction): Promi
     const me = await requireAuth(req, res, { skipTenantStatusCheck: true });
     if (!me) return;
     if (!me.tenantId) { next(new ValidationError(String("No tenant" ), "VALIDATION_ERROR")); return; }
-    if (me.role !== ROLES.AGENCY_ADMIN && me.role !== ROLES.SUPER_ADMIN) {
+    if (!isBillingAdmin(me.role)) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
 

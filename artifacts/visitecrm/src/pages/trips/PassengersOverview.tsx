@@ -35,6 +35,8 @@ interface TripFinancialReport {
   expensesByCategory: Record<string, number>;
 }
 
+const TRIP_FINANCIAL_REPORT_REFRESH_MS = 30_000;
+
 export function PassengersOverview({ tripId }: { tripId: string }) {
   const [, navigate] = useLocation();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -85,6 +87,9 @@ export function PassengersOverview({ tripId }: { tripId: string }) {
       return res.json();
     },
     enabled: financialReportOpen && !!tripId && canViewFinancial,
+    refetchInterval: financialReportOpen && !!tripId && canViewFinancial
+      ? TRIP_FINANCIAL_REPORT_REFRESH_MS
+      : false,
   });
 
   const filteredReservations = useMemo(() => {
@@ -666,7 +671,11 @@ export function PassengersOverview({ tripId }: { tripId: string }) {
           <Button variant="outline"><Download className="w-4 h-4 mr-2" />Exportar PDF</Button>
           <Button variant="outline"><Send className="w-4 h-4 mr-2" />Enviar WhatsApp</Button>
           {canViewFinancial && (
-            <Button variant="outline" onClick={() => setFinancialReportOpen(true)}>
+            <Button
+              variant="outline"
+              onClick={() => setFinancialReportOpen(true)}
+              data-testid="button-open-trip-financial-report"
+            >
               <DollarSign className="w-4 h-4 mr-2" />Relatório Financeiro
             </Button>
           )}

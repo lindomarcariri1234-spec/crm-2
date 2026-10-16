@@ -6,11 +6,38 @@ import { generateId } from "./id";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
 import {
   createRedisDailyLimitCircuit,
+  isRedisDailyBudgetBelowRecoveryThreshold,
+  isRedisQuotaExhaustionResponse,
   type RedisQuotaWorker,
 } from "./redis-daily-limit-circuit";
 
 let _connection: Redis | null = null;
+let _queueConnection: Redis | null = null;
+let _useSeparateQueueRedis = false;
 export let isQueueEnabled = false;
+const _dailyStatsFailureKind = new Map<"app" | "queue", "quota_exhausted" | "unavailable">();
+
+async function requireDailyBudgetHeadroom(resource: "app" | "queue"): Promise<void> {
+  if (!getUpstashRestCredentials(resource)) return;
+
+  const stats = await fetchUpstashDailyStats(resource);
+  if (!stats) {
+    if (_dailyStatsFailureKind.get(resource) === "quota_exhausted") {
+      const error = new Error("Upstash daily request quota is still exhausted");
+      error.name = "RedisDailyBudgetNotRecoveredError";
+      throw error;
+    }
+    // INFO is not a guaranteed source for daily usage. Fall back to the
+    // worker-class Redis probe when telemetry is unavailable, then validate
+    // worker resumption before closing the circuit.
+    return;
+  }
+  if (!isRedisDailyBudgetBelowRecoveryThreshold(stats)) {
+    const error = new Error("Upstash daily usage is still above the recovery threshold");
+    error.name = "RedisDailyBudgetNotRecoveredError";
+    throw error;
+  }
+}
 
 const redisDailyLimitCircuit = createRedisDailyLimitCircuit({
   probe: async () => {
@@ -18,7 +45,25 @@ const redisDailyLimitCircuit = createRedisDailyLimitCircuit({
     if (!connection || connection.status !== "ready") {
       throw new Error("redis_not_ready");
     }
-    await connection.ping();
+    await requireDailyBudgetHeadroom("app");
+    // PING can remain available while the provider rejects ordinary commands
+    // at its daily request quota. Probe with the same command class the workers
+    // need before declaring Redis recovered and resuming their traffic.
+    await connection.get("visitecrm:redis:daily-limit-probe");
+  },
+  onOpened: recordTransientRedisError,
+  onRecovered: resetTransientRedisErrors,
+});
+
+const queueRedisDailyLimitCircuit = createRedisDailyLimitCircuit({
+  probe: async () => {
+    const connection = _queueConnection;
+    if (!connection || connection.status !== "ready") {
+      throw new Error("queue_redis_not_ready");
+    }
+    const resource = getBullMQRedisSelection() === "REDIS_QUEUE_URL" ? "queue" : "app";
+    await requireDailyBudgetHeadroom(resource);
+    await connection.get("visitecrm:queue-redis:daily-limit-probe");
   },
   onOpened: recordTransientRedisError,
   onRecovered: resetTransientRedisErrors,
@@ -29,11 +74,45 @@ export function isRedisDailyLimitCircuitOpen(): boolean {
 }
 
 export function registerRedisDailyLimitWorker(worker: RedisQuotaWorker): () => void {
-  return redisDailyLimitCircuit.registerWorker(worker);
+  return queueRedisDailyLimitCircuit.registerWorker(worker);
 }
 
 export function reportRedisDailyLimitError(error: unknown): boolean {
   return redisDailyLimitCircuit.reportError(error);
+}
+
+export function isQueueRedisDailyLimitCircuitOpen(): boolean {
+  return queueRedisDailyLimitCircuit.isOpen();
+}
+
+export function registerQueueRedisDailyLimitWorker(worker: RedisQuotaWorker): () => void {
+  return queueRedisDailyLimitCircuit.registerWorker(worker);
+}
+
+export function reportQueueRedisDailyLimitError(error: unknown): boolean {
+  return queueRedisDailyLimitCircuit.reportError(error);
+}
+
+export function approveSeparateQueueRedisCutover(): void {
+  _useSeparateQueueRedis = true;
+}
+
+export function rejectSeparateQueueRedisCutover(): void {
+  _useSeparateQueueRedis = false;
+  queueRedisDailyLimitCircuit.stop();
+  _producerConnection?.disconnect();
+  _queueConnection?.disconnect();
+  _producerConnection = null;
+  _queueConnection = null;
+  isQueueEnabled = false;
+  _evictionPolicyPromise = Promise.resolve();
+}
+
+export function getBullMQRedisSelection(): "REDIS_URL" | "REDIS_QUEUE_URL" | "disabled" {
+  if (!areWorkersEnabled()) return "disabled";
+  if (_useSeparateQueueRedis && process.env["REDIS_QUEUE_URL"]?.trim()) return "REDIS_QUEUE_URL";
+  if (process.env["REDIS_URL"]?.trim()) return "REDIS_URL";
+  return "disabled";
 }
 
 // ─── Eviction policy ──────────────────────────────────────────────────────────
@@ -160,75 +239,81 @@ async function maybeFireRedisAlert(): Promise<void> {
     if (Date.now() - _lastAlertSentAt < ALERT_RATE_LIMIT_MS) return;
   }
 
-  const alertEmail = await getAlertEmail();
-  if (!alertEmail) {
-    logger.warn("[redis-alert] No alert email configured (set redis_alert_email in platform settings or SUPERADMIN_EMAIL env) — skipping alert email");
-    return;
-  }
+  try {
+    const alertEmail = await getAlertEmail();
+    if (!alertEmail) {
+      logger.warn("[redis-alert] No alert email configured (set redis_alert_email in platform settings or SUPERADMIN_EMAIL env) — skipping alert email");
+      return;
+    }
 
-  const alertEnabled = await isAlertEnabled("redis_alert_on_degraded");
-  if (!alertEnabled) {
-    logger.info("[redis-alert] Degraded/unavailable alerts disabled via platform settings — skipping");
-    return;
-  }
+    const alertEnabled = await isAlertEnabled("redis_alert_on_degraded");
+    if (!alertEnabled) {
+      logger.info("[redis-alert] Degraded/unavailable alerts disabled via platform settings — skipping");
+      return;
+    }
 
-  const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
-  if (!appUrl) {
-    logger.warn("[redis-alert] APP_URL not set — alert email will not include a dashboard link");
-  }
-  const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
+    const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
+    if (!appUrl) {
+      logger.warn("[redis-alert] APP_URL not set — alert email will not include a dashboard link");
+    }
+    const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
 
-  // Mark the attempt immediately to prevent concurrent duplicate sends.
-  // _alertInFlight lets resetTransientRedisErrors() know a send is pending
-  // so it can set _resetPendingRecovery instead of silently dropping recovery.
-  _lastAlertSentAt = Date.now();
-  _alertInFlight = true;
+    // Mark the attempt immediately to prevent concurrent duplicate sends.
+    // _alertInFlight lets resetTransientRedisErrors() know a send is pending
+    // so it can set _resetPendingRecovery instead of silently dropping recovery.
+    _lastAlertSentAt = Date.now();
+    _alertInFlight = true;
 
-  const tenantId = await getAlertTenantId();
-  if (!tenantId) {
-    _alertInFlight = false;
-    _lastAlertSentAt = null;
-    logger.error("[redis-alert] No tenant available for outbound alert");
-    return;
-  }
-  dispatchOutboundMessage({
-    tenantId,
-    eventType: "redis_alert",
-    idempotencyKey: `redis-alert:${currentStatus}:${new Date().toISOString().slice(0, 13)}`,
-    recipient: { type: "direct", email: alertEmail },
-    email: {
-      subject: `[VisiteCRM] Redis ${currentStatus}`,
-      html: `<h2>Redis ${currentStatus}</h2><p>A conexão Redis está ${currentStatus}.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
-      senderName: "VisiteCRM",
-    },
-    whatsapp: { text: `Alerta VisiteCRM: Redis está ${currentStatus}.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
-    origin: "redis-health",
-    metadata: { status: currentStatus, dashboardUrl },
-  }).then((result) => {
-      const delivery = result.deliveries.find((item) => item.channel === "email");
-      const success = delivery?.status === "accepted" || delivery?.status === "pending";
-      _alertInFlight = false;
-      if (success) {
-        _hadActiveAlert = true;
-        logRedisAlert("alert", currentStatus, alertEmail);
-        logger.warn({ status: currentStatus, to: alertEmail }, "[redis-alert] Alert email sent");
-        // Case B: Redis recovered while we were sending — fire recovery now.
-        if (_resetPendingRecovery) {
-          _resetPendingRecovery = false;
-          void sendRecoveryEmailIfNeeded();
-        }
-      } else {
-        logger.error({ status: currentStatus, error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-alert] Failed to send alert email — clearing rate-limit so next error can retry");
-        _lastAlertSentAt = null;
-        _resetPendingRecovery = false; // abort deferred recovery — no alert was delivered
-      }
-    })
-    .catch((err) => {
-      logger.error({ err }, "[redis-alert] Unexpected error sending alert email — clearing rate-limit so next error can retry");
+    const tenantId = await getAlertTenantId();
+    if (!tenantId) {
       _alertInFlight = false;
       _lastAlertSentAt = null;
-      _resetPendingRecovery = false; // abort deferred recovery — no alert was delivered
+      _resetPendingRecovery = false;
+      logger.error("[redis-alert] No tenant available for outbound alert");
+      return;
+    }
+
+    const result = await dispatchOutboundMessage({
+      tenantId,
+      eventType: "redis_alert",
+      idempotencyKey: `redis-alert:${currentStatus}:${new Date().toISOString().slice(0, 13)}`,
+      recipient: { type: "direct", email: alertEmail },
+      email: {
+        subject: `[VisiteCRM] Redis ${currentStatus}`,
+        html: `<h2>Redis ${currentStatus}</h2><p>A conexão Redis está ${currentStatus}.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
+        senderName: "VisiteCRM",
+      },
+      whatsapp: { text: `Alerta VisiteCRM: Redis está ${currentStatus}.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+      origin: "redis-health",
+      metadata: { status: currentStatus, dashboardUrl },
     });
+
+    const delivery = result.deliveries.find((item) => item.channel === "email");
+    const success = delivery?.status === "accepted" || delivery?.status === "pending";
+    _alertInFlight = false;
+    if (success) {
+      _hadActiveAlert = true;
+      logRedisAlert("alert", currentStatus, alertEmail);
+      logger.warn({ status: currentStatus, to: alertEmail }, "[redis-alert] Alert email sent");
+      // Case B: Redis recovered while we were sending — fire recovery now.
+      if (_resetPendingRecovery) {
+        _resetPendingRecovery = false;
+        await sendRecoveryEmailIfNeeded();
+      }
+    } else {
+      logger.error({ status: currentStatus, error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-alert] Failed to send alert email — clearing rate-limit so next error can retry");
+      _lastAlertSentAt = null;
+      _resetPendingRecovery = false; // abort deferred recovery — no alert was delivered
+    }
+  } catch (error) {
+    _alertInFlight = false;
+    _lastAlertSentAt = null;
+    _resetPendingRecovery = false;
+    logger.error(
+      { errorName: error instanceof Error ? error.name : "unknown" },
+      "[redis-alert] Alert preparation or delivery failed — clearing rate-limit so next error can retry",
+    );
+  }
 }
 
 async function sendRecoveryEmailIfNeeded(): Promise<void> {
@@ -243,50 +328,65 @@ async function sendRecoveryEmailIfNeeded(): Promise<void> {
   _hadActiveAlert = false;
   _lastRecoveryEmailSentAt = now;
 
-  const alertEmail = await getAlertEmail();
-  if (!alertEmail) return;
-
-  const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
-  const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
-
-  const tenantId = await getAlertTenantId();
-  if (!tenantId) return;
-  dispatchOutboundMessage({
-    tenantId,
-    eventType: "redis_recovery",
-    idempotencyKey: `redis-recovery:${new Date().toISOString().slice(0, 13)}`,
-    recipient: { type: "direct", email: alertEmail },
-    email: {
-      subject: "[VisiteCRM] Redis recuperado",
-      html: `<h2>Redis recuperado</h2><p>A conexão Redis foi restabelecida.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
-      senderName: "VisiteCRM",
-    },
-    whatsapp: { text: `VisiteCRM: a conexão Redis foi restabelecida.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
-    origin: "redis-health-recovery",
-    metadata: { dashboardUrl },
-  }).then((result) => {
-      const delivery = result.deliveries.find((item) => item.channel === "email");
-      if (delivery?.status === "accepted" || delivery?.status === "pending") {
-        logRedisAlert("recovery", null, alertEmail);
-        logger.info({ to: alertEmail }, "[redis-recovery] Recovery email sent");
-      } else {
-        logger.error({ error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-recovery] Failed to send recovery email");
-        _lastRecoveryEmailSentAt = null; // reset so next recovery can retry
-      }
-    })
-    .catch((err) => {
-      logger.error({ err }, "[redis-recovery] Unexpected error sending recovery email");
+  try {
+    const alertEmail = await getAlertEmail();
+    if (!alertEmail) {
+      _hadActiveAlert = true;
       _lastRecoveryEmailSentAt = null;
+      return;
+    }
+
+    const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
+    const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
+
+    const tenantId = await getAlertTenantId();
+    if (!tenantId) {
+      _hadActiveAlert = true;
+      _lastRecoveryEmailSentAt = null;
+      logger.error("[redis-recovery] No tenant available for outbound recovery message");
+      return;
+    }
+    const result = await dispatchOutboundMessage({
+      tenantId,
+      eventType: "redis_recovery",
+      idempotencyKey: `redis-recovery:${new Date().toISOString().slice(0, 13)}`,
+      recipient: { type: "direct", email: alertEmail },
+      email: {
+        subject: "[VisiteCRM] Redis recuperado",
+        html: `<h2>Redis recuperado</h2><p>A conexão Redis foi restabelecida.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
+        senderName: "VisiteCRM",
+      },
+      whatsapp: { text: `VisiteCRM: a conexão Redis foi restabelecida.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+      origin: "redis-health-recovery",
+      metadata: { dashboardUrl },
     });
+
+    const delivery = result.deliveries.find((item) => item.channel === "email");
+    if (delivery?.status === "accepted" || delivery?.status === "pending") {
+      logRedisAlert("recovery", null, alertEmail);
+      logger.info({ to: alertEmail }, "[redis-recovery] Recovery email sent");
+    } else {
+      logger.error({ error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-recovery] Failed to send recovery email");
+      _hadActiveAlert = true;
+      _lastRecoveryEmailSentAt = null; // reset so next recovery can retry
+    }
+  } catch (error) {
+    logger.error(
+      { errorName: error instanceof Error ? error.name : "unknown" },
+      "[redis-recovery] Preparation or delivery failed — keeping recovery eligible for retry",
+    );
+    _hadActiveAlert = true;
+    _lastRecoveryEmailSentAt = null;
+  }
 }
 
-export function recordTransientRedisError(): void {
+export function recordTransientRedisError(): Promise<void> {
   _consecutiveTransientErrors++;
   _lastTransientErrorAt = Date.now();
-  void maybeFireRedisAlert();
+  return maybeFireRedisAlert();
 }
 
-export function resetTransientRedisErrors(): void {
+export function resetTransientRedisErrors(): Promise<void> {
   const wasAlerting = _hadActiveAlert;
   const wasInFlight = _alertInFlight;
   _consecutiveTransientErrors = 0;
@@ -295,12 +395,13 @@ export function resetTransientRedisErrors(): void {
 
   if (wasAlerting) {
     // Case A: alert was confirmed delivered before this reset — send recovery now.
-    void sendRecoveryEmailIfNeeded();
+    return sendRecoveryEmailIfNeeded();
   } else if (wasInFlight) {
     // Case B: alert send is still in-flight — defer recovery until it resolves.
     _resetPendingRecovery = true;
   }
   // Case C: no alert was sent (or it failed) — nothing to recover from.
+  return Promise.resolve();
 }
 
 export function getRedisStatus(): "ok" | "degraded" | "unavailable" {
@@ -441,14 +542,6 @@ export function getRedisConnection(): Redis | null {
   const useTls = url.startsWith("rediss://") || knownTlsHosts.some((h) => parsedHost.endsWith(h));
 
   if (!_connection) {
-    // Create a new promise for this connection's eviction policy check.
-    // Any caller that awaits waitForEvictionPolicyCheck() will block until
-    // maybeFixEvictionPolicy resolves it (or until closeRedisConnection resolves it).
-    _evictionPolicyPromise = new Promise((resolve) => {
-      _evictionPolicyResolve = resolve;
-    });
-    _evictionPolicySafe = null;
-
     try {
       _connection = new Redis(url, {
         maxRetriesPerRequest: null,
@@ -488,8 +581,6 @@ export function getRedisConnection(): Redis | null {
 
       _connection.on("ready", () => {
         if (!isRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
-        // Attempt to enforce noeviction policy for BullMQ safety (once per startup).
-        void maybeFixEvictionPolicy(_connection!);
       });
 
       _connection.on("error", (err: Error) => {
@@ -513,6 +604,80 @@ export function getRedisConnection(): Redis | null {
   }
 
   return _connection;
+}
+
+/**
+ * Redis connection used only by BullMQ. REDIS_QUEUE_URL can point at an
+ * independent provider resource; omitting it preserves the legacy single-Redis
+ * setup by falling back to REDIS_URL.
+ */
+export function getBullMQWorkerConnection(): Redis | null {
+  const raw = (_useSeparateQueueRedis ? process.env["REDIS_QUEUE_URL"]?.trim() : undefined)
+    || process.env["REDIS_URL"]?.trim();
+  if (!raw) return null;
+
+  const urlMatch = raw.match(/(rediss?:\/\/\S+)/);
+  const url = urlMatch ? urlMatch[1] : raw;
+  let parsedHost = "";
+  try { parsedHost = new URL(url.replace(/^redis:\/\//, "https://")).hostname; } catch { /* ignore */ }
+  const knownTlsHosts = [".upstash.io", ".redis.cache.windows.net", ".redislabs.com"];
+  const useTls = url.startsWith("rediss://") || knownTlsHosts.some((host) => parsedHost.endsWith(host));
+
+  if (!_queueConnection) {
+    _evictionPolicyPromise = new Promise((resolve) => {
+      _evictionPolicyResolve = resolve;
+    });
+    _evictionPolicyChecked = false;
+    _evictionPolicySafe = null;
+
+    try {
+      _queueConnection = new Redis(url, {
+        maxRetriesPerRequest: null,
+        enableReadyCheck: false,
+        lazyConnect: false,
+        keepAlive: 30_000,
+        connectTimeout: 10_000,
+        ...(useTls ? { tls: {} } : {}),
+        retryStrategy: (times: number) => {
+          const delayMs = Math.min(500 * Math.pow(2, times - 1), 30_000);
+          if (times <= 3 || times % 10 === 0) {
+            logger.warn({ attempt: times, delayMs }, "[redis-queue] Reconnecting with exponential back-off");
+          }
+          return delayMs;
+        },
+      });
+
+      _queueConnection.on("connect", () => {
+        isQueueEnabled = true;
+        if (!isQueueRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
+        logger.info("[redis-queue] Connected");
+      });
+      _queueConnection.on("ready", () => {
+        if (!isQueueRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
+        void maybeFixEvictionPolicy(_queueConnection!);
+      });
+      _queueConnection.on("error", (err: Error) => {
+        const dailyLimit = reportQueueRedisDailyLimitError(err);
+        if (isTransientRedisError(err)) {
+          if (!dailyLimit) recordTransientRedisError();
+          logger.warn({ err }, "[redis-queue] Transient error (will retry)");
+        } else {
+          logger.error({ err }, "[redis-queue] Error");
+        }
+      });
+      _queueConnection.on("close", () => {
+        isQueueEnabled = false;
+        logger.warn("[redis-queue] Connection closed");
+      });
+    } catch (err) {
+      logger.error({ err }, "[redis-queue] Failed to create connection");
+      _queueConnection = null;
+      _evictionPolicyResolve?.();
+      _evictionPolicyResolve = null;
+      _evictionPolicyPromise = Promise.resolve();
+    }
+  }
+  return _queueConnection;
 }
 
 let _producerConnection: Redis | null = null;
@@ -541,7 +706,7 @@ export function getBullMQQueueConnection(): Redis | null {
   // and nothing would ever consume them (silent job loss).
   if (!areWorkersEnabled()) return null;
 
-  const conn = getRedisConnection();
+  const conn = getBullMQWorkerConnection();
   if (!conn) return null;
 
   if (!_producerConnection) {
@@ -556,7 +721,7 @@ export function getBullMQQueueConnection(): Redis | null {
     });
 
     _producerConnection.on("error", (err: Error) => {
-      const dailyLimit = reportRedisDailyLimitError(err);
+      const dailyLimit = reportQueueRedisDailyLimitError(err);
       if (isTransientRedisError(err)) {
         if (!dailyLimit) recordTransientRedisError();
         logger.warn({ err }, "[redis-producer] Transient error");
@@ -571,6 +736,7 @@ export function getBullMQQueueConnection(): Redis | null {
 
 export async function closeRedisConnection(): Promise<void> {
   redisDailyLimitCircuit.stop();
+  queueRedisDailyLimitCircuit.stop();
   // Resolve any pending eviction-policy waiters before tearing down.
   _evictionPolicyResolve?.();
   _evictionPolicyResolve = null;
@@ -580,10 +746,13 @@ export async function closeRedisConnection(): Promise<void> {
 
   await Promise.all([
     _producerConnection?.quit().catch(() => {}),
+    _queueConnection?.quit().catch(() => {}),
     _connection?.quit().catch(() => {}),
   ]);
   _producerConnection = null;
+  _queueConnection = null;
   _connection = null;
+  _useSeparateQueueRedis = false;
   isQueueEnabled = false;
 }
 
@@ -630,14 +799,19 @@ export interface UpstashDailyStats {
  *
  * Returns null when neither source is configured.
  */
-function getUpstashRestCredentials(): { restUrl: string; token: string } | null {
-  const explicitUrl = process.env["UPSTASH_REDIS_REST_URL"]?.trim();
-  const explicitToken = process.env["UPSTASH_REDIS_REST_TOKEN"]?.trim();
-  if (explicitUrl && explicitToken) {
-    return { restUrl: explicitUrl.replace(/\/$/, ""), token: explicitToken };
+function getUpstashRestCredentials(resource: "app" | "queue" = "app"): { restUrl: string; token: string } | null {
+  const queueRedisUrl = resource === "queue" ? process.env["REDIS_QUEUE_URL"]?.trim() : undefined;
+  if (resource === "queue" && !queueRedisUrl) return null;
+
+  if (resource === "app") {
+    const explicitUrl = process.env["UPSTASH_REDIS_REST_URL"]?.trim();
+    const explicitToken = process.env["UPSTASH_REDIS_REST_TOKEN"]?.trim();
+    if (explicitUrl && explicitToken) {
+      return { restUrl: explicitUrl.replace(/\/$/, ""), token: explicitToken };
+    }
   }
 
-  const redisUrl = process.env["REDIS_URL"]?.trim();
+  const redisUrl = queueRedisUrl ?? process.env["REDIS_URL"]?.trim();
   if (!redisUrl) return null;
 
   const urlMatch = redisUrl.match(/(rediss?:\/\/\S+)/);
@@ -665,12 +839,12 @@ function getUpstashRestCredentials(): { restUrl: string; token: string } | null 
 // Caching avoids hammering the Upstash REST API on every /admin/system-health
 // request. The cache is intentionally short-lived so the dashboard still
 // reflects near-real-time data.
-let _dailyStatsCache: { stats: UpstashDailyStats; fetchedAt: number } | null = null;
+const _dailyStatsCache = new Map<"app" | "queue", { stats: UpstashDailyStats; fetchedAt: number }>();
 const DAILY_STATS_CACHE_TTL_MS = 45_000; // 45 seconds
 
 // ─── Upstash daily limit alert ────────────────────────────────────────────────
 // At most one alert per hour when usage crosses the configured threshold.
-let _lastDailyLimitAlertAt: number | null = null;
+const _lastDailyLimitAlertAt = new Map<"app" | "queue", number>();
 const DAILY_LIMIT_ALERT_RATE_LIMIT_MS = 60 * 60 * 1000; // 1 hour
 
 /**
@@ -678,20 +852,21 @@ const DAILY_LIMIT_ALERT_RATE_LIMIT_MS = 60 * 60 * 1000; // 1 hour
  * warning threshold and the rate-limit window has elapsed.
  * Safe to call on every stats fetch — does nothing if conditions aren't met.
  */
-export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
+export function maybeSendDailyLimitAlert(stats: UpstashDailyStats, resource: "app" | "queue" = "app"): void {
   if (stats.usagePct < stats.warningThresholdPct) return;
 
-  if (_lastDailyLimitAlertAt !== null) {
-    if (Date.now() - _lastDailyLimitAlertAt < DAILY_LIMIT_ALERT_RATE_LIMIT_MS) return;
+  const lastAlertAt = _lastDailyLimitAlertAt.get(resource);
+  if (lastAlertAt !== undefined) {
+    if (Date.now() - lastAlertAt < DAILY_LIMIT_ALERT_RATE_LIMIT_MS) return;
   }
 
   // Mark immediately to prevent concurrent duplicate sends; reset on failure.
-  _lastDailyLimitAlertAt = Date.now();
+  _lastDailyLimitAlertAt.set(resource, Date.now());
 
   void getAlertEmail().then(async (alertEmail) => {
     if (!alertEmail) {
       logger.warn("[redis-daily-limit] No alert email configured — skipping daily limit alert email");
-      _lastDailyLimitAlertAt = null;
+      _lastDailyLimitAlertAt.delete(resource);
       return;
     }
 
@@ -709,16 +884,16 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
       return dispatchOutboundMessage({
         tenantId,
         eventType: "redis_daily_limit_alert",
-        idempotencyKey: `redis-daily-limit:${new Date().toISOString().slice(0, 10)}`,
+          idempotencyKey: `redis-daily-limit:${resource}:${new Date().toISOString().slice(0, 10)}`,
         recipient: { type: "direct", email: alertEmail },
         email: {
-          subject: "[VisiteCRM] Limite diário do Redis próxima",
-          html: `<h2>Limite diário do Redis</h2><p>Uso atual: ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}). Limite de alerta: ${stats.warningThresholdPct}%.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
+          subject: `[VisiteCRM] Limite diário do Redis ${resource === "queue" ? "(filas)" : "(aplicação)"} próximo`,
+          html: `<h2>Limite diário do Redis ${resource === "queue" ? "(filas)" : "(aplicação)"}</h2><p>Uso atual: ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}). Limite de alerta: ${stats.warningThresholdPct}%.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
           senderName: "VisiteCRM",
         },
-        whatsapp: { text: `Alerta VisiteCRM: uso diário do Redis em ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}).${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
-        origin: "redis-daily-limit",
-        metadata: { ...stats, dashboardUrl },
+        whatsapp: { text: `Alerta VisiteCRM: uso diário do Redis (${resource}) em ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}).${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+        origin: `redis-daily-limit-${resource}`,
+        metadata: { ...stats, resource, dashboardUrl },
       });
     })
       .then((result) => {
@@ -734,7 +909,7 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
             { error: delivery?.lastError ?? delivery?.skippedReason },
             "[redis-daily-limit] Failed to send alert email — clearing rate-limit so next check can retry",
           );
-          _lastDailyLimitAlertAt = null;
+          _lastDailyLimitAlertAt.delete(resource);
         }
       })
       .catch((err) => {
@@ -742,7 +917,7 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
           { err },
           "[redis-daily-limit] Unexpected error sending alert email — clearing rate-limit so next check can retry",
         );
-        _lastDailyLimitAlertAt = null;
+        _lastDailyLimitAlertAt.delete(resource);
       });
   });
 }
@@ -758,13 +933,14 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
  * - The host is not an Upstash instance (no REST stats API available)
  * - The network request fails
  */
-export async function fetchUpstashDailyStats(): Promise<UpstashDailyStats | null> {
+export async function fetchUpstashDailyStats(resource: "app" | "queue" = "app"): Promise<UpstashDailyStats | null> {
   // Return cached result if still fresh
-  if (_dailyStatsCache !== null && Date.now() - _dailyStatsCache.fetchedAt < DAILY_STATS_CACHE_TTL_MS) {
-    return _dailyStatsCache.stats;
+  const cached = _dailyStatsCache.get(resource);
+  if (cached && Date.now() - cached.fetchedAt < DAILY_STATS_CACHE_TTL_MS) {
+    return cached.stats;
   }
 
-  const creds = getUpstashRestCredentials();
+  const creds = getUpstashRestCredentials(resource);
   if (!creds) return null;
 
   try {
@@ -779,8 +955,15 @@ export async function fetchUpstashDailyStats(): Promise<UpstashDailyStats | null
     clearTimeout(timeoutId);
 
     if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: unknown } | null;
+      const errorMessage = typeof body?.error === "string" ? body.error : "";
+      const failureKind = isRedisQuotaExhaustionResponse(response.status, errorMessage)
+        ? "quota_exhausted"
+        : "unavailable";
+      _dailyStatsCache.delete(resource);
+      _dailyStatsFailureKind.set(resource, failureKind);
       logger.warn(
-        { status: response.status },
+        { status: response.status, failureKind },
         "[redis-stats] Upstash INFO request returned non-OK status",
       );
       return null;
@@ -797,16 +980,28 @@ export async function fetchUpstashDailyStats(): Promise<UpstashDailyStats | null
       return match ? parseInt(match[1], 10) : null;
     };
 
-    const commandCount = parseField("daily_request_count") ?? 0;
+    const commandCount = parseField("daily_request_count");
+    if (commandCount === null || !Number.isFinite(commandCount)) {
+      _dailyStatsCache.delete(resource);
+      _dailyStatsFailureKind.set(resource, "unavailable");
+      logger.warn(
+        { reason: "daily_request_counter_missing" },
+        "[redis-stats] Upstash INFO response did not include a valid daily request counter",
+      );
+      return null;
+    }
     // Upstash free tier hard limit
     const maxCommands = parseField("max_daily_requests") ?? REDIS_DAILY_LIMIT;
     const usagePct = maxCommands > 0 ? (commandCount / maxCommands) * 100 : 0;
     const warningThresholdPct = getRedisWarningThresholdPct();
 
     const result = { commandCount, maxCommands, usagePct, warningThresholdPct };
-    _dailyStatsCache = { stats: result, fetchedAt: Date.now() };
+    _dailyStatsFailureKind.delete(resource);
+    _dailyStatsCache.set(resource, { stats: result, fetchedAt: Date.now() });
     return result;
   } catch (err) {
+    _dailyStatsCache.delete(resource);
+    _dailyStatsFailureKind.set(resource, "unavailable");
     logger.warn({ err }, "[redis-stats] Failed to fetch Upstash daily stats");
     return null;
   }

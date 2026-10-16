@@ -14,3 +14,9 @@ description: A local server configuration quirk when running the database migrat
 **Why:** A one-shot shell can terminate daemonized child processes when it exits, leaving later test commands with `ECONNREFUSED` even though startup and migrations succeeded.
 
 **How to apply:** Start the cluster in a background task that stays alive, run the migration and tests against it, then stop the database and the task.
+
+**Role selection:** `initdb` creates its initial superuser from the effective operating-system user. Explicitly pass that role to `createdb` and use the same username in `DATABASE_URL`; inherited `PGUSER` may name a remote database role that does not exist locally.
+
+**Why:** In this environment `PGUSER` can point at the managed database account while the disposable cluster belongs to the local `runner` user.
+
+**How to apply:** After local cluster initialization, use `createdb -U "$(id -un)" ...` and a matching local URL instead of relying on inherited libpq defaults.

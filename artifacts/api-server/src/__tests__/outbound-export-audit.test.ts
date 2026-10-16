@@ -27,6 +27,7 @@ vi.mock("../lib/id.js", () => ({
 
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: mockRequireAuth,
+  ALL_STAFF_ROLES: ["superadmin", "agencia", "gerente", "vendedor", "suporte"],
 }));
 
 vi.mock("../lib/outbound-sse.js", () => ({
@@ -69,6 +70,8 @@ describe("GET /outbound-messages/export audit trail", () => {
       {
         message: {
           id: "message-1",
+          createdAt: new Date("2026-10-01T12:00:00Z"),
+          updatedAt: new Date("2026-10-01T12:00:00Z"),
           recipientName: "Cliente confidencial",
           recipientId: "client-1",
           eventType: "reservation_confirmation",
@@ -81,6 +84,9 @@ describe("GET /outbound-messages/export audit trail", () => {
             recipient: "cliente@example.com",
             channel: "email",
             attempts: 2,
+            nextAttemptAt: new Date("2026-10-01T12:00:00Z"),
+            createdAt: new Date("2026-10-01T12:00:00Z"),
+            updatedAt: new Date("2026-10-01T12:00:00Z"),
             lastError: "secret provider token leaked in error",
             skippedReason: null,
           },
@@ -101,7 +107,7 @@ describe("GET /outbound-messages/export audit trail", () => {
         dateTo: "2026-08-31",
       });
 
-    expect(response.status).toBe(200);
+    expect(response.status, response.text).toBe(200);
     expect(response.headers["content-type"]).toContain("text/csv");
     expect(mockAuditValues).toHaveBeenCalledWith(expect.objectContaining({
       id: "audit-log-id",

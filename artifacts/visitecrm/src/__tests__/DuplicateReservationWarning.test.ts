@@ -385,6 +385,27 @@ describe("StepPayment — submitError amber banner", () => {
     );
   });
 
+  it("keeps InfinitePay checkout failures generic and directs buyers to the agency", async () => {
+    const { StepPayment } = await import(
+      "../pages/vitrine/_wizard/step-payment.js"
+    );
+    const store = makeStore();
+    const state = makeMinimalState({
+      submitError: "Não foi possível abrir o checkout da InfinitePay. Tente novamente ou fale com a agência; este aviso não confirma a causa.",
+    });
+    state.form.paymentProvider = "infinitepay";
+
+    const { container } = await renderComponent(
+      createElement(StepPayment, { state, store }),
+    );
+
+    const message = container.textContent ?? "";
+    expect(message).toContain("Esta mensagem não confirma a causa da falha.");
+    expect(message).toContain("fale com a agência");
+    expect(message).not.toContain("maria@example.com");
+    expect(message).not.toContain("+5585999990000");
+  });
+
   it("does NOT render the banner when submitError is null", async () => {
     const { StepPayment } = await import(
       "../pages/vitrine/_wizard/step-payment.js"

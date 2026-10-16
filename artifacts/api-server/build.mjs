@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm, cp, readFile, readdir, access } from "node:fs/promises";
+import { rm, cp, mkdir, readFile, readdir, access } from "node:fs/promises";
 import {
   assertBundleFresh,
   getBundleIntegrityBanner,
@@ -191,9 +191,16 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     );
   }
 
-  await cp(stripeSyncMigrations, path.join(distDir, "migrations"), {
-    recursive: true,
-  });
+  const migrationsOutputDir = path.join(distDir, "migrations");
+  await mkdir(migrationsOutputDir, { recursive: true });
+  await Promise.all(
+    migrationFiles.map((file) =>
+      cp(
+        path.join(stripeSyncMigrations, file),
+        path.join(migrationsOutputDir, file),
+      ),
+    ),
+  );
   console.log(
     `[build] Copied ${migrationFiles.length} stripe-replit-sync migration(s) to dist/migrations`,
   );

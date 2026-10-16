@@ -13,6 +13,8 @@ const {
   mockUpdate,
   mockSet,
   mockUpdateWhere,
+  mockTransaction,
+  mockForUpdate,
 } = vi.hoisted(() => ({
   mockLimit: vi.fn(),
   mockWhere: vi.fn(),
@@ -22,6 +24,8 @@ const {
   mockUpdate: vi.fn(),
   mockSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
+  mockTransaction: vi.fn(),
+  mockForUpdate: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -29,7 +33,7 @@ vi.mock("@workspace/db", () => ({
     select: mockSelect,
     insert: vi.fn(),
     update: mockUpdate,
-    transaction: vi.fn(),
+    transaction: mockTransaction,
   },
   usersTable: {
     id: "id",
@@ -122,7 +126,8 @@ import { errorHandler } from "../middlewares/errorHandler.js";
 
 function resetSelectMock() {
   mockLimit.mockReset();
-  mockWhere.mockReset().mockReturnValue({ limit: mockLimit });
+  mockForUpdate.mockReset().mockReturnValue({ limit: mockLimit });
+  mockWhere.mockReset().mockReturnValue({ limit: mockLimit, for: mockForUpdate });
   mockFrom.mockReset().mockReturnValue({ where: mockWhere });
   mockSelect.mockReset().mockReturnValue({ from: mockFrom });
   mockUpdate.mockReset().mockReturnValue({ set: mockSet });
@@ -155,6 +160,7 @@ describe("inactive account access", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetSelectMock();
+    mockTransaction.mockReset();
     mockGetAuth.mockReturnValue({ userId: "clerk-inactive" });
   });
 
@@ -260,6 +266,57 @@ describe("onboarding inactive-account guards", () => {
     expect(res.status).toBe(403);
     expect(res.body.code).toBe("USER_INACTIVE");
     expect(mockSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a superadmin be converted into an agency admin by onboarding", async () => {
+    mockLimit.mockResolvedValueOnce([{
+      id: "user-superadmin",
+      isActive: true,
+      tenantId: null,
+      role: ROLES.SUPER_ADMIN,
+    }]);
+
+    const res = await request(buildOnboardingApp())
+      .post("/api/onboarding/agency")
+      .send({ name: "Agência Teste", slug: "agencia-teste" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN_ROLE");
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("locks and rechecks the account before creating an agency", async () => {
+    mockLimit
+      .mockResolvedValueOnce([{
+        id: "user-1",
+        isActive: true,
+        tenantId: null,
+        role: ROLES.AGENCY_ADMIN,
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: "user-1",
+        isActive: true,
+        tenantId: "tenant-created-by-another-request",
+        role: ROLES.AGENCY_ADMIN,
+      }]);
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({
+        select: mockSelect,
+        insert: vi.fn(),
+        update: mockUpdate,
+      }),
+    );
+
+    const res = await request(buildOnboardingApp())
+      .post("/api/onboarding/agency")
+      .send({ name: "Agência Teste", slug: "agencia-teste" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("TENANT_ALREADY_ASSIGNED");
+    expect(mockForUpdate).toHaveBeenCalledWith("update");
+    expect(mockTransaction).toHaveBeenCalledOnce();
   });
 });
 

@@ -17,23 +17,72 @@ const CUSTOMER_SAFE_RESERVATION_ERROR_CODES = new Set([
   "SEAT_MAP_DISABLED",
   "SEAT_QUANTITY_MISMATCH",
   "TRIP_NOT_FOUND",
+  "TRIP_COMPLETED",
 ]);
+const CUSTOMER_SAFE_CLIENT_IDENTITY_CONFLICT_CODES = new Set([
+  "CLIENT_CPF_AMBIGUOUS",
+  "CLIENT_CPF_ALREADY_LINKED",
+  "CLIENT_CPF_CONFLICT",
+  "CLIENT_EMAIL_ALREADY_LINKED",
+  "CLIENT_EMAIL_AMBIGUOUS",
+  "CLIENT_IDENTITY_CONFLICT",
+  "CLIENT_PHONE_ALREADY_LINKED",
+  "CLIENT_PHONE_AMBIGUOUS",
+]);
+const GENERIC_CLIENT_IDENTITY_CONFLICT_MESSAGE =
+  "Não foi possível concluir a reserva com os dados informados. Entre em contato com a agência e informe o protocolo exibido.";
 
 const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_SQL_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/;
+const DUPLICATE_RESERVATION_CONSTRAINTS = new Set([
+  "reservations_active_client_trip_unique",
+  "reservations_active_store_order_trip_unique",
+]);
 
 function safeString(value: unknown, pattern: RegExp): string | undefined {
   return typeof value === "string" && pattern.test(value) ? value : undefined;
+}
+
+export function isDuplicateReservationConstraintViolation(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 4 && current && !seen.has(current); depth += 1) {
+    if (typeof current !== "object") break;
+    seen.add(current);
+
+    const item = current as Record<string, unknown>;
+    if (
+      item.code === "23505"
+      && typeof item.constraint === "string"
+      && DUPLICATE_RESERVATION_CONSTRAINTS.has(item.constraint)
+    ) {
+      return true;
+    }
+
+    current = item.cause;
+  }
+
+  return false;
 }
 
 export function toCustomerSafeReservationError(error: unknown): AppError | null {
   if (
     !(error instanceof AppError)
     || !error.isOperational
-    || !CUSTOMER_SAFE_RESERVATION_ERROR_CODES.has(error.code)
   ) {
     return null;
   }
+
+  if (CUSTOMER_SAFE_CLIENT_IDENTITY_CONFLICT_CODES.has(error.code)) {
+    return new AppError(
+      GENERIC_CLIENT_IDENTITY_CONFLICT_MESSAGE,
+      409,
+      "CHECKOUT_IDENTITY_CONFLICT",
+    );
+  }
+
+  if (!CUSTOMER_SAFE_RESERVATION_ERROR_CODES.has(error.code)) return null;
 
   // Do not forward arbitrary `extra` payloads from lower layers to the public
   // checkout response. The known error message and code are intentionally safe.

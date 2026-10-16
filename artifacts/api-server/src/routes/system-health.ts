@@ -5,6 +5,8 @@ import { getRedisStatus, fetchUpstashDailyStats, areWorkersEnabled } from "../li
 import { getStripeSyncTablesStatus, getWebhookAuditStatus, recheckWebhookAudit } from "../lib/stripeSync";
 import { getDriftSnapshot, getOrphanDealsCount, getClientFinancialDriftCount, cleanupOrphanDeals, repairSeatDriftOnly } from "../lib/seat-reconciliation";
 import { ROLES } from "@workspace/permissions";
+import { getBullMQRedisCutoverStatus, getReminderQueue } from "../queues/index.js";
+import { getReminderSchedulerRunHealth } from "../queues/reminder-schedulers.js";
 
 const router = Router();
 
@@ -17,19 +19,23 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
 
-    const [redisStatus, dailyStats, webhookAudit, stripeSyncTables, driftSnapshot, orphanDeals, clientFinancialDrift] = await Promise.all([
+    const reminderTimezone = process.env["REMINDER_TZ"] ?? "America/Sao_Paulo";
+    const [redisStatus, dailyStats, queueDailyStats, webhookAudit, stripeSyncTables, driftSnapshot, orphanDeals, clientFinancialDrift, reminderSchedulers] = await Promise.all([
       Promise.resolve(getRedisStatus()),
       fetchUpstashDailyStats(),
+      fetchUpstashDailyStats("queue"),
       Promise.resolve(getWebhookAuditStatus()),
       Promise.resolve(getStripeSyncTablesStatus()),
       getDriftSnapshot(),
       getOrphanDealsCount(),
       getClientFinancialDriftCount(),
+      getReminderSchedulerRunHealth(getReminderQueue(), reminderTimezone),
     ]);
 
     res.json({
       redis: {
         status: redisStatus,
+        queueCutover: getBullMQRedisCutoverStatus(),
         ...(dailyStats !== null
           ? {
               dailyUsage: {
@@ -40,10 +46,21 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
               },
             }
           : {}),
+        ...(queueDailyStats !== null
+          ? {
+              queueDailyUsage: {
+                commandCount: queueDailyStats.commandCount,
+                maxCommands: queueDailyStats.maxCommands,
+                usagePct: Math.round(queueDailyStats.usagePct * 10) / 10,
+                warningThresholdPct: queueDailyStats.warningThresholdPct,
+              },
+            }
+          : {}),
       },
       workers: {
         enabled: areWorkersEnabled(),
       },
+      reminderSchedulers,
       stripeWebhookAudit: {
         status: webhookAudit.status,
         duplicateCount: webhookAudit.duplicateCount,

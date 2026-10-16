@@ -5,11 +5,16 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { SystemHealthBullMQRedisCutover } from "./systemHealthBullMQRedisCutover";
 import type { SystemHealthRedisDailyUsage } from "./systemHealthRedisDailyUsage";
+import type { SystemHealthRedisQueueDailyUsage } from "./systemHealthRedisQueueDailyUsage";
 import type { SystemHealthRedisStatus } from "./systemHealthRedisStatus";
 
 export interface SystemHealthRedis {
   status: SystemHealthRedisStatus;
   /** @nullable */
   dailyUsage?: SystemHealthRedisDailyUsage;
+  /** @nullable */
+  queueDailyUsage?: SystemHealthRedisQueueDailyUsage;
+  queueCutover?: SystemHealthBullMQRedisCutover;
 }

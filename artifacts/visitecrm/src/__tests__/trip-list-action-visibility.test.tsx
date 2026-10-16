@@ -164,7 +164,7 @@ type ActionVisibility = {
   create: boolean;
   edit: boolean;
   duplicate: boolean;
-  delete: boolean;
+  transferToCompleted: boolean;
   import: boolean;
   export: boolean;
   publish: boolean;
@@ -175,7 +175,7 @@ const allActions: ActionVisibility = {
   create: true,
   edit: true,
   duplicate: true,
-  delete: true,
+  transferToCompleted: true,
   import: true,
   export: true,
   publish: true,
@@ -186,7 +186,7 @@ const managerActions: ActionVisibility = {
   create: true,
   edit: true,
   duplicate: true,
-  delete: false,
+  transferToCompleted: true,
   import: false,
   export: true,
   publish: false,
@@ -197,7 +197,7 @@ const readOnlyActions: ActionVisibility = {
   create: false,
   edit: false,
   duplicate: false,
-  delete: false,
+  transferToCompleted: false,
   import: false,
   export: false,
   publish: false,
@@ -242,9 +242,9 @@ function makeTripsHook(role: string) {
     setDateFilter: vi.fn(),
     page: 1,
     setPage: vi.fn(),
-    deleteTrip: { mutateAsync: vi.fn(), isPending: false },
+    updateTrip: { mutateAsync: vi.fn(), isPending: false },
     handleDuplicate: vi.fn(),
-    handleDelete: vi.fn(),
+    handleMarkCompleted: vi.fn(),
     hasActiveFilters: false,
     clearFilters: vi.fn(),
     refetch: vi.fn(),
@@ -260,7 +260,7 @@ function getVisibleActions(container: HTMLElement): ActionVisibility {
     create: Boolean(container.querySelector('a[href="/trips/new"]')),
     edit: Boolean(container.querySelector('a[href="/trips/trip-1/edit"]')),
     duplicate: Boolean(container.querySelector('button[title="Duplicar"]')),
-    delete: Boolean(container.querySelector('button[title="Excluir"]')),
+    transferToCompleted: Boolean(container.querySelector('button[title="Transferir para Realizadas"]')),
     import: hasButtonText("Importar planilha"),
     export: hasButtonText("Exportar CSV"),
     publish: Boolean(container.querySelector('button[title="Publicar na Loja"]')),
@@ -307,6 +307,7 @@ describe("TripList — visibilidade das ações por perfil", () => {
       const handle = await renderComponent(createElement(TripList));
 
       expect(getVisibleActions(handle.container)).toEqual(scenario.expected);
+      expect(handle.container.querySelector('button[title="Excluir"]')).toBeNull();
 
       const listToggle = handle.container.querySelector<HTMLButtonElement>(
         '[data-testid="view-list"]',
@@ -315,6 +316,82 @@ describe("TripList — visibilidade das ações por perfil", () => {
 
       await flushAct(() => listToggle.click());
       expect(getVisibleActions(handle.container)).toEqual(scenario.expected);
+      expect(handle.container.querySelector('button[title="Excluir"]')).toBeNull();
+    });
+  }
+
+  it("transfere uma viagem para Realizadas sem acionar exclusão", async () => {
+    const tripsHook = makeTripsHook(ROLES.AGENCY_ADMIN);
+    mocks.useTrips.mockReturnValue(tripsHook);
+    const handle = await renderComponent(createElement(TripList));
+
+    const transferButton = handle.container.querySelector<HTMLButtonElement>(
+      'button[title="Transferir para Realizadas"]',
+    );
+    if (!transferButton) throw new Error("O botão de transferência não foi renderizado");
+    await flushAct(() => transferButton.click());
+
+    expect(handle.container.textContent).toContain("Reservas, passageiros, pagamentos e histórico serão preservados.");
+    const confirmButton = [...handle.container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Transferir para Realizadas"));
+    if (!confirmButton) throw new Error("A confirmação de transferência não foi renderizada");
+    await flushAct(() => confirmButton.click());
+
+    expect(tripsHook.handleMarkCompleted).toHaveBeenCalledWith("trip-1");
+    expect(tripsHook.setStatusFilter).toHaveBeenCalledWith("completed");
+  });
+});
+
+describe("TripList — mapa de assentos enquanto as configurações carregam", () => {
+  for (const scenario of readOnlyRoleScenarios) {
+    it(`oculta o mapa durante o carregamento e usa o padrão habilitado quando as configurações não trazem a opção para ${scenario.label}`, async () => {
+      mocks.useTrips.mockReturnValue(makeTripsHook(scenario.role));
+      mocks.useGetTenant.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+      });
+      const handle = await renderComponent(createElement(TripList));
+      const expectedWhileLoading = {
+        overview: true,
+        passengers: true,
+        seatMap: false,
+        boardingPanel: true,
+      };
+
+      expect(getReadOnlyTripActions(handle.container)).toEqual(
+        expectedWhileLoading,
+      );
+
+      const listToggle = handle.container.querySelector<HTMLButtonElement>(
+        '[data-testid="view-list"]',
+      );
+      if (!listToggle) {
+        throw new Error("O botão do modo de lista não foi renderizado");
+      }
+      await flushAct(() => listToggle.click());
+      expect(getReadOnlyTripActions(handle.container)).toEqual(expectedWhileLoading);
+
+      mocks.useGetTenant.mockReturnValue({
+        data: { settings: {} },
+        isLoading: false,
+        isError: false,
+      });
+      await handle.rerender(createElement(TripList));
+      const expectedAfterSettingsLoad = {
+        overview: true,
+        passengers: true,
+        seatMap: true,
+        boardingPanel: true,
+      };
+
+      expect(getReadOnlyTripActions(handle.container)).toEqual(
+        expectedAfterSettingsLoad,
+      );
+      await flushAct(() => listToggle.click());
+      expect(getReadOnlyTripActions(handle.container)).toEqual(
+        expectedAfterSettingsLoad,
+      );
     });
   }
 });

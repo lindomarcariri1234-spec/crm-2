@@ -85,6 +85,9 @@ export const storeApi = {
     return req<{ data: StoreOrder[]; total: number; page: number; limit: number }>("GET", `/store/orders${qs}`);
   },
   getOrder: (id: string) => req<StoreOrder>("GET", `/store/orders/${id}`),
+  getLatePayments: () => req<{ data: LatePaymentReview[] }>("GET", "/store/late-payments"),
+  refundLatePayment: (id: string) =>
+    req<{ success: boolean; status: string; refundId: string }>("POST", `/store/late-payments/${id}/refund`, {}),
   recordManualPixDeposit: (id: string, amount: number, idempotencyKey: string) =>
     req<{
       success: boolean;
@@ -629,6 +632,20 @@ export interface StoreOrderReservation {
   passengers: StoreOrderPassenger[];
 }
 
+export interface LatePaymentReview {
+  id: string;
+  amount: string;
+  status: string;
+  gateway: string | null;
+  transactionId: string | null;
+  notes: string | null;
+  createdAt: string;
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  isTestMode: boolean | null;
+}
+
 export interface StoreOrder extends LinkedData {
   id: string;
   storeId: string;
@@ -826,6 +843,7 @@ export interface CreateOrderInput {
     productName: string;
     quantity: number;
     unitPrice: number;
+    variantName?: string;
     variantLabel?: string;
     metadata?: Record<string, unknown>;
   }>;

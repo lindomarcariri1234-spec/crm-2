@@ -14,6 +14,8 @@ const mockState = vi.hoisted(() => ({
   >(),
   readInstagramAccessToken: vi.fn(),
   sendInstagramText: vi.fn(),
+  sendZernioInstagramText: vi.fn(),
+  decryptCredential: vi.fn(),
   chatbotConversationsTable: {
     id: { table: "chatbot_conversations", column: "id" },
     tenantId: { table: "chatbot_conversations", column: "tenant_id" },
@@ -31,6 +33,7 @@ const mockState = vi.hoisted(() => ({
     role: { table: "chatbot_messages", column: "role" },
     sentAt: { table: "chatbot_messages", column: "sent_at" },
     sourceMessageId: { table: "chatbot_messages", column: "source_message_id" },
+    providerMessageId: { table: "chatbot_messages", column: "provider_message_id" },
     content: { table: "chatbot_messages", column: "content" },
     isBot: { table: "chatbot_messages", column: "is_bot" },
     deliveryStatus: { table: "chatbot_messages", column: "delivery_status" },
@@ -89,6 +92,9 @@ vi.mock("../lib/tenant.js", () => ({
 vi.mock("../lib/id.js", () => ({
   generateId: vi.fn(() => "instagram-staff-reply-id"),
 }));
+vi.mock("../lib/crypto.js", () => ({
+  decryptCredential: mockState.decryptCredential,
+}));
 
 vi.mock("../lib/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -132,9 +138,22 @@ vi.mock("../services/instagram-messaging", async (importOriginal) => {
   };
 });
 
+vi.mock("../services/instagram-zernio.js", () => ({
+  INSTAGRAM_ZERNIO_TYPE: "instagram_zernio",
+  sendZernioInstagramText: mockState.sendZernioInstagramText,
+  ZernioInstagramSendError: class ZernioInstagramSendError extends Error {
+    kind: "rejected" | "unknown";
+    constructor(kind: "rejected" | "unknown") {
+      super("Zernio send failed");
+      this.kind = kind;
+    }
+  },
+}));
+
 import { errorHandler } from "../middlewares/errorHandler.js";
 import { requireAuth } from "../lib/tenant.js";
 import chatbotRouter from "../routes/chatbot.js";
+import { deliverAttendanceReply } from "../services/whatsapp-attendance.js";
 
 const TENANT_ID = "tenant-instagram-reply-test";
 const STAFF_ID = "staff-instagram-reply-test";
@@ -227,6 +246,8 @@ beforeEach(() => {
   mockState.getInstagramMetaConfig.mockReturnValue({ appConfigured: true });
   mockState.readInstagramAccessToken.mockReturnValue("test-access-token");
   mockState.sendInstagramText.mockResolvedValue(undefined);
+  mockState.sendZernioInstagramText.mockResolvedValue("zernio-message-id");
+  mockState.decryptCredential.mockReturnValue(JSON.stringify({ apiKey: "test-zernio-key" }));
 
   const insertBuilder = {
     values: vi.fn(),
@@ -252,6 +273,67 @@ afterEach(() => {
 });
 
 describe("POST /chatbot-conversations/:id/reply for Instagram", () => {
+  it("returns a queued WhatsApp reply instead of treating pending delivery as a send failure", async () => {
+    const conversation = {
+      ...makeConversation(),
+      channel: "whatsapp",
+      sessionId: "5511999999999",
+    };
+    const pendingMessage = {
+      id: "instagram-staff-reply-id",
+      tenantId: TENANT_ID,
+      conversationId: CONVERSATION_ID,
+      role: "assistant",
+      content: REPLY_BODY.content,
+      deliveryStatus: "pending",
+      deliveryAttempts: 1,
+    };
+    configureSelectResults([conversation], [pendingMessage]);
+    vi.mocked(deliverAttendanceReply).mockResolvedValueOnce(false);
+
+    const response = await request(buildApp())
+      .post(`/api/chatbot-conversations/${CONVERSATION_ID}/reply`)
+      .send(REPLY_BODY);
+
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({
+      id: pendingMessage.id,
+      deliveryStatus: "pending",
+    });
+    expect(mockState.dbUpdate).toHaveBeenCalled();
+  });
+
+  it("returns safe guidance for a terminal provider failure without leaking its raw response", async () => {
+    const conversation = {
+      ...makeConversation(),
+      channel: "whatsapp",
+      sessionId: "5511999999999",
+    };
+    const message = {
+      id: "instagram-staff-reply-id",
+      tenantId: TENANT_ID,
+      conversationId: CONVERSATION_ID,
+      role: "assistant",
+      content: REPLY_BODY.content,
+      deliveryStatus: "failed",
+      deliveryAttempts: 3,
+      lastDeliveryError: "Authorization: Bearer private-provider-response",
+    };
+    configureSelectResults([conversation], [message]);
+    vi.mocked(deliverAttendanceReply).mockResolvedValueOnce(false);
+
+    const response = await request(buildApp())
+      .post(`/api/chatbot-conversations/${CONVERSATION_ID}/reply`)
+      .send(REPLY_BODY);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "WHATSAPP_DELIVERY_FAILED",
+      error: expect.stringContaining("O WhatsApp não aceitou a mensagem"),
+    });
+    expect(JSON.stringify(response.body)).not.toContain("private-provider-response");
+  });
+
   it("blocks an expired persisted inbound message before inserting or sending", async () => {
     const lastInboundAt = new Date(NOW - 24 * 60 * 60 * 1000);
     const [conversationQuery, integrationQuery, inboundQuery] =
@@ -387,5 +469,75 @@ describe("POST /chatbot-conversations/:id/reply for Instagram", () => {
     expect(integrationQuery.limit).toHaveBeenCalledWith(1);
     expect(inboundQuery.limit).toHaveBeenCalledWith(1);
     expect(savedMessageQuery.limit).toHaveBeenCalledWith(1);
+  });
+
+  it("sends Zernio conversations through the Zernio inbox API with its idempotency key", async () => {
+    const zernioConversation = {
+      ...makeConversation(),
+      metadata: {
+        provider: "zernio",
+        instagramIntegrationId: INTEGRATION_ID,
+        zernioAccountId: "zernio-account",
+        zernioProfileId: "zernio-profile",
+        zernioConversationId: "zernio-conversation",
+      },
+    };
+    const integration = {
+      id: INTEGRATION_ID,
+      tenantId: TENANT_ID,
+      type: "instagram_zernio",
+      enabled: true,
+      status: "connected",
+      config: {
+        accountId: "zernio-account",
+        profileId: "zernio-profile",
+      },
+      secretsEncrypted: "encrypted-zernio-key",
+    };
+    const savedMessage = {
+      id: "instagram-staff-reply-id",
+      tenantId: TENANT_ID,
+      conversationId: CONVERSATION_ID,
+      role: "assistant",
+      content: REPLY_BODY.content,
+      deliveryStatus: "sent",
+      deliveryAttempts: 1,
+      providerMessageId: "zernio-message-id",
+    };
+    configureSelectResults(
+      [zernioConversation],
+      [integration],
+      [{ sentAt: new Date(NOW - 30 * 60 * 1000) }],
+      [savedMessage],
+    );
+    const updateWrites: Array<Record<string, unknown>> = [];
+    mockState.dbUpdate.mockImplementation(() => {
+      const builder = {
+        set: vi.fn((values: Record<string, unknown>) => {
+          updateWrites.push(values);
+          return builder;
+        }),
+        where: vi.fn().mockResolvedValue([]),
+      };
+      return builder;
+    });
+
+    const response = await request(buildApp())
+      .post(`/api/chatbot-conversations/${CONVERSATION_ID}/reply`)
+      .send(REPLY_BODY);
+
+    expect(response.status).toBe(201);
+    expect(mockState.sendZernioInstagramText).toHaveBeenCalledWith(
+      "test-zernio-key",
+      "zernio-account",
+      "zernio-conversation",
+      REPLY_BODY.content,
+      REPLY_BODY.idempotencyKey,
+    );
+    expect(mockState.sendInstagramText).not.toHaveBeenCalled();
+    expect(updateWrites[0]).toMatchObject({
+      providerMessageId: "zernio-message-id",
+      deliveryStatus: "sent",
+    });
   });
 });

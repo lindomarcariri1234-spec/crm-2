@@ -1,11 +1,11 @@
 import type { Worker } from "bullmq";
 import { logger } from "./logger";
 import {
-  isRedisDailyLimitCircuitOpen,
+  isQueueRedisDailyLimitCircuitOpen,
   isTransientRedisError,
   recordTransientRedisError,
-  registerRedisDailyLimitWorker,
-  reportRedisDailyLimitError,
+  registerQueueRedisDailyLimitWorker,
+  reportQueueRedisDailyLimitError,
   resetTransientRedisErrors,
 } from "./redis";
 
@@ -27,11 +27,22 @@ export const WORKER_IDLE_DRAIN_DELAY_SECONDS = 10;
  * @param workerName - Short name used in log messages (e.g. "email-worker").
  */
 export function attachCircuitBreaker<T>(worker: Worker<T>, workerName: string): void {
-  const unregisterWorker = registerRedisDailyLimitWorker(worker);
+  const unregisterWorker = registerQueueRedisDailyLimitWorker(worker);
   worker.once("closed", unregisterWorker);
 
+  // BullMQ's resume() restarts Worker.run() without awaiting its promise when
+  // its previous loop has stopped. Redis can reject that background run while
+  // a quota probe is optimistic, which otherwise becomes an unhandled rejection.
+  const runWorker = worker.run;
+  if (typeof runWorker === "function") {
+    const originalRun = runWorker.bind(worker);
+    worker.run = () => originalRun().catch((error: unknown) => {
+      worker.emit("error", error instanceof Error ? error : new Error("Worker run failed"));
+    });
+  }
+
   worker.on("error", (err: Error) => {
-    if (reportRedisDailyLimitError(err)) {
+    if (reportQueueRedisDailyLimitError(err)) {
       logger.warn({ workerName }, `[${workerName}] Redis daily-limit circuit is active`);
     } else if (isTransientRedisError(err)) {
       recordTransientRedisError();
@@ -42,6 +53,6 @@ export function attachCircuitBreaker<T>(worker: Worker<T>, workerName: string): 
   });
 
   worker.on("ready", () => {
-    if (!isRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
+    if (!isQueueRedisDailyLimitCircuitOpen()) resetTransientRedisErrors();
   });
 }

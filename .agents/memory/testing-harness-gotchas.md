@@ -1,6 +1,6 @@
 ---
 name: Testing harness gotchas
-description: Index of project-specific Vitest mock, integration-database, and validation pitfalls.
+description: Index of project-specific Vitest, browser-test, integration-database, and validation pitfalls.
 ---
 
 Detailed notes by failure mode:
@@ -24,6 +24,7 @@ Detailed notes by failure mode:
 - [Vitest 4 constructor mocks](vitest4-constructor-mocks.md)
 - [Local PostgreSQL integration setup](local-postgres-integration.md)
 - [PostgreSQL lock-barrier visibility](postgres-lock-barrier-visibility.md)
+- [Browser keyboard verification](browser-keyboard-verification.md)
 
 ## GitHub Actions PostgreSQL isolation
 
@@ -32,3 +33,19 @@ For an isolated-database guard, permit the CI service database only when `CI` is
 **Why:** The Actions job connects through `localhost`, but PostgreSQL reports its service container's bridge-network address.
 
 **How to apply:** Keep the developer path constrained to the dedicated local test database and loopback server address; use the exact CI database name plus a loopback URL host for the hosted-service path.
+
+## Trips hook query-client constraint
+
+The focused `useTrips` filter tests render hooks without a `QueryClientProvider`. Do not add direct `useQueryClient()` usage to this hook unless the harness is updated to provide a client.
+
+**Why:** Cache invalidation through `useQueryClient` caused every filter test to fail before it could exercise the hook.
+
+**How to apply:** Prefer the hook's existing refetch path for trip mutations, or add a provider to the shared test harness before introducing query-client access.
+
+## Authenticated client-portal visual fixtures
+
+When visual tests mount the real `App` for `/perfil`, keep the Clerk shim's signed-in state aligned with the synthetic `/api/users/me` response. The client role on this route is `cliente` and the fixture must include `tenantId`; a mismatched fixture follows the real guard into onboarding. The visual harness document is served from its own path, so exercise Wouter navigation without a full document reload and return through browser history.
+
+**Why:** The real route guard depends on both Clerk state and the server profile, while a full anchor reload leaves the visual fixture entrypoint.
+
+**How to apply:** Set a per-test session flag in the Clerk shim and fixture response; use the route's actual pathname for the initial render, then update history and dispatch `popstate` for external links while the fixture app remains mounted.

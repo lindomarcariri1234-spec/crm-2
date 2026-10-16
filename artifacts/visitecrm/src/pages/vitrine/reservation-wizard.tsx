@@ -134,7 +134,7 @@ export default function ReservationWizard({
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
           <button
             onClick={goBack}
-            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="flex items-center gap-1 text-sm text-slate-700 hover:text-slate-900 transition-colors"
           >
             <ChevronLeft className="w-4 h-4" />
             {step === "dados" ? "Cancelar" : "Voltar"}

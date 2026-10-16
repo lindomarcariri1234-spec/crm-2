@@ -19,18 +19,24 @@ import { ROLES } from "@workspace/permissions";
 const {
   mockRequireAuth,
   mockGetStripeSyncTablesStatus,
+  mockGetBullMQRedisCutoverStatus,
+  mockGetReminderSchedulerRunHealth,
   mockCleanupOrphanDeals,
   mockRepairSeatDriftOnly,
   mockRunSeatReconciliationCron,
 } = vi.hoisted(() => {
   const mockRequireAuth = vi.fn();
   const mockGetStripeSyncTablesStatus = vi.fn();
+  const mockGetBullMQRedisCutoverStatus = vi.fn();
+  const mockGetReminderSchedulerRunHealth = vi.fn();
   const mockCleanupOrphanDeals = vi.fn();
   const mockRepairSeatDriftOnly = vi.fn();
   const mockRunSeatReconciliationCron = vi.fn();
   return {
     mockRequireAuth,
     mockGetStripeSyncTablesStatus,
+    mockGetBullMQRedisCutoverStatus,
+    mockGetReminderSchedulerRunHealth,
     mockCleanupOrphanDeals,
     mockRepairSeatDriftOnly,
     mockRunSeatReconciliationCron,
@@ -67,6 +73,15 @@ vi.mock("../lib/stripeSync.js", () => ({
     endpoints: [],
     checkedAt: null,
   })),
+}));
+
+vi.mock("../queues/index.js", () => ({
+  getBullMQRedisCutoverStatus: mockGetBullMQRedisCutoverStatus,
+  getReminderQueue: vi.fn(() => null),
+}));
+
+vi.mock("../queues/reminder-schedulers.js", () => ({
+  getReminderSchedulerRunHealth: mockGetReminderSchedulerRunHealth,
 }));
 
 vi.mock("@clerk/express", () => ({
@@ -222,10 +237,39 @@ describe("POST /admin/system-health/repair", () => {
 describe("GET /admin/system-health", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetReminderSchedulerRunHealth.mockResolvedValue({
+      status: "unknown",
+      failedCount: 0,
+      unattemptedCount: 14,
+      delayedCount: 0,
+      unavailableCount: 14,
+      timezone: "America/Sao_Paulo",
+      schedulers: [],
+    });
   });
 
   it("includes the Stripe Sync table assertion status for SUPER_ADMIN", async () => {
     mockRequireAuth.mockResolvedValue(makeSuperAdmin());
+    mockGetReminderSchedulerRunHealth.mockResolvedValue({
+      status: "degraded",
+      failedCount: 1,
+      unattemptedCount: 0,
+      delayedCount: 1,
+      unavailableCount: 0,
+      timezone: "America/Sao_Paulo",
+      schedulers: [{
+        id: "boarding-reminder-daily",
+        name: "boarding_reminder",
+        status: "failed",
+        scheduleStatus: "registration_failed",
+        lastAttemptAt: "2026-10-15T12:00:00.000Z",
+        lastSuccessfulAt: null,
+        nextRunAt: null,
+        lastRunAt: null,
+        lastRunStatus: null,
+        failureCount: 1,
+      }],
+    });
     mockGetStripeSyncTablesStatus.mockReturnValue({
       ok: false,
       checkedAt: "2026-08-24T12:00:00.000Z",
@@ -237,6 +281,41 @@ describe("GET /admin/system-health", () => {
     expect(res.body.stripeSyncTables).toEqual({
       ok: false,
       checkedAt: "2026-08-24T12:00:00.000Z",
+    });
+    expect(res.body.reminderSchedulers).toMatchObject({
+      status: "degraded",
+      failedCount: 1,
+      schedulers: [expect.objectContaining({ id: "boarding-reminder-daily", status: "failed" })],
+    });
+  });
+
+  it("includes the selected queue Redis and cutover blockers", async () => {
+    mockRequireAuth.mockResolvedValue(makeSuperAdmin());
+    mockGetStripeSyncTablesStatus.mockReturnValue({ ok: true, checkedAt: null });
+    mockGetBullMQRedisCutoverStatus.mockReturnValue({
+      selectedRedis: "REDIS_URL",
+      outcome: "blocked",
+      reason: "Ainda há trabalho nas filas legadas; o BullMQ permanece em REDIS_URL",
+      blockerCount: 1,
+      blockedWorkCount: 4,
+      blockers: [{
+        queue: "emails",
+        state: "wait",
+        count: 4,
+        reason: "4 item(ns) no estado wait permanecem na fila legada",
+      }],
+      checkedAt: "2026-10-15T12:00:00.000Z",
+    });
+
+    const res = await request(buildApp()).get("/admin/system-health");
+
+    expect(res.status).toBe(200);
+    expect(res.body.redis.queueCutover).toMatchObject({
+      selectedRedis: "REDIS_URL",
+      outcome: "blocked",
+      blockerCount: 1,
+      blockedWorkCount: 4,
+      blockers: [expect.objectContaining({ queue: "emails", state: "wait", count: 4 })],
     });
   });
 });

@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { ListExpensesSourceType } from "./listExpensesSourceType";
 import type { ListExpensesSummaryPeriod } from "./listExpensesSummaryPeriod";
 
 export type ListExpensesParams = {
@@ -24,6 +25,15 @@ export type ListExpensesParams = {
    * @nullable
    */
   supplierId?: string | null;
+  /**
+   * Exact source record ID for opening one operational cost from its linked payable.
+   * @nullable
+   */
+  sourceId?: string | null;
+  /**
+   * Source record type; required together with sourceId.
+   */
+  sourceType?: ListExpensesSourceType;
   /**
    * @nullable
    */

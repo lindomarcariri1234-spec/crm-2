@@ -1,3 +1,9 @@
+import {
+  isApiRootRequest,
+  restoreRewrittenApiPath,
+  sendApiRootNotFound,
+} from "./request-routing.mjs";
+
 let appPromise;
 
 // Vercel traces dependencies from this small conventional function file, not
@@ -33,22 +39,17 @@ function getMissingPackage(error) {
     : undefined;
 }
 
-function restoreRewrittenApiPath(request) {
-  const url = new URL(request.url || "/api", "http://vercel.internal");
-  const path = url.searchParams.get("__vercel_api_path");
-  if (path === null) return;
-  url.searchParams.delete("__vercel_api_path");
-  const search = url.searchParams.toString();
-  const isStorefrontPath = path === "loja" || path.startsWith("loja/");
-  request.url = `${isStorefrontPath ? "" : "/api/"}${path}${search ? `?${search}` : ""}`;
-}
-
 async function getApp() {
   appPromise ??= import("./bundle.mjs").then((module) => module.default);
   return appPromise;
 }
 
 export default async function handler(request, response) {
+  if (isApiRootRequest(request)) {
+    sendApiRootNotFound(response);
+    return;
+  }
+
   try {
     const app = await getApp();
     restoreRewrittenApiPath(request);

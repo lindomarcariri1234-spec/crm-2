@@ -56,6 +56,9 @@ function buildApp() {
   app.get("/500", (_req, _res, next: express.NextFunction) =>
     next(new Error("Falha inesperada do servidor")));
 
+  app.get("/app-500", (_req, _res, next: express.NextFunction) =>
+    next(new AppError("private SQL schema detail", 500, "SPREADSHEET_IMPORT_FAILED")));
+
   app.use(errorHandler);
   return app;
 }
@@ -101,6 +104,17 @@ describe("API error response format — { error, code } contract", () => {
     const res = await request(app).get("/500");
     expect(res.status).toBe(500);
     expect(res.body).toMatchObject({ error: "Internal server error", code: "INTERNAL_ERROR" });
+  });
+
+  it("5xx AppError keeps its stable code but never exposes its internal message", async () => {
+    const res = await request(app).get("/app-500");
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({
+      error: "Internal server error",
+      message: "Internal server error",
+      code: "SPREADSHEET_IMPORT_FAILED",
+    });
+    expect(JSON.stringify(res.body)).not.toContain("private SQL schema detail");
   });
 
   it("every error response includes a requestId field", async () => {

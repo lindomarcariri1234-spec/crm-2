@@ -4,6 +4,7 @@ import {
   auditLogsTable,
   clientsTable,
   chatbotConversationsTable,
+  chatbotMessagesTable,
   tenantsTable,
   usersTable,
   emailLogsTable,
@@ -256,6 +257,38 @@ function deliveryValues(
     maxAttempts: MAX_ATTEMPTS,
     nextAttemptAt: new Date(),
   };
+}
+
+async function syncAttendanceChatbotMessage(
+  tenantId: string,
+  origin: string | null,
+  metadata: unknown,
+  status: string,
+  error: string | null,
+  skippedReason: string | null,
+): Promise<void> {
+  if (origin !== "whatsapp-attendance" || metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) return;
+  const metadataRecord = metadata as Record<string, unknown>;
+  const chatbotMessageId = metadataRecord["chatbotMessageId"];
+  const conversationId = metadataRecord["conversationId"];
+  if (typeof chatbotMessageId !== "string" || typeof conversationId !== "string") return;
+  const optedOut = ["whatsapp_opted_out", "contact_opted_out"].includes(skippedReason ?? error ?? "");
+  const deliveryStatus = ["accepted", "delivered", "read", "sent"].includes(status)
+    ? "sent"
+    : status === "failed" || status === "skipped"
+      ? optedOut ? "cancelled" : "failed"
+      : "pending";
+  await db.update(chatbotMessagesTable)
+    .set({
+      deliveryStatus,
+      deliveryUpdatedAt: new Date(),
+      lastDeliveryError: deliveryStatus === "sent" ? null : skippedReason ?? error ?? "delivery_pending",
+    })
+    .where(and(
+      eq(chatbotMessagesTable.id, chatbotMessageId),
+      eq(chatbotMessagesTable.conversationId, conversationId),
+      eq(chatbotMessagesTable.tenantId, tenantId),
+    ));
 }
 
 async function refreshMessageStatus(tenantId: string, messageId: string): Promise<void> {
@@ -689,6 +722,8 @@ export async function updateOutboundDeliveryFromWebhook(
       externalId: outboundDeliveriesTable.externalId,
       lastError: outboundDeliveriesTable.lastError,
       skippedReason: outboundDeliveriesTable.skippedReason,
+      origin: outboundMessagesTable.origin,
+      metadata: outboundMessagesTable.metadata,
     })
     .from(outboundDeliveriesTable)
     .leftJoin(outboundMessagesTable, and(
@@ -761,6 +796,14 @@ export async function updateOutboundDeliveryFromWebhook(
     ));
 
   await syncLegacyEmailLog(update.tenantId, updated);
+  await syncAttendanceChatbotMessage(
+    update.tenantId,
+    delivery.origin,
+    delivery.metadata,
+    updated.status,
+    updated.lastError,
+    updated.skippedReason,
+  );
   await refreshMessageStatus(update.tenantId, delivery.outboundMessageId);
   emitOutboundDeliveryUpdate(update.tenantId, {
     deliveryId: delivery.id,
@@ -939,6 +982,33 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
       error: updated ? error : "delivery_result_unknown",
     });
     if (exhausted && updated) await syncLegacyEmailLog(tenantId, updated);
+  }
+  if (delivery.channel === "whatsapp") {
+    const [outboundMessage] = await db.select({
+      origin: outboundMessagesTable.origin,
+      metadata: outboundMessagesTable.metadata,
+    }).from(outboundMessagesTable).where(and(
+      eq(outboundMessagesTable.id, delivery.outboundMessageId),
+      eq(outboundMessagesTable.tenantId, tenantId),
+    )).limit(1);
+    const [finalDelivery] = await db.select({
+      status: outboundDeliveriesTable.status,
+      lastError: outboundDeliveriesTable.lastError,
+      skippedReason: outboundDeliveriesTable.skippedReason,
+    }).from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.id, delivery.id),
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+    )).limit(1);
+    if (finalDelivery) {
+      await syncAttendanceChatbotMessage(
+        tenantId,
+        outboundMessage?.origin ?? null,
+        outboundMessage?.metadata,
+        finalDelivery.status,
+        finalDelivery.lastError,
+        finalDelivery.skippedReason,
+      );
+    }
   }
   await refreshMessageStatus(tenantId, delivery.outboundMessageId);
   return success;

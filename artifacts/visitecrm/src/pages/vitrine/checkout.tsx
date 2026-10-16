@@ -877,6 +877,7 @@ export default function VitrineCheckout({
           productName: i.productName,
           quantity: i.quantity,
           unitPrice: i.unitPrice,
+          variantName: i.variantName,
           variantLabel: i.variantLabel,
         })),
         couponCode: couponResult?.valid ? form.couponCode : undefined,

@@ -666,7 +666,7 @@ export async function createReservationsForOrder(
 
     // Row-level lock prevents concurrent paid orders from overselling the same trip.
     const lockResult = await exec.execute(
-      sql`SELECT id, available_seats, total_capacity, show_seat_map, seat_map, type FROM trips WHERE id = ${tripId} AND tenant_id = ${order.tenantId} FOR UPDATE`,
+      sql`SELECT id, available_seats, total_capacity, show_seat_map, seat_map, type, status FROM trips WHERE id = ${tripId} AND tenant_id = ${order.tenantId} FOR UPDATE`,
     );
     const tripRow = (lockResult as unknown as { rows: Array<{
       id: string;
@@ -675,6 +675,7 @@ export async function createReservationsForOrder(
       show_seat_map: boolean;
       seat_map: Record<string, { status?: string }> | null;
       type: string;
+      status: string;
     }> }).rows[0];
 
     if (!tripRow) {
@@ -682,6 +683,14 @@ export async function createReservationsForOrder(
         `Viagem vinculada ao produto "${product.name}" não encontrada`,
         404,
         "TRIP_NOT_FOUND",
+      );
+    }
+
+    if (tripRow.status === "completed") {
+      throw new AppError(
+        `A viagem "${product.name}" já foi realizada e não está mais disponível para compra`,
+        409,
+        "TRIP_COMPLETED",
       );
     }
 

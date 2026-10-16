@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useState } from "react";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { useUser, useClerk } from "@clerk/react";
 import { useGetMe, useGetCalendarStatus, getGetCalendarStatusQueryKey } from "@workspace/api-client-react";
 import { MANAGEMENT_ROLES, ROLES } from "@workspace/permissions";
@@ -41,6 +41,7 @@ import {
   History,
   Wallet,
   Award,
+  Crown,
   X,
   Menu,
   MapPin,
@@ -155,13 +156,22 @@ export interface NavItem {
 
 export function getNavigationContext(items: NavItem[], location: string): { current?: NavItem; parent?: NavItem } {
   let bestMatch: { current?: NavItem; parent?: NavItem; score: number } = { score: -1 };
+  const currentUrl = new URL(location, "https://visitecrm.local");
 
   const visitNavigation = (entries: NavItem[], parent?: NavItem) => {
     for (const item of entries) {
-      const exact = location === item.href;
-      const nested = item.href !== "/" && location.startsWith(`${item.href}/`);
+      const targetUrl = new URL(item.href, "https://visitecrm.local");
+      const queryMatches = [...targetUrl.searchParams].every(
+        ([key, value]) => currentUrl.searchParams.getAll(key).includes(value),
+      );
+      const exactPath = currentUrl.pathname === targetUrl.pathname;
+      const exact = exactPath && queryMatches;
+      const nested =
+        targetUrl.search === "" &&
+        targetUrl.pathname !== "/" &&
+        currentUrl.pathname.startsWith(`${targetUrl.pathname}/`);
       if (exact || nested) {
-        const score = item.href.length + (exact ? 1000 : 0);
+        const score = item.href.length + (exact ? 1000 : 0) + (targetUrl.search ? 10000 : 0);
         if (score > bestMatch.score) {
           bestMatch = { current: item, parent, score };
         }
@@ -219,6 +229,7 @@ const AGENCY_NAVIGATION: NavItem[] = [
     children: [
       { name: "Marketing", href: "/marketing", icon: Target },
       { name: "Fidelidade", href: "/fidelidade", icon: Star },
+      { name: "Clube", href: "/configuracoes?tab=clube", icon: Crown },
       { name: "NPS", href: "/nps", icon: TrendingUp },
       { name: "Indicações", href: "/indicacoes", icon: Share2 },
       { name: "Embaixadores", href: "/embaixadores", icon: Award, roles: MANAGEMENT_ROLES },
@@ -308,13 +319,13 @@ const ROLE_LABELS: Record<string, string> = {
 
 function NavLink({
   item,
-  location,
   userRole,
+  currentHref,
   depth = 0,
 }: {
   item: NavItem;
-  location: string;
   userRole?: string;
+  currentHref?: string;
   depth?: number;
 }) {
   const visibleChildren = item.children?.filter(
@@ -322,13 +333,9 @@ function NavLink({
       (!c.hiddenFor || (userRole && !c.hiddenFor.includes(userRole))) &&
       (!c.roles || (!!userRole && c.roles.includes(userRole)))
   );
-  const isActive =
-    location === item.href ||
-    (item.href !== "/" && location.startsWith(item.href));
+  const isActive = currentHref === item.href;
   const hasChildren = visibleChildren && visibleChildren.length > 0;
-  const childActive = visibleChildren?.some(
-    (c) => location === c.href || (c.href !== "/" && location.startsWith(c.href))
-  );
+  const childActive = visibleChildren?.some((c) => c.href === currentHref);
   const [open, setOpen] = useState(Boolean(isActive || childActive));
 
   useEffect(() => {
@@ -362,7 +369,7 @@ function NavLink({
           {open && (
             <div id={`submenu-${item.href.replace(/[^a-z0-9]/gi, "-")}`} className="mt-0.5 space-y-0.5">
               {visibleChildren!.map((child) => (
-                <NavLink key={child.href} item={child} location={location} userRole={userRole} depth={depth + 1} />
+                <NavLink key={child.href} item={child} userRole={userRole} currentHref={currentHref} depth={depth + 1} />
               ))}
             </div>
           )}
@@ -403,13 +410,14 @@ export function NavigationMenu({
       (!item.hiddenFor || (userRole && !item.hiddenFor.includes(userRole))) &&
       (!item.roles || (!!userRole && item.roles.includes(userRole)))
   );
+  const currentHref = getNavigationContext(visibleItems, location).current?.href;
 
   return (
     <nav aria-label="Navegação principal" className="flex flex-col gap-0.5" onClick={(event) => {
       if (event.target instanceof Element && event.target.closest("a")) onNavigate?.();
     }}>
       {visibleItems.map((item) => (
-        <NavLink key={item.name} item={item} location={location} userRole={userRole} />
+        <NavLink key={item.name} item={item} userRole={userRole} currentHref={currentHref} />
       ))}
     </nav>
   );
@@ -447,6 +455,7 @@ function TenantBrand({
 
 export default function Layout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
+  const search = useSearch();
   const { user } = useUser();
   const { signOut } = useClerk();
   const { data: me } = useGetMe();
@@ -475,7 +484,8 @@ export default function Layout({ children }: { children: ReactNode }) {
 
   const navItems = userRole === ROLES.SALES ? VENDOR_NAVIGATION : agencyNav;
 
-  const { current: currentSection, parent: parentSection } = getNavigationContext(navItems, location);
+  const currentLocation = `${location}${search}`;
+  const { current: currentSection, parent: parentSection } = getNavigationContext(navItems, currentLocation);
 
   return (
     <div className="flex min-h-[100dvh] bg-background">
@@ -487,7 +497,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         />
 
          <div className="flex-1 overflow-y-auto py-4 px-3">
-          <NavigationMenu items={navItems} location={location} userRole={userRole} />
+          <NavigationMenu items={navItems} location={currentLocation} userRole={userRole} />
         </div>
 
         {/* User block */}
@@ -534,7 +544,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             <div className="flex-1 overflow-y-auto py-3 px-2">
               <NavigationMenu
                 items={navItems}
-                location={location}
+                location={currentLocation}
                 userRole={userRole}
                 onNavigate={() => setMobileNavigationOpen(false)}
               />

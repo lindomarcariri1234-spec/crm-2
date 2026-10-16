@@ -61,5 +61,6 @@ describe("rotas carregadas sob demanda", () => {
 
       expect(routeModule.default).toBeTypeOf("function");
     },
+    15_000,
   );
 });

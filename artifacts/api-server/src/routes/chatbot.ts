@@ -11,7 +11,8 @@ import {
 import { eq, and, desc, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
-import { requireAuth } from "../lib/tenant";
+import { decryptCredential } from "../lib/crypto";
+import { ALL_STAFF_ROLES, requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { deliverAttendanceReply } from "../services/whatsapp-attendance";
@@ -23,6 +24,11 @@ import {
   readInstagramAccessToken,
   sendInstagramText,
 } from "../services/instagram-messaging";
+import {
+  INSTAGRAM_ZERNIO_TYPE,
+  sendZernioInstagramText,
+  ZernioInstagramSendError,
+} from "../services/instagram-zernio.js";
 import { recomputeClientClassification, recordClientClassificationEvent } from "../services/client-classification.js";
 import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
 import { extractVerifiedUploadThingKey, utapi } from "../lib/uploadthing";
@@ -32,7 +38,72 @@ import { ensureSupportTicketForConversation, recordSupportTicketEvent } from "..
 import { broadcastSupportTicketUpdate } from "../lib/realtime.js";
 
 const router = Router();
+
+async function requireChatbotStaff(
+  req: Parameters<typeof requireAuth>[0],
+  res: Parameters<typeof requireAuth>[1],
+  next: NextFunction,
+) {
+  const me = await requireAuth(req, res);
+  if (!me) return null;
+  if (!ALL_STAFF_ROLES.includes(me.role)) {
+    next(new ForbiddenError("Apenas membros da equipe podem acessar a caixa de entrada da agência.", "FORBIDDEN_ROLE"));
+    return null;
+  }
+  return me;
+}
 const DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
+const CHATBOT_DELIVERY_ISSUES = {
+  optedOut: "Envio cancelado: o cliente não autorizou contato pelo WhatsApp.",
+  invalidPhone: "Número de WhatsApp inválido ou desatualizado. Atualize o contato e tente novamente.",
+  conversationUnavailable: "Esta conversa não está disponível para receber respostas.",
+  connectionUnavailable: "Conexão do WhatsApp indisponível. Revise a integração e tente novamente.",
+  providerUnavailable: "O serviço do WhatsApp está indisponível. Tente novamente mais tarde.",
+  rateLimited: "O provedor limitou o envio. Aguarde alguns minutos antes de tentar novamente.",
+  rejected: "O WhatsApp não aceitou a mensagem. Revise o contato e a integração antes de tentar novamente.",
+} as const;
+
+function safeChatbotDeliveryIssue(
+  channel: string,
+  status: string | null | undefined,
+  rawReason: unknown,
+): string | null {
+  if (status !== "failed" && status !== "cancelled") return null;
+  if (channel !== "whatsapp") {
+    return "A plataforma não aceitou a mensagem. Revise a conexão da conta e tente novamente.";
+  }
+  const reason = typeof rawReason === "string" ? rawReason : "";
+  if (["contact_opted_out", "whatsapp_opted_out", "whatsapp_recipient_opted_out"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.optedOut;
+  }
+  if (["invalid_phone", "whatsapp_invalid_phone", "whatsapp_address_missing", "whatsapp_recipient_changed", "whatsapp_recipient_unavailable"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.invalidPhone;
+  }
+  if (["conversation_unavailable", "whatsapp_conversation_unavailable", "outbound_message_unavailable"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.conversationUnavailable;
+  }
+  if (["credentials_not_configured", "whatsapp_connection_unavailable", "whatsapp_connection_ambiguous", "no_whatsapp_provider", "whatsapp_account_unavailable"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.connectionUnavailable;
+  }
+  const providerStatus = /^(?:zapi|evolution)_(\d{3})$/.exec(reason)?.[1];
+  if (providerStatus === "401" || providerStatus === "403") return CHATBOT_DELIVERY_ISSUES.connectionUnavailable;
+  if (providerStatus === "429") return CHATBOT_DELIVERY_ISSUES.rateLimited;
+  if (providerStatus && Number(providerStatus) >= 500) return CHATBOT_DELIVERY_ISSUES.providerUnavailable;
+  if (providerStatus) return CHATBOT_DELIVERY_ISSUES.rejected;
+  return CHATBOT_DELIVERY_ISSUES.rejected;
+}
+
+function readZernioApiKey(encrypted: string | null | undefined): string | null {
+  if (!encrypted) return null;
+  try {
+    const parsed: unknown = JSON.parse(decryptCredential(encrypted));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const apiKey = (parsed as Record<string, unknown>)["apiKey"];
+    return typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 const CreateConversationBody = z.object({
   clientId: z.string().optional(),
@@ -55,7 +126,7 @@ const ReplyConversationBody = z.object({
 
 router.get("/chatbot-conversations", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const conversations = await db.select({
       id: chatbotConversationsTable.id,
@@ -139,7 +210,7 @@ router.get("/chatbot-conversations", async (req, res, next: NextFunction): Promi
 
 router.post("/chatbot-conversations", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = CreateConversationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
@@ -154,7 +225,7 @@ router.post("/chatbot-conversations", async (req, res, next: NextFunction): Prom
 
 router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const [conv] = await db.select().from(chatbotConversationsTable)
       .where(and(eq(chatbotConversationsTable.id, req.params.id), eq(chatbotConversationsTable.tenantId, me.tenantId))).limit(1);
@@ -196,33 +267,51 @@ router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFun
         message.role === "user" &&
         Boolean(message.mediaUrl);
       let expiresIn = DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS;
+      let mediaExpiresAt: Date | null = null;
       if (isInboundWhatsAppMedia) {
-        const mediaExpiresAt = getWhatsAppInboundMediaExpirationAt(message.sentAt);
+        mediaExpiresAt = getWhatsAppInboundMediaExpirationAt(message.sentAt);
         const secondsUntilExpiry = Math.floor((mediaExpiresAt.getTime() - now) / 1000);
         if (message.mediaExpiredAt || secondsUntilExpiry <= 0) {
           return {
             ...message,
             mediaUrl: null,
             mediaExpiredAt: message.mediaExpiredAt ?? mediaExpiresAt,
+            mediaExpiresAt,
           };
         }
         expiresIn = Math.min(DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS, secondsUntilExpiry);
       }
 
       const fileKey = message.mediaUrl ? extractVerifiedUploadThingKey(message.mediaUrl) : null;
-      if (!fileKey) return message;
+      if (!fileKey) {
+        return mediaExpiresAt ? { ...message, mediaExpiresAt } : message;
+      }
       try {
         const signed = await utapi.generateSignedURL(fileKey, { expiresIn });
-        return { ...message, mediaUrl: signed.ufsUrl };
+        return {
+          ...message,
+          mediaUrl: signed.ufsUrl,
+          ...(mediaExpiresAt ? { mediaExpiresAt } : {}),
+        };
       } catch {
         logger.warn(
           { tenantId: me.tenantId, messageId: message.id },
           "[chatbot] could not create temporary media URL",
         );
-        return { ...message, mediaUrl: null };
+        return {
+          ...message,
+          mediaUrl: null,
+          ...(mediaExpiresAt ? { mediaExpiresAt } : {}),
+        };
       }
     }));
-    res.json(visibleMessages);
+    res.json(visibleMessages.map((message) => {
+      const { lastDeliveryError, ...safeMessage } = message;
+      return {
+        ...safeMessage,
+        deliveryIssue: safeChatbotDeliveryIssue(conv.channel, message.deliveryStatus, lastDeliveryError),
+      };
+    }));
   } catch (err) {
     next(err);
   }
@@ -230,7 +319,7 @@ router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFun
 
 router.post("/chatbot-messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = CreateMessageBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
@@ -251,7 +340,7 @@ router.post("/chatbot-messages", async (req, res, next: NextFunction): Promise<v
 
 router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = z.object({
       status: z.string().optional(),
@@ -305,6 +394,12 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
       if (parsed.data.status !== undefined) updates.status = parsed.data.status;
       if (parsed.data.assignedUserId !== undefined) updates.assignedUserId = parsed.data.assignedUserId || null;
       if (parsed.data.endedAt !== undefined) updates.endedAt = parsed.data.endedAt ? new Date(parsed.data.endedAt) : null;
+      if (parsed.data.clientId !== undefined) {
+        const currentMetadata = current.metadata && typeof current.metadata === "object" && !Array.isArray(current.metadata)
+          ? current.metadata as Record<string, unknown>
+          : {};
+        updates.metadata = { ...currentMetadata, clientAssociationManualOverride: true };
+      }
       const clientChanged = parsed.data.clientId !== undefined && parsed.data.clientId !== current.clientId;
       if (clientChanged) updates.clientId = parsed.data.clientId;
       if (Object.keys(updates).length > 0) {
@@ -450,7 +545,7 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
  * never accepted from the browser, which keeps an agent inside their tenant. */
 router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = ReplyConversationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
@@ -483,6 +578,10 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         && !Array.isArray(conversation.metadata)
         ? conversation.metadata as Record<string, unknown>
         : {};
+      const provider = metadata["provider"] === "zernio" ? "zernio" : "meta";
+      const integrationType = provider === "zernio"
+        ? INSTAGRAM_ZERNIO_TYPE
+        : INSTAGRAM_MESSAGING_TYPE;
       const integrationId = typeof metadata["instagramIntegrationId"] === "string"
         ? metadata["instagramIntegrationId"]
         : null;
@@ -491,7 +590,7 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
           .where(and(
             eq(tenantIntegrationsTable.id, integrationId),
             eq(tenantIntegrationsTable.tenantId, me.tenantId),
-            eq(tenantIntegrationsTable.type, INSTAGRAM_MESSAGING_TYPE),
+            eq(tenantIntegrationsTable.type, integrationType),
             eq(tenantIntegrationsTable.enabled, true),
             eq(tenantIntegrationsTable.status, "connected"),
           ))
@@ -501,6 +600,28 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         res.status(409).json({
           code: "INSTAGRAM_CONNECTION_UNAVAILABLE",
           error: "A conta do Instagram não está conectada. Reconecte-a nas configurações.",
+        });
+        return;
+      }
+      const zernioConfig = provider === "zernio"
+        ? (integration.config ?? {}) as Record<string, string>
+        : null;
+      const zernioApiKey = provider === "zernio"
+        ? readZernioApiKey(integration.secretsEncrypted)
+        : null;
+      if (
+        provider === "zernio" &&
+        (
+          !zernioApiKey ||
+          !zernioConfig?.accountId ||
+          zernioConfig.accountId !== metadata["zernioAccountId"] ||
+          zernioConfig.profileId !== metadata["zernioProfileId"] ||
+          typeof metadata["zernioConversationId"] !== "string"
+        )
+      ) {
+        res.status(409).json({
+          code: "ZERNIO_SEND_CONFIGURATION_INCOMPLETE",
+          error: "Configure a chave de API da Zernio e confira o vínculo da conta antes de enviar.",
         });
         return;
       }
@@ -560,27 +681,47 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
       }
 
       try {
-        const meta = getInstagramMetaConfig();
-        if (!meta.appConfigured) throw new InstagramProviderError("rejected");
-        const integrationConfig = (integration.config ?? {}) as Record<string, string>;
-        const instagramUserId = integrationConfig["instagramUserId"];
-        if (!instagramUserId) throw new InstagramProviderError("rejected");
-        await sendInstagramText(
-          meta,
-          readInstagramAccessToken(integration),
-          instagramUserId,
-          conversation.sessionId,
-          parsed.data.content,
-        );
-        await db.update(chatbotMessagesTable).set({
-          deliveryStatus: "sent",
-          deliveryAttempts: 1,
-          deliveryUpdatedAt: new Date(),
-          lastDeliveryError: null,
-        }).where(and(
-          eq(chatbotMessagesTable.id, id),
-          eq(chatbotMessagesTable.tenantId, me.tenantId),
-        ));
+        if (provider === "zernio") {
+          const providerMessageId = await sendZernioInstagramText(
+            zernioApiKey!,
+            zernioConfig!.accountId!,
+            metadata["zernioConversationId"] as string,
+            parsed.data.content,
+            parsed.data.idempotencyKey,
+          );
+          await db.update(chatbotMessagesTable).set({
+            providerMessageId,
+            deliveryStatus: "sent",
+            deliveryAttempts: 1,
+            deliveryUpdatedAt: new Date(),
+            lastDeliveryError: null,
+          }).where(and(
+            eq(chatbotMessagesTable.id, id),
+            eq(chatbotMessagesTable.tenantId, me.tenantId),
+          ));
+        } else {
+          const meta = getInstagramMetaConfig();
+          if (!meta.appConfigured) throw new InstagramProviderError("rejected");
+          const integrationConfig = (integration.config ?? {}) as Record<string, string>;
+          const instagramUserId = integrationConfig["instagramUserId"];
+          if (!instagramUserId) throw new InstagramProviderError("rejected");
+          await sendInstagramText(
+            meta,
+            readInstagramAccessToken(integration),
+            instagramUserId,
+            conversation.sessionId,
+            parsed.data.content,
+          );
+          await db.update(chatbotMessagesTable).set({
+            deliveryStatus: "sent",
+            deliveryAttempts: 1,
+            deliveryUpdatedAt: new Date(),
+            lastDeliveryError: null,
+          }).where(and(
+            eq(chatbotMessagesTable.id, id),
+            eq(chatbotMessagesTable.tenantId, me.tenantId),
+          ));
+        }
         await db.update(chatbotConversationsTable)
           .set({ status: "human_handoff", assignedUserId: me.id })
           .where(and(
@@ -593,17 +734,20 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         res.status(201).json(message);
       } catch (error) {
         const providerError = error instanceof InstagramProviderError ? error : null;
-        const outcomeUnknown = providerError?.kind === "unknown";
+        const zernioError = error instanceof ZernioInstagramSendError ? error : null;
+        const outcomeUnknown = providerError?.kind === "unknown" || zernioError?.kind === "unknown";
         await db.update(chatbotMessagesTable).set({
           deliveryStatus: outcomeUnknown ? "unknown" : "failed",
           deliveryAttempts: 1,
           deliveryUpdatedAt: new Date(),
-          lastDeliveryError: outcomeUnknown ? "instagram-outcome-unknown" : "instagram-provider-rejected",
+          lastDeliveryError: outcomeUnknown
+            ? `${provider}-outcome-unknown`
+            : `${provider}-provider-rejected`,
         }).where(and(
           eq(chatbotMessagesTable.id, id),
           eq(chatbotMessagesTable.tenantId, me.tenantId),
         ));
-        if (providerError?.httpStatus === 401) {
+        if (provider === "meta" && providerError?.httpStatus === 401) {
           await db.update(tenantIntegrationsTable).set({
             enabled: false,
             status: "error",
@@ -614,10 +758,14 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
           ));
         }
         res.status(outcomeUnknown ? 502 : 422).json({
-          code: outcomeUnknown ? "INSTAGRAM_DELIVERY_UNKNOWN" : "INSTAGRAM_DELIVERY_FAILED",
+          code: outcomeUnknown
+            ? "INSTAGRAM_DELIVERY_UNKNOWN"
+            : provider === "zernio" ? "ZERNIO_DELIVERY_FAILED" : "INSTAGRAM_DELIVERY_FAILED",
           error: outcomeUnknown
-            ? "A Meta não confirmou o resultado do envio. Verifique a conversa antes de tentar novamente."
-            : "A Meta recusou o envio. Revise a conexão e as permissões do Instagram.",
+            ? `A ${provider === "zernio" ? "Zernio" : "Meta"} não confirmou o resultado do envio. Verifique a conversa antes de tentar novamente.`
+            : provider === "zernio"
+              ? "A Zernio recusou o envio. Confira a chave de API e as permissões de mensagens."
+              : "A Meta recusou o envio. Revise a conexão e as permissões do Instagram.",
         });
       }
       return;
@@ -649,20 +797,44 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         eq(chatbotMessagesTable.sourceMessageId, sourceMessageId),
       ))
       .limit(1);
-    if (!existing || !await deliverAttendanceReply({
-      tenantId: me.tenantId,
-      messageId: existing.id,
-    })) {
+    const delivered = existing
+      ? await deliverAttendanceReply({
+          tenantId: me.tenantId,
+          messageId: existing.id,
+          inlineOnQueueFailure: true,
+        })
+      : false;
+    if (!existing) {
       next(new ValidationError("Não foi possível enviar a mensagem pelo WhatsApp.", "WHATSAPP_DELIVERY_FAILED"));
+      return;
+    }
+    const [message] = await db.select().from(chatbotMessagesTable)
+      .where(and(eq(chatbotMessagesTable.id, existing.id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!message) {
+      next(new NotFoundError("Mensagem não encontrada após o envio.", "MESSAGE_NOT_FOUND"));
+      return;
+    }
+    if (!delivered && message.deliveryStatus === "cancelled") {
+      next(new ForbiddenError(
+        safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, message.lastDeliveryError)
+          ?? CHATBOT_DELIVERY_ISSUES.optedOut,
+        "WHATSAPP_OPTED_OUT",
+      ));
+      return;
+    }
+    if (!delivered && message.deliveryStatus === "failed") {
+      next(new ValidationError(
+        safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, message.lastDeliveryError)
+          ?? CHATBOT_DELIVERY_ISSUES.rejected,
+        "WHATSAPP_DELIVERY_FAILED",
+      ));
       return;
     }
     await db.update(chatbotConversationsTable)
       .set({ status: "human_handoff", assignedUserId: me.id })
       .where(eq(chatbotConversationsTable.id, conversation.id));
-    const [message] = await db.select().from(chatbotMessagesTable)
-      .where(and(eq(chatbotMessagesTable.id, id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
-      .limit(1);
-    res.status(201).json(message);
+    res.status(delivered ? 201 : 202).json(message);
   } catch (err) {
     next(err);
   }

@@ -3,7 +3,7 @@ name: Manual migration workflow
 description: drizzle-kit is interactive so migrations must be created manually
 ---
 
-drizzle-kit generate/push prompts interactively and cannot be run non-interactively from scripts.
+`drizzle-kit generate/push` is interactive by default. Schema-only generation can run non-interactively, but its output still needs review against the existing incremental migration chain.
 
 **Correct workflow**:
 1. Write the SQL file at `lib/db/drizzle/NNNN_<tag>.sql`
@@ -13,6 +13,12 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 **Why**: The migrate command is non-interactive and reads the journal to determine what to apply. The generate command would overwrite the journal with drizzle's own snapshot.
 
 **How to apply**: Check the last `idx` in `_journal.json` before writing a new migration. Next migration is last idx + 1.
+
+**Generated migration review**: Reject generated SQL that recreates tables or columns already present in the baseline or incremental migration chain; use the documented manual SQL + journal workflow instead.
+
+**Why**: Schema-only generation can emit broad schema recreation when its snapshot does not represent the project's actual migration history, even when the intended change is only additive.
+
+**How to apply**: Review generated statements against the current journal and coverage checks before accepting them; keep only intended additive DDL and matching snapshot history.
 
 **Rule for clean-database prerequisites:** Do not rewrite already-applied baseline or incremental SQL to fix a dependency on a table created later in the journal. Prepare the prerequisite from its original CREATE migration only when the public schema is genuinely empty, and keep command-line and application migration entry points aligned.
 
@@ -38,6 +44,12 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 
 **How to apply:** Preserve the transaction boundary, translate lock-timeout SQLSTATE `55P03` to the actionable migration timeout error, and keep the session lock until the full journal runner ends.
 
+**Lock wait progress:** Probe with a nonblocking advisory-lock attempt, then log a safe start notice and periodic elapsed time only while contended; use the shared pipeline for CLI and API startup.
+
+**Why:** Startup could appear frozen during the bounded wait, while diagnostics must not expose database URLs, credentials, or SQL.
+
+**How to apply:** Keep progress logs limited to the validated application name and elapsed/timeout durations; test a short wait that releases normally and assert CLI/API messages are safe.
+
 **Timeout owner diagnostics:** Label CLI/API lock sessions with stable application names, restore each connection's original name before returning it to the pool, and report only the holder PID plus a sanitized `application_name`.
 
 **Why:** In a multi-instance deployment, the lock owner must be identifiable without exposing connection URLs, SQL, or unrelated session metadata.
@@ -49,6 +61,12 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 **Why:** An assumption that earlier journal rows survive a later SQL error made a recovery test fail; retry must be proven against the actual database transaction boundary.
 
 **How to apply:** Force a SQL error in a disposable copy of a migration, then retry with the canonical journal against the same database and confirm the full journal completes without dropping the database.
+
+**Abrupt process termination:** PostgreSQL releases a session-level advisory lock when the owning process loses its connection, even when application cleanup never runs.
+
+**Why:** A normal exception exercises `finally`, but a forced process exit validates the database's recovery boundary and prevents tests from relying on cleanup code that cannot run after a crash.
+
+**How to apply:** In an isolated PostgreSQL database, kill a child process after it confirms lock ownership, retry through the CLI, and verify the database identity and a preexisting marker remain unchanged while the journal completes.
 
 **Migration recovery fixtures:** Select the migration to fault by its stable tag or SQL signature, never by a relative journal position such as `entries.at(-2)`.
 

@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import {
   buildTripCsvData,
   buildTripsCsv,
@@ -45,7 +43,24 @@ describe("trip CSV import", () => {
   });
 
   it("recognizes all records from the complete export without source IDs or occupancy", () => {
-    const csv = readFileSync(resolve(process.cwd(), "../../attached_assets/trips_1787592010061.csv"), "utf8");
+    const headers = [...TRIP_CSV_HEADERS, "Custos Fixos"];
+    const records = Array.from({ length: 20 }, (_, index) => {
+      const first = index === 0;
+      const values = [
+        first ? "Férias no Francês" : `Viagem ${index + 1}`,
+        first ? "Praia do Francês" : "Praias",
+        first ? "Maceió" : "Natal",
+        first ? "AL" : "RN",
+        first ? "17/12/2026" : "20/12/2026",
+        first ? "21/12/2026" : "22/12/2026",
+        "", "", first ? "R$ 850,00" : "R$ 100,00", "", "",
+        first ? "55" : "46", "excursão", "standard", "", "",
+        "Praça Central", "Guia", "", "Ônibus", "", "", "", "", "ativa",
+        first ? JSON.stringify([{ name: "Motorista", value: 13000, id: "source-cost-id" }]) : "",
+      ];
+      return values.map(value => `"${value.replace(/"/g, '""')}"`).join(",");
+    });
+    const csv = [headers.map(value => `"${value}"`).join(","), ...records].join("\n");
     const rows = parseTripCsv(csv);
     const imported = rows.slice(1).map((row, index) => buildTripCsvData(rows[0], row, index + 2));
     expect(imported).toHaveLength(20);

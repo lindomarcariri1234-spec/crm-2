@@ -28,12 +28,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { DollarSign, Receipt, ArrowDown, Trash2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { RESERVATION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, type ReservationStatus } from "@workspace/permissions";
 import { fmt, METHOD_LABELS } from "./constants";
 import type { LinkedData } from "@/lib/linked-data";
 
 const MANAGEMENT_ROLES = ["super_admin", "agency_admin", "agency_manager"];
+const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 const ReservationStatusSchema = z.enum([
   RESERVATION_STATUS.PENDING,
@@ -93,6 +95,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
   const updateReservation = useUpdateReservation();
   const createPayment = useCreatePayment();
   const deletePayment = useDeletePayment();
+  const { toast } = useToast();
   const { data: paymentsData } = useListPayments(
     { reservationId, limit: 50 },
     { query: { queryKey: ["payments", reservationId], enabled: open && !!reservationId } }
@@ -109,6 +112,9 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
     || (!data?.isGratuidade && existingPaidAmount > 0);
 
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
+  const [partialRefundPaymentId, setPartialRefundPaymentId] = useState<string | null>(null);
+  const [partialRefundAmount, setPartialRefundAmount] = useState("");
+  const [partialRefundPending, setPartialRefundPending] = useState(false);
 
   const [paymentMethod, setPaymentMethod] = useState("");
   const [editStatus, setEditStatus] = useState<string>("");
@@ -343,6 +349,45 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
           .some(term => key.includes(term));
       },
     });
+  };
+
+  const handlePartialRefund = async (event: React.FormEvent<HTMLFormElement>, paymentId: string) => {
+    event.preventDefault();
+    const amount = Number(partialRefundAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    setPartialRefundPending(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/payments/${encodeURIComponent(paymentId)}/partial-refunds`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      const body = await response.json().catch(() => ({})) as { message?: string; error?: string };
+      if (!response.ok) throw new Error(body.message ?? body.error ?? "Não foi possível registrar o estorno.");
+      setPartialRefundPaymentId(null);
+      setPartialRefundAmount("");
+      toast({ title: "Estorno parcial registrado", description: "O saldo da reserva foi recalculado." });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["reservation-edit", reservationId] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/reservations"] }),
+        queryClient.invalidateQueries({ queryKey: ["reservation", reservationId] }),
+        queryClient.invalidateQueries({ queryKey: ["payments", reservationId] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/payments"] }),
+        queryClient.invalidateQueries({
+          predicate: query => ["financial-metrics", "payments/summary", "clients", "store/orders"]
+            .some(term => JSON.stringify(query.queryKey).includes(term)),
+        }),
+      ]);
+    } catch (error) {
+      toast({
+        title: "Falha ao registrar estorno",
+        description: error instanceof Error ? error.message : "Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setPartialRefundPending(false);
+    }
   };
 
   return (
@@ -595,11 +640,18 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
                       [PAYMENT_STATUS.CHARGED_BACK]:{ label: "Chargeback", cls: "bg-red-100 text-red-700" },
                     };
                     return payments.map(p => {
-                      const cfg = PAYMENT_STATUS_CFG[p.status ?? ""] ?? { label: p.status ?? "—", cls: "bg-gray-100 text-gray-600" };
-                      const isPaid = p.status === PAYMENT_STATUS.PAID || p.status === PAYMENT_STATUS.APPROVED;
+                      const isPartialRefund = p.category === "manual_refund";
+                      const cfg = isPartialRefund
+                        ? { label: "Estorno parcial", cls: "bg-purple-100 text-purple-700" }
+                        : PAYMENT_STATUS_CFG[p.status ?? ""] ?? { label: p.status ?? "—", cls: "bg-gray-100 text-gray-600" };
+                      const isPaid = !isPartialRefund && (p.status === PAYMENT_STATUS.PAID || p.status === PAYMENT_STATUS.APPROVED);
                       const displayDate = p.paidAt ?? p.dueDate;
+                      const refundRemaining = Number(p.amount) - payments
+                        .filter(refund => refund.refundOfPaymentId === p.id && refund.category === "manual_refund")
+                        .reduce((sum, refund) => sum + Math.abs(Number(refund.amount)), 0);
                       return (
-                        <div key={p.id} className="flex items-center justify-between p-2.5 bg-muted/40 rounded-lg border text-sm">
+                        <div key={p.id} className="space-y-2">
+                        <div className="flex items-center justify-between p-2.5 bg-muted/40 rounded-lg border text-sm">
                           <div>
                             <p className="font-medium text-xs">{METHOD_LABELS[p.paymentMethod ?? ""] ?? p.paymentMethod ?? "—"}</p>
                             {displayDate && (
@@ -627,7 +679,47 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             )}
+                            {canDeletePayment
+                              && p.type === PAYMENT_TYPE.RECEIVABLE
+                              && (p.status === PAYMENT_STATUS.PAID || p.status === PAYMENT_STATUS.APPROVED)
+                              && p.gateway !== "stripe"
+                              && Number(p.amount) > 0
+                              && refundRemaining > 0
+                              && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setPartialRefundPaymentId(partialRefundPaymentId === p.id ? null : p.id);
+                                    setPartialRefundAmount("");
+                                  }}
+                                >
+                                  Estorno parcial
+                                </Button>
+                              )}
                           </div>
+                        </div>
+                        {partialRefundPaymentId === p.id && (
+                          <form className="flex items-end gap-2 rounded-md border p-2" onSubmit={event => void handlePartialRefund(event, p.id)}>
+                            <div className="flex-1 space-y-1">
+                              <label className="text-xs font-medium" htmlFor={`partial-refund-${p.id}`}>Valor do estorno (R$)</label>
+                              <Input
+                                id={`partial-refund-${p.id}`}
+                                type="number"
+                                min="0.01"
+                                max={refundRemaining}
+                                step="0.01"
+                                value={partialRefundAmount}
+                                onChange={event => setPartialRefundAmount(event.target.value)}
+                                required
+                              />
+                            </div>
+                            <Button type="submit" size="sm" disabled={partialRefundPending || !partialRefundAmount}>
+                              {partialRefundPending ? "Registrando..." : "Confirmar"}
+                            </Button>
+                          </form>
+                        )}
                         </div>
                       );
                     });

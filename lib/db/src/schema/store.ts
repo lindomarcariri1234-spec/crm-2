@@ -275,6 +275,7 @@ export const storeOrdersTable = pgTable("store_orders", {
   paymentStatus: text("payment_status").notNull().default("pending"),
 
   paymentIntentId: text("payment_intent_id"),
+  stripeRefundedAmount: integer("stripe_refunded_amount").notNull().default(0),
   paymentChargeId: text("payment_charge_id"),
   // One-shot token returned in the order POST response. Required by
   // /public/store/:slug/orders/:orderNumber/payment-intent so attackers who

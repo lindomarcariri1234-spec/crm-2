@@ -10,10 +10,10 @@ import { addSeatClient, removeSeatClient } from "../lib/seat-sse";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { tryAddBoardingClient, removeBoardingClient, emitBoardingUpdate } from "../lib/boarding-sse";
 import { getClientIp } from "../lib/get-client-ip";
-import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationRoomsTable, accommodationsTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, tripCostsTable, expensesTable, paymentsTable, type TripImportResult } from "@workspace/db";
+import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationRoomsTable, accommodationsTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, tripCostsTable, expensesTable, paymentsTable, storesTable, storeProductsTable, type TripImportResult } from "@workspace/db";
 import { checkPlanLimit } from "../lib/planLimits";
 import type { LayoutCell, FixedCostItem, VariableCostItem, FreePassenger } from "@workspace/db";
-import { eq, and, ilike, sql, desc, asc, inArray, or, gt, gte, isNotNull } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, asc, inArray, or, gt, gte, isNotNull, exists, notExists } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser, MANAGEMENT_ROLES, ADMIN_ROLES } from "../lib/tenant";
 import { parseBrazilCalendarDateStart } from "../lib/trip-date-filter";
@@ -47,7 +47,7 @@ import {
   type ManifestPanel,
 } from "../lib/manifest-helpers.js";
 import { isValidTripTime, normalizeTripTime } from "../lib/trip-date-time.js";
-import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, TRIP_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type TripStatus, type ReservationStatus } from "@workspace/permissions";
+import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, TRIP_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, ROLES, type TripStatus, type ReservationStatus } from "@workspace/permissions";
 import { parseTripStatus } from "../lib/status-validators";
 import { getPassengerExportFinancialValues } from "../lib/passenger-export";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
@@ -73,7 +73,9 @@ function tripImportFingerprint(data: { name: string; destination: string; destin
 
 const ListTripsQuery = z.object({
   search: z.string().optional(),
+  location: z.string().trim().max(100).optional(),
   status: z.enum(["draft", "published", "active", "confirmed", "cancelled", "completed"]).optional(),
+  storePublication: z.enum(["published", "unpublished"]).optional(),
   type: z.string().optional(),
   date: z.string()
     .refine((value) => parseBrazilCalendarDateStart(value) !== null, {
@@ -517,6 +519,52 @@ export function formatTrip(t: typeof tripsTable.$inferSelect) {
   };
 }
 
+export function formatClientTrip(t: typeof tripsTable.$inferSelect) {
+  return {
+    ...formatTrip(t),
+    driverCnh: null,
+    driverPhone: null,
+    driver1Cpf: null,
+    driver1Cnh: null,
+    driver1CnhCategory: null,
+    driver1CnhExpiry: null,
+    driver2Cpf: null,
+    driver2Cnh: null,
+    driver2CnhCategory: null,
+    driver2CnhExpiry: null,
+    tourGuideCpf: null,
+    tourGuideRegistration: null,
+    manifestNumber: null,
+    fixedCosts: [],
+    variableCosts: [],
+  };
+}
+
+async function getClientTripScope(me: { id: string; tenantId: string }) {
+  const [client] = await db.select({ id: clientsTable.id })
+    .from(clientsTable)
+    .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.userId, me.id)))
+    .limit(1);
+  if (!client) return { clientId: null, tripIds: [] as string[] };
+
+  const reservations = await db.select({ tripId: reservationsTable.tripId })
+    .from(reservationsTable)
+    .where(and(
+      eq(reservationsTable.tenantId, me.tenantId),
+      eq(reservationsTable.clientId, client.id),
+    ));
+  return {
+    clientId: client.id,
+    tripIds: [...new Set(reservations.map(row => row.tripId).filter((id): id is string => Boolean(id)))],
+  };
+}
+
+async function requireClientTripAccess(me: { id: string; tenantId: string; role: string }, tripId: string) {
+  if (me.role !== ROLES.CLIENT) return;
+  const { tripIds } = await getClientTripScope(me);
+  if (!tripIds.includes(tripId)) throw new NotFoundError("Trip not found", "TRIP_NOT_FOUND");
+}
+
 router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -527,12 +575,49 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
       next(new ValidationError(queryResult.error.errors[0]?.message ?? "Invalid query params", "VALIDATION_ERROR"));
       return;
     }
-    const { search, status, type, date, page: pageNum, limit: limitNum } = queryResult.data;
+    const { search, location, status, storePublication, type, date, page: pageNum, limit: limitNum } = queryResult.data;
     const offset = (pageNum - 1) * limitNum;
 
     const conditions: ReturnType<typeof eq>[] = [eq(tripsTable.tenantId, me.tenantId)];
+    if (me.role === ROLES.CLIENT) {
+      const { tripIds } = await getClientTripScope(me);
+      if (tripIds.length === 0) {
+        res.json({
+          data: [],
+          total: 0,
+          page: pageNum,
+          limit: limitNum,
+          stats: { total: 0, active: 0, totalCapacity: 0, occupiedSeats: 0, totalRevenue: 0 },
+        });
+        return;
+      }
+      conditions.push(inArray(tripsTable.id, tripIds) as ReturnType<typeof eq>);
+    }
     if (search) conditions.push(ilike(tripsTable.name, `%${search}%`) as ReturnType<typeof eq>);
+    if (location) {
+      const pattern = `%${location}%`;
+      conditions.push(or(
+        ilike(tripsTable.destination, pattern),
+        ilike(tripsTable.destinationCity, pattern),
+        ilike(tripsTable.destinationState, pattern),
+        ilike(tripsTable.originCity, pattern),
+        ilike(tripsTable.originState, pattern),
+      )! as ReturnType<typeof eq>);
+    }
     if (status) conditions.push(eq(tripsTable.status, parseTripStatus(status)));
+    if (storePublication) {
+      const activeStoreProduct = db.select({ id: storeProductsTable.id })
+        .from(storeProductsTable)
+        .innerJoin(storesTable, eq(storeProductsTable.storeId, storesTable.id))
+        .where(and(
+          eq(storeProductsTable.tripId, tripsTable.id),
+          eq(storeProductsTable.status, "active"),
+          eq(storesTable.tenantId, tripsTable.tenantId),
+        ));
+      conditions.push((storePublication === "published"
+        ? exists(activeStoreProduct)
+        : notExists(activeStoreProduct)) as ReturnType<typeof eq>);
+    }
     if (type) conditions.push(eq(tripsTable.type, type) as ReturnType<typeof eq>);
     if (date) {
       const departureDateStart = parseBrazilCalendarDateStart(date);
@@ -580,7 +665,7 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
     ]);
 
     res.json({
-      data: trips.map(formatTrip),
+      data: trips.map(me.role === ROLES.CLIENT ? formatClientTrip : formatTrip),
       total: Number(countResult?.count ?? 0),
       page: pageNum,
       limit: limitNum,
@@ -589,7 +674,7 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
         active: Number(statsResult?.active ?? 0),
         totalCapacity: Number(statsResult?.totalCapacity ?? 0),
         occupiedSeats: Number(statsResult?.occupiedSeats ?? 0),
-        totalRevenue: Number(statsResult?.totalRevenue ?? 0),
+        totalRevenue: me.role === ROLES.CLIENT ? 0 : Number(statsResult?.totalRevenue ?? 0),
       },
     });
   } catch (err) {
@@ -1116,11 +1201,12 @@ router.get("/trips/:id", async (req, res, next: NextFunction): Promise<void> => 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    await requireClientTripAccess(me, req.params.id);
     const [trip] = await db.select().from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
       .limit(1);
     if (!trip) { next(new NotFoundError("Trip not found", "TRIP_NOT_FOUND")); return; }
-    res.json(formatTrip(trip));
+    res.json(me.role === ROLES.CLIENT ? formatClientTrip(trip) : formatTrip(trip));
   } catch (err) {
     next(err);
   }
@@ -1130,6 +1216,10 @@ router.get("/trips/:id/room-allocation-summary", async (req, res, next: NextFunc
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.MANAGE)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const [trip] = await db.select().from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
       .limit(1);
@@ -1711,6 +1801,7 @@ router.get("/trips/:id/seat-map", async (req, res, next: NextFunction): Promise<
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    await requireClientTripAccess(me, req.params.id);
     const features = await getTenantSupportedFeatures(me.tenantId);
     if (!hasSeatMapFeature(features)) {
       next(new ForbiddenError("Mapa de assentos não está disponível no seu plano atual", "FEATURE_NOT_IN_PLAN"));
@@ -1763,8 +1854,8 @@ router.get("/trips/:id/seat-map", async (req, res, next: NextFunction): Promise<
         : freeSeats[num]
           ? "free"
           : (data.type && !["seat", "vip", "accessible"].includes(data.type) ? data.type : "available"),
-      occupantName: freeSeats[num] ?? null,
-      reservationId: occupiedSeats[num]?.reservationId ?? null,
+      occupantName: me.role === ROLES.CLIENT ? null : freeSeats[num] ?? null,
+      reservationId: me.role === ROLES.CLIENT ? null : occupiedSeats[num]?.reservationId ?? null,
     }));
 
     const maxCol = Math.max(...seats.map(s => s.col), 4);
@@ -2036,6 +2127,7 @@ router.post("/trips/:id/sync-seat-counters", async (req, res, next: NextFunction
 router.get("/trips/:id/seats/stream", async (req, res, next: NextFunction): Promise<void> => {
   const me = await requireAuth(req, res);
   if (!me) return;
+  await requireClientTripAccess(me, req.params.id);
 
   const features = await getTenantSupportedFeatures(me.tenantId);
   if (!hasSeatMapFeature(features)) {
@@ -3066,7 +3158,10 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
       .limit(1);
     if (!trip) { next(new NotFoundError("Viagem não encontrada", "TRIP_NOT_FOUND")); return; }
 
-    const [passenger] = await db.select({ id: passengersTable.id })
+    const [passenger] = await db.select({
+      id: passengersTable.id,
+      reservationId: passengersTable.reservationId,
+    })
       .from(passengersTable)
       .innerJoin(reservationsTable, eq(passengersTable.reservationId, reservationsTable.id))
       .where(and(
@@ -3076,6 +3171,10 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
       ))
       .limit(1);
     if (!passenger) { next(new NotFoundError("Passageiro não encontrado", "PASSENGER_NOT_FOUND")); return; }
+    if (reservationId && reservationId !== passenger.reservationId) {
+      next(new ValidationError("A reserva não corresponde ao passageiro.", "VALIDATION_ERROR"));
+      return;
+    }
 
     const checkedInAt = new Date();
     await db.insert(tripCheckinsTable)
@@ -3084,7 +3183,7 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
         tripId: req.params.id!,
         tenantId: me.tenantId,
         passengerId,
-        reservationId: reservationId ?? null,
+        reservationId: passenger.reservationId,
         checkedInByUserRef: me.id,
         checkedInAt,
         notes: notes ?? null,
@@ -3148,6 +3247,10 @@ router.get("/trips/:id/boarding-live", async (req, res, next: NextFunction): Pro
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const [trip] = await db.select({
       id: tripsTable.id,
@@ -3296,6 +3399,10 @@ router.get("/trips/:id/boarding-live/stream", async (req, res, next: NextFunctio
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const tripId = req.params.id!;
     const [trip] = await db.select({ id: tripsTable.id })
@@ -3518,6 +3625,10 @@ router.get("/trips/:id/location", async (req, res, next: NextFunction): Promise<
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const [location] = await db.select()
       .from(tripGuideLocationsTable)
       .where(and(

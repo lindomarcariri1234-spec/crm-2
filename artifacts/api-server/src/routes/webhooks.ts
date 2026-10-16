@@ -1,11 +1,17 @@
-import { Router, type Request, type NextFunction } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import crypto from "node:crypto";
 import { db } from "@workspace/db";
 import { storeOrdersTable, reservationsTable, paymentsTable, storesTable, tripsTable } from "@workspace/db";
 import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
-import { syncReservationPaymentStatus, paymentExistsForGatewayTx, type DbExecutor } from "../lib/reservation-payments";
+import {
+  applyCumulativeStripeRefundToPayments,
+  recalculateReservationPaymentAmountsPreservingStatus,
+  syncReservationPaymentStatus,
+  paymentExistsForGatewayTx,
+  type DbExecutor,
+} from "../lib/reservation-payments";
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { runDeferredOrderAccounting, runPostPaymentSideEffects } from "../services/checkout/post-booking";
@@ -28,7 +34,6 @@ import { processEvolutionInbound } from "../services/whatsapp-attendance";
 import { processEvolutionDeliveryStatus } from "../services/whatsapp-attendance";
 import { moveDealToStage } from "../services/pipeline-automation";
 import { updateOutboundDeliveryFromWebhook } from "../services/outbound-delivery";
-import { recomputeClientClassification } from "../services/client-classification.js";
 
 const router = Router();
 
@@ -40,6 +45,11 @@ function evolutionWebhookApiKey(req: Request): string | undefined {
     : null;
   const payloadKey = body?.["apikey"] ?? body?.["apiKey"];
   return typeof payloadKey === "string" ? payloadKey : undefined;
+}
+
+function evolutionInstanceName(req: Request): string {
+  const value = req.params["instanceName"];
+  return typeof value === "string" ? value : value?.[0] ?? "";
 }
 
 const RESEND_BOUNCE_TYPES = new Map<string, "permanent" | "temporary">([
@@ -57,13 +67,14 @@ function parseResendBounceType(data: Record<string, unknown>): "permanent" | "te
   return RESEND_BOUNCE_TYPES.get(rawType);
 }
 
-// Evolution calls this endpoint for every inbound WhatsApp event. It is
-// instance-scoped and verifies the integration API key before resolving a
+// Evolution can POST to either the configured base callback URL or append
+// event names when an instance has webhookByEvents enabled. Both paths are
+// instance-scoped and verify the integration API key before resolving a
 // tenant; no tenant identifier is accepted from the external caller.
-router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next: NextFunction): Promise<void> => {
+async function handleEvolutionWebhook(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const statusOutcome = await processEvolutionDeliveryStatus({
-      instanceName: req.params["instanceName"] ?? "",
+      instanceName: evolutionInstanceName(req),
       apiKey: evolutionWebhookApiKey(req),
       payload: req.body,
     });
@@ -77,7 +88,7 @@ router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next:
     }
 
     const outcome = await processEvolutionInbound({
-      instanceName: req.params["instanceName"] ?? "",
+      instanceName: evolutionInstanceName(req),
       apiKey: evolutionWebhookApiKey(req),
       payload: req.body,
     });
@@ -89,6 +100,17 @@ router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next:
   } catch (err) {
     next(err);
   }
+}
+
+const EVOLUTION_WEBHOOK_EVENTS = new Set(["messages-upsert", "messages-update"]);
+router.post("/webhooks/whatsapp/evolution/:instanceName", handleEvolutionWebhook);
+router.post("/webhooks/whatsapp/evolution/:instanceName/:eventName", (req, res, next): void => {
+  const eventName = req.params["eventName"]?.toLowerCase();
+  if (!eventName || !EVOLUTION_WEBHOOK_EVENTS.has(eventName)) {
+    res.status(404).json({ received: false });
+    return;
+  }
+  void handleEvolutionWebhook(req, res, next);
 });
 
 // Resend sends provider callbacks without a user session. The tenant is
@@ -477,24 +499,46 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
     const paymentIntentId = String(obj["payment_intent"] ?? "");
     if (!paymentIntentId) return;
     // Only treat as a full refund/cancellation when the entire charge was
-    // refunded. Partial refunds are recorded in financial views via the
-    // existing payments rows but must not cancel the reservation.
+    // refunded. Partial refunds reduce net receipts but leave reservations active.
     const amount = Number(obj["amount"] ?? 0);
     const amountRefunded = Number(obj["amount_refunded"] ?? 0);
     if (amount > 0 && amountRefunded < amount) {
       let refundedOrderId: string | null = null;
       await db.transaction(async (tx) => {
-        const [order] = await tx.select({ id: storeOrdersTable.id, tenantId: storeOrdersTable.tenantId })
+        const [order] = await tx.select({
+          id: storeOrdersTable.id,
+          tenantId: storeOrdersTable.tenantId,
+          paymentStatus: storeOrdersTable.paymentStatus,
+          status: storeOrdersTable.status,
+          stripeRefundedAmount: storeOrdersTable.stripeRefundedAmount,
+        })
           .from(storeOrdersTable)
           .where(and(eq(storeOrdersTable.paymentIntentId, paymentIntentId), eq(storeOrdersTable.tenantId, store.tenantId)))
+          .for("update")
           .limit(1);
         if (order) {
+          if (
+            order.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+            || order.status === STORE_ORDER_STATUS.CANCELLED
+          ) return;
           refundedOrderId = order.id;
-          await adjustOrderSettlement(tx as unknown as DbExecutor, {
-            tenantId: order.tenantId, orderId: order.id, amount: amountRefunded,
-            totalAmount: amount, eventKey: `partial-refund:stripe:${paymentIntentId}:${amountRefunded}`,
-            occurredAt: new Date(), reason: "Reembolso parcial Stripe",
-          });
+          const cumulativeRefundCents = Math.max(
+            order.stripeRefundedAmount,
+            Math.min(Math.floor(amount), Math.floor(amountRefunded)),
+          );
+          await tx.update(storeOrdersTable)
+            .set({ stripeRefundedAmount: cumulativeRefundCents })
+            .where(and(
+              eq(storeOrdersTable.id, order.id),
+              eq(storeOrdersTable.tenantId, order.tenantId),
+            ));
+          await applySavedStripeRefund(
+            tx as unknown as DbExecutor,
+            order,
+            paymentIntentId,
+            cumulativeRefundCents,
+            Math.floor(amount),
+          );
         }
       });
       if (refundedOrderId) {
@@ -509,13 +553,10 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
         `);
         const clients = (affected as unknown as { rows: Array<{ client_id: string }> }).rows;
         for (const client of clients) {
-          await recomputeClientClassification({
-            tenantId: store.tenantId,
-            clientId: client.client_id,
-            trigger: "partial_order_refund",
-            sourceId: refundedOrderId,
-            reason: "Reembolso parcial aplicado; indicadores de classificação recalculados.",
-          });
+          await recalculateClientFinancials(
+            client.client_id,
+            store.tenantId,
+          );
         }
       }
       return;
@@ -842,6 +883,45 @@ interface ApplyResult {
   retryDeferredOnly?: boolean;
 }
 
+async function applySavedStripeRefund(
+  tx: DbExecutor,
+  order: { id: string; tenantId: string },
+  paymentIntentId: string,
+  amountRefundedCents: number,
+  chargeAmountCents: number,
+): Promise<string[]> {
+  const cumulativeRefundCents = Math.min(
+    Math.max(0, Math.floor(amountRefundedCents)),
+    Math.max(0, Math.floor(chargeAmountCents)),
+  );
+  if (cumulativeRefundCents === 0) return [];
+
+  await adjustOrderSettlement(tx, {
+    tenantId: order.tenantId,
+    orderId: order.id,
+    amount: cumulativeRefundCents / 100,
+    totalAmount: chargeAmountCents / 100,
+    eventKey: `partial-refund:stripe:${paymentIntentId}:${cumulativeRefundCents}`,
+    occurredAt: new Date(),
+    reason: "Reembolso parcial Stripe",
+  });
+  const { reservationIds } = await applyCumulativeStripeRefundToPayments(tx, {
+    tenantId: order.tenantId,
+    orderId: order.id,
+    paymentIntentId,
+    amountRefundedCents: cumulativeRefundCents,
+    chargeAmountCents,
+  });
+  for (const reservationId of reservationIds) {
+    await recalculateReservationPaymentAmountsPreservingStatus(
+      reservationId,
+      order.tenantId,
+      tx,
+    );
+  }
+  return reservationIds;
+}
+
 export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Promise<ApplyResult | null> {
   const { store, gateway, transactionId, paymentIntentId, amount, paidAt, stripeLivemode } = args;
   const isTestMode = gateway === "stripe"
@@ -864,7 +944,8 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       paymentMethod: storeOrdersTable.paymentMethod,
       paymentStatus: storeOrdersTable.paymentStatus,
       status: storeOrdersTable.status,
-       totalAmount: storeOrdersTable.totalAmount,
+      totalAmount: storeOrdersTable.totalAmount,
+      stripeRefundedAmount: storeOrdersTable.stripeRefundedAmount,
     })
     .from(storeOrdersTable)
     .where(
@@ -881,13 +962,12 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     logger.info({ paymentIntentId, gateway, slug: store.slug }, "[webhooks] No matching order for paymentIntentId");
     return null;
   }
-  if (order.status === STORE_ORDER_STATUS.CANCELLED) {
-    logger.warn({ orderId: order.id, gateway, transactionId }, "[webhooks] Ignoring payment for cancelled/expired order");
-    return null;
-  }
-
   // Idempotency: if we already recorded this exact gateway transaction, stop.
   if (await paymentExistsForGatewayTx(order.tenantId, gateway, transactionId, tx)) {
+    if (order.status === STORE_ORDER_STATUS.CANCELLED) {
+      logger.info({ orderId: order.id, gateway, transactionId }, "[webhooks] Duplicate late payment already recorded");
+      return null;
+    }
     if (gateway === "stripe" && typeof stripeLivemode === "boolean") {
       await tx.update(storeOrdersTable)
         .set({ stripeLivemode })
@@ -910,6 +990,36 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       retryDeferredOnly: true,
       ...(order.paymentStatus !== STORE_PAYMENT_STATUS.PAID ? { partialPayment: true } : {}),
     };
+  }
+
+  if (order.status === STORE_ORDER_STATUS.CANCELLED) {
+    const receivedAmount = roundMoney(amount);
+    await tx.insert(paymentsTable).values({
+      id: generateId(),
+      tenantId: order.tenantId,
+      reservationId: null,
+      clientId: order.clientId ?? null,
+      orderId: order.id,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "store_order",
+      amount: receivedAmount.toFixed(2),
+      paymentMethod: order.paymentMethod ?? gateway,
+      installmentNumber: 1,
+      totalInstallments: 1,
+      dueDate: paidAt,
+      paidAt,
+      status: PAYMENT_STATUS.PAID,
+      gateway,
+      transactionId,
+      isTestMode,
+      description: "Pagamento recebido após o cancelamento do pedido. Reserva não reativada; revisar e reembolsar manualmente.",
+      notes: "Pagamento tardio confirmado pelo provedor. O pedido e a reserva permanecem cancelados para evitar vender uma vaga já liberada. Revisar e reembolsar manualmente.",
+    });
+    logger.error(
+      { orderId: order.id, gateway, transactionId, amount: receivedAmount },
+      "[webhooks] Late payment recorded for cancelled order; manual refund review required",
+    );
+    return null;
   }
 
   // Reservations are normally already pending from checkout. The call remains
@@ -941,6 +1051,7 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       eq(paymentsTable.tenantId, order.tenantId),
       eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
       eq(paymentsTable.status, PAYMENT_STATUS.PAID),
+      sql`${paymentsTable.category} IS DISTINCT FROM 'stripe_refund'`,
       reservations.length > 0
         ? or(
           eq(paymentsTable.orderId, order.id),
@@ -1021,6 +1132,18 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       occurredAt: paidAt,
       receivedAmount: effectiveReceivedAmount,
     });
+    if (gateway === "stripe" && order.stripeRefundedAmount > 0) {
+      await applySavedStripeRefund(
+        tx,
+        order,
+        paymentIntentId,
+        order.stripeRefundedAmount,
+        Math.round(amount * 100),
+      );
+      if (order.clientId) {
+        await recalculateClientFinancials(order.clientId, order.tenantId, tx);
+      }
+    }
     if (isPartialPayment) {
       await tx.update(storeOrdersTable).set({
         amountRemaining: Math.max(0, totalOrderAmount - receivedAfterEvent).toFixed(2),
@@ -1136,6 +1259,16 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     occurredAt: paidAt,
     receivedAmount: effectiveReceivedAmount,
   });
+
+  if (gateway === "stripe" && order.stripeRefundedAmount > 0) {
+    await applySavedStripeRefund(
+      tx,
+      order,
+      paymentIntentId,
+      order.stripeRefundedAmount,
+      Math.round(amount * 100),
+    );
+  }
 
   if (order.clientId) {
     await recalculateClientFinancials(order.clientId, order.tenantId, tx);

@@ -194,9 +194,10 @@ FRONTEND_URL = "https://visitecrm.com"
 VITE_APP_URL = "https://visitecrm.com/"
 PUBLICATION_SMOKE_URL = "https://crm-2-lindomarcariri.replit.app"
 VITE_STRIPE_PUBLIC_KEY = "pk_live_51TSu3dKLGMGrnwqHxjXo5fRdJdAyFQHsuFoWG6BaJKx6GGza4pjg2PPMQzFch9OMDVeLOHU07SxYp3J4v27FL5lT00yZoKCeXr"
+VITE_CLERK_PROXY_URL = "https://visitecrm.com/api/__clerk"
 
   [userenv.development]
-CLERK_PUBLISHABLE_KEY = "pk_test_ZW1pbmVudC1jYXQtMjMuY2xlcmsuYWNjb3VudHMuZGV2JA"
+CLERK_PUBLISHABLE_KEY = "pk_test_ZW5hYmxlZC1ndWxsLTM0NzUuY2xlcmsuYWNjb3VudHMuZGV2JA"
 
 [[ports]]
 localPort = 5000

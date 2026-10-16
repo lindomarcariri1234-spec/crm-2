@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { MessageSquare, Send } from "lucide-react";
 import type { AiConversationMessage } from "@/lib/communicationTimeline";
 import type { ClientConversationSummary, CommunicationTimelineEntry } from "@/lib/communicationTimeline";
@@ -18,6 +18,7 @@ export interface AiConversation {
   status: string;
   assignedUserId: string | null;
   sessionId: string | null;
+  metadata?: Record<string, unknown> | null;
   startedAt: string;
   createdAt: string;
   lastMessageId: string | null;
@@ -37,10 +38,12 @@ export interface AiMessage {
   isBot: boolean;
   sentAt: string;
   deliveryStatus?: string | null;
+  deliveryIssue?: string | null;
   mediaUrl?: string | null;
   mediaMimeType?: string | null;
   mediaFileName?: string | null;
   mediaExpiredAt?: string | null;
+  mediaExpiresAt?: string | null;
 }
 
 export type ClientLinkStatus = "checking" | "valid" | "missing" | "unavailable";
@@ -112,13 +115,46 @@ export function MessageMediaAttachment({
   mimeType,
   fileName,
   expiredAt,
+  expiresAt,
 }: {
   url: string | null | undefined;
   mimeType: string | null | undefined;
   fileName: string | null | undefined;
   expiredAt: string | null | undefined;
+  expiresAt?: string | null;
 }) {
-  if (expiredAt) {
+  const [now, setNow] = useState(() => Date.now());
+  const [loadFailed, setLoadFailed] = useState(false);
+  const expiryTime = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+  let safeUrl: string | null = null;
+  try {
+    const parsedUrl = url ? new URL(url) : null;
+    if (parsedUrl && (parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:") && !parsedUrl.username && !parsedUrl.password) {
+      safeUrl = parsedUrl.toString();
+    }
+  } catch {
+    safeUrl = null;
+  }
+
+  useEffect(() => {
+    if (!Number.isFinite(expiryTime)) return;
+    const remainingMs = expiryTime - Date.now();
+    if (remainingMs <= 0) {
+      setNow(Date.now());
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setNow(Date.now()),
+      Math.min(remainingMs, 24 * 60 * 60 * 1000),
+    );
+    return () => window.clearTimeout(timer);
+  }, [expiryTime, now]);
+
+  useEffect(() => {
+    setLoadFailed(false);
+  }, [safeUrl]);
+
+  if (expiredAt || (Number.isFinite(expiryTime) && expiryTime <= Math.max(now, Date.now()))) {
     return (
       <span className="mt-1 block text-xs opacity-80" role="status">
         Anexo expirado após 90 dias
@@ -126,33 +162,35 @@ export function MessageMediaAttachment({
     );
   }
 
-  if (!url) {
+  if (!safeUrl || loadFailed) {
     return (
-      <span className="mt-1 block text-xs opacity-80">
-        {mimeType ? "Anexo indisponível" : "Mídia anexada"}
+      <span className="mt-1 block text-xs opacity-80" role={mimeType || loadFailed ? "status" : undefined}>
+        {mimeType || loadFailed ? "Anexo indisponível ou expirado" : "Mídia anexada"}
       </span>
     );
   }
 
-  const normalizedMimeType = mimeType?.toLowerCase() ?? "";
+  const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   if (INLINE_AUDIO_TYPES.has(normalizedMimeType)) {
     return (
       <audio
         className="mt-2 block w-full max-w-full"
         controls
+        onError={() => setLoadFailed(true)}
         preload="none"
-        src={url}
+        src={safeUrl}
         aria-label={fileName || "Áudio recebido"}
       />
     );
   }
   if (INLINE_IMAGE_TYPES.has(normalizedMimeType)) {
     return (
-      <a href={url} target="_blank" rel="noreferrer" className="mt-2 block">
+      <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="mt-2 block">
         <img
-          src={url}
+          src={safeUrl}
           alt={fileName || "Imagem recebida"}
           loading="lazy"
+          onError={() => setLoadFailed(true)}
           className="max-h-64 max-w-full rounded-md object-contain"
         />
       </a>
@@ -163,17 +201,40 @@ export function MessageMediaAttachment({
       <video
         className="mt-2 block max-h-64 max-w-full rounded-md"
         controls
+        onError={() => setLoadFailed(true)}
         preload="metadata"
-        src={url}
+        src={safeUrl}
         aria-label={fileName || "Vídeo recebido"}
       />
     );
   }
+  if (normalizedMimeType === "application/pdf") {
+    return (
+      <object
+        className="mt-2 block h-80 w-full max-w-full rounded-md border border-border/70 bg-white"
+        aria-label={fileName ? `Pré-visualização de ${fileName}` : "Pré-visualização de documento PDF"}
+        data={safeUrl}
+        type="application/pdf"
+      >
+        <span className="block p-3 text-xs" role="status">
+          Não foi possível pré-visualizar este PDF.
+          <a
+            className="ml-1 underline underline-offset-2"
+            href={safeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Abrir em uma nova guia
+          </a>
+        </span>
+      </object>
+    );
+  }
   return (
     <a
-      href={url}
+      href={safeUrl}
       target="_blank"
-      rel="noreferrer"
+      rel="noopener noreferrer"
       download={fileName || undefined}
       className="mt-1 block text-xs underline underline-offset-2"
     >
@@ -491,6 +552,7 @@ export function ConversationsTab({
                               mimeType={message.mediaMimeType}
                               fileName={message.mediaFileName}
                               expiredAt={message.mediaExpiredAt}
+                              expiresAt={message.mediaExpiresAt}
                             />
                           )}
                         </div>
@@ -773,6 +835,7 @@ export function AiInboxTab({
                             mimeType={message.mediaMimeType}
                             fileName={message.mediaFileName}
                             expiredAt={message.mediaExpiredAt}
+                            expiresAt={message.mediaExpiresAt}
                           />
                         )}
                         <p className="mt-1.5 text-[10px] opacity-75">

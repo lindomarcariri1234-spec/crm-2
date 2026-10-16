@@ -16,3 +16,9 @@ For an unpaid order that is cancelled or abandoned, expire the pending referral 
 **Why:** `reversed` requires a completed conversion and `convertedAt`; using it for an unpaid checkout violates referral consistency and can leave trip-linked ownership ambiguous.
 
 **How to apply:** Lock the order before expiring the pending row during administrative cancellation. Keep the abandoned-order sweep's `reservationId IS NULL` guard because reservation-linked referrals belong to reservation cancellation flows.
+
+For manual storefront cancellation, any order with paid or approved receipts requires an explicitly recorded refund. In one transaction, demote those receipt rows, cancel active linked reservations and release their seats, recalculate reservation/client balances, then reverse settlement and referral effects. A refund status without order cancellation is invalid.
+
+**Why:** The admin order editor does not issue gateway refunds. Reversing settlement/referral effects while leaving captured receipts and active reservations creates contradictory financial and booking state.
+
+**How to apply:** Enforce the rule under the order lock in the status route, including partial receipts on an order whose aggregate payment status is still pending. Keep repeated cancellation/refund requests idempotent.

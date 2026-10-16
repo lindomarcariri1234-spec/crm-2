@@ -14,4 +14,14 @@ describe("getClientIp", () => {
   it("preserves native IPv6 addresses", () => {
     expect(getClientIp(requestWithIp("2001:db8::1"))).toBe("2001:db8::1");
   });
+
+  it("uses Express's trusted request IP instead of a spoofable forwarded chain", () => {
+    const request = {
+      ip: "203.0.113.24",
+      socket: { remoteAddress: "10.0.0.1" },
+      headers: { "x-forwarded-for": "198.51.100.77, 203.0.113.24" },
+    } as unknown as Request;
+
+    expect(getClientIp(request)).toBe("203.0.113.24");
+  });
 });

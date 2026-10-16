@@ -9,6 +9,10 @@ import type { AuthedUser } from "../lib/tenant";
 import { generateId } from "../lib/id";
 import { encryptCredential, decryptCredential } from "../lib/crypto";
 import { assertSafeUrl, ssrfSafeFetchBounded } from "../lib/ssrf";
+import {
+  importZernioInstagramHistoryChunk,
+  INSTAGRAM_ZERNIO_TYPE,
+} from "../services/instagram-zernio.js";
 
 const router = Router();
 
@@ -191,6 +195,7 @@ async function requireIntegrationAdmin(
 interface FieldDef {
   key: string;
   label: string;
+  description?: string;
   secret: boolean;
   ssrfCheck?: boolean; // must pass assertSafeUrl before being stored
   optional?: boolean;
@@ -452,6 +457,45 @@ const REGISTRY: Record<string, RegistryEntry> = {
       return { ok: true, message: "Configuração do Google Analytics válida." };
     },
   },
+
+  instagram_zernio: {
+    label: "Instagram Direct (Zernio)",
+    fields: [
+      {
+        key: "accountId",
+        label: "Account ID da Zernio",
+        description: "ID exato recebido em account.accountId no evento do webhook; não use o @ do Instagram.",
+        secret: false,
+      },
+      {
+        key: "profileId",
+        label: "Profile ID da Zernio",
+        description: "ID exato recebido em account.profileId. Necessário para associar eventos ao perfil correto.",
+        secret: false,
+      },
+      {
+        key: "apiKey",
+        label: "Chave de API da Zernio",
+        description: "Necessária para enviar respostas do CRM. A chave precisa ter permissão para mensagens (messages).",
+        secret: true,
+        optional: true,
+      },
+    ],
+    async testConnection(config) {
+      const accountId = config.accountId?.trim();
+      const profileId = config.profileId?.trim();
+      if (!accountId || !profileId) {
+        return {
+          ok: false,
+          message: "Informe o Account ID e o Profile ID da conta Zernio.",
+        };
+      }
+      return {
+        ok: true,
+        message: "Mapeamento da conta e do perfil Zernio validado.",
+      };
+    },
+  },
 };
 
 const ALLOWED_TYPES = Object.keys(REGISTRY);
@@ -625,10 +669,113 @@ router.get("/integrations/:type", async (req, res, next: NextFunction): Promise<
       fieldDefs: entry.fields.map((f) => ({
         key: f.key,
         label: f.label,
+        ...(f.description ? { description: f.description } : {}),
         secret: f.secret,
         optional: f.optional ?? false,
       })),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/integrations/instagram_zernio/import-history", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireIntegrationAdmin(req, res, next);
+    if (!me) return;
+    const body = z.object({
+      integrationId: z.string().min(1).max(200),
+      cursor: z.string().max(80_000).nullable().optional(),
+    }).safeParse(req.body);
+    if (!body.success) {
+      next(new ValidationError("Selecione uma integração Zernio válida.", "VALIDATION_ERROR"));
+      return;
+    }
+    const [integration] = await db.select().from(tenantIntegrationsTable)
+      .where(and(
+        eq(tenantIntegrationsTable.id, body.data.integrationId),
+        eq(tenantIntegrationsTable.tenantId, me.tenantId),
+        eq(tenantIntegrationsTable.type, INSTAGRAM_ZERNIO_TYPE),
+        eq(tenantIntegrationsTable.enabled, true),
+        eq(tenantIntegrationsTable.status, "connected"),
+      ))
+      .limit(1);
+    if (!integration) {
+      next(new NotFoundError("Integração Zernio ativa não encontrada.", "NOT_FOUND"));
+      return;
+    }
+    const config = (integration.config ?? {}) as Record<string, string>;
+    const accountId = config["accountId"]?.trim();
+    const profileId = config["profileId"]?.trim();
+    const apiKey = integration.secretsEncrypted
+      ? decryptSecrets(integration.secretsEncrypted)["apiKey"]?.trim()
+      : null;
+    if (!accountId || !profileId || !apiKey) {
+      next(new ValidationError("Configure Account ID, Profile ID e chave de API antes de importar.", "VALIDATION_ERROR"));
+      return;
+    }
+    let resumeCursor: unknown;
+    if (body.data.cursor) {
+      try {
+        const checkpoint: unknown = JSON.parse(decryptCredential(body.data.cursor));
+        if (
+          typeof checkpoint !== "object" ||
+          checkpoint === null ||
+          !("cursor" in checkpoint) ||
+          !("integrationId" in checkpoint) ||
+          !("accountId" in checkpoint) ||
+          checkpoint.integrationId !== integration.id ||
+          checkpoint.accountId !== accountId
+        ) {
+          throw new Error("invalid checkpoint");
+        }
+        resumeCursor = checkpoint.cursor;
+      } catch {
+        next(new ValidationError("O ponto de retomada da importação é inválido. Inicie novamente.", "VALIDATION_ERROR"));
+        return;
+      }
+    }
+    try {
+      const result = await importZernioInstagramHistoryChunk(
+        apiKey,
+        accountId,
+        profileId,
+        integration.id,
+        resumeCursor,
+      );
+      if (result.done) {
+        await writeLog(
+          me,
+          INSTAGRAM_ZERNIO_TYPE,
+          "history_import",
+          "info",
+          `Histórico importado: ${result.progress.conversationsProcessed} conversas, ${result.progress.messagesImported} mensagens novas, ${result.progress.messagesAlreadyPresent} já existentes e ${result.progress.messagesSkipped} não importadas.`,
+        );
+      }
+      res.json({
+        done: result.done,
+        progress: result.progress,
+        cursor: result.cursor
+          ? encryptCredential(JSON.stringify({
+              integrationId: integration.id,
+              accountId,
+              cursor: result.cursor,
+            }))
+          : null,
+      });
+    } catch {
+      await writeLog(
+        me,
+        INSTAGRAM_ZERNIO_TYPE,
+        "history_import",
+        "error",
+        "Falha ao importar o histórico da Zernio; os itens já importados podem ser mantidos. Tente novamente.",
+      );
+      res.status(502).json({
+        message: "Não foi possível concluir esta etapa. O progresso salvo foi preservado; tente continuar a importação.",
+        cursor: body.data.cursor ?? null,
+      });
+    }
   } catch (err) {
     next(err);
   }
@@ -850,7 +997,10 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
 
     // Auto-verify the saved config so the persisted status always reflects the
     // stored credentials. Never auto-test disabled integrations (stale status).
-    if (enabled && (newSecretsEncrypted || secretFields.length === 0)) {
+    if (
+      enabled &&
+      (newSecretsEncrypted || secretFields.length === 0 || type === INSTAGRAM_ZERNIO_TYPE)
+    ) {
       try {
         const secrets = newSecretsEncrypted ? decryptSecrets(newSecretsEncrypted) : {};
         const testResult = await entry.testConnection(resolvedConfig, secrets);

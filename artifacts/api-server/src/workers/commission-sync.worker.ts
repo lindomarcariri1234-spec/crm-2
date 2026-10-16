@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { getRedisConnection } from "../lib/redis";
+import { getBullMQWorkerConnection } from "../lib/redis";
 import {
   attachCircuitBreaker,
   WORKER_IDLE_DRAIN_DELAY_SECONDS,
@@ -12,7 +12,7 @@ import type { CommissionSyncJobData } from "../queues/index";
 let _worker: Worker<CommissionSyncJobData> | null = null;
 
 export function startCommissionSyncWorker(): Worker<CommissionSyncJobData> | null {
-  const conn = getRedisConnection();
+  const conn = getBullMQWorkerConnection();
   if (!conn) {
     logger.warn("[commission-sync-worker] No Redis connection — worker not started");
     return null;

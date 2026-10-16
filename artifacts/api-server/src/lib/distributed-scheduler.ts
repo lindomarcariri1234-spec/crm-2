@@ -95,9 +95,13 @@ function logDailyLimitSkip(jobName: string): void {
   const lastLoggedAt = lastDailyLimitSkipLogAt.get(jobName);
   if (lastLoggedAt !== undefined && now - lastLoggedAt < DAILY_LIMIT_SKIP_LOG_COOLDOWN_MS) return;
   lastDailyLimitSkipLogAt.set(jobName, now);
-  logger.warn(
-    { jobName, mode: "daily-limit-circuit-open" },
-    "[scheduler] Redis daily-limit circuit is open; scheduled execution skipped",
+  logger.error(
+    {
+      jobName,
+      mode: "daily-limit-circuit-open",
+      recovery: "waiting-for-next-cron-trigger",
+    },
+    "[scheduler] Scheduled execution was not run because the Redis daily-limit circuit is open",
   );
 }
 

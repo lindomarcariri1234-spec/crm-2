@@ -1,30 +1,246 @@
 import { db } from "@workspace/db";
 import { reservationsTable, paymentsTable, tripsTable } from "@workspace/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { roundMoney } from "./pricing";
-import { RESERVATION_STATUS, PAYMENT_STATUS, type ReservationStatus } from "@workspace/permissions";
+import { RESERVATION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, type ReservationStatus } from "@workspace/permissions";
 import { recomputeClientClassification } from "../services/client-classification.js";
 
 export type DbExecutor = Pick<typeof db, "execute" | "select" | "insert" | "update" | "delete">;
+
+export async function lockReservationsForPaymentReconciliation(
+  tenantId: string,
+  reservationIds: Iterable<string>,
+  executor: DbExecutor,
+): Promise<void> {
+  const ids = [...new Set(reservationIds)].filter(Boolean);
+  if (ids.length === 0) return;
+
+  await executor
+    .select({ id: reservationsTable.id })
+    .from(reservationsTable)
+    .where(and(
+      eq(reservationsTable.tenantId, tenantId),
+      inArray(reservationsTable.id, ids),
+    ))
+    .orderBy(asc(reservationsTable.id))
+    .for("update");
+}
 
 type ReservationUpdate = Partial<typeof reservationsTable.$inferInsert> & {
   status?: ReservationStatus;
 };
 
-export async function sumPaidReservationPayments(
+/**
+ * PAID and APPROVED both consume a reservation's receivable balance.
+ * Keep this definition shared by status changes and reservation snapshots.
+ */
+export async function sumReceivedReservationPayments(
   executor: DbExecutor,
   reservationId: string,
   tenantId: string,
 ): Promise<number> {
   const result = await executor.execute(sql`
-    SELECT COALESCE(SUM(amount::numeric), 0) AS total_paid
+    SELECT COALESCE(SUM(amount::numeric), 0) AS total_received
     FROM payments
     WHERE reservation_id = ${reservationId}
       AND tenant_id = ${tenantId}
-      AND status = ${PAYMENT_STATUS.PAID}
+      AND status IN (${PAYMENT_STATUS.PAID}, ${PAYMENT_STATUS.APPROVED})
   `);
-  const row = (result as unknown as { rows: Array<{ total_paid: string }> }).rows[0];
-  return roundMoney(Number(row?.total_paid ?? "0"));
+  const row = (result as unknown as { rows: Array<{ total_received: string }> }).rows[0];
+  return roundMoney(Number(row?.total_received ?? "0"));
+}
+
+export function allocateCumulativeRefundCents(
+  receipts: ReadonlyArray<{ id: string; reservationId: string | null; amount: string | number }>,
+  cumulativeRefundCents: number,
+): Array<{ paymentId: string; refundCents: number }> {
+  const ordered = [...receipts]
+    .map((receipt) => ({
+      ...receipt,
+      grossCents: Math.max(0, Math.round(Number(receipt.amount) * 100)),
+    }))
+    .sort((a, b) =>
+      (a.reservationId ?? "").localeCompare(b.reservationId ?? "") || a.id.localeCompare(b.id),
+    );
+  const grossTotalCents = ordered.reduce((sum, receipt) => sum + receipt.grossCents, 0);
+  const targetCents = Math.min(
+    grossTotalCents,
+    Number.isSafeInteger(cumulativeRefundCents) ? Math.max(0, cumulativeRefundCents) : 0,
+  );
+  if (grossTotalCents === 0 || targetCents === 0) {
+    return ordered.map(({ id }) => ({ paymentId: id, refundCents: 0 }));
+  }
+
+  const denominator = BigInt(grossTotalCents);
+  const shares = ordered.map((receipt, index) => {
+    const numerator = BigInt(targetCents) * BigInt(receipt.grossCents);
+    return {
+      paymentId: receipt.id,
+      grossCents: receipt.grossCents,
+      index,
+      refundCents: Number(numerator / denominator),
+      remainder: numerator % denominator,
+    };
+  });
+  let remainingCents = targetCents - shares.reduce((sum, share) => sum + share.refundCents, 0);
+  const remainderOrder = [...shares].sort((a, b) =>
+    a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1,
+  );
+  for (const share of remainderOrder) {
+    if (remainingCents === 0) break;
+    if (share.refundCents >= share.grossCents) continue;
+    share.refundCents++;
+    remainingCents--;
+  }
+  return shares.map(({ paymentId, refundCents }) => ({ paymentId, refundCents }));
+}
+
+export async function applyCumulativeStripeRefundToPayments(
+  executor: DbExecutor,
+  args: {
+    tenantId: string;
+    orderId: string;
+    paymentIntentId: string;
+    amountRefundedCents: number;
+    chargeAmountCents: number;
+    refundedAt?: Date;
+  },
+): Promise<{ reservationIds: string[] }> {
+  const receipts = await executor
+    .select({
+      id: paymentsTable.id,
+      tenantId: paymentsTable.tenantId,
+      reservationId: paymentsTable.reservationId,
+      clientId: sql<string | null>`COALESCE(${paymentsTable.clientId}, ${reservationsTable.clientId})`,
+      amount: paymentsTable.amount,
+      paymentMethod: paymentsTable.paymentMethod,
+      installmentNumber: paymentsTable.installmentNumber,
+      totalInstallments: paymentsTable.totalInstallments,
+      dueDate: paymentsTable.dueDate,
+      isTestMode: paymentsTable.isTestMode,
+    })
+    .from(paymentsTable)
+    .leftJoin(reservationsTable, and(
+      eq(reservationsTable.id, paymentsTable.reservationId),
+      eq(reservationsTable.tenantId, paymentsTable.tenantId),
+    ))
+    .where(and(
+      eq(paymentsTable.tenantId, args.tenantId),
+      eq(paymentsTable.orderId, args.orderId),
+      eq(paymentsTable.gateway, "stripe"),
+      eq(paymentsTable.transactionId, args.paymentIntentId),
+      eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+      inArray(paymentsTable.status, [PAYMENT_STATUS.PAID, PAYMENT_STATUS.APPROVED]),
+      sql`${paymentsTable.amount}::numeric > 0`,
+    ))
+    .orderBy(asc(paymentsTable.reservationId), asc(paymentsTable.id));
+
+  if (receipts.length === 0) return { reservationIds: [] };
+
+  const transactionIdPrefix = `stripe-refund-allocation:${args.paymentIntentId}:`;
+  const existingRefundRows = await executor
+    .select({
+      id: paymentsTable.id,
+      transactionId: paymentsTable.transactionId,
+      amount: paymentsTable.amount,
+    })
+    .from(paymentsTable)
+    .where(and(
+      eq(paymentsTable.tenantId, args.tenantId),
+      eq(paymentsTable.orderId, args.orderId),
+      eq(paymentsTable.gateway, "stripe"),
+      eq(paymentsTable.category, "stripe_refund"),
+      sql`LEFT(${paymentsTable.transactionId}, ${transactionIdPrefix.length}) = ${transactionIdPrefix}`,
+    ));
+  const previouslyRefundedCents = existingRefundRows.reduce((sum, row) => {
+    const cents = Math.round(Number(row.amount) * 100);
+    return sum + (cents < 0 ? -cents : 0);
+  }, 0);
+  const requestedCents = Math.min(
+    Math.max(0, Math.floor(args.chargeAmountCents)),
+    Math.max(0, Math.floor(args.amountRefundedCents)),
+  );
+  const cumulativeRefundCents = Math.max(previouslyRefundedCents, requestedCents);
+  const allocations = allocateCumulativeRefundCents(
+    receipts,
+    cumulativeRefundCents,
+  );
+  const existingById = new Map(existingRefundRows.map((row) => [row.id, row]));
+  const reservationIds = new Set<string>();
+  const refundedAt = args.refundedAt ?? new Date();
+
+  for (const receipt of receipts) {
+    const allocation = allocations.find((row) => row.paymentId === receipt.id);
+    if (!allocation || allocation.refundCents <= 0) continue;
+    const transactionId = `${transactionIdPrefix}${receipt.id}`;
+    const refundRowId = transactionId;
+    const existing = existingById.get(refundRowId);
+    const refundRow = {
+      amount: (-allocation.refundCents / 100).toFixed(2),
+      status: PAYMENT_STATUS.PAID,
+      description: "Reembolso parcial Stripe alocado ao recebimento",
+    };
+    if (existing) {
+      await executor.update(paymentsTable)
+        .set(refundRow)
+        .where(and(
+          eq(paymentsTable.id, existing.id),
+          eq(paymentsTable.tenantId, args.tenantId),
+        ));
+    } else {
+      await executor.insert(paymentsTable).values({
+        id: refundRowId,
+        tenantId: args.tenantId,
+        reservationId: receipt.reservationId,
+        clientId: receipt.clientId,
+        orderId: args.orderId,
+        type: PAYMENT_TYPE.RECEIVABLE,
+        category: "stripe_refund",
+        amount: refundRow.amount,
+        paymentMethod: receipt.paymentMethod,
+        installmentNumber: receipt.installmentNumber,
+        totalInstallments: receipt.totalInstallments,
+        dueDate: refundedAt,
+        paidAt: refundedAt,
+        status: PAYMENT_STATUS.PAID,
+        gateway: "stripe",
+        transactionId,
+        isTestMode: receipt.isTestMode,
+        description: refundRow.description,
+      });
+    }
+    if (receipt.reservationId) reservationIds.add(receipt.reservationId);
+  }
+  return { reservationIds: [...reservationIds].sort() };
+}
+
+export async function recalculateReservationPaymentAmountsPreservingStatus(
+  reservationId: string,
+  tenantId: string,
+  executor: DbExecutor,
+): Promise<void> {
+  const [reservation] = await executor
+    .select({
+      id: reservationsTable.id,
+      totalValue: reservationsTable.totalValue,
+    })
+    .from(reservationsTable)
+    .where(and(
+      eq(reservationsTable.id, reservationId),
+      eq(reservationsTable.tenantId, tenantId),
+    ))
+    .for("update")
+    .limit(1);
+  if (!reservation) return;
+
+  const paidValue = await sumReceivedReservationPayments(executor, reservationId, tenantId);
+  const balance = roundMoney(Math.max(Number(reservation.totalValue) - paidValue, 0));
+  await executor.update(reservationsTable)
+    .set({ paidValue: String(paidValue), balance: String(balance) })
+    .where(and(
+      eq(reservationsTable.id, reservationId),
+      eq(reservationsTable.tenantId, tenantId),
+    ));
 }
 
 export async function syncReservationPaymentStatus(
@@ -52,7 +268,7 @@ export async function syncReservationPaymentStatus(
   if (!reservation) return;
 
   const totalValue = roundMoney(Number(reservation.totalValue));
-  const paidValue = await sumPaidReservationPayments(executor, reservationId, tenantId);
+  const paidValue = await sumReceivedReservationPayments(executor, reservationId, tenantId);
   const balance = roundMoney(Math.max(totalValue - paidValue, 0));
   const isExpired = String(reservation.status) === "expired";
 

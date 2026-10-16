@@ -7,8 +7,10 @@
  * (c) depositAmount is correctly included in the createOrder payload
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { flushAct, renderHook, cleanupRoots } from "./eventSourceHarness.js";
+import { createElement } from "react";
+import { flushAct, renderComponent, renderHook, cleanupRoots } from "./eventSourceHarness.js";
 import type { PublicStore } from "../lib/storeApi.js";
+import type { WizardState } from "../pages/vitrine/_wizard/use-wizard-state.js";
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -35,6 +37,10 @@ vi.mock("lucide-react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("lucide-react")>();
   return { ...actual };
 });
+vi.mock("../pages/vitrine/_wizard/confetti.js", () => ({ ConfettiAnimation: () => null }));
+vi.mock("../pages/vitrine/_wizard/voucher.js", () => ({ Voucher: () => null }));
+vi.mock("../pages/vitrine/_wizard/step-indicator.js", () => ({ StepIndicator: () => null }));
+vi.mock("@/lib/tripDuration", () => ({ calculateTripDuration: () => null }));
 
 // ---------------------------------------------------------------------------
 // storeApi mocks — use vi.fn() so individual tests can configure getProduct
@@ -125,12 +131,28 @@ function makeStore(minDepositAmount?: string | null): PublicStore {
 }
 
 import { useWizardState } from "../pages/vitrine/_wizard/use-wizard-state.js";
+import { StepConfirmation } from "../pages/vitrine/_wizard/step-confirmation.js";
+
+function ConfirmationHarness({
+  captureState,
+}: {
+  captureState: (state: WizardState) => void;
+}) {
+  const state = useWizardState({
+    slug: "loja-teste",
+    productSlug: "produto-1",
+    store: makeStore(),
+  });
+  captureState(state);
+  return createElement(StepConfirmation, { state, store: makeStore(), slug: "loja-teste" });
+}
 
 // ---------------------------------------------------------------------------
 // Cleanup
 // ---------------------------------------------------------------------------
 afterEach(async () => {
   await cleanupRoots();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -510,6 +532,153 @@ describe("reservation wizard Stripe card checkout", () => {
     );
 
     expect(result.current.recoveringStripeReturn).toBe(false);
+    expect(getOrderSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("reservation wizard payment status polling", () => {
+  const sessionValues = new Map<string, string>();
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T15:00:00.000Z"));
+    getProductFn.mockResolvedValue(PRODUCT_FIXTURE);
+    createOrderSpy.mockReset().mockResolvedValue({
+      orderNumber: "ORD-POLL-001",
+      totalAmount: "500.00",
+      createdAt: new Date().toISOString(),
+      reservationExpiresAt: null,
+      depositAmount: null,
+      amountRemaining: "500.00",
+      paymentToken: "poll-token",
+      paymentMethod: "pix",
+      paymentStatus: "pending",
+      status: "pending",
+      financialSummary: {
+        totalAmount: 500,
+        paidAmount: 0,
+        amountRemaining: 500,
+        depositRequested: 0,
+        minimumRequired: 500,
+        states: { payment: "pending", reservation: "pending" },
+        reservationValid: false,
+      },
+    });
+    getOrderSpy.mockReset();
+    sessionValues.clear();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => sessionValues.get(key) ?? null,
+      setItem: (key: string, value: string) => sessionValues.set(key, value),
+      removeItem: (key: string) => sessionValues.delete(key),
+    });
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  async function submitOrder() {
+    let latestState!: WizardState;
+    const rendered = await renderComponent(createElement(ConfirmationHarness, {
+      captureState: (state) => { latestState = state; },
+    }));
+    await flushAct(() => {
+      latestState.set("customerName", "João Silva");
+      latestState.set("customerEmail", "joao@exemplo.com");
+      latestState.set("customerPhone", "(11) 99999-9999");
+      latestState.set("customerCpf", "529.982.247-25");
+    });
+    await flushAct(async () => {
+      await latestState.submit();
+    });
+    expect(latestState.completedOrder?.paymentStatus).toBe("pending");
+    return {
+      get current() { return latestState; },
+      container: rendered.container,
+    };
+  }
+
+  it.each([
+    {
+      finalState: "paid",
+      order: {
+        status: "confirmed",
+        paymentStatus: "paid",
+        paidAmount: "500.00",
+        financialSummary: {
+          totalAmount: 500,
+          paidAmount: 500,
+          amountRemaining: 0,
+          depositRequested: 0,
+          minimumRequired: 500,
+          states: { payment: "paid", reservation: "confirmed" },
+          reservationValid: true,
+        },
+      },
+    },
+    {
+      finalState: "cancelled",
+      order: { status: "cancelled", paymentStatus: "cancelled" },
+    },
+  ])("updates the confirmation to $finalState and stops polling", async ({ finalState, order }) => {
+    getOrderSpy.mockResolvedValue({
+      orderNumber: "ORD-POLL-001",
+      totalAmount: "500.00",
+      ...order,
+    });
+    const result = await submitOrder();
+
+    await flushAct(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+
+    expect(getOrderSpy).toHaveBeenCalledOnce();
+    expect(getOrderSpy).toHaveBeenCalledWith("loja-teste", "ORD-POLL-001", "poll-token");
+    expect(result.current.completedOrder?.status).toBe(
+      finalState === "paid" ? "confirmed" : "cancelled",
+    );
+    expect(result.current.completedOrder?.paymentStatus).toBe(finalState);
+    expect(result.container.textContent).toContain(
+      finalState === "paid" ? "Pagamento Recebido" : "Reserva cancelada",
+    );
+
+    await flushAct(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(getOrderSpy).toHaveBeenCalledOnce();
+  });
+
+  it("does not poll or request order status when the checkout has no payment token", async () => {
+    createOrderSpy.mockResolvedValue({
+      orderNumber: "ORD-POLL-001",
+      totalAmount: "500.00",
+      createdAt: new Date().toISOString(),
+      reservationExpiresAt: null,
+      depositAmount: null,
+      amountRemaining: "500.00",
+      paymentToken: null,
+      paymentMethod: "pix",
+      paymentStatus: "pending",
+      status: "pending",
+      financialSummary: {
+        totalAmount: 500,
+        paidAmount: 0,
+        amountRemaining: 500,
+        depositRequested: 0,
+        minimumRequired: 500,
+        states: { payment: "pending", reservation: "pending" },
+        reservationValid: false,
+      },
+    });
+    const result = await submitOrder();
+
+    await flushAct(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await result.current.refreshOrderStatus();
+    });
+
+    expect(result.current.completedOrder?.status).toBe("pending");
     expect(getOrderSpy).not.toHaveBeenCalled();
   });
 });

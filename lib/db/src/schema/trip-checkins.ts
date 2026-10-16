@@ -7,7 +7,7 @@ export const tripCheckinsTable = pgTable("trip_checkins", {
   tripId: text("trip_id").notNull().references(() => tripsTable.id, { onDelete: "cascade" }),
   tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   passengerId: text("passenger_id").notNull(),
-  reservationId: text("reservation_id"),
+  reservationId: text("reservation_id").notNull(),
   checkedInByUserRef: text("checked_in_by_user_ref"),
   checkedInAt: timestamp("checked_in_at", { withTimezone: true }).notNull().defaultNow(),
   notes: text("notes"),

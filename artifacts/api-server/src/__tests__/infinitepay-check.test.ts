@@ -1,5 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { parseInfinitePayCheckResult } from "../lib/infinitepay.js";
+import {
+  classifyInfinitePayHttpFailure,
+  formatInfinitePayPhoneNumber,
+  parseInfinitePayCheckResult,
+} from "../lib/infinitepay.js";
+
+describe("formatInfinitePayPhoneNumber", () => {
+  it.each([
+    ["(11) 99988-7766", "+5511999887766"],
+    ["11999887766", "+5511999887766"],
+    ["+55 (11) 99988-7766", "+5511999887766"],
+    ["(11) 3333-2222", "+551133332222"],
+    ["", undefined],
+    ["123", undefined],
+  ])("formats Brazilian checkout phones for InfinitePay", (phone, expected) => {
+    expect(formatInfinitePayPhoneNumber(phone)).toBe(expected);
+  });
+});
+
+describe("classifyInfinitePayHttpFailure", () => {
+  it.each([
+    [400, "validation"],
+    [422, "validation"],
+    [401, "authorization"],
+    [403, "authorization"],
+    [429, "rate_limit"],
+    [500, "provider_error"],
+  ] as const)("classifies HTTP %i without relying on an undocumented response body", (status, expected) => {
+    expect(classifyInfinitePayHttpFailure(status)).toBe(expected);
+  });
+});
 
 describe("parseInfinitePayCheckResult", () => {
   const paid = {

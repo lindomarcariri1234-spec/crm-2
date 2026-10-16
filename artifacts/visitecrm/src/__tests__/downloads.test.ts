@@ -100,6 +100,7 @@ import {
   prepareReferrals,
   prepareCommissions,
   preparePipeline,
+  chunkReservationIds,
   downloadXlsx,
   downloadPdf,
 } from "../pages/downloads-utils.js";
@@ -328,13 +329,27 @@ describe("prepareClients", () => {
     expect(count).toBe(2);
   });
 
+  it("shows refund totals separately without changing canonical spending or balance", () => {
+    const client = makeClient({ id: "client-refunded", createdAt: "2025-03-15T00:00:00Z" });
+    const { headers, rows } = prepareClients(
+      [client] as any[],
+      RANGE_START,
+      RANGE_END,
+      new Map([["client-refunded", 1250]]),
+    );
+
+    expect(rows[0][headers.indexOf("Estornos Stripe (R$)")]).toBe("12,50");
+    expect(rows[0][headers.indexOf("Total Gasto (R$)")]).toBe("1.500,00");
+    expect(rows[0][headers.indexOf("Saldo Devedor (R$)")]).toBe("200,00");
+  });
+
   it("maps tags array to semicolon-separated string", () => {
     const c = makeClient({
       tags: ["vip", "fidelizado"],
       createdAt: "2025-03-10T00:00:00Z",
     });
     const { rows } = prepareClients([c] as any[], RANGE_START, RANGE_END);
-    const tagsCol = rows[0][15];
+    const tagsCol = rows[0][16];
     expect(tagsCol).toBe("vip; fidelizado");
   });
 
@@ -344,7 +359,7 @@ describe("prepareClients", () => {
       createdAt: "2025-03-10T00:00:00Z",
     });
     const { rows } = prepareClients([c] as any[], RANGE_START, RANGE_END);
-    const destCol = rows[0][16];
+    const destCol = rows[0][17];
     expect(destCol).toBe("Paris; Roma");
   });
 
@@ -490,6 +505,26 @@ describe("prepareReservations", () => {
     expect(rows[0][0]).toBe("r1");
   });
 
+  it("includes an older reservation when its ID has a refund in the selected period", () => {
+    const older = makeReservation({
+      id: "old-reservation",
+      createdAt: "2024-01-15T00:00:00Z",
+      paidValue: 75,
+      balance: 25,
+    });
+    const { headers, rows, count } = prepareReservations(
+      [older] as any[],
+      RANGE_START,
+      RANGE_END,
+      new Set(["old-reservation"]),
+    );
+
+    expect(count).toBe(1);
+    expect(rows[0][headers.indexOf("Criado em")]).toBe("15/01/2024");
+    expect(rows[0][headers.indexOf("Valor Pago Líquido (R$)")]).toBe("75,00");
+    expect(rows[0][headers.indexOf("Saldo (R$)")]).toBe("25,00");
+  });
+
   it("returns empty rows when all reservations fall outside the range", () => {
     const before = makeReservation({ id: "r1", createdAt: "2025-03-31T00:00:00Z" });
     const after = makeReservation({ id: "r2", createdAt: "2025-05-01T00:00:00Z" });
@@ -505,7 +540,120 @@ describe("prepareReservations", () => {
 
     expect(headers).toContain("Cliente");
     expect(headers).toContain("Valor Total (R$)");
+    expect(headers).toContain("Recebimentos Brutos (R$)");
+    expect(headers).toContain("Detalhes dos Estornos Stripe");
+    expect(headers).toContain("Valor Pago Líquido (R$)");
     expect(headers).toContain("Criado em");
+  });
+
+  it("exports Stripe refunds with their dates while reconciling gross receipts to canonical net paid", () => {
+    const reservation = makeReservation({
+      createdAt: "2025-04-10T00:00:00Z",
+      paidValue: 75,
+      balance: 25,
+      payments: [
+        { type: "receivable", category: "reservation", amount: 100, status: "paid", paidAt: "2025-04-10T12:00:00Z" },
+        { type: "receivable", category: "stripe_refund", amount: -25, status: "paid", paidAt: "2025-04-20T12:00:00Z" },
+      ],
+    });
+    const { headers, rows } = prepareReservations([reservation] as any[], RANGE_START, RANGE_END);
+    const row = rows[0];
+    const col = (name: string) => row[headers.indexOf(name)];
+
+    expect(col("Recebimentos Brutos (R$)")).toBe("100,00");
+    expect(col("Estornos Stripe (R$)")).toBe("25,00");
+    expect(col("Detalhes dos Estornos Stripe")).toContain("20/04/2025");
+    expect(col("Detalhes dos Estornos Stripe")).toContain("25,00");
+    expect(col("Valor Pago Líquido (R$)")).toBe("75,00");
+    expect(col("Saldo (R$)")).toBe("25,00");
+  });
+
+  it("uses the stored refund date even when payment details were edited later", () => {
+    const reservation = makeReservation({
+      createdAt: "2025-04-10T00:00:00Z",
+      paidValue: 60,
+      balance: 40,
+      payments: [
+        {
+          type: "receivable",
+          category: "reservation",
+          amount: 40,
+          status: "refunded",
+          gateway: "manual",
+          refundedAt: "2025-04-20T12:00:00Z",
+          updatedAt: "2025-04-22T12:00:00Z",
+        },
+      ],
+    });
+    const { headers, rows } = prepareReservations([reservation] as any[], RANGE_START, RANGE_END);
+    const row = rows[0];
+    const col = (name: string) => row[headers.indexOf(name)];
+
+    expect(col("Recebimentos Brutos (R$)")).toBe("100,00");
+    expect(col("Estornos Stripe (R$)")).toBe("0,00");
+    expect(col("Estornos Manuais (R$)")).toBe("-40,00");
+    expect(col("Detalhes dos Estornos Manuais")).toContain("20/04/2025");
+    expect(col("Detalhes dos Estornos Manuais")).toContain("40,00");
+    expect(col("Valor Pago Líquido (R$)")).toBe("60,00");
+    expect(col("Saldo (R$)")).toBe("40,00");
+  });
+
+  it("uses updatedAt for legacy manual refunds without a stored refund date", () => {
+    const reservation = makeReservation({
+      createdAt: "2025-04-10T00:00:00Z",
+      payments: [
+        {
+          type: "receivable",
+          category: "reservation",
+          amount: 40,
+          status: "refunded",
+          gateway: "manual",
+          updatedAt: "2025-04-22T12:00:00Z",
+        },
+      ],
+    });
+    const { headers, rows } = prepareReservations([reservation] as any[], RANGE_START, RANGE_END);
+    const manualRefundDetails = rows[0][headers.indexOf("Detalhes dos Estornos Manuais")];
+
+    expect(manualRefundDetails).toContain("22/04/2025");
+  });
+
+  it("exports partial manual refunds separately from Stripe refunds and subtracts them from net receipts", () => {
+    const reservation = makeReservation({
+      createdAt: "2025-04-10T00:00:00Z",
+      paidValue: 75,
+      balance: 25,
+      payments: [
+        { type: "receivable", category: "reservation", amount: 100, status: "paid", paidAt: "2025-04-10T12:00:00Z" },
+        {
+          type: "receivable",
+          category: "manual_refund",
+          amount: -25,
+          status: "paid",
+          gateway: "manual",
+          refundedAt: "2025-04-20T12:00:00Z",
+        },
+      ],
+    });
+    const { headers, rows } = prepareReservations([reservation] as any[], RANGE_START, RANGE_END);
+    const row = rows[0];
+    const col = (name: string) => row[headers.indexOf(name)];
+
+    expect(col("Estornos Stripe (R$)")).toBe("0,00");
+    expect(col("Estornos Manuais (R$)")).toBe("-25,00");
+    expect(col("Detalhes dos Estornos Manuais")).toContain("20/04/2025");
+    expect(col("Valor Pago Líquido (R$)")).toBe("75,00");
+    expect(col("Recebimentos Brutos (R$)")).toBe("100,00");
+  });
+});
+
+describe("chunkReservationIds", () => {
+  it("splits large exports into batches accepted by the bulk payments filter", () => {
+    const ids = Array.from({ length: 251 }, (_, index) => `reservation-${index}`);
+    const batches = chunkReservationIds(ids);
+
+    expect(batches.map(batch => batch.length)).toEqual([100, 100, 51]);
+    expect(batches.flat()).toEqual(ids);
   });
 });
 
@@ -1010,5 +1158,32 @@ describe("Downloads — empty quick-download result", () => {
       (result) => result.value as { save: ReturnType<typeof vi.fn> },
     );
     expect(createdPdfDocs.every((doc) => !doc.save.mock.calls.length)).toBe(true);
+  });
+});
+
+describe("Downloads — agency backup authorization", () => {
+  afterEach(async () => {
+    await cleanupRoots();
+  });
+
+  it("shows the complete backup area only to the exact agency-admin role", async () => {
+    downloadsApiMocks.useGetMe.mockReturnValue({ data: { role: "agencia" } });
+    const admin = await renderComponent(createElement(Downloads));
+    expect(admin.container.querySelector('[data-testid="downloads-area-backup"]')).not.toBeNull();
+    expect(admin.container.querySelector("#agency-backup")).not.toBeNull();
+    expect(admin.container.querySelector('[data-testid="button-generate-agency-backup"]')).not.toBeNull();
+    expect(admin.container.querySelector('[data-testid="input-agency-backup-file"]')).not.toBeNull();
+    expect(admin.container.querySelector('[data-testid="text-backup-export-description"]')?.textContent)
+      .toContain("local seguro");
+    expect(admin.container.querySelector('[data-testid="input-agency-backup-file"]')?.getAttribute("aria-label"))
+      .toBe("Selecionar arquivo JSON de backup");
+    expect(admin.container.textContent).toContain("Restaurar de arquivo");
+    await cleanupRoots();
+
+    downloadsApiMocks.useGetMe.mockReturnValue({ data: { role: "gerente" } });
+    const manager = await renderComponent(createElement(Downloads));
+    expect(manager.container.querySelector('[data-testid="downloads-area-backup"]')).toBeNull();
+    expect(manager.container.querySelector("#agency-backup")).toBeNull();
+    expect(manager.container.querySelector('[data-testid="button-generate-agency-backup"]')).toBeNull();
   });
 });

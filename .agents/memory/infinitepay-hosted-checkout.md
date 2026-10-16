@@ -10,3 +10,21 @@ Official documentation reviewed for this integration does not document webhook s
 **Why:** the available official API docs describe hosted link creation, paid-payment notification, and status verification, but leave these other provider capabilities unspecified.
 
 **How to apply:** verify every customer return and payment webhook server-side. Keep account eligibility, handle configuration, installment limits, fees, settlement, and refund procedures subject to confirmation with the merchant's InfinitePay account.
+
+Link creation also requires **Checkout Integrado** to be enabled in the merchant's InfinitePay app/web settings, and the handle must be sent without the leading `$`. The official [checkout docs](https://www.infinitepay.io/checkout-documentacao) and [help article](https://ajuda.infinitepay.io/pt-BR/articles/10766888-como-usar-o-checkout-integrado-da-infinitepay) show successful `/links` responses but do not publish an error-body schema. A 422 alone cannot identify which account or payload field was rejected; do not infer codes or paths from arbitrary response strings, and never log the raw body.
+
+**Why:** the official InfinitePay setup guide lists activation as a prerequisite, while checkout validation responses may not expose a safe error code.
+
+**How to apply:** when `/links` returns 422, classify only the HTTP status, verify merchant-side activation and the exact handle before changing the request contract, and add response-derived diagnostics only after InfinitePay documents a safe code or field-path format.
+
+The storefront accepts Brazilian phone numbers in national formatting, while InfinitePay's documented `customer.phone_number` example uses `+55` international format. Normalize Brazilian local numbers to `+55` before sending; omit the optional phone field if it cannot be safely normalized.
+
+**Why:** passing a display-formatted local phone directly can violate provider validation even when the checkout form accepts it.
+
+**How to apply:** normalize only the InfinitePay request payload; preserve the customer's original phone in the order record.
+
+Payment returns and webhooks must remain verifiable after a store is deactivated. Storefront order creation remains active-only, but callbacks should resolve the store by slug and verify the exact transaction through `payment_check`. Also release the conditional in-progress checkout claim after fetch, response parsing, or persistence failures before a URL is returned to the customer.
+
+**Why:** provider callbacks can arrive after store deactivation, and an unreleased creation marker otherwise makes a failed checkout impossible to retry.
+
+**How to apply:** keep customer-facing checkout creation behind the active-store check; allow authenticated provider verification for existing orders regardless of current storefront availability, and clear only the exact marker claimed by that request.

@@ -1466,10 +1466,22 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: location
+          in: query
+          description: Case-insensitive match across trip origin and destination city/state (maximum 100 characters).
+          schema:
+            type: string
+            maxLength: 100
         - name: status
           in: query
           schema:
             type: ["string", "null"]
+        - name: storePublication
+          in: query
+          description: Filter trips by whether their linked store product is active in the public storefront.
+          schema:
+            type: string
+            enum: [published, unpublished]
         - name: type
           in: query
           schema:
@@ -1829,6 +1841,11 @@ paths:
       tags: [reservations]
       summary: List reservations
       parameters:
+        - name: reservationIds
+          in: query
+          description: Comma-separated reservation IDs to retrieve (maximum 100 IDs).
+          schema:
+            type: ["string", "null"]
         - name: search
           in: query
           schema:
@@ -2217,8 +2234,18 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: reservationIds
+          in: query
+          description: Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).
+          schema:
+            type: ["string", "null"]
         - name: clientId
           in: query
+          schema:
+            type: ["string", "null"]
+        - name: clientIds
+          in: query
+          description: Comma-separated client IDs to retrieve payments for (maximum 100 IDs).
           schema:
             type: ["string", "null"]
         - name: status
@@ -2245,6 +2272,16 @@ paths:
         - name: dueDateTo
           in: query
           description: Inclusive end of the due-date range in America/Sao_Paulo.
+          schema:
+            type: ["string", "null"]
+        - name: updatedAtFrom
+          in: query
+          description: Inclusive start of the updated-at range in America/Sao_Paulo.
+          schema:
+            type: ["string", "null"]
+        - name: updatedAtTo
+          in: query
+          description: Inclusive end of the updated-at range in America/Sao_Paulo.
           schema:
             type: ["string", "null"]
         - name: unlinkedOnly
@@ -2401,6 +2438,31 @@ paths:
                 required:
                   - success
 
+  /payments/{id}/partial-refunds:
+    post:
+      operationId: createPartialManualRefund
+      tags: [payments]
+      summary: Record a partial manual refund for a reservation payment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePartialManualRefundBody"
+      responses:
+        "201":
+          description: Created manual refund adjustment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+
   /payments/summary:
     get:
       operationId: getPaymentsSummary
@@ -2437,6 +2499,17 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: sourceId
+          in: query
+          description: Exact source record ID for opening one operational cost from its linked payable.
+          schema:
+            type: ["string", "null"]
+        - name: sourceType
+          in: query
+          description: Source record type; required together with sourceId.
+          schema:
+            type: string
+            enum: [agency, trip]
         - name: dateFrom
           in: query
           schema:
@@ -9557,6 +9630,12 @@ components:
           type: string
         paidAt:
           type: ["string", "null"]
+        refundedAt:
+          type: ["string", "null"]
+        refundOfPaymentId:
+          type: ["string", "null"]
+        gateway:
+          type: ["string", "null"]
         status:
           $ref: "#/components/schemas/PaymentStatus"
         description:
@@ -9643,6 +9722,18 @@ components:
           type: ["string", "null"]
         notes:
           type: ["string", "null"]
+
+    CreatePartialManualRefundBody:
+      type: object
+      properties:
+        amount:
+          type: number
+          exclusiveMinimum: 0
+          multipleOf: 0.01
+        notes:
+          type: string
+          maxLength: 1000
+      required: [amount]
 
     CreateOperationalCostPayableBody:
       type: object
@@ -10872,8 +10963,23 @@ components:
             properties:
               productId:
                 type: string
+              productName:
+                type: string
               quantity:
                 type: integer
+              unitPrice:
+                type: number
+                description: >
+                  Client-side display estimate only. The server recalculates
+                  the amount from the current product and selected variant.
+              variantName:
+                type: string
+              variantLabel:
+                type: string
+              metadata:
+                type: object
+                additionalProperties: true
+            required: [productId, quantity]
         customerName:
           type: string
         customerEmail:
@@ -11363,7 +11469,54 @@ components:
             warningThresholdPct:
               type: number
           required: [commandCount, maxCommands, usagePct, warningThresholdPct]
+        queueDailyUsage:
+          type: ["object", "null"]
+          properties:
+            commandCount:
+              type: number
+            maxCommands:
+              type: number
+            usagePct:
+              type: number
+            warningThresholdPct:
+              type: number
+          required: [commandCount, maxCommands, usagePct, warningThresholdPct]
+        queueCutover:
+          $ref: "#/components/schemas/SystemHealthBullMQRedisCutover"
       required: [status]
+
+    SystemHealthBullMQRedisCutover:
+      type: object
+      properties:
+        selectedRedis:
+          type: string
+          enum: [REDIS_URL, REDIS_QUEUE_URL, disabled]
+        outcome:
+          type: string
+          enum: [not_checked, checking, not_configured, workers_disabled, blocked, approved, verified, reverted, same_resource]
+        reason:
+          type: ["string", "null"]
+        blockerCount:
+          type: integer
+        blockedWorkCount:
+          type: integer
+        blockers:
+          type: array
+          items:
+            type: object
+            properties:
+              queue:
+                type: string
+              state:
+                type: string
+              count:
+                type: integer
+              reason:
+                type: string
+            required: [queue, state, count, reason]
+        checkedAt:
+          type: ["string", "null"]
+      required: [selectedRedis, outcome, reason, blockerCount, blockedWorkCount, blockers, checkedAt]
 
     SystemHealthStripeWebhookAuditEndpoint:
       type: object
@@ -11409,6 +11562,8 @@ components:
           $ref: "#/components/schemas/SystemHealthStripeWebhookAudit"
         stripeSyncTables:
           $ref: "#/components/schemas/SystemHealthStripeSyncTables"
+        reminderSchedulers:
+          $ref: "#/components/schemas/ReminderSchedulerRegistrationHealth"
         workers:
           type: object
           additionalProperties: true
@@ -11421,7 +11576,63 @@ components:
         clientFinancialDrift:
           type: object
           additionalProperties: true
-      required: [redis, stripeWebhookAudit, stripeSyncTables]
+      required: [redis, stripeWebhookAudit, stripeSyncTables, reminderSchedulers]
+
+    ReminderSchedulerRegistrationHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unknown]
+        failedCount:
+          type: integer
+        unattemptedCount:
+          type: integer
+        delayedCount:
+          type: integer
+        missingCount:
+          type: integer
+        unavailableCount:
+          type: integer
+        timezone:
+          type: string
+        schedulers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReminderSchedulerRegistration"
+      required: [status, failedCount, unattemptedCount, delayedCount, missingCount, unavailableCount, timezone, schedulers]
+
+    ReminderSchedulerRegistration:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [not_attempted, registered, failed]
+        scheduleStatus:
+          type: string
+          enum: [healthy, registration_failed, missing, delayed, unavailable]
+        lastAttemptAt:
+          type: ["string", "null"]
+          format: date-time
+        lastSuccessfulAt:
+          type: ["string", "null"]
+          format: date-time
+        nextRunAt:
+          type: ["string", "null"]
+          format: date-time
+        lastRunAt:
+          type: ["string", "null"]
+          format: date-time
+        lastRunStatus:
+          type: ["string", "null"]
+          enum: [completed, failed, null]
+        failureCount:
+          type: integer
+      required: [id, name, status, scheduleStatus, lastAttemptAt, lastSuccessfulAt, nextRunAt, lastRunAt, lastRunStatus, failureCount]
 
     RepairSystemHealth:
       type: object
@@ -11479,6 +11690,16 @@ components:
           type: string
         email:
           type: string
+        cnpj:
+          type: ["string", "null"]
+        address:
+          type: ["string", "null"]
+        city:
+          type: ["string", "null"]
+        state:
+          type: ["string", "null"]
+        zipCode:
+          type: ["string", "null"]
         whatsapp:
           type: ["string", "null"]
         phone:

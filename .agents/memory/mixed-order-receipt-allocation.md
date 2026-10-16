@@ -8,3 +8,29 @@ When one checkout order contains multiple reservations, allocate its confirmed o
 **Why:** Payments can be linked only to the parent order. Treating every child as unpaid hides real receipts, while independently rounding proportional shares loses or creates cents and can produce contradictory balances.
 
 **How to apply:** Any reservation-facing summary, voucher eligibility check, portal view, or pipeline view for a mixed order must use the same allocation rule and retain the parent order's cancelled/refunded/failed state precedence.
+
+## Partial Stripe refunds
+
+Keep the original paid receipt rows intact. Represent cumulative partial refunds
+as deterministic negative receivable rows allocated proportionally across the
+charge's order-level and reservation-linked receipts in integer cents. Replays
+update the same per-receipt refund rows; reservation balance refreshes must not
+change an active reservation's status.
+
+**Why:** Mutating gross payment amounts loses receipt history and makes cumulative
+Stripe refund events difficult to replay safely. A stable negative allocation
+preserves the original receipt while making paid totals net of refunds.
+
+**How to apply:** Select only original positive receipt rows for the order and
+payment intent, allocate the cumulative refund with deterministic cent remainders,
+and refresh affected client totals after commit. Persist the cumulative Stripe
+refund amount on the order before allocation; payment confirmation must reconcile
+that saved amount after creating receipt rows. Full refunds continue to use the
+existing terminal cancellation path.
+
+**Why:** Stripe can deliver a charge refund before the payment-success event.
+Without a durable high-water mark, the refund handler sees no receipts and a
+later payment event can incorrectly restore the gross balance.
+
+**How to apply:** Lock the order for both events, only advance the stored
+cumulative amount, and run the same idempotent allocation after receipt creation.

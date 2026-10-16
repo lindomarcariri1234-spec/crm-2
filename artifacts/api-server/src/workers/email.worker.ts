@@ -2,7 +2,7 @@ import { Worker } from "bullmq";
 import { db, emailLogsTable, campaignSendsTable, reservationsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { sendReservationConfirmationEmail, sendReservationCancellationEmail, sendBirthdayEmail, sendNewBookingNotificationEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendReferralWelcomeEmail, sendReminderHtmlEmail, sendReferralLoyaltyPointsEmail } from "@workspace/email";
-import { getRedisConnection } from "../lib/redis";
+import { getBullMQWorkerConnection } from "../lib/redis";
 import {
   attachCircuitBreaker,
   WORKER_IDLE_DRAIN_DELAY_SECONDS,
@@ -133,7 +133,7 @@ async function bridgeLegacyEmailToWhatsApp(
 }
 
 export function startEmailWorker(): Worker<EmailJobData> | null {
-  const conn = getRedisConnection();
+  const conn = getBullMQWorkerConnection();
   if (!conn) {
     logger.warn("[email-worker] No Redis connection — worker not started");
     return null;

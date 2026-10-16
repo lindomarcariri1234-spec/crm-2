@@ -2371,6 +2371,12 @@ export interface Payment {
   dueDate: string;
   /** @nullable */
   paidAt?: string | null;
+  /** @nullable */
+  refundedAt?: string | null;
+  /** @nullable */
+  refundOfPaymentId?: string | null;
+  /** @nullable */
+  gateway?: string | null;
   status: PaymentStatus;
   /** @nullable */
   description?: string | null;
@@ -2417,6 +2423,13 @@ export interface UpdatePaymentBody {
   paidAt?: string | null;
   /** @nullable */
   notes?: string | null;
+}
+
+export interface CreatePartialManualRefundBody {
+  /** @exclusiveMinimum 0 */
+  amount: number;
+  /** @maxLength 1000 */
+  notes?: string;
 }
 
 export type CreateOperationalCostPayableBodySourceType =
@@ -3382,9 +3395,17 @@ export interface UpdateOrderBody {
   paymentStatus?: string | null;
 }
 
+export type PublicCheckoutBodyItemsItemMetadata = { [key: string]: unknown };
+
 export type PublicCheckoutBodyItemsItem = {
-  productId?: string;
-  quantity?: number;
+  productId: string;
+  productName?: string;
+  quantity: number;
+  /** Client-side display estimate only. The server recalculates the amount from the current product and selected variant. */
+  unitPrice?: number;
+  variantName?: string;
+  variantLabel?: string;
+  metadata?: PublicCheckoutBodyItemsItemMetadata;
 };
 
 /**
@@ -3772,10 +3793,66 @@ export type SystemHealthRedisDailyUsage = {
   warningThresholdPct: number;
 } | null;
 
+/**
+ * @nullable
+ */
+export type SystemHealthRedisQueueDailyUsage = {
+  commandCount: number;
+  maxCommands: number;
+  usagePct: number;
+  warningThresholdPct: number;
+} | null;
+
+export type SystemHealthBullMQRedisCutoverSelectedRedis =
+  (typeof SystemHealthBullMQRedisCutoverSelectedRedis)[keyof typeof SystemHealthBullMQRedisCutoverSelectedRedis];
+
+export const SystemHealthBullMQRedisCutoverSelectedRedis = {
+  REDIS_URL: "REDIS_URL",
+  REDIS_QUEUE_URL: "REDIS_QUEUE_URL",
+  disabled: "disabled",
+} as const;
+
+export type SystemHealthBullMQRedisCutoverOutcome =
+  (typeof SystemHealthBullMQRedisCutoverOutcome)[keyof typeof SystemHealthBullMQRedisCutoverOutcome];
+
+export const SystemHealthBullMQRedisCutoverOutcome = {
+  not_checked: "not_checked",
+  checking: "checking",
+  not_configured: "not_configured",
+  workers_disabled: "workers_disabled",
+  blocked: "blocked",
+  approved: "approved",
+  verified: "verified",
+  reverted: "reverted",
+  same_resource: "same_resource",
+} as const;
+
+export type SystemHealthBullMQRedisCutoverBlockersItem = {
+  queue: string;
+  state: string;
+  count: number;
+  reason: string;
+};
+
+export interface SystemHealthBullMQRedisCutover {
+  selectedRedis: SystemHealthBullMQRedisCutoverSelectedRedis;
+  outcome: SystemHealthBullMQRedisCutoverOutcome;
+  /** @nullable */
+  reason: string | null;
+  blockerCount: number;
+  blockedWorkCount: number;
+  blockers: SystemHealthBullMQRedisCutoverBlockersItem[];
+  /** @nullable */
+  checkedAt: string | null;
+}
+
 export interface SystemHealthRedis {
   status: SystemHealthRedisStatus;
   /** @nullable */
   dailyUsage?: SystemHealthRedisDailyUsage;
+  /** @nullable */
+  queueDailyUsage?: SystemHealthRedisQueueDailyUsage;
+  queueCutover?: SystemHealthBullMQRedisCutover;
 }
 
 export interface SystemHealthStripeWebhookAuditEndpoint {
@@ -3815,10 +3892,81 @@ export type SystemHealthPipelineOrphans = { [key: string]: unknown };
 
 export type SystemHealthClientFinancialDrift = { [key: string]: unknown };
 
+export type ReminderSchedulerRegistrationHealthStatus =
+  (typeof ReminderSchedulerRegistrationHealthStatus)[keyof typeof ReminderSchedulerRegistrationHealthStatus];
+
+export const ReminderSchedulerRegistrationHealthStatus = {
+  ok: "ok",
+  degraded: "degraded",
+  unknown: "unknown",
+} as const;
+
+export type ReminderSchedulerRegistrationStatus =
+  (typeof ReminderSchedulerRegistrationStatus)[keyof typeof ReminderSchedulerRegistrationStatus];
+
+export const ReminderSchedulerRegistrationStatus = {
+  not_attempted: "not_attempted",
+  registered: "registered",
+  failed: "failed",
+} as const;
+
+export type ReminderSchedulerRegistrationScheduleStatus =
+  (typeof ReminderSchedulerRegistrationScheduleStatus)[keyof typeof ReminderSchedulerRegistrationScheduleStatus];
+
+export const ReminderSchedulerRegistrationScheduleStatus = {
+  healthy: "healthy",
+  registration_failed: "registration_failed",
+  missing: "missing",
+  delayed: "delayed",
+  unavailable: "unavailable",
+} as const;
+
+/**
+ * @nullable
+ */
+export type ReminderSchedulerRegistrationLastRunStatus =
+  | (typeof ReminderSchedulerRegistrationLastRunStatus)[keyof typeof ReminderSchedulerRegistrationLastRunStatus]
+  | null;
+
+export const ReminderSchedulerRegistrationLastRunStatus = {
+  completed: "completed",
+  failed: "failed",
+} as const;
+
+export interface ReminderSchedulerRegistration {
+  id: string;
+  name: string;
+  status: ReminderSchedulerRegistrationStatus;
+  scheduleStatus: ReminderSchedulerRegistrationScheduleStatus;
+  /** @nullable */
+  lastAttemptAt: string | null;
+  /** @nullable */
+  lastSuccessfulAt: string | null;
+  /** @nullable */
+  nextRunAt: string | null;
+  /** @nullable */
+  lastRunAt: string | null;
+  /** @nullable */
+  lastRunStatus: ReminderSchedulerRegistrationLastRunStatus;
+  failureCount: number;
+}
+
+export interface ReminderSchedulerRegistrationHealth {
+  status: ReminderSchedulerRegistrationHealthStatus;
+  failedCount: number;
+  unattemptedCount: number;
+  delayedCount: number;
+  missingCount: number;
+  unavailableCount: number;
+  timezone: string;
+  schedulers: ReminderSchedulerRegistration[];
+}
+
 export interface SystemHealth {
   redis: SystemHealthRedis;
   stripeWebhookAudit: SystemHealthStripeWebhookAudit;
   stripeSyncTables: SystemHealthStripeSyncTables;
+  reminderSchedulers: ReminderSchedulerRegistrationHealth;
   workers?: SystemHealthWorkers;
   seatDrift?: SystemHealthSeatDrift;
   pipelineOrphans?: SystemHealthPipelineOrphans;
@@ -3856,6 +4004,16 @@ export interface Tenant {
   name: string;
   slug: string;
   email: string;
+  /** @nullable */
+  cnpj?: string | null;
+  /** @nullable */
+  address?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  state?: string | null;
+  /** @nullable */
+  zipCode?: string | null;
   /** @nullable */
   whatsapp?: string | null;
   /** @nullable */
@@ -5886,9 +6044,18 @@ export type ListTripsParams = {
    */
   search?: string | null;
   /**
+   * Case-insensitive match across trip origin and destination city/state (maximum 100 characters).
+   * @maxLength 100
+   */
+  location?: string;
+  /**
    * @nullable
    */
   status?: string | null;
+  /**
+   * Filter trips by whether their linked store product is active in the public storefront.
+   */
+  storePublication?: ListTripsStorePublication;
   type?: string;
   /**
    * Inclusive departure-date lower bound in YYYY-MM-DD (America/Sao_Paulo).
@@ -5897,6 +6064,14 @@ export type ListTripsParams = {
   page?: number;
   limit?: number;
 };
+
+export type ListTripsStorePublication =
+  (typeof ListTripsStorePublication)[keyof typeof ListTripsStorePublication];
+
+export const ListTripsStorePublication = {
+  published: "published",
+  unpublished: "unpublished",
+} as const;
 
 export type SyncTripPassengers200 = {
   /** Number of passenger records created */
@@ -5935,6 +6110,11 @@ export type GetReservationStatsParams = {
 };
 
 export type ListReservationsParams = {
+  /**
+   * Comma-separated reservation IDs to retrieve (maximum 100 IDs).
+   * @nullable
+   */
+  reservationIds?: string | null;
   /**
    * @nullable
    */
@@ -5997,9 +6177,19 @@ export type ListPaymentsParams = {
    */
   reservationId?: string | null;
   /**
+   * Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).
+   * @nullable
+   */
+  reservationIds?: string | null;
+  /**
    * @nullable
    */
   clientId?: string | null;
+  /**
+   * Comma-separated client IDs to retrieve payments for (maximum 100 IDs).
+   * @nullable
+   */
+  clientIds?: string | null;
   /**
    * @nullable
    */
@@ -6026,6 +6216,16 @@ export type ListPaymentsParams = {
    * @nullable
    */
   dueDateTo?: string | null;
+  /**
+   * Inclusive start of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtFrom?: string | null;
+  /**
+   * Inclusive end of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtTo?: string | null;
   /**
    * Return only payments not linked to an operational cost.
    */
@@ -6056,6 +6256,15 @@ export type ListExpensesParams = {
    */
   supplierId?: string | null;
   /**
+   * Exact source record ID for opening one operational cost from its linked payable.
+   * @nullable
+   */
+  sourceId?: string | null;
+  /**
+   * Source record type; required together with sourceId.
+   */
+  sourceType?: ListExpensesSourceType;
+  /**
    * @nullable
    */
   dateFrom?: string | null;
@@ -6074,6 +6283,14 @@ export type ListExpensesParams = {
   page?: number;
   limit?: number;
 };
+
+export type ListExpensesSourceType =
+  (typeof ListExpensesSourceType)[keyof typeof ListExpensesSourceType];
+
+export const ListExpensesSourceType = {
+  agency: "agency",
+  trip: "trip",
+} as const;
 
 export type ListExpensesSummaryPeriod =
   (typeof ListExpensesSummaryPeriod)[keyof typeof ListExpensesSummaryPeriod];

@@ -172,6 +172,75 @@ beforeEach(() => {
 });
 
 describe("GET /chatbot-conversations/:id/messages media links", () => {
+  it("returns safe explanations for terminal delivery failures without exposing provider details", async () => {
+    const sentAt = new Date();
+    const messages = [
+      makeMessage("invalid-phone", sentAt, {
+        role: "assistant",
+        deliveryStatus: "failed",
+        lastDeliveryError: "whatsapp_invalid_phone",
+        mediaUrl: null,
+        mediaMimeType: null,
+        mediaFileName: null,
+      }),
+      makeMessage("connection", sentAt, {
+        role: "assistant",
+        deliveryStatus: "failed",
+        lastDeliveryError: "evolution_401",
+        mediaUrl: null,
+        mediaMimeType: null,
+        mediaFileName: null,
+      }),
+      makeMessage("opted-out", sentAt, {
+        role: "assistant",
+        deliveryStatus: "cancelled",
+        lastDeliveryError: "contact_opted_out",
+        mediaUrl: null,
+        mediaMimeType: null,
+        mediaFileName: null,
+      }),
+      makeMessage("unknown-provider-error", sentAt, {
+        role: "assistant",
+        deliveryStatus: "failed",
+        lastDeliveryError: "Authorization: Bearer private-provider-response",
+        mediaUrl: null,
+        mediaMimeType: null,
+        mediaFileName: null,
+      }),
+      makeMessage("pending-error", sentAt, {
+        role: "assistant",
+        deliveryStatus: "pending",
+        lastDeliveryError: "raw transient provider detail",
+        mediaUrl: null,
+        mediaMimeType: null,
+        mediaFileName: null,
+      }),
+    ];
+    configureDatabaseRows(
+      { id: CONVERSATION_ID, tenantId: TENANT_ID, channel: "whatsapp" },
+      messages,
+    );
+
+    const response = await request(buildApp()).get(
+      `/api/chatbot-conversations/${CONVERSATION_ID}/messages`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.find((message: { id: string }) => message.id === "invalid-phone"))
+      .toMatchObject({ deliveryIssue: expect.stringContaining("Número de WhatsApp inválido") });
+    expect(response.body.find((message: { id: string }) => message.id === "connection"))
+      .toMatchObject({ deliveryIssue: expect.stringContaining("Revise a integração") });
+    expect(response.body.find((message: { id: string }) => message.id === "opted-out"))
+      .toMatchObject({ deliveryIssue: expect.stringContaining("não autorizou contato") });
+    expect(response.body.find((message: { id: string }) => message.id === "unknown-provider-error"))
+      .toMatchObject({ deliveryIssue: expect.stringContaining("não aceitou a mensagem") });
+    expect(response.body.find((message: { id: string }) => message.id === "pending-error"))
+      .toMatchObject({ deliveryIssue: null, deliveryStatus: "pending" });
+    expect(response.body.every((message: Record<string, unknown>) => !("lastDeliveryError" in message))).toBe(true);
+    expect(JSON.stringify(response.body)).not.toContain("private-provider-response");
+    expect(JSON.stringify(response.body)).not.toContain("raw transient provider detail");
+  });
+
   it("caps inbound WhatsApp links at the 90-day cutoff and returns expired media without a URL", async () => {
     const now = Date.now();
     const nearCutoffMessage = makeMessage(
@@ -214,12 +283,18 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       (message: { id: string }) => message.id === "old-text-only",
     );
     expect(nearCutoff.mediaUrl).toContain("https://signed.example/near-cutoff");
+    expect(nearCutoff.mediaExpiresAt).toBe(
+      new Date(nearCutoffMessage.sentAt.getTime() + RETENTION_MS).toISOString(),
+    );
     expect(expired).toMatchObject({
       content: "message-past-cutoff",
       mediaUrl: null,
       mediaMimeType: "audio/ogg",
       mediaFileName: "past-cutoff.ogg",
       mediaExpiredAt: new Date(
+        expiredMessage.sentAt.getTime() + RETENTION_MS,
+      ).toISOString(),
+      mediaExpiresAt: new Date(
         expiredMessage.sentAt.getTime() + RETENTION_MS,
       ).toISOString(),
     });
