@@ -13,6 +13,7 @@ const {
   mockLoggerWarn,
   mockAnd,
   mockEq,
+  mockSql,
 } = vi.hoisted(() => ({
   mockDbSelect: vi.fn(),
   mockDbInsert: vi.fn(),
@@ -26,6 +27,10 @@ const {
   mockLoggerWarn: vi.fn(),
   mockAnd: vi.fn((...conditions: unknown[]) => ({ conditions })),
   mockEq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
+  mockSql: vi.fn((strings: readonly string[], ...values: unknown[]) => ({
+    query: strings.join("?"),
+    values,
+  })),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -100,7 +105,7 @@ vi.mock("drizzle-orm", () => ({
   isNull: vi.fn(() => "isNull"),
   lte: vi.fn(() => "lte"),
   or: vi.fn(() => "or"),
-  sql: vi.fn(() => "sql"),
+  sql: mockSql,
 }));
 
 vi.mock("@workspace/email", () => ({
@@ -535,9 +540,11 @@ describe("legacy email history synchronization", () => {
         whatsapp: delivery.recipient,
         phone: null,
       }]))
+      .mockReturnValueOnce(makeSelectQuery([{ id: "integration-a" }]))
       .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
     mockDbUpdate
       .mockReturnValueOnce(makeUpdateQuery([processing]))
+      .mockReturnValueOnce(makeUpdateQuery())
       .mockReturnValueOnce(makeUpdateQuery([accepted]))
       .mockReturnValueOnce(makeUpdateQuery())
       .mockReturnValueOnce(makeUpdateQuery());
@@ -560,8 +567,13 @@ describe("legacy email history synchronization", () => {
       "tenant-a",
       delivery.recipient,
       delivery.content,
-      { integrationId: undefined, requireEvolution: false },
+      { integrationId: "integration-a", requireEvolution: false },
     );
+    const metadataUpdate = mockUpdateSets.find((values) =>
+      values && typeof values === "object" && "metadata" in values,
+    ) as { metadata?: { query?: string } } | undefined;
+    expect(metadataUpdate?.metadata?.query).toContain("COALESCE(?::jsonb, '{}'::jsonb)");
+    expect(metadataUpdate?.metadata?.query).toContain("))::json");
     expect(mockLoggerWarn.mock.calls).toContainEqual([
       { tenantId: "tenant-a", deliveryId: "delivery-1" },
       expect.stringContaining("Queue add failed"),

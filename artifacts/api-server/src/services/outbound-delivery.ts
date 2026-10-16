@@ -886,7 +886,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
     } else {
       if (whatsappRoute?.integrationId) {
         await db.update(outboundMessagesTable).set({
-          metadata: sql`COALESCE(${outboundMessagesTable.metadata}, '{}'::jsonb) || jsonb_build_object('whatsappIntegrationId', ${whatsappRoute.integrationId})`,
+          metadata: sql`(COALESCE(${outboundMessagesTable.metadata}::jsonb, '{}'::jsonb) || jsonb_build_object('whatsappIntegrationId', ${whatsappRoute.integrationId}))::json`,
         }).where(and(
           eq(outboundMessagesTable.id, delivery.outboundMessageId),
           eq(outboundMessagesTable.tenantId, tenantId),
@@ -910,6 +910,15 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     outcomeUnknown = delivery.channel === "whatsapp";
+    const errorCode = err && typeof err === "object" && "code" in err && typeof err.code === "string"
+      ? err.code
+      : undefined;
+    logger.error({
+      tenantId,
+      deliveryId,
+      errorName: err instanceof Error ? err.name : "unknown",
+      ...(errorCode ? { errorCode } : {}),
+    }, "[outbound-delivery] Delivery processing threw before a provider result was recorded");
   }
 
   if (success) {
