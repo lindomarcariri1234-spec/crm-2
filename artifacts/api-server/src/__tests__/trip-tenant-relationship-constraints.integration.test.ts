@@ -669,4 +669,109 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
       client.release();
     }
   });
+
+  it("cascades reservation deletion to its check-ins without deleting trips or passengers", async () => {
+    if (!process.env["DATABASE_URL"]) {
+      throw new Error("DATABASE_URL must point to an isolated integration-test database");
+    }
+
+    const client = await pool.connect();
+    const suffix = generateId();
+    const ids = {
+      tenant: `cascade-tenant-${suffix}`,
+      tripA: `cascade-trip-a-${suffix}`,
+      tripB: `cascade-trip-b-${suffix}`,
+      reservationA: `cascade-reservation-a-${suffix}`,
+      reservationB: `cascade-reservation-b-${suffix}`,
+      passengerA1: `cascade-passenger-a1-${suffix}`,
+      passengerA2: `cascade-passenger-a2-${suffix}`,
+      passengerB: `cascade-passenger-b-${suffix}`,
+      checkinA1: `cascade-checkin-a1-${suffix}`,
+      checkinA2: `cascade-checkin-a2-${suffix}`,
+      checkinB: `cascade-checkin-b-${suffix}`,
+    };
+
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL search_path TO pg_temp, public");
+      await client.query(`
+        CREATE TEMP TABLE tenants (id text PRIMARY KEY);
+        CREATE TEMP TABLE trips (
+          id text PRIMARY KEY,
+          tenant_id text NOT NULL
+        );
+        CREATE TEMP TABLE reservations (
+          id text PRIMARY KEY,
+          trip_id text NOT NULL,
+          tenant_id text NOT NULL
+        );
+        CREATE TEMP TABLE passengers (
+          id text PRIMARY KEY,
+          reservation_id text NOT NULL
+        );
+        CREATE TEMP TABLE trip_checkins (
+          id text PRIMARY KEY,
+          trip_id text NOT NULL,
+          tenant_id text NOT NULL,
+          passenger_id text NOT NULL,
+          reservation_id text NOT NULL
+        );
+      `);
+
+      await client.query(tripTenantMigration);
+
+      await client.query("INSERT INTO tenants (id) VALUES ($1)", [ids.tenant]);
+      await client.query(
+        "INSERT INTO trips (id, tenant_id) VALUES ($1, $3), ($2, $3)",
+        [ids.tripA, ids.tripB, ids.tenant],
+      );
+      await client.query(
+        `INSERT INTO reservations (id, trip_id, tenant_id)
+         VALUES ($1, $2, $4), ($3, $5, $4)`,
+        [ids.reservationA, ids.tripA, ids.reservationB, ids.tenant, ids.tripB],
+      );
+      await client.query(
+        `INSERT INTO passengers (id, reservation_id)
+         VALUES ($1, $4), ($2, $4), ($3, $5)`,
+        [ids.passengerA1, ids.passengerA2, ids.passengerB, ids.reservationA, ids.reservationB],
+      );
+      await client.query(
+        `INSERT INTO trip_checkins
+          (id, trip_id, tenant_id, passenger_id, reservation_id)
+         VALUES
+          ($1, $2, $6, $3, $5),
+          ($4, $2, $6, $7, $5),
+          ($8, $9, $6, $10, $11)`,
+        [
+          ids.checkinA1, ids.tripA, ids.passengerA1, ids.checkinA2,
+          ids.reservationA, ids.tenant, ids.passengerA2, ids.checkinB,
+          ids.tripB, ids.passengerB, ids.reservationB,
+        ],
+      );
+
+      await client.query("DELETE FROM reservations WHERE id = $1", [ids.reservationA]);
+
+      const remainingCheckins = await client.query(
+        "SELECT id, reservation_id FROM trip_checkins ORDER BY id",
+      );
+      expect(remainingCheckins.rows).toEqual([
+        { id: ids.checkinB, reservation_id: ids.reservationB },
+      ]);
+
+      const remainingParents = await client.query(
+        `SELECT
+           (SELECT array_agg(id ORDER BY id) FROM trips) AS trip_ids,
+           (SELECT array_agg(id ORDER BY id) FROM passengers) AS passenger_ids,
+           (SELECT array_agg(id ORDER BY id) FROM reservations) AS reservation_ids`,
+      );
+      expect(remainingParents.rows).toEqual([{
+        trip_ids: [ids.tripA, ids.tripB].sort(),
+        passenger_ids: [ids.passengerA1, ids.passengerA2, ids.passengerB].sort(),
+        reservation_ids: [ids.reservationB],
+      }]);
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
 });
