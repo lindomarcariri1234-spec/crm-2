@@ -586,6 +586,18 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
          VALUES ('cross-trip-checkin', 'trip-b', 'tenant-b', 'passenger-a', 'reservation-a')`,
       )).rejects.toMatchObject({ code: "23503" });
 
+      await expect(client.query(
+        `UPDATE pg_temp.reservations
+            SET trip_id = 'trip-b',
+                tenant_id = 'tenant-b'
+          WHERE id = 'reservation-a'`,
+      )).rejects.toMatchObject({ code: "23503" });
+      await expect(client.query(
+        `UPDATE pg_temp.trip_checkins
+            SET reservation_id = 'reservation-b'
+          WHERE id = 'legacy-checkin'`,
+      )).rejects.toMatchObject({ code: "23503" });
+
       const validRowsAfterRejectedWrites = await client.query(
         `SELECT r.id AS reservation_id,
                 r.trip_id AS reservation_trip_id,
