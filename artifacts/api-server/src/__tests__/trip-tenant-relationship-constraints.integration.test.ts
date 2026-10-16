@@ -585,6 +585,14 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
           (id, trip_id, tenant_id, passenger_id, reservation_id)
          VALUES ('cross-trip-checkin', 'trip-b', 'tenant-b', 'passenger-a', 'reservation-a')`,
       )).rejects.toMatchObject({ code: "23503" });
+      // Match reservation B's trip and tenant so only the passenger↔reservation
+      // relationship is invalid.
+      await expect(client.query(
+        `INSERT INTO pg_temp.trip_checkins
+          (id, trip_id, tenant_id, passenger_id, reservation_id)
+         VALUES ('cross-reservation-passenger-checkin',
+                 'trip-b', 'tenant-b', 'passenger-a', 'reservation-b')`,
+      )).rejects.toMatchObject({ code: "23503" });
 
       await expect(client.query(
         `UPDATE pg_temp.reservations
@@ -606,7 +614,15 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
                 c.trip_id AS checkin_trip_id,
                 c.tenant_id AS checkin_tenant_id,
                 c.passenger_id,
-                c.reservation_id AS checkin_reservation_id
+                c.reservation_id AS checkin_reservation_id,
+                (SELECT trip_id FROM pg_temp.reservations WHERE id = 'reservation-b')
+                  AS reservation_b_trip_id,
+                (SELECT tenant_id FROM pg_temp.reservations WHERE id = 'reservation-b')
+                  AS reservation_b_tenant_id,
+                (SELECT reservation_id FROM pg_temp.passengers WHERE id = 'passenger-a')
+                  AS passenger_a_reservation_id,
+                (SELECT reservation_id FROM pg_temp.passengers WHERE id = 'passenger-b')
+                  AS passenger_b_reservation_id
            FROM pg_temp.reservations r
            CROSS JOIN pg_temp.trip_checkins c
           WHERE r.id = 'reservation-a' AND c.id = 'legacy-checkin'`,
@@ -620,13 +636,20 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         checkin_tenant_id: "tenant-a",
         passenger_id: "passenger-a",
         checkin_reservation_id: "reservation-a",
+        reservation_b_trip_id: "trip-b",
+        reservation_b_tenant_id: "tenant-b",
+        passenger_a_reservation_id: "reservation-a",
+        passenger_b_reservation_id: "reservation-b",
       }]);
       const rejectedRows = await client.query(
         `SELECT
            (SELECT COUNT(*)::int FROM pg_temp.reservations
              WHERE id = 'cross-agency-reservation') AS invalid_reservations,
            (SELECT COUNT(*)::int FROM pg_temp.trip_checkins
-             WHERE id = 'cross-trip-checkin') AS invalid_checkins`,
+              WHERE id IN (
+                'cross-trip-checkin',
+                'cross-reservation-passenger-checkin'
+              )) AS invalid_checkins`,
       );
       expect(rejectedRows.rows).toEqual([{
         invalid_reservations: 0,
