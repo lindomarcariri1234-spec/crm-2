@@ -16,11 +16,39 @@ const mockState = vi.hoisted(() => ({
   chatbotConversationsTable: {
     id: { table: "chatbot_conversations", column: "id" },
     tenantId: { table: "chatbot_conversations", column: "tenant_id" },
+    clientId: { table: "chatbot_conversations", column: "client_id" },
+    channel: { table: "chatbot_conversations", column: "channel" },
   },
   chatbotMessagesTable: {
+    id: { table: "chatbot_messages", column: "id" },
     conversationId: { table: "chatbot_messages", column: "conversation_id" },
     tenantId: { table: "chatbot_messages", column: "tenant_id" },
     sentAt: { table: "chatbot_messages", column: "sent_at" },
+    role: { table: "chatbot_messages", column: "role" },
+    content: { table: "chatbot_messages", column: "content" },
+    isBot: { table: "chatbot_messages", column: "is_bot" },
+    deliveryStatus: { table: "chatbot_messages", column: "delivery_status" },
+    lastDeliveryError: { table: "chatbot_messages", column: "last_delivery_error" },
+    mediaUrl: { table: "chatbot_messages", column: "media_url" },
+    mediaMimeType: { table: "chatbot_messages", column: "media_mime_type" },
+    mediaFileName: { table: "chatbot_messages", column: "media_file_name" },
+    mediaExpiredAt: { table: "chatbot_messages", column: "media_expired_at" },
+  },
+  messagesTable: {
+    id: { table: "messages", column: "id" },
+    tenantId: { table: "messages", column: "tenant_id" },
+    toClientId: { table: "messages", column: "to_client_id" },
+    sentAt: { table: "messages", column: "sent_at" },
+    channel: { table: "messages", column: "channel" },
+    content: { table: "messages", column: "content" },
+    status: { table: "messages", column: "status" },
+    mediaUrl: { table: "messages", column: "media_url" },
+    outboundMessageId: { table: "messages", column: "outbound_message_id" },
+  },
+  clientsTable: {
+    id: { table: "clients", column: "id" },
+    tenantId: { table: "clients", column: "tenant_id" },
+    name: { table: "clients", column: "name" },
   },
   outboundDeliveriesTable: {
     id: { table: "outbound_deliveries", column: "id" },
@@ -34,6 +62,7 @@ const mockState = vi.hoisted(() => ({
     externalId: { table: "outbound_deliveries", column: "external_id" },
     createdAt: { table: "outbound_deliveries", column: "created_at" },
     acceptedAt: { table: "outbound_deliveries", column: "accepted_at" },
+    failedAt: { table: "outbound_deliveries", column: "failed_at" },
   },
   outboundDeliveryAttemptsTable: {
     deliveryId: { table: "outbound_delivery_attempts", column: "delivery_id" },
@@ -53,6 +82,7 @@ const mockState = vi.hoisted(() => ({
     metadata: { table: "outbound_messages", column: "metadata" },
     recipientType: { table: "outbound_messages", column: "recipient_type" },
     recipientId: { table: "outbound_messages", column: "recipient_id" },
+    recipientName: { table: "outbound_messages", column: "recipient_name" },
   },
 }));
 
@@ -60,14 +90,11 @@ vi.mock("@workspace/db", () => ({
   db: { select: mockState.dbSelect },
   chatbotConversationsTable: mockState.chatbotConversationsTable,
   chatbotMessagesTable: mockState.chatbotMessagesTable,
+  messagesTable: mockState.messagesTable,
   outboundDeliveriesTable: mockState.outboundDeliveriesTable,
   outboundDeliveryAttemptsTable: mockState.outboundDeliveryAttemptsTable,
   outboundMessagesTable: mockState.outboundMessagesTable,
-  clientsTable: {
-    id: { table: "clients", column: "id" },
-    tenantId: { table: "clients", column: "tenant_id" },
-    name: { table: "clients", column: "name" },
-  },
+  clientsTable: mockState.clientsTable,
 }));
 
 vi.mock("drizzle-orm", async (importOriginal) => {
@@ -642,6 +669,123 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
     expect(invalidLimit.status).toBe(400);
     expect(invalidCursor.status).toBe(400);
     expect(mockState.dbSelect).not.toHaveBeenCalled();
+  });
+
+  it("returns one tenant-scoped client timeline combining legacy, chatbot, and ledger entries", async () => {
+    const start = new Date("2026-10-15T12:00:00.000Z");
+    const client = { id: "client-a", name: "Ana Silva" };
+    const legacy = {
+      id: "legacy-a",
+      channel: "email",
+      content: "<p>Olá</p>",
+      status: "sent",
+      mediaUrl: null,
+      sentAt: start,
+    };
+    const chatbot = {
+      id: "chat-a",
+      conversationId: CONVERSATION_ID,
+      role: "user",
+      content: "Mensagem recebida",
+      isBot: false,
+      deliveryStatus: "sent",
+      lastDeliveryError: null,
+      mediaUrl: null,
+      mediaMimeType: null,
+      mediaFileName: null,
+      mediaExpiredAt: null,
+      sentAt: new Date(start.getTime() + 1000),
+    };
+    const chatbotReply = {
+      ...chatbot,
+      id: "chat-reply",
+      role: "assistant",
+      content: "Resposta automática",
+      isBot: true,
+      sentAt: new Date(start.getTime() + 1500),
+    };
+    const delivery = {
+      id: "delivery-a",
+      outboundMessageId: "outbound-a",
+      channel: "whatsapp",
+      content: "Resposta enviada",
+      status: "accepted",
+      createdAt: start,
+      acceptedAt: new Date(start.getTime() + 2000),
+      failedAt: null,
+      externalId: "provider-a",
+      provider: "evolution",
+      origin: "manual",
+      recipientName: "Ana Silva",
+      metadata: {},
+    };
+    const linkedDelivery = {
+      ...delivery,
+      id: "delivery-linked",
+      channel: "whatsapp",
+      status: "accepted",
+      metadata: { chatbotMessageId: "chat-reply" },
+    };
+    const makeBuilder = (result: unknown[], finalMethod: "limit" | "where") => {
+      const builder: Record<string, ReturnType<typeof vi.fn>> = {};
+      for (const method of ["from", "where", "innerJoin", "limit", "orderBy"]) {
+        builder[method] = vi.fn().mockReturnValue(builder);
+      }
+      builder[finalMethod]!.mockResolvedValue(result);
+      return builder;
+    };
+    const clientQuery = makeBuilder([client], "limit");
+    const legacyQuery = makeBuilder([legacy], "limit");
+    const chatbotQuery = makeBuilder([chatbot, chatbotReply], "limit");
+    const deliveryQuery = makeBuilder([delivery], "limit");
+    const linkedQuery = makeBuilder([linkedDelivery], "where");
+    mockState.dbSelect.mockReset()
+      .mockImplementationOnce(() => clientQuery)
+      .mockImplementationOnce(() => legacyQuery)
+      .mockImplementationOnce(() => chatbotQuery)
+      .mockImplementationOnce(() => deliveryQuery)
+      .mockImplementationOnce(() => linkedQuery);
+
+    const response = await request(buildApp())
+      .get("/api/clients/client-a/communication-timeline?limit=4");
+
+    expect(response.status).toBe(200);
+    expect(response.body.items.map((item: { id: string }) => item.id)).toEqual([
+      "message:legacy-a",
+      "chatbot:chat-a",
+      "chatbot:chat-reply",
+      "outbound:outbound-a:delivery-a",
+    ]);
+    expect(response.body.items.map((item: { source: string }) => item.source)).toEqual([
+      "message",
+      "chatbot",
+      "chatbot",
+      "outbound",
+    ]);
+    expect(response.body.items[1]).toMatchObject({ direction: "inbound", actor: "client" });
+    expect(response.body.items[2]).toMatchObject({
+      direction: "outbound",
+      actor: "ai",
+      channel: "whatsapp",
+      status: "sent",
+    });
+    expect(response.body.items).toHaveLength(4);
+    expect(response.body.hasMore).toBe(false);
+    expect(mockState.eq).toHaveBeenCalledWith(mockState.clientsTable?.tenantId, TENANT_ID);
+    expect(mockState.eq).toHaveBeenCalledWith(mockState.messagesTable.tenantId, TENANT_ID);
+    expect(mockState.eq).toHaveBeenCalledWith(mockState.outboundDeliveriesTable.tenantId, TENANT_ID);
+  });
+
+  it("does not read any client history when the client is outside the authenticated tenant", async () => {
+    const clientQuery = createQueryBuilder();
+    clientQuery.limit.mockResolvedValue([]);
+    mockState.dbSelect.mockReset().mockImplementationOnce(() => clientQuery);
+
+    const response = await request(buildApp())
+      .get("/api/clients/foreign-client/communication-timeline");
+
+    expect(response.status).toBe(404);
+    expect(mockState.dbSelect).toHaveBeenCalledTimes(1);
   });
 
   it("returns not found for a conversation outside the authenticated tenant before reading either history table", async () => {

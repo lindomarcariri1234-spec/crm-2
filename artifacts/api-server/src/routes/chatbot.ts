@@ -3,6 +3,7 @@ import {
   db,
   chatbotConversationsTable,
   chatbotMessagesTable,
+  messagesTable,
   outboundDeliveriesTable,
   outboundDeliveryAttemptsTable,
   outboundMessagesTable,
@@ -632,6 +633,264 @@ router.get("/chatbot-conversations/:id/timeline", async (req, res, next: NextFun
     });
   } catch (err) {
     next(err);
+  }
+});
+
+router.get("/clients/:clientId/communication-timeline", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireChatbotStaff(req, res, next);
+    if (!me) return;
+    const pageSize = parseConversationTimelineLimit(req.query.limit);
+    const cursor = decodeConversationTimelineCursor(req.query.cursor);
+    const [client] = await db.select({ id: clientsTable.id, name: clientsTable.name })
+      .from(clientsTable)
+      .where(and(
+        eq(clientsTable.id, req.params.clientId),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .limit(1);
+    if (!client) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+
+    const legacyConditions = [
+      eq(messagesTable.tenantId, me.tenantId),
+      eq(messagesTable.toClientId, client.id),
+      sql`NOT EXISTS (
+        SELECT 1 FROM outbound_messages legacy_outbound
+        WHERE legacy_outbound.id = ${messagesTable.outboundMessageId}
+          AND legacy_outbound.tenant_id = ${me.tenantId}
+      )`,
+    ];
+    if (cursor) {
+      legacyConditions.push(or(
+        lt(messagesTable.sentAt, cursor.at),
+        and(
+          eq(messagesTable.sentAt, cursor.at),
+          sql`(('message:' || ${messagesTable.id}) COLLATE "C") < (${cursor.id} COLLATE "C")`,
+        ),
+      )!);
+    }
+    const legacyRows = await db.select({
+      id: messagesTable.id,
+      channel: messagesTable.channel,
+      content: messagesTable.content,
+      status: messagesTable.status,
+      mediaUrl: messagesTable.mediaUrl,
+      sentAt: messagesTable.sentAt,
+    }).from(messagesTable)
+      .where(and(...legacyConditions))
+      .orderBy(desc(messagesTable.sentAt), desc(sql`(('message:' || ${messagesTable.id}) COLLATE "C")`))
+      .limit(pageSize + 1);
+
+    const chatbotConditions = [
+      eq(chatbotMessagesTable.tenantId, me.tenantId),
+      eq(chatbotConversationsTable.tenantId, me.tenantId),
+      eq(chatbotConversationsTable.clientId, client.id),
+      eq(chatbotConversationsTable.channel, "whatsapp"),
+      sql`${chatbotMessagesTable.role} <> 'system'`,
+    ];
+    if (cursor) {
+      chatbotConditions.push(or(
+        lt(chatbotMessagesTable.sentAt, cursor.at),
+        and(
+          eq(chatbotMessagesTable.sentAt, cursor.at),
+          sql`(('chatbot:' || ${chatbotMessagesTable.id}) COLLATE "C") < (${cursor.id} COLLATE "C")`,
+        ),
+      )!);
+    }
+    const chatbotRows = await db.select({
+      id: chatbotMessagesTable.id,
+      conversationId: chatbotMessagesTable.conversationId,
+      role: chatbotMessagesTable.role,
+      content: chatbotMessagesTable.content,
+      isBot: chatbotMessagesTable.isBot,
+      deliveryStatus: chatbotMessagesTable.deliveryStatus,
+      lastDeliveryError: chatbotMessagesTable.lastDeliveryError,
+      mediaUrl: chatbotMessagesTable.mediaUrl,
+      mediaMimeType: chatbotMessagesTable.mediaMimeType,
+      mediaFileName: chatbotMessagesTable.mediaFileName,
+      mediaExpiredAt: chatbotMessagesTable.mediaExpiredAt,
+      sentAt: chatbotMessagesTable.sentAt,
+    }).from(chatbotMessagesTable)
+      .innerJoin(chatbotConversationsTable, and(
+        eq(chatbotConversationsTable.id, chatbotMessagesTable.conversationId),
+        eq(chatbotConversationsTable.tenantId, chatbotMessagesTable.tenantId),
+      ))
+      .where(and(...chatbotConditions))
+      .orderBy(desc(chatbotMessagesTable.sentAt), desc(sql`(('chatbot:' || ${chatbotMessagesTable.id}) COLLATE "C")`))
+      .limit(pageSize + 1);
+
+    const outboundSelection = {
+      id: outboundDeliveriesTable.id,
+      outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+      channel: outboundDeliveriesTable.channel,
+      content: outboundDeliveriesTable.content,
+      status: outboundDeliveriesTable.status,
+      createdAt: outboundDeliveriesTable.createdAt,
+      acceptedAt: outboundDeliveriesTable.acceptedAt,
+      failedAt: outboundDeliveriesTable.failedAt,
+      externalId: outboundDeliveriesTable.externalId,
+      provider: outboundDeliveriesTable.provider,
+      origin: outboundMessagesTable.origin,
+      recipientName: outboundMessagesTable.recipientName,
+      metadata: outboundMessagesTable.metadata,
+    };
+    const deliveryTimelineAt = sql<Date>`COALESCE(
+      ${outboundDeliveriesTable.acceptedAt},
+      ${outboundDeliveriesTable.failedAt},
+      ${outboundDeliveriesTable.createdAt}
+    )`;
+    const deliveryConditions = [
+      eq(outboundDeliveriesTable.tenantId, me.tenantId),
+      eq(outboundMessagesTable.tenantId, me.tenantId),
+      eq(outboundMessagesTable.recipientType, "client"),
+      eq(outboundMessagesTable.recipientId, client.id),
+      sql`NOT EXISTS (
+        SELECT 1
+        FROM chatbot_messages linked_message
+        INNER JOIN chatbot_conversations linked_conversation
+          ON linked_conversation.id = linked_message.conversation_id
+         AND linked_conversation.tenant_id = linked_message.tenant_id
+        WHERE linked_message.id = (outbound_messages.metadata->>'chatbotMessageId')
+          AND linked_message.tenant_id = ${me.tenantId}
+          AND linked_conversation.client_id = ${client.id}
+          AND linked_conversation.channel = 'whatsapp'
+      )`,
+    ];
+    if (cursor) {
+      deliveryConditions.push(or(
+        lt(deliveryTimelineAt, cursor.at),
+        and(
+          eq(deliveryTimelineAt, cursor.at),
+          sql`(('outbound:' || ${outboundDeliveriesTable.outboundMessageId} || ':' || ${outboundDeliveriesTable.id}) COLLATE "C") < (${cursor.id} COLLATE "C")`,
+        ),
+      )!);
+    }
+    const deliveryRows = await db.select(outboundSelection).from(outboundDeliveriesTable)
+      .innerJoin(outboundMessagesTable, and(
+        eq(outboundMessagesTable.id, outboundDeliveriesTable.outboundMessageId),
+        eq(outboundMessagesTable.tenantId, outboundDeliveriesTable.tenantId),
+      ))
+      .where(and(...deliveryConditions))
+      .orderBy(desc(deliveryTimelineAt), desc(sql`(('outbound:' || ${outboundDeliveriesTable.outboundMessageId} || ':' || ${outboundDeliveriesTable.id}) COLLATE "C")`))
+      .limit(pageSize + 1);
+
+    const candidates = [
+      ...legacyRows.map((row) => ({ kind: "legacy" as const, id: `message:${row.id}`, at: row.sentAt, row })),
+      ...chatbotRows.map((row) => ({ kind: "chatbot" as const, id: `chatbot:${row.id}`, at: row.sentAt, row })),
+      ...deliveryRows.map((row) => ({
+        kind: "delivery" as const,
+        id: `outbound:${row.outboundMessageId}:${row.id}`,
+        at: row.acceptedAt ?? row.failedAt ?? row.createdAt,
+        row,
+      })),
+    ].sort((left, right) =>
+      right.at.getTime() - left.at.getTime() || compareTimelineIds(right.id, left.id),
+    );
+    const hasMore = candidates.length > pageSize;
+    const pageCandidates = candidates.slice(0, pageSize);
+    const pageChatbotRows = pageCandidates.flatMap((candidate) => candidate.kind === "chatbot" ? [candidate.row] : []);
+    const chatbotIds = pageChatbotRows.map((row) => row.id);
+    const linkedRows = chatbotIds.length
+      ? await db.select(outboundSelection).from(outboundDeliveriesTable)
+          .innerJoin(outboundMessagesTable, and(
+            eq(outboundMessagesTable.id, outboundDeliveriesTable.outboundMessageId),
+            eq(outboundMessagesTable.tenantId, outboundDeliveriesTable.tenantId),
+          ))
+          .where(and(
+            eq(outboundDeliveriesTable.tenantId, me.tenantId),
+            inArray(sql<string>`${outboundMessagesTable.metadata}->>'chatbotMessageId'`, chatbotIds),
+            eq(outboundMessagesTable.recipientType, "client"),
+            eq(outboundMessagesTable.recipientId, client.id),
+          ))
+      : [];
+    const linkedByMessage = new Map(linkedRows.map((row) => {
+      const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+        ? row.metadata as Record<string, unknown>
+        : {};
+      return [String(metadata.chatbotMessageId), row];
+    }));
+    const now = Date.now();
+    const items = await Promise.all(pageCandidates.map(async (candidate) => {
+      if (candidate.kind === "legacy") {
+        return {
+          id: candidate.id,
+          clientId: client.id,
+          clientName: client.name,
+          channel: candidate.row.channel,
+          content: candidate.row.content,
+          direction: "outbound" as const,
+          actor: "team" as const,
+          sentAt: candidate.row.sentAt,
+          status: candidate.row.status,
+          source: "message" as const,
+          mediaUrl: candidate.row.mediaUrl,
+        };
+      }
+      if (candidate.kind === "delivery") {
+        return {
+          id: candidate.id,
+          clientId: client.id,
+          clientName: candidate.row.recipientName || client.name,
+          channel: candidate.row.channel,
+          content: candidate.row.content,
+          direction: "outbound" as const,
+          actor: "team" as const,
+          sentAt: candidate.row.acceptedAt ?? candidate.row.failedAt ?? candidate.row.createdAt,
+          status: candidate.row.status === "accepted" ? "sent" : candidate.row.status,
+          source: "outbound" as const,
+        };
+      }
+      let mediaUrl = candidate.row.mediaUrl;
+      const mediaExpiresAt = candidate.row.role === "user" && candidate.row.mediaUrl
+        ? getWhatsAppInboundMediaExpirationAt(candidate.row.sentAt)
+        : null;
+      if (mediaExpiresAt && (candidate.row.mediaExpiredAt || mediaExpiresAt.getTime() <= now)) {
+        mediaUrl = null;
+      } else if (mediaUrl) {
+        const fileKey = extractVerifiedUploadThingKey(mediaUrl);
+        if (fileKey) {
+          const expiresIn = mediaExpiresAt
+            ? Math.min(DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS, Math.max(1, Math.floor((mediaExpiresAt.getTime() - now) / 1000)))
+            : DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS;
+          try {
+            mediaUrl = (await utapi.generateSignedURL(fileKey, { expiresIn })).ufsUrl;
+          } catch {
+            mediaUrl = null;
+          }
+        }
+      }
+      const linked = linkedByMessage.get(candidate.row.id);
+      const isInbound = candidate.row.role === "user";
+      return {
+        id: candidate.id,
+        clientId: client.id,
+        clientName: client.name,
+        channel: linked?.channel ?? "whatsapp",
+        content: candidate.row.content,
+        direction: isInbound ? "inbound" as const : "outbound" as const,
+        actor: isInbound ? "client" as const : candidate.row.isBot ? "ai" as const : "team" as const,
+        sentAt: candidate.row.sentAt,
+        status: isInbound ? "received" : linked?.status === "accepted" ? "sent" : linked?.status ?? candidate.row.deliveryStatus,
+        source: "chatbot" as const,
+        mediaUrl,
+        mediaMimeType: candidate.row.mediaMimeType,
+        mediaFileName: candidate.row.mediaFileName,
+        mediaExpiredAt: candidate.row.mediaExpiredAt ?? (mediaExpiresAt && mediaUrl === null ? mediaExpiresAt : null),
+        mediaExpiresAt,
+      };
+    }));
+    const oldestCandidate = pageCandidates.at(-1);
+    res.json({
+      items: items.sort((left, right) =>
+        left.sentAt.getTime() - right.sentAt.getTime() || compareTimelineIds(left.id, right.id),
+      ),
+      hasMore,
+      nextCursor: hasMore && oldestCandidate
+        ? encodeConversationTimelineCursor(oldestCandidate.at, oldestCandidate.id)
+        : null,
+    });
+  } catch (error) {
+    next(error);
   }
 });
 

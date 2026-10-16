@@ -88,7 +88,7 @@ function timeValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function timelineContent(channel: string, content: string): string {
+export function normalizeTimelineContent(channel: string, content: string): string {
   if (channel !== "email") return content;
   return content
     .replace(/<br\s*\/?>/gi, "\n")
@@ -124,7 +124,7 @@ function basicTimelineEntries(
       clientId: message.toClientId,
       clientName: message.clientName || message.toClientId,
       channel: message.channel,
-      content: timelineContent(message.channel, message.content),
+      content: normalizeTimelineContent(message.channel, message.content),
       direction: "outbound",
       actor: "team",
       sentAt: message.sentAt,
@@ -141,7 +141,7 @@ function basicTimelineEntries(
       clientId: message.recipientId!,
       clientName: message.recipientName || message.recipientId!,
       channel: delivery.channel,
-      content: timelineContent(delivery.channel, delivery.content),
+      content: normalizeTimelineContent(delivery.channel, delivery.content),
       direction: "outbound",
       actor: "team",
       sentAt: delivery.acceptedAt ?? delivery.failedAt ?? delivery.createdAt ?? message.createdAt,

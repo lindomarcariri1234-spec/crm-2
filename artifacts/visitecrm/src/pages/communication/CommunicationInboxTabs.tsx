@@ -275,6 +275,9 @@ interface ConversationsTabProps {
   refetchOutboundMessages: () => unknown;
   fetchAiInbox: () => unknown;
   conversationMessages: CommunicationTimelineEntry[];
+  hasMoreClientTimeline?: boolean;
+  loadingOlderClientTimeline?: boolean;
+  onLoadOlderClientTimeline?: () => unknown;
   selectedClientName: string | undefined;
   loadingConversationAiMessages: boolean;
   retryingConversationIds?: string[];
@@ -312,6 +315,9 @@ export function ConversationsTab({
   refetchOutboundMessages,
   fetchAiInbox,
   conversationMessages,
+  hasMoreClientTimeline = false,
+  loadingOlderClientTimeline = false,
+  onLoadOlderClientTimeline = () => undefined,
   selectedClientName,
   loadingConversationAiMessages,
   retryingConversationIds = [],
@@ -334,17 +340,33 @@ export function ConversationsTab({
   const timelineRef = useRef<HTMLDivElement>(null);
   const previousClientIdRef = useRef(selectedClientId);
   const followLatestMessageRef = useRef(true);
+  const pendingPrependScrollRef = useRef<{ height: number; top: number } | null>(null);
 
   useLayoutEffect(() => {
     if (previousClientIdRef.current !== selectedClientId) {
       previousClientIdRef.current = selectedClientId;
       followLatestMessageRef.current = true;
+      pendingPrependScrollRef.current = null;
     }
     const timeline = timelineRef.current;
-    if (timeline && followLatestMessageRef.current) {
+    const pending = pendingPrependScrollRef.current;
+    if (timeline && pending && !loadingOlderClientTimeline) {
+      timeline.scrollTop = pending.top + timeline.scrollHeight - pending.height;
+      pendingPrependScrollRef.current = null;
+    } else if (timeline && followLatestMessageRef.current) {
       timeline.scrollTop = timeline.scrollHeight;
     }
-  }, [conversationMessages, selectedClientId]);
+  }, [conversationMessages, selectedClientId, loadingOlderClientTimeline]);
+
+  const loadOlderMessages = async () => {
+    const timeline = timelineRef.current;
+    if (!timeline || loadingOlderClientTimeline) return;
+    pendingPrependScrollRef.current = {
+      height: timeline.scrollHeight,
+      top: timeline.scrollTop,
+    };
+    await onLoadOlderClientTimeline();
+  };
 
   const handleTimelineScroll = () => {
     const timeline = timelineRef.current;
@@ -470,6 +492,20 @@ export function ConversationsTab({
                   role="log"
                   aria-live="polite"
                 >
+                  {hasMoreClientTimeline && (
+                    <div className="flex justify-center">
+                      <Button
+                        data-testid="button-load-older-client-timeline"
+                        disabled={loadingOlderClientTimeline}
+                        onClick={() => { void loadOlderMessages(); }}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        {loadingOlderClientTimeline ? "Carregando mensagens anteriores..." : "Carregar mensagens anteriores"}
+                      </Button>
+                    </div>
+                  )}
                   {loadingConversationAiMessages && (
                     <p className="rounded-lg bg-secondary/70 px-3 py-2 text-xs text-muted-foreground" role="status">Carregando mensagens recebidas…</p>
                   )}
