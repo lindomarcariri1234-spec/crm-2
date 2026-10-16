@@ -492,6 +492,31 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         tenant_id: "tenant-a",
         reservation_id: "reservation-a",
       }]);
+      await expect(client.query(
+        `UPDATE pg_temp.passengers
+            SET reservation_id = 'reservation-b'
+          WHERE id = 'passenger-a'`,
+      )).rejects.toMatchObject({
+        code: "23503",
+        constraint: "trip_checkins_passenger_reservation_fk",
+      });
+      const passengerAndCheckinAfterRejectedMove = await client.query(
+        `SELECT p.id AS passenger_id,
+                p.reservation_id AS passenger_reservation_id,
+                c.id AS checkin_id,
+                c.passenger_id AS checkin_passenger_id,
+                c.reservation_id AS checkin_reservation_id
+           FROM pg_temp.passengers p
+           JOIN pg_temp.trip_checkins c ON c.passenger_id = p.id
+          WHERE p.id = 'passenger-a' AND c.id = 'legacy-checkin'`,
+      );
+      expect(passengerAndCheckinAfterRejectedMove.rows).toEqual([{
+        passenger_id: "passenger-a",
+        passenger_reservation_id: "reservation-a",
+        checkin_id: "legacy-checkin",
+        checkin_passenger_id: "passenger-a",
+        checkin_reservation_id: "reservation-a",
+      }]);
       const reservationIsRequired = await client.query<{ attnotnull: boolean }>(
         `SELECT attnotnull
            FROM pg_attribute
