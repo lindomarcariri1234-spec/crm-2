@@ -39,6 +39,21 @@ export interface AiMessage {
   sentAt: string;
   deliveryStatus?: string | null;
   deliveryIssue?: string | null;
+  direction?: "inbound" | "outbound";
+  channel?: string | null;
+  provider?: string | null;
+  origin?: string | null;
+  externalId?: string | null;
+  deliveryAttempts?: number | null;
+  deliveryHistory?: Array<{
+    attemptNumber: number;
+    status: string;
+    provider: string | null;
+    externalId: string | null;
+    error: string | null;
+    startedAt: string | Date;
+    completedAt: string | Date | null;
+  }>;
   mediaUrl?: string | null;
   mediaMimeType?: string | null;
   mediaFileName?: string | null;

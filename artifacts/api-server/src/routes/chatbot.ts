@@ -3,12 +3,15 @@ import {
   db,
   chatbotConversationsTable,
   chatbotMessagesTable,
+  outboundDeliveriesTable,
+  outboundDeliveryAttemptsTable,
+  outboundMessagesTable,
   clientsTable,
   usersTable,
   supportTicketsTable,
   tenantIntegrationsTable,
 } from "@workspace/db";
-import { eq, and, desc, isNull, lte, or, sql } from "drizzle-orm";
+import { eq, and, desc, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { decryptCredential } from "../lib/crypto";
@@ -312,6 +315,201 @@ router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFun
         deliveryIssue: safeChatbotDeliveryIssue(conv.channel, message.deliveryStatus, lastDeliveryError),
       };
     }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/chatbot-conversations/:id/timeline", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireChatbotStaff(req, res, next);
+    if (!me) return;
+    const [conversation] = await db.select().from(chatbotConversationsTable)
+      .where(and(
+        eq(chatbotConversationsTable.id, req.params.id),
+        eq(chatbotConversationsTable.tenantId, me.tenantId),
+      )).limit(1);
+    if (!conversation) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+
+    const storedMessages = await db.select().from(chatbotMessagesTable)
+      .where(and(
+        eq(chatbotMessagesTable.conversationId, conversation.id),
+        eq(chatbotMessagesTable.tenantId, me.tenantId),
+      ))
+      .orderBy(chatbotMessagesTable.sentAt, chatbotMessagesTable.id);
+
+    const now = Date.now();
+    const visibleMessages = await Promise.all(storedMessages.map(async (message) => {
+      const mediaExpiresAt = conversation.channel === "whatsapp" && message.role === "user" && message.mediaUrl
+        ? getWhatsAppInboundMediaExpirationAt(message.sentAt)
+        : null;
+      if (mediaExpiresAt && (message.mediaExpiredAt || mediaExpiresAt.getTime() <= now)) {
+        return { ...message, mediaUrl: null, mediaExpiredAt: message.mediaExpiredAt ?? mediaExpiresAt, mediaExpiresAt };
+      }
+      const fileKey = message.mediaUrl ? extractVerifiedUploadThingKey(message.mediaUrl) : null;
+      if (!fileKey) return mediaExpiresAt ? { ...message, mediaExpiresAt } : message;
+      const expiresIn = mediaExpiresAt
+        ? Math.min(DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS, Math.max(1, Math.floor((mediaExpiresAt.getTime() - now) / 1000)))
+        : DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS;
+      try {
+        const signed = await utapi.generateSignedURL(fileKey, { expiresIn });
+        return { ...message, mediaUrl: signed.ufsUrl, ...(mediaExpiresAt ? { mediaExpiresAt } : {}) };
+      } catch {
+        logger.warn({ tenantId: me.tenantId, messageId: message.id }, "[chatbot] could not create temporary timeline media URL");
+        return { ...message, mediaUrl: null, ...(mediaExpiresAt ? { mediaExpiresAt } : {}) };
+      }
+    }));
+
+    const outboundRows = await db.select({
+      id: outboundDeliveriesTable.id,
+      outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+      channel: outboundDeliveriesTable.channel,
+      content: outboundDeliveriesTable.content,
+      status: outboundDeliveriesTable.status,
+      attempts: outboundDeliveriesTable.attempts,
+      provider: outboundDeliveriesTable.provider,
+      externalId: outboundDeliveriesTable.externalId,
+      createdAt: outboundDeliveriesTable.createdAt,
+      acceptedAt: outboundDeliveriesTable.acceptedAt,
+      origin: outboundMessagesTable.origin,
+      metadata: outboundMessagesTable.metadata,
+    }).from(outboundDeliveriesTable)
+      .innerJoin(outboundMessagesTable, and(
+        eq(outboundMessagesTable.id, outboundDeliveriesTable.outboundMessageId),
+        eq(outboundMessagesTable.tenantId, outboundDeliveriesTable.tenantId),
+      ))
+      .where(and(
+        eq(outboundDeliveriesTable.tenantId, me.tenantId),
+        or(
+          sql`${outboundMessagesTable.metadata}->>'conversationId' = ${conversation.id}`,
+          ...(conversation.clientId
+            ? [and(
+                eq(outboundMessagesTable.recipientType, "client"),
+                eq(outboundMessagesTable.recipientId, conversation.clientId),
+              )]
+            : []),
+        ),
+      ))
+      .orderBy(outboundDeliveriesTable.createdAt, outboundDeliveriesTable.id);
+
+    const attempts = outboundRows.length
+      ? await db.select({
+          deliveryId: outboundDeliveryAttemptsTable.deliveryId,
+          attemptNumber: outboundDeliveryAttemptsTable.attemptNumber,
+          status: outboundDeliveryAttemptsTable.status,
+          provider: outboundDeliveryAttemptsTable.provider,
+          externalId: outboundDeliveryAttemptsTable.externalId,
+          error: outboundDeliveryAttemptsTable.error,
+          startedAt: outboundDeliveryAttemptsTable.startedAt,
+          completedAt: outboundDeliveryAttemptsTable.completedAt,
+        }).from(outboundDeliveryAttemptsTable)
+          .where(and(
+            eq(outboundDeliveryAttemptsTable.tenantId, me.tenantId),
+            inArray(outboundDeliveryAttemptsTable.deliveryId, outboundRows.map((row) => row.id)),
+          ))
+          .orderBy(outboundDeliveryAttemptsTable.attemptNumber)
+      : [];
+    const attemptsByDelivery = new Map<string, typeof attempts>();
+    for (const attempt of attempts) {
+      const list = attemptsByDelivery.get(attempt.deliveryId) ?? [];
+      list.push(attempt);
+      attemptsByDelivery.set(attempt.deliveryId, list);
+    }
+    type TimelineEntry = Omit<(typeof visibleMessages)[number], "lastDeliveryError"> & {
+      direction: "inbound" | "outbound";
+      origin: string;
+      channel: string;
+      provider: string | null;
+      externalId?: string | null;
+      deliveryAttempts?: number;
+      deliveryHistory?: Array<{
+        attemptNumber: number;
+        status: string;
+        provider: string | null;
+        externalId: string | null;
+        error: string | null;
+        startedAt: Date;
+        completedAt: Date | null;
+      }>;
+      deliveryIssue: string | null;
+    };
+    const projectedMessages: TimelineEntry[] = visibleMessages.map((message) => {
+      const { lastDeliveryError, ...safeMessage } = message;
+      return {
+        ...safeMessage,
+        direction: message.role === "user" ? "inbound" : "outbound",
+        origin: "chatbot",
+        channel: conversation.channel,
+        provider: null as string | null,
+        deliveryIssue: safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, lastDeliveryError),
+      };
+    });
+    const messageIndexById = new Map(projectedMessages.map((message, index) => [message.id, index]));
+    for (const row of outboundRows) {
+      const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+        ? row.metadata as Record<string, unknown>
+        : {};
+      const chatbotMessageId = typeof metadata.chatbotMessageId === "string" ? metadata.chatbotMessageId : null;
+      const deliveryIssue = row.status === "unknown"
+        ? "Não foi possível confirmar a entrega."
+        : row.status === "failed" || row.status === "skipped"
+          ? "A entrega não foi concluída."
+          : null;
+      const deliveryHistory = (attemptsByDelivery.get(row.id) ?? []).map((attempt) => ({
+        attemptNumber: attempt.attemptNumber,
+        status: attempt.status,
+        provider: attempt.provider,
+        externalId: attempt.externalId,
+        error: attempt.error ? "provider_error" : null,
+        startedAt: attempt.startedAt,
+        completedAt: attempt.completedAt,
+      }));
+      const linkedIndex = chatbotMessageId ? messageIndexById.get(chatbotMessageId) : undefined;
+      if (linkedIndex !== undefined) {
+        projectedMessages[linkedIndex] = {
+          ...projectedMessages[linkedIndex]!,
+          channel: row.channel,
+          origin: row.origin,
+          provider: row.provider,
+          externalId: row.externalId,
+          deliveryStatus: row.status === "accepted" ? "sent" : row.status,
+          deliveryAttempts: row.attempts,
+          deliveryIssue,
+          deliveryHistory,
+        };
+        continue;
+      }
+      projectedMessages.push({
+        id: `delivery:${row.id}`,
+        conversationId: conversation.id,
+        tenantId: me.tenantId,
+        ticketId: null,
+        sourceMessageId: null,
+        providerMessageId: row.externalId,
+        deliveryUpdatedAt: row.acceptedAt ?? row.createdAt,
+        role: "assistant",
+        content: row.content,
+        isBot: false,
+        sentAt: row.acceptedAt ?? row.createdAt,
+        mediaUrl: null,
+        mediaMimeType: null,
+        mediaFileName: null,
+        mediaExpiredAt: null,
+        direction: "outbound",
+        origin: row.origin,
+        channel: row.channel,
+        provider: row.provider,
+        externalId: row.externalId,
+        deliveryStatus: row.status === "accepted" ? "sent" : row.status,
+        deliveryAttempts: row.attempts,
+        deliveryIssue,
+        deliveryHistory,
+      });
+    }
+    projectedMessages.sort((left, right) =>
+      new Date(left.sentAt).getTime() - new Date(right.sentAt).getTime() || left.id.localeCompare(right.id),
+    );
+    res.json(projectedMessages);
   } catch (err) {
     next(err);
   }

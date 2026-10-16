@@ -440,7 +440,7 @@ export default function Communication() {
       setAiMessagesError(null);
     }
     try {
-      const res = await fetch(`${BASE}/api/chatbot-conversations/${id}/messages`, { credentials: "include" });
+      const res = await fetch(`${BASE}/api/chatbot-conversations/${id}/timeline`, { credentials: "include" });
       if (!res.ok) throw new Error("failed");
       const messages = await res.json() as AiMessage[];
       if (requestId === aiConversationRequestId.current) {
@@ -1983,6 +1983,8 @@ export default function Communication() {
                             ? "Entregue"
                             : message.deliveryStatus === "failed"
                               ? "Falhou"
+                                : message.deliveryStatus === "skipped"
+                                  ? "Não enviada"
                               : message.deliveryStatus === "cancelled"
                                 ? "Cancelada"
                               : message.deliveryStatus === "unknown"
@@ -2010,6 +2012,29 @@ export default function Communication() {
                                 <time dateTime={message.sentAt}>{new Date(message.sentAt).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}</time>
                                 {!inbound && deliveryLabel && <span aria-label={`Status: ${deliveryLabel}`}>· {deliveryLabel}</span>}
                               </div>
+                              {!inbound && (message.channel || message.provider || message.origin || message.deliveryAttempts != null) && (
+                                <p className={`mt-1 break-all text-[10px] ${message.isBot ? "text-muted-foreground" : "text-primary-foreground/75"}`}>
+                                  {[message.channel, message.provider ? `Provedor: ${message.provider}` : null, message.origin ? `Origem: ${message.origin}` : null, message.deliveryAttempts != null ? `${message.deliveryAttempts} tentativa(s)` : null, message.externalId ? `ID: ${message.externalId}` : null]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </p>
+                              )}
+                              {!inbound && Boolean(message.deliveryHistory?.length) && (
+                                <details className={`mt-1 text-[10px] ${message.isBot ? "text-muted-foreground" : "text-primary-foreground/75"}`}>
+                                  <summary className="cursor-pointer">Detalhes das tentativas ({message.deliveryHistory!.length})</summary>
+                                  <ul className="mt-1 space-y-1 break-all pl-3">
+                                    {message.deliveryHistory!.map((attempt) => (
+                                      <li key={`${message.id}-${attempt.attemptNumber}`}>
+                                        Tentativa {attempt.attemptNumber}: {attempt.status}
+                                        {attempt.provider ? ` · ${attempt.provider}` : ""}
+                                        {attempt.externalId ? ` · ID ${attempt.externalId}` : ""}
+                                        {attempt.startedAt ? ` · ${new Date(attempt.startedAt).toLocaleString("pt-BR")}` : ""}
+                                        {attempt.error ? " · O provedor informou uma falha." : ""}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </details>
+                              )}
                               {!inbound && message.deliveryIssue && (
                                 <p
                                   role="status"

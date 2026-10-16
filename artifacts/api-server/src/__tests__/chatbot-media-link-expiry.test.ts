@@ -9,6 +9,9 @@ const mockState = vi.hoisted(() => ({
   generateSignedURL: vi.fn(),
   conversation: null as Record<string, unknown> | null,
   messages: [] as Record<string, unknown>[],
+  eq: vi.fn((column: unknown, value: unknown) => ({ operator: "eq", column, value })),
+  outboundRows: [] as Record<string, unknown>[],
+  attempts: [] as Record<string, unknown>[],
   chatbotConversationsTable: {
     id: { table: "chatbot_conversations", column: "id" },
     tenantId: { table: "chatbot_conversations", column: "tenant_id" },
@@ -18,12 +21,47 @@ const mockState = vi.hoisted(() => ({
     tenantId: { table: "chatbot_messages", column: "tenant_id" },
     sentAt: { table: "chatbot_messages", column: "sent_at" },
   },
+  outboundDeliveriesTable: {
+    id: { table: "outbound_deliveries", column: "id" },
+    tenantId: { table: "outbound_deliveries", column: "tenant_id" },
+    outboundMessageId: { table: "outbound_deliveries", column: "outbound_message_id" },
+    channel: { table: "outbound_deliveries", column: "channel" },
+    content: { table: "outbound_deliveries", column: "content" },
+    status: { table: "outbound_deliveries", column: "status" },
+    attempts: { table: "outbound_deliveries", column: "attempts" },
+    provider: { table: "outbound_deliveries", column: "provider" },
+    externalId: { table: "outbound_deliveries", column: "external_id" },
+    createdAt: { table: "outbound_deliveries", column: "created_at" },
+    acceptedAt: { table: "outbound_deliveries", column: "accepted_at" },
+  },
+  outboundDeliveryAttemptsTable: {
+    deliveryId: { table: "outbound_delivery_attempts", column: "delivery_id" },
+    tenantId: { table: "outbound_delivery_attempts", column: "tenant_id" },
+    attemptNumber: { table: "outbound_delivery_attempts", column: "attempt_number" },
+    status: { table: "outbound_delivery_attempts", column: "status" },
+    provider: { table: "outbound_delivery_attempts", column: "provider" },
+    externalId: { table: "outbound_delivery_attempts", column: "external_id" },
+    error: { table: "outbound_delivery_attempts", column: "error" },
+    startedAt: { table: "outbound_delivery_attempts", column: "started_at" },
+    completedAt: { table: "outbound_delivery_attempts", column: "completed_at" },
+  },
+  outboundMessagesTable: {
+    id: { table: "outbound_messages", column: "id" },
+    tenantId: { table: "outbound_messages", column: "tenant_id" },
+    origin: { table: "outbound_messages", column: "origin" },
+    metadata: { table: "outbound_messages", column: "metadata" },
+    recipientType: { table: "outbound_messages", column: "recipient_type" },
+    recipientId: { table: "outbound_messages", column: "recipient_id" },
+  },
 }));
 
 vi.mock("@workspace/db", () => ({
   db: { select: mockState.dbSelect },
   chatbotConversationsTable: mockState.chatbotConversationsTable,
   chatbotMessagesTable: mockState.chatbotMessagesTable,
+  outboundDeliveriesTable: mockState.outboundDeliveriesTable,
+  outboundDeliveryAttemptsTable: mockState.outboundDeliveryAttemptsTable,
+  outboundMessagesTable: mockState.outboundMessagesTable,
   clientsTable: {
     id: { table: "clients", column: "id" },
     tenantId: { table: "clients", column: "tenant_id" },
@@ -36,17 +74,17 @@ vi.mock("drizzle-orm", async (importOriginal) => {
   return {
     ...actual,
     and: (...conditions: unknown[]) => ({ operator: "and", conditions }),
-    eq: (column: unknown, value: unknown) => ({
-      operator: "eq",
-      column,
-      value,
-    }),
+    or: (...conditions: unknown[]) => ({ operator: "or", conditions }),
+    eq: mockState.eq,
+    inArray: (column: unknown, values: unknown[]) => ({ operator: "inArray", column, values }),
+    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ operator: "sql", strings, values }),
   };
 });
 
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: mockState.requireAuth,
   ADMIN_ROLES: [],
+  ALL_STAFF_ROLES: ["agency_admin"],
 }));
 
 vi.mock("../lib/uploadthing.js", () => ({
@@ -411,5 +449,134 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
     });
     expect(messagesQuery.orderBy).not.toHaveBeenCalled();
     expect(mockState.generateSignedURL).not.toHaveBeenCalled();
+  });
+
+  it("projects inbound and outbound entries together without duplicating linked messages or exposing raw errors", async () => {
+    const sentAt = new Date("2026-10-15T12:00:00.000Z");
+    const conversation = {
+      id: CONVERSATION_ID,
+      tenantId: TENANT_ID,
+      clientId: "client-a",
+      channel: "instagram",
+    };
+    const messages = [
+      makeMessage("inbound-a", sentAt, { mediaUrl: null }),
+      makeMessage("reply-a", new Date(sentAt.getTime() + 1000), {
+        role: "assistant",
+        deliveryStatus: "unknown",
+        lastDeliveryError: "raw provider failure",
+      }),
+    ];
+    const delivery = {
+      id: "delivery-a",
+      outboundMessageId: "outbound-a",
+      channel: "instagram",
+      content: "Resposta enviada",
+      status: "unknown",
+      attempts: 2,
+      provider: "zernio",
+      externalId: "provider-message-a",
+      createdAt: sentAt,
+      acceptedAt: null,
+      origin: "instagram-attendance",
+      metadata: { conversationId: CONVERSATION_ID, chatbotMessageId: "reply-a" },
+    };
+    const acceptedDelivery = {
+      ...delivery,
+      id: "delivery-accepted",
+      outboundMessageId: "outbound-accepted",
+      channel: "whatsapp",
+      content: "Confirmação enviada",
+      status: "accepted",
+      attempts: 1,
+      provider: "evolution",
+      externalId: "provider-message-accepted",
+      acceptedAt: new Date(sentAt.getTime() + 2000),
+      origin: "whatsapp-attendance",
+      metadata: { conversationId: CONVERSATION_ID },
+    };
+    const attempt = {
+      deliveryId: "delivery-a",
+      attemptNumber: 2,
+      status: "unknown",
+      provider: "zernio",
+      externalId: "provider-message-a",
+      error: "provider secret detail",
+      startedAt: sentAt,
+      completedAt: sentAt,
+    };
+    mockState.conversation = conversation;
+    mockState.messages = messages;
+    const makeBuilder = (result: unknown[], finalMethod: "limit" | "orderBy") => {
+      const builder: Record<string, ReturnType<typeof vi.fn>> = {};
+      for (const method of ["from", "where", "innerJoin", "limit", "orderBy"]) {
+        builder[method] = vi.fn().mockReturnValue(builder);
+      }
+      builder[finalMethod]!.mockResolvedValue(result);
+      return builder;
+    };
+    const conversationQuery = makeBuilder([conversation], "limit");
+    const messagesQuery = makeBuilder(messages, "orderBy");
+    const outboundQuery = makeBuilder([delivery, acceptedDelivery], "orderBy");
+    const attemptsQuery = makeBuilder([attempt], "orderBy");
+    mockState.dbSelect.mockReset()
+      .mockImplementationOnce(() => conversationQuery)
+      .mockImplementationOnce(() => messagesQuery)
+      .mockImplementationOnce(() => outboundQuery)
+      .mockImplementationOnce(() => attemptsQuery);
+
+    const response = await request(buildApp())
+      .get(`/api/chatbot-conversations/${CONVERSATION_ID}/timeline`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveLength(3);
+    expect(response.body[0]).toMatchObject({ id: "inbound-a", direction: "inbound" });
+    expect(response.body[1]).toMatchObject({
+      id: "reply-a",
+      direction: "outbound",
+      deliveryStatus: "unknown",
+      origin: "instagram-attendance",
+      channel: "instagram",
+      provider: "zernio",
+      externalId: "provider-message-a",
+      deliveryAttempts: 2,
+      deliveryHistory: [{
+        attemptNumber: 2,
+        status: "unknown",
+        error: "provider_error",
+      }],
+    });
+    expect(response.body[2]).toMatchObject({
+      id: "delivery:delivery-accepted",
+      direction: "outbound",
+      deliveryStatus: "sent",
+      channel: "whatsapp",
+      provider: "evolution",
+      origin: "whatsapp-attendance",
+      deliveryAttempts: 1,
+    });
+    expect(JSON.stringify(response.body)).not.toContain("provider secret detail");
+    expect(JSON.stringify(response.body)).not.toContain("raw provider failure");
+    expect(mockState.eq).toHaveBeenCalledWith(mockState.chatbotConversationsTable.tenantId, TENANT_ID);
+    expect(mockState.eq).toHaveBeenCalledWith(mockState.outboundDeliveriesTable.tenantId, TENANT_ID);
+    expect(mockState.eq).toHaveBeenCalledWith(mockState.outboundDeliveryAttemptsTable.tenantId, TENANT_ID);
+  });
+
+  it("returns not found for a conversation outside the authenticated tenant before reading either history table", async () => {
+    const conversationQuery = createQueryBuilder();
+    conversationQuery.limit.mockResolvedValue([]);
+    mockState.dbSelect.mockReset().mockImplementationOnce(() => conversationQuery);
+
+    const response = await request(buildApp())
+      .get(`/api/chatbot-conversations/${CONVERSATION_ID}/timeline`);
+
+    expect(response.status).toBe(404);
+    expect(conversationQuery.where).toHaveBeenCalledWith(expect.objectContaining({
+      operator: "and",
+      conditions: expect.arrayContaining([
+        expect.objectContaining({ column: mockState.chatbotConversationsTable.tenantId, value: TENANT_ID }),
+      ]),
+    }));
+    expect(mockState.dbSelect).toHaveBeenCalledTimes(1);
   });
 });
