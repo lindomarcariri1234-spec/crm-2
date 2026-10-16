@@ -245,6 +245,20 @@ export async function prepareBullMQQueueRedisCutover(): Promise<boolean> {
     return true;
   }
 
+  const forcedCutoverUntil = Date.parse(process.env["FORCE_BULLMQ_REDIS_CUTOVER_UNTIL"] ?? "");
+  if (Number.isFinite(forcedCutoverUntil) && forcedCutoverUntil > Date.now()) {
+    approveSeparateQueueRedisCutover();
+    updateBullMQRedisCutoverStatus(
+      "approved",
+      "Troca temporária autorizada até o prazo configurado; filas legadas não foram inspecionadas e podem conter jobs pendentes",
+      [{ queue: "*", state: "inspection-skipped", count: 0, reason: "Troca autorizada sem inspecionar o Redis legado" }],
+    );
+    logger.warn(
+      "[queue-cutover] Temporary forced cutover enabled; legacy Redis queues were not inspected and may retain pending jobs",
+    );
+    return true;
+  }
+
   const legacyRedis = getRedisConnection();
   if (!legacyRedis) {
     logger.warn("[queue-cutover] Legacy Redis is configured but unavailable; keeping BullMQ on it");

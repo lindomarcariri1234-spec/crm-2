@@ -129,6 +129,35 @@ describe("prepareBullMQQueueRedisCutover", () => {
     expect(state.closed).toBe(state.queueNames.length);
   });
 
+  it("allows an explicitly authorized forced cutover without inspecting the legacy resource", async () => {
+    vi.stubEnv("FORCE_BULLMQ_REDIS_CUTOVER_UNTIL", new Date(Date.now() + 60_000).toISOString());
+    state.getRedisConnection.mockReturnValue(null);
+
+    await prepareBullMQQueueRedisCutover();
+
+    expect(state.approved).toHaveBeenCalledOnce();
+    expect(state.getRedisConnection).not.toHaveBeenCalled();
+    expect(state.queueNames).toHaveLength(0);
+    expect(getBullMQRedisCutoverStatus()).toMatchObject({
+      selectedRedis: "REDIS_QUEUE_URL",
+      outcome: "approved",
+      reason: expect.stringContaining("não foram inspecionadas"),
+      blockerCount: 1,
+      blockedWorkCount: 0,
+      blockers: [expect.objectContaining({ state: "inspection-skipped" })],
+    });
+  });
+
+  it("does not force cutover after the authorization window expires", async () => {
+    vi.stubEnv("FORCE_BULLMQ_REDIS_CUTOVER_UNTIL", new Date(Date.now() - 60_000).toISOString());
+    state.getRedisConnection.mockReturnValue(null);
+
+    await prepareBullMQQueueRedisCutover();
+
+    expect(state.approved).not.toHaveBeenCalled();
+    expect(state.getRedisConnection).toHaveBeenCalledOnce();
+  });
+
   it("keeps using the legacy resource while runnable or failed jobs remain", async () => {
     state.counts = { wait: 0, active: 1, failed: 2 };
 

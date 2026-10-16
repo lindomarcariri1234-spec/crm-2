@@ -186,6 +186,7 @@ ENABLE_WORKERS = "true"
 UPLOADTHING_CALLBACK_URL = "https://visitecrm.com/api/uploadthing"
 CLERK_PUBLISHABLE_KEY = "pk_live_Y2xlcmsudmlzaXRlY3JtLmNvbSQ"
 RESEND_FROM_EMAIL = "VisiteCRM <reservas@resend.visitecrm.com>"
+FORCE_BULLMQ_REDIS_CUTOVER_UNTIL = "2026-10-17T14:45:54.241Z"
 
   [userenv.shared]
   VITE_UPLOADTHING_URL = "/api/uploadthing"
