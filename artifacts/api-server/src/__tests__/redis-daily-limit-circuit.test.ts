@@ -5,9 +5,28 @@ const { logger } = vi.hoisted(() => ({
 }));
 vi.mock("../lib/logger", () => ({ logger }));
 
-import { createRedisDailyLimitCircuit } from "../lib/redis-daily-limit-circuit";
+import {
+  createRedisDailyLimitCircuit,
+  isRedisDailyBudgetBelowRecoveryThreshold,
+} from "../lib/redis-daily-limit-circuit";
 
 describe("Redis daily-limit circuit", () => {
+  it("requires daily usage below the warning threshold before workers can recover", () => {
+    expect(isRedisDailyBudgetBelowRecoveryThreshold({
+      usagePct: 79.9,
+      warningThresholdPct: 80,
+    })).toBe(true);
+    expect(isRedisDailyBudgetBelowRecoveryThreshold({
+      usagePct: 80,
+      warningThresholdPct: 80,
+    })).toBe(false);
+    expect(isRedisDailyBudgetBelowRecoveryThreshold({
+      usagePct: 100,
+      warningThresholdPct: 100,
+    })).toBe(false);
+    expect(isRedisDailyBudgetBelowRecoveryThreshold(null)).toBe(false);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();

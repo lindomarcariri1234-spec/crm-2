@@ -6,6 +6,7 @@ import { generateId } from "./id";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
 import {
   createRedisDailyLimitCircuit,
+  isRedisDailyBudgetBelowRecoveryThreshold,
   type RedisQuotaWorker,
 } from "./redis-daily-limit-circuit";
 
@@ -14,12 +15,29 @@ let _queueConnection: Redis | null = null;
 let _useSeparateQueueRedis = false;
 export let isQueueEnabled = false;
 
+async function requireDailyBudgetHeadroom(resource: "app" | "queue"): Promise<void> {
+  if (!getUpstashRestCredentials(resource)) return;
+
+  const stats = await fetchUpstashDailyStats(resource);
+  if (!stats) {
+    const error = new Error("Upstash daily usage could not be verified");
+    error.name = "RedisDailyBudgetStatsUnavailableError";
+    throw error;
+  }
+  if (!isRedisDailyBudgetBelowRecoveryThreshold(stats)) {
+    const error = new Error("Upstash daily usage is still above the recovery threshold");
+    error.name = "RedisDailyBudgetNotRecoveredError";
+    throw error;
+  }
+}
+
 const redisDailyLimitCircuit = createRedisDailyLimitCircuit({
   probe: async () => {
     const connection = _connection;
     if (!connection || connection.status !== "ready") {
       throw new Error("redis_not_ready");
     }
+    await requireDailyBudgetHeadroom("app");
     // PING can remain available while the provider rejects ordinary commands
     // at its daily request quota. Probe with the same command class the workers
     // need before declaring Redis recovered and resuming their traffic.
@@ -35,6 +53,8 @@ const queueRedisDailyLimitCircuit = createRedisDailyLimitCircuit({
     if (!connection || connection.status !== "ready") {
       throw new Error("queue_redis_not_ready");
     }
+    const resource = getBullMQRedisSelection() === "REDIS_QUEUE_URL" ? "queue" : "app";
+    await requireDailyBudgetHeadroom(resource);
     await connection.get("visitecrm:queue-redis:daily-limit-probe");
   },
   onOpened: recordTransientRedisError,

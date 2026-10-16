@@ -5,6 +5,23 @@ export interface RedisQuotaWorker {
   resume: () => Promise<void> | void;
 }
 
+export interface RedisDailyBudgetStats {
+  usagePct: number;
+  warningThresholdPct: number;
+}
+
+export function isRedisDailyBudgetBelowRecoveryThreshold(
+  stats: RedisDailyBudgetStats | null,
+): boolean {
+  return Boolean(
+    stats
+    && Number.isFinite(stats.usagePct)
+    && Number.isFinite(stats.warningThresholdPct)
+    && stats.usagePct < stats.warningThresholdPct
+    && stats.usagePct < 100,
+  );
+}
+
 export interface RedisDailyLimitCircuitOptions {
   probe: () => Promise<unknown>;
   onOpened?: () => void;
