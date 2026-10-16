@@ -148,6 +148,10 @@ import {
   INSTAGRAM_REPLY_MAX_BYTES,
   isInstagramReplyWindowExpired,
 } from "./communication/instagramInboxRules";
+import {
+  getAiReplyAttempt,
+  shouldRetainAiReplyAttempt,
+} from "./communication/aiReplyRetryPolicy";
 import SupportTicketsTab from "./communication/SupportTicketsTab";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -319,7 +323,7 @@ export default function Communication() {
   const [sendingAiReply, setSendingAiReply] = useState(false);
   const [associatingAiConversationId, setAssociatingAiConversationId] = useState<string | null>(null);
   const [aiClientPickerOpen, setAiClientPickerOpen] = useState(false);
-  const aiReplyKey = useRef<string | null>(null);
+  const aiReplyKeys = useRef(new Map<string, { conversationId: string; content: string; idempotencyKey: string }>());
   const aiConversationRequestId = useRef(0);
   const aiInboxRequestId = useRef(0);
 
@@ -453,18 +457,6 @@ export default function Communication() {
     }
   }, [toast]);
 
-  useEffect(() => {
-    if (!selectedAiConversationId || !aiMessages.some((message) =>
-      message.role !== "user"
-      && ["pending", "processing", "unknown"].includes(message.deliveryStatus ?? ""),
-    )) return;
-    const conversationId = selectedAiConversationId;
-    const interval = window.setInterval(() => {
-      void selectAiConversation(conversationId, true);
-    }, 5000);
-    return () => window.clearInterval(interval);
-  }, [aiMessages, selectedAiConversationId, selectAiConversation]);
-
   useEffect(() => () => {
     aiConversationRequestId.current += 1;
   }, []);
@@ -474,21 +466,34 @@ export default function Communication() {
     void fetchAiInbox();
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") void fetchAiInbox(true);
-    }, 15_000);
+    }, 5_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void fetchAiInbox(true);
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       aiInboxRequestId.current += 1;
     };
   }, [tab, fetchAiInbox]);
 
   useEffect(() => {
     if (tab !== "ai-inbox" || !selectedAiConversationId) return;
-    const interval = window.setInterval(() => {
+    const conversationId = selectedAiConversationId;
+    const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") {
-        void selectAiConversation(selectedAiConversationId, true);
+        void selectAiConversation(conversationId, true);
       }
-    }, 15_000);
-    return () => window.clearInterval(interval);
+    };
+    const interval = window.setInterval(() => {
+      refreshWhenVisible();
+    }, 3_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, [tab, selectedAiConversationId, selectAiConversation]);
 
   const handleResendFailed = async (emailLogId: string) => {
@@ -1063,22 +1068,36 @@ export default function Communication() {
   const handleAiReply = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selectedAiConversationId || !aiReply.trim()) return;
+    const content = aiReply.trim();
+    const conversationId = selectedAiConversationId;
+    const attempt = getAiReplyAttempt(
+      aiReplyKeys.current.get(conversationId) ?? null,
+      conversationId,
+      content,
+      () => crypto.randomUUID(),
+    );
+    aiReplyKeys.current.set(conversationId, attempt);
     setSendingAiReply(true);
+    let receivedResponse = false;
     try {
-      const res = await fetch(`${BASE}/api/chatbot-conversations/${selectedAiConversationId}/reply`, {
+      const res = await fetch(`${BASE}/api/chatbot-conversations/${conversationId}/reply`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: aiReply.trim(),
-          idempotencyKey: aiReplyKey.current ?? (aiReplyKey.current = crypto.randomUUID()),
+          content,
+          idempotencyKey: attempt.idempotencyKey,
         }),
       });
+      receivedResponse = true;
       if (!res.ok) {
         const responseBody = await res.json().catch(() => ({})) as Record<string, unknown>;
         const code = typeof responseBody["code"] === "string" ? responseBody["code"] : "";
-        if (code !== "INSTAGRAM_DELIVERY_UNKNOWN" && code !== "INSTAGRAM_DELIVERY_UNRESOLVED") {
-          aiReplyKey.current = null;
+        if (
+          !shouldRetainAiReplyAttempt(res.status, code)
+          && aiReplyKeys.current.get(conversationId)?.idempotencyKey === attempt.idempotencyKey
+        ) {
+          aiReplyKeys.current.delete(conversationId);
         }
         throw new Error(typeof responseBody["error"] === "string"
           ? responseBody["error"]
@@ -1088,8 +1107,10 @@ export default function Communication() {
       }
       const deliveryQueued = res.status === 202;
       setAiReply("");
-      aiReplyKey.current = null;
-      await Promise.all([selectAiConversation(selectedAiConversationId), fetchAiInbox()]);
+      if (aiReplyKeys.current.get(conversationId)?.idempotencyKey === attempt.idempotencyKey) {
+        aiReplyKeys.current.delete(conversationId);
+      }
+      await Promise.all([selectAiConversation(conversationId), fetchAiInbox()]);
       if (deliveryQueued) {
         toast({
           title: "Resposta na fila",
@@ -1100,7 +1121,9 @@ export default function Communication() {
       const channelLabel = selectedAiConversation?.channel === "instagram" ? "Instagram" : "WhatsApp";
       toast({
         title: `Não foi possível enviar pelo ${channelLabel}.`,
-        description: error instanceof Error ? error.message : "Verifique a conexão e tente novamente.",
+        description: !receivedResponse
+          ? "A confirmação não chegou. Tente novamente com o mesmo texto; o identificador da tentativa será reutilizado para evitar envio duplicado."
+          : error instanceof Error ? error.message : "Verifique a conexão e tente novamente.",
         variant: "destructive",
       });
     } finally {
