@@ -8,6 +8,7 @@ vi.mock("../lib/logger", () => ({ logger }));
 import {
   createRedisDailyLimitCircuit,
   isRedisDailyBudgetBelowRecoveryThreshold,
+  isRedisQuotaExhaustionResponse,
 } from "../lib/redis-daily-limit-circuit";
 
 describe("Redis daily-limit circuit", () => {
@@ -25,6 +26,13 @@ describe("Redis daily-limit circuit", () => {
       warningThresholdPct: 100,
     })).toBe(false);
     expect(isRedisDailyBudgetBelowRecoveryThreshold(null)).toBe(false);
+  });
+
+  it("distinguishes an exhausted quota from an unavailable stats endpoint", () => {
+    expect(isRedisQuotaExhaustionResponse(400, "ERR max requests limit exceeded")).toBe(true);
+    expect(isRedisQuotaExhaustionResponse(429, "too many requests")).toBe(true);
+    expect(isRedisQuotaExhaustionResponse(400, "ERR unknown command 'INFO'")).toBe(false);
+    expect(isRedisQuotaExhaustionResponse(400, "")).toBe(false);
   });
 
   afterEach(() => {
@@ -49,6 +57,7 @@ describe("Redis daily-limit circuit", () => {
       onRecovered,
       initialProbeDelayMs: 100,
       maxProbeDelayMs: 400,
+      recoveryValidationMs: 10,
     });
     circuit.registerWorker(worker);
 
@@ -67,11 +76,43 @@ describe("Redis daily-limit circuit", () => {
     await vi.advanceTimersByTimeAsync(199);
     expect(probe).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(10);
 
     expect(probe).toHaveBeenCalledTimes(2);
     expect(worker.resume).toHaveBeenCalledOnce();
     expect(circuit.isOpen()).toBe(false);
     expect(onRecovered).toHaveBeenCalledOnce();
+    circuit.stop();
+  });
+
+  it("stays open if a resumed worker hits the quota during recovery validation", async () => {
+    vi.useFakeTimers();
+    let circuit: ReturnType<typeof createRedisDailyLimitCircuit>;
+    const worker = {
+      pause: vi.fn().mockResolvedValue(undefined),
+      resume: vi.fn(() => {
+        setTimeout(() => {
+          circuit.reportError(new Error("max daily request limit"));
+        }, 10);
+      }),
+    };
+    const probe = vi.fn().mockResolvedValue("PONG");
+    circuit = createRedisDailyLimitCircuit({
+      probe,
+      initialProbeDelayMs: 100,
+      maxProbeDelayMs: 400,
+      recoveryValidationMs: 50,
+    });
+    circuit.registerWorker(worker);
+
+    circuit.reportError(new Error("max daily request limit"));
+    await vi.advanceTimersByTimeAsync(110);
+
+    expect(probe).toHaveBeenCalledOnce();
+    expect(worker.resume).toHaveBeenCalledOnce();
+    expect(worker.pause).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(circuit.isOpen()).toBe(true);
     circuit.stop();
   });
 

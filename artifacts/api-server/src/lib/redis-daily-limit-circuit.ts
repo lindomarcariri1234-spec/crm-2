@@ -22,12 +22,18 @@ export function isRedisDailyBudgetBelowRecoveryThreshold(
   );
 }
 
+export function isRedisQuotaExhaustionResponse(status: number, message: string): boolean {
+  return status === 429
+    || /max(?:imum)? requests? limit|daily request limit|request limit exceeded|quota exceeded/i.test(message);
+}
+
 export interface RedisDailyLimitCircuitOptions {
   probe: () => Promise<unknown>;
   onOpened?: () => void;
   onRecovered?: () => void;
   initialProbeDelayMs?: number;
   maxProbeDelayMs?: number;
+  recoveryValidationMs?: number;
 }
 
 export function isRedisDailyLimitError(error: unknown): boolean {
@@ -50,12 +56,14 @@ export function createRedisDailyLimitCircuit({
   onRecovered,
   initialProbeDelayMs = 15 * 60_000,
   maxProbeDelayMs = 60 * 60_000,
+  recoveryValidationMs = 5_000,
 }: RedisDailyLimitCircuitOptions) {
   const firstProbeDelayMs = Math.max(1, initialProbeDelayMs);
   const maximumProbeDelayMs = Math.max(firstProbeDelayMs, maxProbeDelayMs);
   const workers = new Set<RedisQuotaWorker>();
   let open = false;
   let probeInFlight = false;
+  let recoveryFailed = false;
   let nextProbeDelayMs = firstProbeDelayMs;
   let probeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -83,9 +91,16 @@ export function createRedisDailyLimitCircuit({
   async function tryRecover(): Promise<void> {
     if (!open || probeInFlight) return;
     probeInFlight = true;
+    recoveryFailed = false;
     try {
       await probe();
+      if (recoveryFailed) throw new Error("worker_rejected_during_recovery_probe");
       await Promise.all([...workers].map((worker) => worker.resume()));
+      if (recoveryFailed) throw new Error("worker_rejected_during_recovery_resume");
+      if (recoveryValidationMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, recoveryValidationMs));
+      }
+      if (recoveryFailed) throw new Error("worker_rejected_during_recovery_validation");
       open = false;
       nextProbeDelayMs = firstProbeDelayMs;
       try {
@@ -98,7 +113,7 @@ export function createRedisDailyLimitCircuit({
       }
       logger.info("[redis] Daily request limit recovered; circuit closed");
     } catch (error) {
-      pauseAllWorkers();
+      if (!recoveryFailed) pauseAllWorkers();
       nextProbeDelayMs = Math.min(nextProbeDelayMs * 2, maximumProbeDelayMs);
       const retryDelayMs = nextProbeDelayMs;
       logger.warn(
@@ -125,7 +140,13 @@ export function createRedisDailyLimitCircuit({
 
     reportError(error: unknown): boolean {
       if (!isRedisDailyLimitError(error)) return false;
-      if (open) return true;
+      if (open) {
+        if (probeInFlight && !recoveryFailed) {
+          recoveryFailed = true;
+          pauseAllWorkers();
+        }
+        return true;
+      }
 
       open = true;
       nextProbeDelayMs = firstProbeDelayMs;

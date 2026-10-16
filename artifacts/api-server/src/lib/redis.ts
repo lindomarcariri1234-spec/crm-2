@@ -7,6 +7,7 @@ import { dispatchOutboundMessage } from "../services/outbound-delivery";
 import {
   createRedisDailyLimitCircuit,
   isRedisDailyBudgetBelowRecoveryThreshold,
+  isRedisQuotaExhaustionResponse,
   type RedisQuotaWorker,
 } from "./redis-daily-limit-circuit";
 
@@ -14,15 +15,22 @@ let _connection: Redis | null = null;
 let _queueConnection: Redis | null = null;
 let _useSeparateQueueRedis = false;
 export let isQueueEnabled = false;
+const _dailyStatsFailureKind = new Map<"app" | "queue", "quota_exhausted" | "unavailable">();
 
 async function requireDailyBudgetHeadroom(resource: "app" | "queue"): Promise<void> {
   if (!getUpstashRestCredentials(resource)) return;
 
   const stats = await fetchUpstashDailyStats(resource);
   if (!stats) {
-    const error = new Error("Upstash daily usage could not be verified");
-    error.name = "RedisDailyBudgetStatsUnavailableError";
-    throw error;
+    if (_dailyStatsFailureKind.get(resource) === "quota_exhausted") {
+      const error = new Error("Upstash daily request quota is still exhausted");
+      error.name = "RedisDailyBudgetNotRecoveredError";
+      throw error;
+    }
+    // INFO is not a guaranteed source for daily usage. Fall back to the
+    // worker-class Redis probe when telemetry is unavailable, then validate
+    // worker resumption before closing the circuit.
+    return;
   }
   if (!isRedisDailyBudgetBelowRecoveryThreshold(stats)) {
     const error = new Error("Upstash daily usage is still above the recovery threshold");
@@ -947,8 +955,15 @@ export async function fetchUpstashDailyStats(resource: "app" | "queue" = "app"):
     clearTimeout(timeoutId);
 
     if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: unknown } | null;
+      const errorMessage = typeof body?.error === "string" ? body.error : "";
+      const failureKind = isRedisQuotaExhaustionResponse(response.status, errorMessage)
+        ? "quota_exhausted"
+        : "unavailable";
+      _dailyStatsCache.delete(resource);
+      _dailyStatsFailureKind.set(resource, failureKind);
       logger.warn(
-        { status: response.status },
+        { status: response.status, failureKind },
         "[redis-stats] Upstash INFO request returned non-OK status",
       );
       return null;
@@ -965,16 +980,28 @@ export async function fetchUpstashDailyStats(resource: "app" | "queue" = "app"):
       return match ? parseInt(match[1], 10) : null;
     };
 
-    const commandCount = parseField("daily_request_count") ?? 0;
+    const commandCount = parseField("daily_request_count");
+    if (commandCount === null || !Number.isFinite(commandCount)) {
+      _dailyStatsCache.delete(resource);
+      _dailyStatsFailureKind.set(resource, "unavailable");
+      logger.warn(
+        { reason: "daily_request_counter_missing" },
+        "[redis-stats] Upstash INFO response did not include a valid daily request counter",
+      );
+      return null;
+    }
     // Upstash free tier hard limit
     const maxCommands = parseField("max_daily_requests") ?? REDIS_DAILY_LIMIT;
     const usagePct = maxCommands > 0 ? (commandCount / maxCommands) * 100 : 0;
     const warningThresholdPct = getRedisWarningThresholdPct();
 
     const result = { commandCount, maxCommands, usagePct, warningThresholdPct };
+    _dailyStatsFailureKind.delete(resource);
     _dailyStatsCache.set(resource, { stats: result, fetchedAt: Date.now() });
     return result;
   } catch (err) {
+    _dailyStatsCache.delete(resource);
+    _dailyStatsFailureKind.set(resource, "unavailable");
     logger.warn({ err }, "[redis-stats] Failed to fetch Upstash daily stats");
     return null;
   }
