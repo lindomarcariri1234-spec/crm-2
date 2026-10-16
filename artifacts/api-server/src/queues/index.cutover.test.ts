@@ -90,6 +90,9 @@ vi.mock("../lib/redis", () => ({
   waitForEvictionPolicyCheck: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("../lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn() } }));
+vi.mock("../services/outbound-delivery", () => ({
+  isOutboundDeliveryPendingForQueueRecovery: vi.fn(async () => true),
+}));
 
 import {
   prepareAndVerifyBullMQQueueRedisCutover,

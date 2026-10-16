@@ -448,6 +448,24 @@ export async function enqueueOutboundDelivery(
   return "inline";
 }
 
+/**
+ * Queue migration may replay only deliveries whose ledger still says they
+ * have not been attempted/accepted. Unknown outcomes must be reconciled first.
+ */
+export async function isOutboundDeliveryPendingForQueueRecovery(
+  deliveryId: string,
+  tenantId: string,
+): Promise<boolean> {
+  const [delivery] = await db.select({ status: outboundDeliveriesTable.status })
+    .from(outboundDeliveriesTable)
+    .where(and(
+      eq(outboundDeliveriesTable.id, deliveryId),
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+    ))
+    .limit(1);
+  return delivery?.status === "pending";
+}
+
 async function claimDelivery(deliveryId: string, tenantId: string) {
   const now = new Date();
   const [delivery] = await db.update(outboundDeliveriesTable)

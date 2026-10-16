@@ -479,6 +479,192 @@ export async function verifyBullMQWorkerConsumesProbe(timeoutMs = 10_000): Promi
   }
 }
 
+const LEGACY_RECOVERY_RETRY_MS = 60_000;
+let legacyRecoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Recover only outbound-delivery jobs backed by a still-pending database
+ * ledger row. Other legacy queues can produce external side effects and are
+ * deliberately left in place for their own reconciliation paths.
+ */
+export async function recoverLegacyOutboundDeliveryJobs(): Promise<{
+  inspectedQueues: number;
+  migrated: number;
+  skipped: number;
+  inspectionComplete: boolean;
+}> {
+  const legacyUrl = process.env["REDIS_URL"]?.trim();
+  const targetUrl = process.env["REDIS_QUEUE_URL"]?.trim();
+  if (
+    getBullMQRedisSelection() !== "REDIS_QUEUE_URL" ||
+    !legacyUrl ||
+    !targetUrl ||
+    legacyUrl === targetUrl
+  ) {
+    return { inspectedQueues: 0, migrated: 0, skipped: 0, inspectionComplete: false };
+  }
+
+  const legacyConnection = getRedisConnection();
+  const targetConnection = getBullMQQueueConnection();
+  if (!legacyConnection || !targetConnection) {
+    logger.warn("[queue-recovery] Redis connection unavailable; legacy jobs were not inspected");
+    return { inspectedQueues: 0, migrated: 0, skipped: 0, inspectionComplete: false };
+  }
+
+  const queues: Queue[] = [];
+  let targetQueue: Queue | null = null;
+  let inspectedQueues = 0;
+  let migrated = 0;
+  let skipped = 0;
+  let inspectionComplete = false;
+  const queueInventory: Record<string, Record<string, number>> = {};
+  try {
+    const queueNames = [...new Set(Object.values(QUEUES))];
+    queues.push(...queueNames.map((name) => new Queue(name, { connection: legacyConnection })));
+    targetQueue = new Queue(QUEUES.OUTBOUND_DELIVERY, { connection: targetConnection });
+
+    for (const queue of queues) {
+      const counts = await queue.getJobCounts(
+        "wait",
+        "active",
+        "failed",
+        "paused",
+        "waiting-children",
+        "prioritized",
+        "delayed",
+      );
+      queueInventory[queue.name] = Object.fromEntries(
+        Object.entries(counts).filter(([, count]) => count > 0),
+      );
+      inspectedQueues++;
+    }
+
+    const sourceQueue = queues.find((queue) => queue.name === QUEUES.OUTBOUND_DELIVERY);
+    if (!sourceQueue) throw new Error("legacy_outbound_queue_missing");
+    const { isOutboundDeliveryPendingForQueueRecovery } = await import("../services/outbound-delivery.js");
+    const candidates = await sourceQueue.getJobs(
+      ["wait", "delayed", "paused", "prioritized"],
+      0,
+      -1,
+      true,
+    );
+
+    for (const job of candidates) {
+      const data = job.data as Partial<OutboundDeliveryJobData> | null;
+      const deliveryId = typeof data?.deliveryId === "string" ? data.deliveryId : null;
+      const tenantId = typeof data?.tenantId === "string" ? data.tenantId : null;
+      const expectedJobId = deliveryId && tenantId
+        ? `outbound-delivery:${tenantId}:${deliveryId}`
+        : null;
+      const state = await job.getState();
+      if (
+        !deliveryId ||
+        !tenantId ||
+        !expectedJobId ||
+        job.id !== expectedJobId ||
+        !["wait", "delayed", "paused", "prioritized"].includes(state) ||
+        !(await isOutboundDeliveryPendingForQueueRecovery(deliveryId, tenantId))
+      ) {
+        skipped++;
+        continue;
+      }
+
+      const rawMaxAttempts = Number(job.opts.attempts ?? 1);
+      const maxAttempts = Number.isFinite(rawMaxAttempts) && rawMaxAttempts > 0
+        ? Math.floor(rawMaxAttempts)
+        : 1;
+      const rawAttemptsMade = Number(job.attemptsMade ?? 0);
+      const attemptsMade = Number.isFinite(rawAttemptsMade) && rawAttemptsMade > 0
+        ? Math.floor(rawAttemptsMade)
+        : 0;
+      if (attemptsMade >= maxAttempts) {
+        skipped++;
+        continue;
+      }
+
+      const existing = await targetQueue.getJob(expectedJobId);
+      if (existing) {
+        const existingData = existing.data as Partial<OutboundDeliveryJobData> | null;
+        const sameIdentity =
+          existingData?.deliveryId === deliveryId && existingData?.tenantId === tenantId;
+        const existingState = await existing.getState();
+        if (!sameIdentity || !["completed", "failed"].includes(existingState)) {
+          if (sameIdentity) {
+            await job.remove();
+            migrated++;
+          } else {
+            skipped++;
+          }
+          continue;
+        }
+        await existing.remove();
+      }
+
+      const remainingDelay = state === "delayed"
+        ? Math.max(0, job.timestamp + job.delay - Date.now())
+        : 0;
+      await targetQueue.add(job.name, { deliveryId, tenantId }, {
+        jobId: expectedJobId,
+        delay: remainingDelay,
+        attempts: Math.max(1, maxAttempts - attemptsMade),
+        backoff: job.opts.backoff,
+        priority: job.opts.priority,
+        lifo: job.opts.lifo,
+        removeOnComplete: job.opts.removeOnComplete,
+        removeOnFail: job.opts.removeOnFail,
+      });
+      await job.remove();
+      migrated++;
+    }
+    inspectionComplete = true;
+
+    logger.info(
+      {
+        inspectedQueues,
+        queueInventory,
+        migrated,
+        skipped,
+      },
+      "[queue-recovery] Legacy queue inspection completed",
+    );
+    return { inspectedQueues, migrated, skipped, inspectionComplete };
+  } catch (error) {
+    logger.warn(
+      {
+        errorName: error instanceof Error ? error.name : "unknown",
+        inspectedQueues,
+        migrated,
+        skipped,
+        inspectionComplete,
+      },
+      "[queue-recovery] Could not recover legacy jobs; remaining jobs were left untouched",
+    );
+    return { inspectedQueues, migrated, skipped, inspectionComplete };
+  } finally {
+    await Promise.all([
+      ...queues.map((queue) => queue.close().catch(() => {})),
+      targetQueue?.close().catch(() => {}) ?? Promise.resolve(),
+    ]);
+  }
+}
+
+function scheduleLegacyQueueRecoveryRetry(): void {
+  if (legacyRecoveryRetryTimer || getBullMQRedisSelection() !== "REDIS_QUEUE_URL") return;
+  legacyRecoveryRetryTimer = setTimeout(() => {
+    legacyRecoveryRetryTimer = null;
+    void recoverLegacyOutboundDeliveryJobs().then((result) => {
+      if (!result.inspectionComplete) scheduleLegacyQueueRecoveryRetry();
+    }).catch((error) => {
+      logger.warn(
+        { errorName: error instanceof Error ? error.name : "unknown" },
+        "[queue-recovery] Legacy Redis retry failed",
+      );
+      scheduleLegacyQueueRecoveryRetry();
+    });
+  }, LEGACY_RECOVERY_RETRY_MS);
+  legacyRecoveryRetryTimer.unref?.();
+}
+
 export type ReferralEmailJobData = ReferralBonusPaidEmailJobData | ReferralConvertedEmailJobData | ReferralExpiredEmailJobData | ReferralExpiringSoonEmailJobData | ReferralBonusReleasedEmailJobData | ReferralWelcomeEmailJobData;
 
 export async function prepareAndVerifyBullMQQueueRedisCutover(probeTimeoutMs = 10_000): Promise<boolean> {
@@ -486,6 +672,8 @@ export async function prepareAndVerifyBullMQQueueRedisCutover(probeTimeoutMs = 1
   if (!cutoverApproved) return false;
   if (await verifyBullMQWorkerConsumesProbe(probeTimeoutMs)) {
     updateBullMQRedisCutoverStatus("verified", "Um worker do BullMQ consumiu o teste em REDIS_QUEUE_URL");
+    const recovery = await recoverLegacyOutboundDeliveryJobs();
+    if (!recovery.inspectionComplete) scheduleLegacyQueueRecoveryRetry();
     return true;
   }
 
