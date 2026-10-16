@@ -595,6 +595,43 @@ describe("GET /api/integrations/whatsapp_evolution/connections", () => {
   });
 });
 
+describe("POST /api/integrations/whatsapp_evolution/connections/refresh", () => {
+  it("clears the default only when Evolution confirms the instance is closed", async () => {
+    asAdmin();
+    mockWhere.mockResolvedValueOnce([{ ...WHATSAPP_ROW, isDefault: true }]);
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ instance: { state: "close" } }),
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/refresh");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, unverified: 0, disconnectedDefaults: 1 });
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      status: "disconnected",
+      isDefault: false,
+    }));
+    expect(mockUpdateWhere).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the current status and default after a temporary provider failure", async () => {
+    asAdmin();
+    mockWhere.mockResolvedValueOnce([{ ...WHATSAPP_ROW, isDefault: true }]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 503, text: "temporarily unavailable" });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/refresh");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, unverified: 1, disconnectedDefaults: 0 });
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(JSON.stringify(res.body)).not.toContain("temporarily unavailable");
+  });
+});
+
 // ─── PUT /api/integrations/:type ─────────────────────────────────────────────
 
 describe("PUT /api/integrations/:type — save configuration", () => {

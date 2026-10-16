@@ -1059,9 +1059,39 @@ function WhatsAppIntegrationCards() {
   const [adding, setAdding] = useState(false);
   const [forbidden, setForbidden] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [refreshWarning, setRefreshWarning] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [disconnectedDefaultCount, setDisconnectedDefaultCount] = useState(0);
 
   const loadConnections = useCallback(async () => {
     setLoadError(false);
+    setRefreshing(true);
+    try {
+      const refreshRes = await fetch(`${BASE}/api/integrations/whatsapp_evolution/connections/refresh`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (refreshRes.status === 403) {
+        setForbidden(true);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+      if (refreshRes.ok) {
+        const refreshResult = await refreshRes.json().catch(() => ({})) as {
+          unverified?: number;
+          disconnectedDefaults?: number;
+        };
+        setRefreshWarning((refreshResult.unverified ?? 0) > 0);
+        setDisconnectedDefaultCount(refreshResult.disconnectedDefaults ?? 0);
+      } else {
+        setRefreshWarning(true);
+        setDisconnectedDefaultCount(0);
+      }
+    } catch {
+      setRefreshWarning(true);
+      setDisconnectedDefaultCount(0);
+    }
     try {
       const res = await fetch(`${BASE}/api/integrations/whatsapp_evolution/connections`, {
         credentials: "include",
@@ -1077,6 +1107,7 @@ function WhatsAppIntegrationCards() {
       setConnections([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -1096,9 +1127,16 @@ function WhatsAppIntegrationCards() {
             As respostas dos tickets usam o mesmo número que recebeu a conversa.
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={adding}>
-          Adicionar número
-        </Button>
+        <div className="flex gap-2">
+          {!loading && !loadError && (
+            <Button size="sm" variant="outline" onClick={() => void loadConnections()} disabled={refreshing}>
+              {refreshing ? "Verificando..." : "Atualizar status"}
+            </Button>
+          )}
+          <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={adding}>
+            Adicionar número
+          </Button>
+        </div>
       </div>
       {loading ? (
         <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
@@ -1111,6 +1149,16 @@ function WhatsAppIntegrationCards() {
         </div>
       ) : (
         <>
+          {disconnectedDefaultCount > 0 && (
+            <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              A Evolution confirmou a desconexão do número padrão. Ele foi removido como padrão; escolha um número conectado para continuar usando envios gerais.
+            </div>
+          )}
+          {refreshWarning && (
+            <div role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              Não foi possível confirmar o status de todos os números. Os padrões existentes foram mantidos.
+            </div>
+          )}
           {countWhatsAppDefaults(connections) > 1 && (
             <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
               Há {countWhatsAppDefaults(connections)} números marcados como padrão. Escolha um número ativo e conectado para corrigir; o histórico de mensagens não será alterado.
@@ -1122,6 +1170,7 @@ function WhatsAppIntegrationCards() {
                 key={connection.id}
                 type="whatsapp_evolution"
                 integrationId={connection.id}
+                connection={connection}
                 duplicateDefaultCount={countWhatsAppDefaults(connections)}
                 onSaved={() => void loadConnections()}
               />
@@ -1147,6 +1196,7 @@ function WhatsAppIntegrationCards() {
 function IntegrationCard({
   type,
   integrationId,
+  connection,
   createNew = false,
   onSaved,
   onCancel,
@@ -1154,6 +1204,7 @@ function IntegrationCard({
 }: {
   type: string;
   integrationId?: string;
+  connection?: WhatsAppConnectionSummary;
   createNew?: boolean;
   onSaved?: () => void;
   onCancel?: () => void;
@@ -1271,7 +1322,8 @@ function IntegrationCard({
 
   if (!canManage || forbidden) return null;
 
-  const status = data?.status ?? "disconnected";
+  const status = connection?.status ?? data?.status ?? "disconnected";
+  const isDefault = connection?.isDefault ?? data?.isDefault ?? false;
   const fieldDefs = data?.fieldDefs ?? [];
   const configFields = fieldDefs.filter((f) => !f.secret);
   const secretFields = fieldDefs.filter((f) => f.secret);
@@ -1455,7 +1507,7 @@ function IntegrationCard({
           <CardTitle className="text-base flex items-center gap-2">
             <Wifi className="w-4 h-4 text-muted-foreground" />
             {data?.label ?? type}
-            {type === "whatsapp_evolution" && data?.isDefault && (
+            {type === "whatsapp_evolution" && isDefault && (
               <Badge variant="secondary" className="text-[10px]">Padrão</Badge>
             )}
           </CardTitle>
@@ -1637,7 +1689,7 @@ function IntegrationCard({
 
             <div className="flex flex-wrap gap-2 pt-1">
               {type === "whatsapp_evolution" && integrationId && getWhatsAppDefaultActionLabel({
-                isDefault: data?.isDefault ?? false,
+                isDefault,
                 enabled,
                 status,
               }, duplicateDefaultCount) && (
@@ -1648,7 +1700,7 @@ function IntegrationCard({
                   disabled={saving || testing}
                 >
                   {getWhatsAppDefaultActionLabel({
-                    isDefault: data?.isDefault ?? false,
+                    isDefault,
                     enabled,
                     status,
                   }, duplicateDefaultCount)}

@@ -623,6 +623,112 @@ router.get("/integrations/whatsapp_evolution/connections", async (req, res, next
   }
 });
 
+// Refreshes only provider-confirmed Evolution connection states. Network errors,
+// auth failures, malformed payloads, and transitional states leave stored flags
+// untouched so a temporary outage cannot remove a usable default.
+router.post("/integrations/whatsapp_evolution/connections/refresh", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireIntegrationAdmin(req, res, next);
+    if (!me) return;
+
+    const rows = await db.select({
+      id: tenantIntegrationsTable.id,
+      config: tenantIntegrationsTable.config,
+      secretsEncrypted: tenantIntegrationsTable.secretsEncrypted,
+      enabled: tenantIntegrationsTable.enabled,
+      status: tenantIntegrationsTable.status,
+      isDefault: tenantIntegrationsTable.isDefault,
+    }).from(tenantIntegrationsTable)
+      .where(and(
+        eq(tenantIntegrationsTable.tenantId, me.tenantId),
+        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+      ));
+
+    let unverified = 0;
+    let disconnectedDefaults = 0;
+    await Promise.all(rows.filter((row) => row.enabled || row.isDefault).map(async (row) => {
+      try {
+        const config = (row.config ?? {}) as Record<string, string>;
+        const baseUrl = config.baseUrl?.trim();
+        const instanceName = config.instanceName?.trim();
+        if (!baseUrl || !instanceName || !row.secretsEncrypted) {
+          unverified += 1;
+          return;
+        }
+        const secrets = decryptSecrets(row.secretsEncrypted);
+        const apiKey = secrets.apiKey?.trim();
+        if (!apiKey) {
+          unverified += 1;
+          return;
+        }
+        await assertSafeUrl(baseUrl);
+        const result = await ssrfSafeFetchBounded(
+          `${baseUrl.replace(/\/+$/, "")}/instance/connectionState/${encodeURIComponent(instanceName)}`,
+          { headers: { apikey: apiKey }, timeoutMs: 8000, maxBytes: 16 * 1024 },
+        );
+
+        let nextStatus: "connected" | "disconnected" | null = result.status === 404
+          ? "disconnected"
+          : null;
+        if (result.ok) {
+          try {
+            const payload: unknown = JSON.parse(result.text);
+            const root = typeof payload === "object" && payload !== null
+              ? payload as Record<string, unknown>
+              : {};
+            const instance = typeof root.instance === "object" && root.instance !== null
+              ? root.instance as Record<string, unknown>
+              : {};
+            const state = String(instance.state ?? root.state ?? root.connectionState ?? "").toLowerCase();
+            if (state === "open" || state === "connected") nextStatus = "connected";
+            else if (state === "close" || state === "closed" || state === "disconnected") {
+              nextStatus = "disconnected";
+            }
+          } catch {
+            // A 200 response without a recognized state is not proof of disconnection.
+          }
+        }
+        if (!nextStatus) {
+          unverified += 1;
+          return;
+        }
+
+        const updated = await db.update(tenantIntegrationsTable)
+          .set({
+            status: nextStatus,
+            lastSyncAt: new Date(),
+            lastError: nextStatus === "connected" ? null : "A Evolution confirmou que esta instância está desconectada.",
+            ...(nextStatus === "disconnected" ? { isDefault: false } : {}),
+          })
+          .where(and(
+            eq(tenantIntegrationsTable.id, row.id),
+            eq(tenantIntegrationsTable.tenantId, me.tenantId),
+            eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+            eq(tenantIntegrationsTable.enabled, row.enabled),
+            eq(tenantIntegrationsTable.status, row.status),
+            eq(tenantIntegrationsTable.isDefault, row.isDefault),
+            eq(tenantIntegrationsTable.config, row.config),
+            eq(tenantIntegrationsTable.secretsEncrypted, row.secretsEncrypted),
+          ))
+          .returning({ id: tenantIntegrationsTable.id });
+        if (updated.length === 0) {
+          unverified += 1;
+          return;
+        }
+        if (nextStatus === "disconnected" && row.isDefault && updated.length > 0) {
+          disconnectedDefaults += 1;
+        }
+      } catch {
+        unverified += 1;
+      }
+    }));
+
+    res.json({ ok: true, unverified, disconnectedDefaults });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── GET /integrations/:type ──────────────────────────────────────────────────
 // Returns the current config with all secret fields masked. Never returns
 // plaintext secrets.
