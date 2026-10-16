@@ -196,6 +196,34 @@ let bullMQRedisCutoverStatus: Omit<BullMQRedisCutoverStatus, "selectedRedis"> = 
   checkedAt: null,
 };
 
+type QueueProbeFailure = {
+  category: string;
+  commandName?: string;
+};
+
+let lastQueueProbeFailure: QueueProbeFailure | null = null;
+
+function summarizeQueueProbeFailure(error: unknown): QueueProbeFailure {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  const redisError = error as { command?: { name?: unknown } } | null;
+  const rawCommandName = redisError?.command?.name;
+  const commandName = typeof rawCommandName === "string" && /^[a-z][a-z0-9_-]{0,31}$/i.test(rawCommandName)
+    ? rawCommandName.toLowerCase()
+    : undefined;
+
+  const category =
+    /max(?:imum)? requests? limit|daily request limit|quota exceeded/.test(message) ? "daily_quota" :
+    /wrongpass|noauth|authentication required/.test(message) ? "authentication" :
+    /noperm|permission denied/.test(message) ? "permission_denied" :
+    /unknown command|unsupported command/.test(message) ? "unsupported_command" :
+    /maxmemory-policy|config.*not allowed/.test(message) ? "config_not_allowed" :
+    /econnrefused|econnreset|etimedout|timeout|connection is closed|stream isn't writeable/.test(message) ? "connection" :
+    error instanceof Error && error.name === "ReplyError" ? "redis_reply_error" :
+    error instanceof Error ? "worker_error" : "unknown_error";
+
+  return { category, ...(commandName ? { commandName } : {}) };
+}
+
 function updateBullMQRedisCutoverStatus(
   outcome: BullMQRedisCutoverStatus["outcome"],
   reason: string | null,
@@ -352,6 +380,7 @@ export async function prepareBullMQQueueRedisCutover(): Promise<boolean> {
 
 /** Prove a worker can consume from the selected queue Redis before serving traffic. */
 export async function verifyBullMQWorkerConsumesProbe(timeoutMs = 10_000): Promise<boolean> {
+  lastQueueProbeFailure = null;
   const queueName = "redis-queue-health";
   const jobId = `probe-${randomUUID()}`;
   const probeNonce = randomUUID();
@@ -407,10 +436,16 @@ export async function verifyBullMQWorkerConsumesProbe(timeoutMs = 10_000): Promi
       if (job?.id === jobId) rejectConsumed(error ?? new Error("queue_probe_failed"));
     });
     worker.on("error", (error) => {
+      const failure = summarizeQueueProbeFailure(error);
+      lastQueueProbeFailure = failure;
       logger.warn(
-        { errorName: error instanceof Error ? error.name : "unknown" },
+        {
+          ...failure,
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
         "[queue-cutover] Probe worker error",
       );
+      rejectConsumed(error instanceof Error ? error : new Error("queue_probe_worker_error"));
     });
 
     await timeout(waitForEvictionPolicyCheck());
@@ -425,8 +460,13 @@ export async function verifyBullMQWorkerConsumesProbe(timeoutMs = 10_000): Promi
     logger.info("[queue-cutover] Probe job was consumed by a BullMQ worker");
     return true;
   } catch (error) {
+    const failure = summarizeQueueProbeFailure(error);
+    lastQueueProbeFailure ??= failure;
     logger.warn(
-      { errorName: error instanceof Error ? error.name : "unknown" },
+      {
+        ...lastQueueProbeFailure,
+        errorName: error instanceof Error ? error.name : "unknown",
+      },
       "[queue-cutover] Worker did not consume the probe; reverting to REDIS_URL",
     );
     return false;
@@ -450,9 +490,21 @@ export async function prepareAndVerifyBullMQQueueRedisCutover(probeTimeoutMs = 1
   }
 
   rejectSeparateQueueRedisCutover();
-  updateBullMQRedisCutoverStatus("reverted", "O teste do worker falhou; o BullMQ voltou para REDIS_URL", [
-    { queue: "redis-queue-health", state: "probe", count: 1, reason: "Nenhum worker consumiu o teste da troca" },
-  ]);
+  const failureDetail = lastQueueProbeFailure
+    ? ` O Redis rejeitou ${lastQueueProbeFailure.commandName ?? "uma operação do worker"} (${lastQueueProbeFailure.category}).`
+    : "";
+  updateBullMQRedisCutoverStatus(
+    "reverted",
+    `O teste do worker falhou; o BullMQ voltou para REDIS_URL.${failureDetail}`,
+    [{
+      queue: "redis-queue-health",
+      state: "probe",
+      count: 1,
+      reason: lastQueueProbeFailure
+        ? `Falha ${lastQueueProbeFailure.category}${lastQueueProbeFailure.commandName ? ` na operação ${lastQueueProbeFailure.commandName}` : ""}`
+        : "Nenhum worker consumiu o teste da troca",
+    }],
+  );
   return false;
 }
 

@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   queueNames: [] as string[],
   closed: 0,
   inspectionError: null as Error | null,
+  probeWorkerError: null as Error | null,
   getBullMQWorkerConnection: vi.fn(() => ({ status: "ready" })),
   getBullMQQueueConnection: vi.fn(() => ({ status: "ready" })),
   rejectSeparateQueueRedisCutover: vi.fn(),
@@ -43,6 +44,12 @@ vi.mock("bullmq", () => ({
         queueMicrotask(() => {
           for (const worker of state.workerInstances) {
             worker.emit("completed", { id: options.jobId }, data.nonce);
+          }
+        });
+      } else if (state.probeWorkerError) {
+        queueMicrotask(() => {
+          for (const worker of state.workerInstances) {
+            worker.emit("error", state.probeWorkerError);
           }
         });
       }
@@ -106,6 +113,7 @@ describe("prepareBullMQQueueRedisCutover", () => {
     state.queueNames = [];
     state.closed = 0;
     state.inspectionError = null;
+    state.probeWorkerError = null;
     state.getBullMQWorkerConnection.mockClear();
     state.getBullMQQueueConnection.mockClear();
     state.rejectSeparateQueueRedisCutover.mockClear();
@@ -285,5 +293,26 @@ describe("prepareBullMQQueueRedisCutover", () => {
       blockerCount: 1,
       blockedWorkCount: 1,
     });
+  });
+
+  it("fails immediately on a Redis worker error and exposes only its safe category and command", async () => {
+    const error = Object.assign(new Error("ERR unknown command 'BZPOPMIN'"), {
+      name: "ReplyError",
+      command: { name: "bzpopmin", args: ["must-not-be-logged"] },
+    });
+    state.probeConsumes = false;
+    state.probeWorkerError = error;
+
+    await expect(prepareAndVerifyBullMQQueueRedisCutover(5)).resolves.toBe(false);
+
+    expect(getBullMQRedisCutoverStatus()).toMatchObject({
+      selectedRedis: "REDIS_URL",
+      outcome: "reverted",
+      reason: expect.stringContaining("bzpopmin (unsupported_command)"),
+      blockers: [{
+        reason: "Falha unsupported_command na operação bzpopmin",
+      }],
+    });
+    expect(getBullMQRedisCutoverStatus().reason).not.toContain("must-not-be-logged");
   });
 });
