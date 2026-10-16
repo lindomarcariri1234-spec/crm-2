@@ -368,6 +368,51 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
       ]);
       await expectRejectedMigrationLeftSchemaUnchanged();
 
+      await client.query(
+        "UPDATE pg_temp.reservations SET tenant_id = 'tenant-a' WHERE id = 'reservation-a'",
+      );
+      const twoInvalidReservationsError = await runMigration();
+      expect(twoInvalidReservationsError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining(
+          "2 reservations reference a trip from another tenant or a missing trip",
+        ),
+      });
+      await expectRejectedMigrationLeftSchemaUnchanged();
+
+      await client.query(
+        "UPDATE pg_temp.reservations SET tenant_id = 'tenant-b' WHERE id = 'reservation-b'",
+      );
+      const oneInvalidReservationError = await runMigration();
+      expect(oneInvalidReservationError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining(
+          "1 reservations reference a trip from another tenant or a missing trip",
+        ),
+      });
+      await expectRejectedMigrationLeftSchemaUnchanged();
+
+      await client.query(
+        "INSERT INTO pg_temp.trips (id, tenant_id) VALUES ('missing-trip', 'tenant-a')",
+      );
+      expect(await runMigration()).toBeNull();
+      const resolvedReservations = await client.query(
+        `SELECT id, trip_id, tenant_id
+           FROM pg_temp.reservations
+          WHERE id IN ('reservation-a', 'reservation-b', 'reservation-c', 'reservation-d')
+          ORDER BY id`,
+      );
+      expect(resolvedReservations.rows).toEqual([
+        { id: "reservation-a", trip_id: "trip-a", tenant_id: "tenant-a" },
+        { id: "reservation-b", trip_id: "trip-b", tenant_id: "tenant-b" },
+        { id: "reservation-c", trip_id: "missing-trip", tenant_id: "tenant-a" },
+        { id: "reservation-d", trip_id: "trip-a", tenant_id: "tenant-a" },
+      ]);
+      const migratedCheckin = await client.query(
+        "SELECT reservation_id FROM pg_temp.trip_checkins WHERE id = 'legacy-checkin'",
+      );
+      expect(migratedCheckin.rows).toEqual([{ reservation_id: "reservation-a" }]);
+
       await seedScratchTables({ passengerId: "passenger-a", reservationId: null });
       await client.query(
         "UPDATE pg_temp.reservations SET tenant_id = 'tenant-b' WHERE id = 'reservation-a'",
