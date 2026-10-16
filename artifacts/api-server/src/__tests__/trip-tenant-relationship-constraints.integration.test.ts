@@ -500,6 +500,81 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
             AND NOT attisdropped`,
       );
       expect(reservationIsRequired.rows).toEqual([{ attnotnull: true }]);
+
+      await seedScratchTables({ passengerId: "passenger-a", reservationId: null });
+      await client.query(`
+        ALTER TABLE pg_temp.reservations
+          DROP CONSTRAINT reservations_trip_id_trips_id_fk;
+        ALTER TABLE pg_temp.trip_checkins
+          DROP CONSTRAINT trip_checkins_trip_id_trips_id_fk;
+        UPDATE pg_temp.reservations
+           SET trip_id = 'missing-trip'
+         WHERE id = 'reservation-a';
+        UPDATE pg_temp.trip_checkins
+           SET trip_id = 'missing-trip'
+         WHERE id = 'legacy-checkin';
+      `);
+      const missingTripAttemptError = await runMigration();
+      expect(missingTripAttemptError).toMatchObject({
+        code: "P0001",
+        message: expect.stringContaining(
+          "1 reservations reference a trip from another tenant or a missing trip",
+        ),
+      });
+      const legacyCheckinAfterFailure = await client.query(
+        `SELECT r.trip_id AS reservation_trip_id,
+                c.trip_id AS checkin_trip_id,
+                c.reservation_id
+           FROM pg_temp.reservations r
+           CROSS JOIN pg_temp.trip_checkins c
+          WHERE r.id = 'reservation-a' AND c.id = 'legacy-checkin'`,
+      );
+      expect(legacyCheckinAfterFailure.rows).toEqual([{
+        reservation_trip_id: "missing-trip",
+        checkin_trip_id: "missing-trip",
+        reservation_id: null,
+      }]);
+      await expectRejectedMigrationLeftSchemaUnchanged();
+
+      await client.query(
+        "INSERT INTO pg_temp.trips (id, tenant_id) VALUES ('missing-trip', 'tenant-a')",
+      );
+      expect(await runMigration()).toBeNull();
+      const backfilledAfterTripRestore = await client.query(
+        `SELECT r.trip_id AS reservation_trip_id,
+                r.tenant_id AS reservation_tenant_id,
+                c.trip_id AS checkin_trip_id,
+                c.reservation_id
+           FROM pg_temp.reservations r
+           CROSS JOIN pg_temp.trip_checkins c
+          WHERE r.id = 'reservation-a' AND c.id = 'legacy-checkin'`,
+      );
+      expect(backfilledAfterTripRestore.rows).toEqual([{
+        reservation_trip_id: "missing-trip",
+        reservation_tenant_id: "tenant-a",
+        checkin_trip_id: "missing-trip",
+        reservation_id: "reservation-a",
+      }]);
+      const validatedConstraintCount = await client.query<{
+        constraint_count: number;
+        all_validated: boolean;
+      }>(
+        `SELECT COUNT(*)::int AS constraint_count,
+                BOOL_AND(convalidated) AS all_validated
+           FROM pg_constraint
+          WHERE connamespace = pg_my_temp_schema()
+            AND conname = ANY($1::text[])`,
+        [[
+          "reservations_trip_tenant_fk",
+          "trip_checkins_trip_tenant_fk",
+          "trip_checkins_reservation_trip_tenant_fk",
+          "trip_checkins_passenger_reservation_fk",
+        ]],
+      );
+      expect(validatedConstraintCount.rows).toEqual([{
+        constraint_count: 4,
+        all_validated: true,
+      }]);
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`
