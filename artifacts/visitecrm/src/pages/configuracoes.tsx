@@ -120,6 +120,7 @@ import {
 } from "lucide-react";
 import { formatCurrencyBRL } from "@/lib/utils";
 import { interpolateWhatsAppPreview, renderWhatsAppPreview } from "@/lib/whatsappPreview";
+import { countWhatsAppDefaults, getWhatsAppDefaultActionLabel } from "@/lib/whatsapp-defaults";
 import { ROLES, INVOICE_STATUS } from "@workspace/permissions";
 import { FeaturesTab } from "./FeaturesTab";
 import { LinkedDataIntegrityPanel } from "@/components/linked-data-integrity-panel";
@@ -1109,27 +1110,35 @@ function WhatsAppIntegrationCards() {
           <Button size="sm" variant="outline" onClick={() => void loadConnections()}>Tentar novamente</Button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {connections.map((connection) => (
-            <IntegrationCard
-              key={connection.id}
-              type="whatsapp_evolution"
-              integrationId={connection.id}
-              onSaved={() => void loadConnections()}
-            />
-          ))}
-          {(adding || connections.length === 0) && (
-            <IntegrationCard
-              type="whatsapp_evolution"
-              createNew
-              onSaved={() => {
-                setAdding(false);
-                void loadConnections();
-              }}
-              onCancel={connections.length > 0 ? () => setAdding(false) : undefined}
-            />
+        <>
+          {countWhatsAppDefaults(connections) > 1 && (
+            <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              Há {countWhatsAppDefaults(connections)} números marcados como padrão. Escolha um número ativo e conectado para corrigir; o histórico de mensagens não será alterado.
+            </div>
           )}
-        </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {connections.map((connection) => (
+              <IntegrationCard
+                key={connection.id}
+                type="whatsapp_evolution"
+                integrationId={connection.id}
+                duplicateDefaultCount={countWhatsAppDefaults(connections)}
+                onSaved={() => void loadConnections()}
+              />
+            ))}
+            {(adding || connections.length === 0) && (
+              <IntegrationCard
+                type="whatsapp_evolution"
+                createNew
+                onSaved={() => {
+                  setAdding(false);
+                  void loadConnections();
+                }}
+                onCancel={connections.length > 0 ? () => setAdding(false) : undefined}
+              />
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -1141,12 +1150,14 @@ function IntegrationCard({
   createNew = false,
   onSaved,
   onCancel,
+  duplicateDefaultCount = 0,
 }: {
   type: string;
   integrationId?: string;
   createNew?: boolean;
   onSaved?: () => void;
   onCancel?: () => void;
+  duplicateDefaultCount?: number;
 }) {
   const { toast } = useToast();
   const { data: me } = useGetMe();
@@ -1352,6 +1363,8 @@ function IntegrationCard({
         body: JSON.stringify({ integrationId, isDefault: true }),
       });
       if (!res.ok) throw new Error("Erro ao definir o número padrão");
+      const result = await res.json().catch(() => ({})) as { isDefault?: boolean; message?: string };
+      if (!result.isDefault) throw new Error(result.message || "Conecte o número antes de defini-lo como padrão.");
       toast({ title: "Número padrão atualizado" });
       await loadConfig();
       onSaved?.();
@@ -1623,14 +1636,22 @@ function IntegrationCard({
             )}
 
             <div className="flex flex-wrap gap-2 pt-1">
-              {type === "whatsapp_evolution" && integrationId && !data?.isDefault && (
+              {type === "whatsapp_evolution" && integrationId && getWhatsAppDefaultActionLabel({
+                isDefault: data?.isDefault ?? false,
+                enabled,
+                status,
+              }, duplicateDefaultCount) && (
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => void makeDefault()}
                   disabled={saving || testing}
                 >
-                  Tornar padrão
+                  {getWhatsAppDefaultActionLabel({
+                    isDefault: data?.isDefault ?? false,
+                    enabled,
+                    status,
+                  }, duplicateDefaultCount)}
                 </Button>
               )}
               {createNew && onCancel && (

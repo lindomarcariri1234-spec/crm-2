@@ -278,7 +278,9 @@ beforeEach(() => {
   mockLimit.mockReset();
 
   // Rebuild update chain (clearAllMocks wipes implementations)
-  mockUpdateWhere.mockResolvedValue([]);
+  mockUpdateWhere.mockImplementation(() => Object.assign(Promise.resolve([]), {
+    returning: vi.fn().mockResolvedValue([{ id: "row-wa" }]),
+  }));
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
   mockUpdate.mockReturnValue({ set: mockUpdateSet });
 
@@ -571,9 +573,109 @@ describe("GET /api/integrations/:type — single integration detail", () => {
   });
 });
 
+describe("GET /api/integrations/whatsapp_evolution/connections", () => {
+  it("returns legacy default flags so duplicate defaults can be corrected in settings", async () => {
+    asAdmin();
+    const rows = [
+      { ...WHATSAPP_ROW, id: "wa-old", isDefault: true, status: "disconnected", enabled: false },
+      { ...WHATSAPP_ROW, id: "wa-live", isDefault: true, status: "connected", enabled: true },
+    ];
+    mockWhere.mockReturnValueOnce(Object.assign(Promise.resolve(rows), {
+      orderBy: vi.fn().mockResolvedValue(rows),
+    }));
+
+    const res = await request(buildApp()).get("/api/integrations/whatsapp_evolution/connections");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "wa-old", isDefault: true, enabled: false, status: "disconnected" }),
+      expect.objectContaining({ id: "wa-live", isDefault: true, enabled: true, status: "connected" }),
+    ]));
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
 // ─── PUT /api/integrations/:type ─────────────────────────────────────────────
 
 describe("PUT /api/integrations/:type — save configuration", () => {
+  it("atomically replaces the default only after the selected Evolution connection verifies", async () => {
+    asAdmin();
+    const currentDefault = { ...WHATSAPP_ROW, id: "wa-current", isDefault: true };
+    const selected = { ...WHATSAPP_ROW, id: "wa-selected", isDefault: false };
+    mockLimit.mockResolvedValueOnce([currentDefault]).mockResolvedValueOnce([selected]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, isDefault: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.isDefault).toBe(true);
+    expect(mockTransaction).toHaveBeenCalledOnce();
+    expect(mockUpdateSet.mock.calls.map(([values]) => values)).toEqual(expect.arrayContaining([
+      { isDefault: false },
+      { isDefault: true },
+    ]));
+  });
+
+  it("rejects selecting a disabled Evolution connection as default", async () => {
+    asAdmin();
+    const selected = { ...WHATSAPP_ROW, enabled: false, isDefault: false };
+    mockLimit.mockResolvedValueOnce([selected]).mockResolvedValueOnce([selected]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, enabled: false, isDefault: true });
+
+    expect(res.status).toBe(400);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not promote a disconnected connection when its reconnect check fails", async () => {
+    asAdmin();
+    const selected = { ...WHATSAPP_ROW, status: "disconnected", isDefault: false };
+    mockLimit.mockResolvedValueOnce([selected]).mockResolvedValueOnce([selected]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, enabled: true, isDefault: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.isDefault).toBe(false);
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("clears a stale default flag when a previously connected number fails verification", async () => {
+    asAdmin();
+    const selected = { ...WHATSAPP_ROW, isDefault: true };
+    mockLimit.mockResolvedValueOnce([selected]).mockResolvedValueOnce([selected]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, enabled: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.isDefault).toBe(false);
+    expect(mockUpdateSet.mock.calls.map(([values]) => values)).toContainEqual(
+      expect.objectContaining({ status: "error", isDefault: false }),
+    );
+  });
+
+  it("allows a disconnected connection to become default after a successful reconnect check", async () => {
+    asAdmin();
+    const selected = { ...WHATSAPP_ROW, status: "disconnected", isDefault: false };
+    mockLimit.mockResolvedValueOnce([selected]).mockResolvedValueOnce([selected]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, enabled: true, isDefault: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.isDefault).toBe(true);
+    expect(mockTransaction).toHaveBeenCalledOnce();
+  });
+
   it("returns 404 for unknown integration type", async () => {
     asAdmin();
 
@@ -1149,6 +1251,20 @@ describe("POST /api/integrations/:type/revoke — clear credentials", () => {
 
     const setArgs = mockUpdateSet.mock.calls[0][0] as Record<string, unknown>;
     expect(setArgs.status).toBe("disconnected");
+  });
+
+  it("clears the default flag when revoking an Evolution connection", async () => {
+    asAdmin();
+
+    await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/revoke")
+      .send({ integrationId: "wa-default" });
+
+    expect(mockUpdateSet.mock.calls[0]?.[0]).toMatchObject({
+      enabled: false,
+      status: "disconnected",
+      isDefault: false,
+    });
   });
 
   it("writes an audit log with event=revoke", async () => {

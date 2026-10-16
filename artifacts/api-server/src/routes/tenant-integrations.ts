@@ -186,6 +186,32 @@ async function requireIntegrationAdmin(
   return me;
 }
 
+async function promoteConnectedEvolutionDefault(
+  tenantId: string,
+  integrationId: string,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.update(tenantIntegrationsTable)
+      .set({ isDefault: false })
+      .where(and(
+        eq(tenantIntegrationsTable.tenantId, tenantId),
+        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+        eq(tenantIntegrationsTable.isDefault, true),
+      ));
+    const [promoted] = await tx.update(tenantIntegrationsTable)
+      .set({ isDefault: true })
+      .where(and(
+        eq(tenantIntegrationsTable.tenantId, tenantId),
+        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+        eq(tenantIntegrationsTable.id, integrationId),
+        eq(tenantIntegrationsTable.enabled, true),
+        eq(tenantIntegrationsTable.status, "connected"),
+      ))
+      .returning({ id: tenantIntegrationsTable.id });
+    if (!promoted) throw new Error("evolution_default_requires_connected_integration");
+  });
+}
+
 // ─── Registry ─────────────────────────────────────────────────────────────────
 // Each entry declares the fields (config = non-secret, secrets = encrypted),
 // which config fields need SSRF validation, and how to test the connection.
@@ -899,9 +925,13 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
     const enabled = body.enabled ?? existing?.enabled ?? false;
     const environment = body.environment ?? existing?.environment ?? "production";
     const name = body.name ?? existing?.name ?? null;
-    const isDefault = type === "whatsapp_evolution"
-      ? body.isDefault ?? existing?.isDefault ?? !firstConnection
+    const requestedIsDefault = type === "whatsapp_evolution"
+      ? body.isDefault ?? (enabled ? existing?.isDefault ?? !firstConnection : false)
       : false;
+    if (type === "whatsapp_evolution" && requestedIsDefault && !enabled) {
+      next(new ValidationError("Ative e conecte a integração antes de defini-la como padrão.", "VALIDATION_ERROR"));
+      return;
+    }
     if (type === "distribution_reference" && enabled && environment !== "test") {
       next(new ValidationError(
         "O adaptador de referência só pode ser ativado no ambiente de teste.",
@@ -930,6 +960,11 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       environment !== (existing?.environment ?? "production");
     const resetStatus = !existing || secretsChanged || configChanged || !enabled;
     const status = resetStatus ? "disconnected" : existing?.status ?? "disconnected";
+    let isDefault = type === "whatsapp_evolution"
+      && body.isDefault === undefined
+      && !!existing?.isDefault
+      && enabled
+      && status === "connected";
     const integrationId = existing?.id ?? generateId();
 
     const savedValues = {
@@ -942,33 +977,7 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       status,
       ...(resetStatus ? { lastError: null } : {}),
     };
-    if (type === "whatsapp_evolution" && isDefault) {
-      await db.transaction(async (tx) => {
-        await tx.update(tenantIntegrationsTable)
-          .set({ isDefault: false })
-          .where(and(
-            eq(tenantIntegrationsTable.tenantId, me.tenantId),
-            eq(tenantIntegrationsTable.type, type),
-            eq(tenantIntegrationsTable.isDefault, true),
-          ));
-        if (existing) {
-          await tx.update(tenantIntegrationsTable)
-            .set(savedValues)
-            .where(and(
-              eq(tenantIntegrationsTable.tenantId, me.tenantId),
-              eq(tenantIntegrationsTable.type, type),
-              eq(tenantIntegrationsTable.id, integrationId),
-            ));
-        } else {
-          await tx.insert(tenantIntegrationsTable).values({
-            id: integrationId,
-            tenantId: me.tenantId,
-            type,
-            ...savedValues,
-          });
-        }
-      });
-    } else if (existing) {
+    if (existing) {
       await db.update(tenantIntegrationsTable)
         .set(savedValues)
         .where(and(
@@ -1015,10 +1024,30 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
               ),
             );
           await writeLog(me, type, "test", "info", `Conexão verificada após salvar: ${testResult.message}`);
+          if (type === "whatsapp_evolution" && requestedIsDefault) {
+            try {
+              await promoteConnectedEvolutionDefault(me.tenantId, integrationId);
+              isDefault = true;
+            } catch {
+              isDefault = false;
+              await writeLog(
+                me,
+                type,
+                "default_selection",
+                "warn",
+                "O número não foi definido como padrão porque não está mais ativo e conectado.",
+              );
+            }
+          }
         } else {
+          if (type === "whatsapp_evolution") isDefault = false;
           await db
             .update(tenantIntegrationsTable)
-            .set({ status: "error", lastError: testResult.message })
+            .set({
+              status: "error",
+              lastError: testResult.message,
+              ...(type === "whatsapp_evolution" ? { isDefault: false } : {}),
+            })
             .where(
               and(
                 eq(tenantIntegrationsTable.tenantId, me.tenantId),
@@ -1045,9 +1074,14 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
         }
       } catch (testErr) {
         const msg = sanitizeExternalError(testErr);
+        if (type === "whatsapp_evolution") isDefault = false;
         await db
           .update(tenantIntegrationsTable)
-          .set({ status: "error", lastError: msg })
+          .set({
+            status: "error",
+            lastError: msg,
+            ...(type === "whatsapp_evolution" ? { isDefault: false } : {}),
+          })
           .where(
             and(
               eq(tenantIntegrationsTable.tenantId, me.tenantId),
@@ -1075,6 +1109,9 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       ok: true,
       integrationId,
       isDefault,
+      ...(type === "whatsapp_evolution" && requestedIsDefault && !isDefault
+        ? { message: "O número só pode ser padrão depois de uma verificação bem-sucedida." }
+        : {}),
       ...(webhookSetup ? { webhook: webhookSetup } : {}),
     });
   } catch (err) {
@@ -1233,6 +1270,7 @@ router.post("/integrations/:type/revoke", async (req, res, next: NextFunction): 
         enabled: false,
         status: "disconnected",
         lastError: null,
+        ...(type === "whatsapp_evolution" ? { isDefault: false } : {}),
       })
       .where(and(...rowConditions));
 
