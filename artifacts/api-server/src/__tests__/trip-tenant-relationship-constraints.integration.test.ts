@@ -575,6 +575,51 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         constraint_count: 4,
         all_validated: true,
       }]);
+
+      await expect(client.query(
+        `INSERT INTO pg_temp.reservations (id, trip_id, tenant_id)
+         VALUES ('cross-agency-reservation', 'trip-a', 'tenant-b')`,
+      )).rejects.toMatchObject({ code: "23503" });
+      await expect(client.query(
+        `INSERT INTO pg_temp.trip_checkins
+          (id, trip_id, tenant_id, passenger_id, reservation_id)
+         VALUES ('cross-trip-checkin', 'trip-b', 'tenant-b', 'passenger-a', 'reservation-a')`,
+      )).rejects.toMatchObject({ code: "23503" });
+
+      const validRowsAfterRejectedWrites = await client.query(
+        `SELECT r.id AS reservation_id,
+                r.trip_id AS reservation_trip_id,
+                r.tenant_id AS reservation_tenant_id,
+                c.id AS checkin_id,
+                c.trip_id AS checkin_trip_id,
+                c.tenant_id AS checkin_tenant_id,
+                c.passenger_id,
+                c.reservation_id AS checkin_reservation_id
+           FROM pg_temp.reservations r
+           CROSS JOIN pg_temp.trip_checkins c
+          WHERE r.id = 'reservation-a' AND c.id = 'legacy-checkin'`,
+      );
+      expect(validRowsAfterRejectedWrites.rows).toEqual([{
+        reservation_id: "reservation-a",
+        reservation_trip_id: "missing-trip",
+        reservation_tenant_id: "tenant-a",
+        checkin_id: "legacy-checkin",
+        checkin_trip_id: "missing-trip",
+        checkin_tenant_id: "tenant-a",
+        passenger_id: "passenger-a",
+        checkin_reservation_id: "reservation-a",
+      }]);
+      const rejectedRows = await client.query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM pg_temp.reservations
+             WHERE id = 'cross-agency-reservation') AS invalid_reservations,
+           (SELECT COUNT(*)::int FROM pg_temp.trip_checkins
+             WHERE id = 'cross-trip-checkin') AS invalid_checkins`,
+      );
+      expect(rejectedRows.rows).toEqual([{
+        invalid_reservations: 0,
+        invalid_checkins: 0,
+      }]);
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`
