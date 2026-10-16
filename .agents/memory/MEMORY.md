@@ -147,3 +147,4 @@
 - [CRM settings route scope](crm-settings-route-scope.md) — keep `/configuracoes` focused on general agency and tourism-operation setup; specialized settings remain elsewhere.
 - [Club benefit edit versions](club-benefit-edit-versions.md) — every benefit mutation must strictly advance `updatedAt`, which the editor uses as its optimistic concurrency token.
 - [Playwright WebKit on Nix](playwright-webkit-nix-runtime.md) — Linux WebKit may fail on Nix with Ubuntu ABI gaps; require a real passing run instead of adding one-off browser libraries.
+- [Publish composite foreign-key order](publish-composite-fk-order.md) — unique indexes may be omitted and composite FKs ordered too early; inspect the real diff and stage constraints before FKs.

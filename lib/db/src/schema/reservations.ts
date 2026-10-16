@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, numeric, integer, primaryKey, index, unique, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, numeric, integer, primaryKey, index, unique, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -12,7 +12,7 @@ import { accommodationRoomsTable } from "./registrations";
 export const reservationsTable = pgTable("reservations", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
-  tripId: text("trip_id").notNull(),
+  tripId: text("trip_id").notNull().references(() => tripsTable.id),
   clientId: text("client_id").references(() => clientsTable.id),
   seats: text("seats").array().notNull().default([]),
   // Number of trip-capacity units owned by this reservation. This is
@@ -69,11 +69,6 @@ export const reservationsTable = pgTable("reservations", {
     .on(t.tenantId, t.storeOrderId, t.tripId)
     .where(sql`${t.storeOrderId} IS NOT NULL AND ${t.status} IN ('pending', 'confirmed')`),
   unique("reservations_id_trip_tenant_unique").on(t.id, t.tripId, t.tenantId),
-  foreignKey({
-    name: "reservations_trip_tenant_fk",
-    columns: [t.tripId, t.tenantId],
-    foreignColumns: [tripsTable.id, tripsTable.tenantId],
-  }),
 ]);
 
 export const insertReservationSchema = createInsertSchema(reservationsTable).omit({ createdAt: true, updatedAt: true });
