@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, numeric, integer, primaryKey, index, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, numeric, integer, primaryKey, index, unique, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -68,7 +68,7 @@ export const reservationsTable = pgTable("reservations", {
   uniqueIndex("reservations_active_store_order_trip_unique")
     .on(t.tenantId, t.storeOrderId, t.tripId)
     .where(sql`${t.storeOrderId} IS NOT NULL AND ${t.status} IN ('pending', 'confirmed')`),
-  uniqueIndex("reservations_id_trip_tenant_unique").on(t.id, t.tripId, t.tenantId),
+  unique("reservations_id_trip_tenant_unique").on(t.id, t.tripId, t.tenantId),
   foreignKey({
     name: "reservations_trip_tenant_fk",
     columns: [t.tripId, t.tenantId],
@@ -108,7 +108,7 @@ export const passengersTable = pgTable("passengers", {
   specialNeeds: text("special_needs"),
   documentType: text("document_type"),
 }, (t) => [
-  uniqueIndex("passengers_id_reservation_unique").on(t.id, t.reservationId),
+  unique("passengers_id_reservation_unique").on(t.id, t.reservationId),
 ]);
 
 export const insertPassengerSchema = createInsertSchema(passengersTable);

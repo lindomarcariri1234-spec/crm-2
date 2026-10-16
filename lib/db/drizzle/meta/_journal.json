@@ -841,6 +841,13 @@
       "when": 1809960020000,
       "tag": "0120_trip_tenant_relationship_constraints",
       "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1809960021000,
+      "tag": "0121_trip_tenant_unique_constraints",
+      "breakpoints": true
     }
   ]
 }

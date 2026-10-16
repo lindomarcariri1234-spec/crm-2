@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, numeric, integer, json, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, numeric, integer, json, index, unique, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -91,7 +91,7 @@ export const tripsTable = pgTable("trips", {
   index("trips_tenant_id_departure_date_idx").on(t.tenantId, t.departureDate),
   index("trips_tenant_id_status_idx").on(t.tenantId, t.status),
   index("trips_slug_idx").on(t.slug),
-  uniqueIndex("trips_id_tenant_id_unique").on(t.id, t.tenantId),
+  unique("trips_id_tenant_id_unique").on(t.id, t.tenantId),
   uniqueIndex("trips_tenant_import_fingerprint_unique").on(t.tenantId, t.importFingerprint),
 ]);
 
