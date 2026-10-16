@@ -24,13 +24,21 @@ import {
   hashInstagramOAuthState,
   instagramOAuthStateTtlMs,
   INSTAGRAM_MESSAGING_TYPE,
+  parseInstagramWebhookDeliveryStatuses,
   processInstagramWebhook,
+  resolveInstagramMetaIntegration,
   subscribeInstagramAccount,
   type InstagramOAuthResult,
   verifyInstagramSignedRequest,
   verifyInstagramWebhookSignature,
 } from "../services/instagram-messaging";
-import { processZernioInstagramWebhook, verifyZernioWebhookSignature } from "../services/instagram-zernio.js";
+import {
+  parseZernioInstagramMessageStatus,
+  processZernioInstagramWebhook,
+  resolveZernioIntegration,
+  verifyZernioWebhookSignature,
+} from "../services/instagram-zernio.js";
+import { updateOutboundDeliveryFromWebhook } from "../services/outbound-delivery.js";
 
 const router = Router();
 
@@ -460,6 +468,19 @@ router.post("/webhooks/instagram", async (req, res, next: NextFunction): Promise
       return;
     }
     const stored = await processInstagramWebhook(req.body);
+    const deliveryStatuses = parseInstagramWebhookDeliveryStatuses(req.body);
+    for (const status of deliveryStatuses) {
+      const integration = await resolveInstagramMetaIntegration(status.instagramUserId);
+      if (!integration) continue;
+      await updateOutboundDeliveryFromWebhook({
+        tenantId: integration.tenantId,
+        provider: "meta",
+        integrationId: integration.id,
+        externalId: status.externalId,
+        status: "accepted",
+        providerStatus: status.status,
+      });
+    }
     res.status(200).json({ received: true, stored });
   } catch (error) {
     next(error);
@@ -484,6 +505,20 @@ router.post("/webhooks/zernio", async (req, res, next: NextFunction): Promise<vo
     if (!eventId || (eventIdHeader && eventIdHeader !== eventId)) {
       res.status(400).json({ received: false, code: "INVALID_ZERNIO_EVENT_ID" });
       return;
+    }
+    const status = parseZernioInstagramMessageStatus(event);
+    if (status) {
+      const integration = await resolveZernioIntegration(status.accountId, status.profileId);
+      if (integration) {
+        await updateOutboundDeliveryFromWebhook({
+          tenantId: integration.tenantId,
+          provider: "zernio",
+          integrationId: integration.id,
+          externalId: status.messageId,
+          status: "accepted",
+          providerStatus: status.status,
+        });
+      }
     }
     const stored = await processZernioInstagramWebhook(event);
     res.status(200).json({ received: true, stored });

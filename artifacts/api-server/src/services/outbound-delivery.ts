@@ -19,16 +19,21 @@ import {
   type OutboundMessage,
 } from "@workspace/db";
 import { normalizeBrazilPhone } from "@workspace/shared";
-import { sendReminderHtmlEmail } from "@workspace/email";
-import { getInstagramMetaConfig, isInstagramReplyWindowOpen, readInstagramAccessToken, sendInstagramText, INSTAGRAM_MESSAGING_TYPE, InstagramProviderError } from "./instagram-messaging.js";
-import { INSTAGRAM_ZERNIO_TYPE, sendZernioInstagramText } from "./instagram-zernio.js";
+import { getInstagramMetaConfig, isInstagramReplyWindowOpen, readInstagramAccessToken, INSTAGRAM_MESSAGING_TYPE, InstagramProviderError } from "./instagram-messaging.js";
+import { INSTAGRAM_ZERNIO_TYPE } from "./instagram-zernio.js";
 import { decryptCredential } from "../lib/crypto";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
 import { isQueueRedisDailyLimitCircuitOpen } from "../lib/redis";
 import { getOutboundDeliveryQueue } from "../queues";
-import { reconcileTenantWhatsAppMessage, sendTenantWhatsAppMessage } from "../lib/whatsapp";
+import { reconcileTenantWhatsAppMessage } from "../lib/whatsapp";
 import { emitOutboundDeliveryUpdate } from "../lib/outbound-sse";
+import {
+  emailProviderAdapter,
+  metaInstagramProviderAdapter,
+  whatsappProviderAdapter,
+  zernioInstagramProviderAdapter,
+} from "./messaging-provider-adapters.js";
 
 export type OutboundRecipient =
   | { type: "client"; id: string }
@@ -822,7 +827,7 @@ export async function updateOutboundDeliveryFromWebhook(
       eq(outboundMessagesTable.id, outboundDeliveriesTable.outboundMessageId),
       eq(outboundMessagesTable.tenantId, update.tenantId),
     ));
-  const connectionFilter = update.integrationId
+  const connectionFilter = update.integrationId && update.provider === "evolution"
     ? sql`(
         ${outboundMessagesTable.metadata}->>'whatsappIntegrationId' = ${update.integrationId}
         OR (
@@ -837,6 +842,8 @@ export async function updateOutboundDeliveryFromWebhook(
           )
         )
       )`
+    : update.integrationId && (update.provider === "meta" || update.provider === "zernio")
+      ? sql`${outboundMessagesTable.metadata}->>'instagramIntegrationId' = ${update.integrationId}`
     : undefined;
   const [delivery] = await selection.where(and(
       eq(outboundDeliveriesTable.tenantId, update.tenantId),
@@ -929,7 +936,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
   let externalId: string | null = null;
   let error: string | null = null;
   let outcomeUnknown = false;
-  let whatsappProviderCallStarted = false;
+  let providerCallStarted = false;
   try {
     const whatsappRoute = delivery.channel === "whatsapp"
       ? await getWhatsAppBlockReason(tenantId, delivery)
@@ -971,39 +978,60 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
     if (!delivery.recipient) {
       error = delivery.skippedReason ?? "recipient_missing";
     } else if (delivery.channel === "email") {
-      const result = await sendReminderHtmlEmail({
-        to: delivery.recipient,
+      const result = await emailProviderAdapter.send({
+        recipient: delivery.recipient,
         subject: delivery.subject ?? "",
         html: delivery.content,
-        fromName: "VisiteCRM",
+        senderName: "VisiteCRM",
         idempotencyKey: `outbound:${tenantId}:${delivery.id}`,
       });
       success = result.success;
-      externalId = result.messageId ?? null;
-      provider = "resend";
-      error = result.error ?? null;
+      externalId = result.externalId;
+      provider = result.provider;
+      error = result.error;
     } else if (delivery.channel === "instagram" && instagramRoute) {
       if (!("integration" in instagramRoute)) throw new Error("instagram_route_unavailable");
       const { integration, metadata } = instagramRoute;
       const config = (integration.config ?? {}) as Record<string, string>;
       const providerName = instagramRoute.provider;
-      provider = providerName === "zernio" ? "zernio" : "meta";
       if (providerName === "zernio") {
         const decrypted = integration.secretsEncrypted ? JSON.parse(decryptCredential(integration.secretsEncrypted)) as Record<string, unknown> : {};
         const apiKey = typeof decrypted.apiKey === "string" ? decrypted.apiKey : "";
         const accountId = config.accountId;
         const zernioConversationId = typeof metadata.zernioConversationId === "string" ? metadata.zernioConversationId : "";
         if (!apiKey || !accountId || !zernioConversationId) throw new Error("instagram_connection_unavailable");
-        whatsappProviderCallStarted = true;
-        externalId = await sendZernioInstagramText(apiKey, accountId, zernioConversationId, delivery.content, `outbound:${tenantId}:${delivery.id}`);
+        providerCallStarted = true;
+        const result = await zernioInstagramProviderAdapter.send({
+          apiKey,
+          accountId,
+          conversationId: zernioConversationId,
+          text: delivery.content,
+          idempotencyKey: `outbound:${tenantId}:${delivery.id}`,
+        });
+        success = result.success;
+        provider = result.provider;
+        externalId = result.externalId;
+        error = result.error;
+        outcomeUnknown = result.outcomeUnknown;
       } else {
         const meta = getInstagramMetaConfig();
         const instagramUserId = config.instagramUserId;
         if (!meta.appConfigured || !instagramUserId) throw new Error("instagram_connection_unavailable");
         const accessToken = readInstagramAccessToken(integration);
-        whatsappProviderCallStarted = true;
+        providerCallStarted = true;
         try {
-          await sendInstagramText(meta, accessToken, instagramUserId, delivery.recipient, delivery.content);
+          const result = await metaInstagramProviderAdapter.send({
+            config: meta,
+            accessToken,
+            instagramUserId,
+            recipient: delivery.recipient,
+            text: delivery.content,
+          });
+          success = result.success;
+          provider = result.provider;
+          externalId = result.externalId;
+          error = result.error;
+          outcomeUnknown = result.outcomeUnknown;
         } catch (sendError) {
           if (sendError instanceof InstagramProviderError && sendError.httpStatus === 401) {
             await db.update(tenantIntegrationsTable).set({
@@ -1018,7 +1046,6 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
           throw sendError;
         }
       }
-      success = true;
     } else {
       if (whatsappRoute?.integrationId) {
         await db.update(outboundMessagesTable).set({
@@ -1028,25 +1055,23 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
           eq(outboundMessagesTable.tenantId, tenantId),
         ));
       }
-      whatsappProviderCallStarted = true;
-      const result = await sendTenantWhatsAppMessage(
+      providerCallStarted = true;
+      const result = await whatsappProviderAdapter.send({
         tenantId,
-        delivery.recipient,
-        delivery.content,
-        {
-          integrationId: whatsappRoute?.integrationId,
-          requireEvolution: whatsappRoute?.requireEvolution,
-        },
-      );
+        recipient: delivery.recipient,
+        text: delivery.content,
+        integrationId: whatsappRoute?.integrationId,
+        requireEvolution: whatsappRoute?.requireEvolution,
+      });
       success = result.success;
-      externalId = result.externalId ?? null;
-      provider = result.provider ?? "whatsapp";
-      error = result.error ?? null;
-      outcomeUnknown = result.outcome === "unknown";
+      externalId = result.externalId;
+      provider = result.provider;
+      error = result.error;
+      outcomeUnknown = result.outcomeUnknown;
     }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
-    outcomeUnknown = (delivery.channel === "whatsapp" || delivery.channel === "instagram") && whatsappProviderCallStarted;
+    outcomeUnknown = (delivery.channel === "whatsapp" || delivery.channel === "instagram") && providerCallStarted;
     const errorCode = err && typeof err === "object" && "code" in err && typeof err.code === "string"
       ? err.code
       : undefined;

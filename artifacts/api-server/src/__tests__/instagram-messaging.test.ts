@@ -27,6 +27,7 @@ import {
   getInstagramMetaConfig,
   isInstagramReplyWindowOpen,
   parseInstagramWebhook,
+  parseInstagramWebhookDeliveryStatuses,
   sendInstagramText,
   verifyInstagramSignedRequest,
   verifyInstagramWebhookSignature,
@@ -267,6 +268,22 @@ describe("Instagram Direct integration", () => {
     });
   });
 
+  it("normalizes Meta delivered and read callbacks to provider message IDs", () => {
+    expect(parseInstagramWebhookDeliveryStatuses({
+      object: "instagram",
+      entry: [{
+        id: "agency-instagram-id",
+        messaging: [
+          { delivery: { mids: ["meta-message-1", "meta-message-2"] } },
+          { read: { mid: "meta-message-2" } },
+        ],
+      }],
+    })).toEqual([
+      { instagramUserId: "agency-instagram-id", externalId: "meta-message-1", status: "delivered" },
+      { instagramUserId: "agency-instagram-id", externalId: "meta-message-2", status: "read" },
+    ]);
+  });
+
   it("enforces the 24-hour reply window and rejects provider timestamp skew", () => {
     const now = 1_730_000_000_000;
     expect(isInstagramReplyWindowOpen(null, now)).toBe(false);
@@ -285,6 +302,15 @@ describe("Instagram Direct integration", () => {
       sendInstagramText(config, "access-token", "agency-id", "recipient-id", "á".repeat(501)),
     ).rejects.toMatchObject({ name: "InstagramProviderError", kind: "rejected", httpStatus: 413 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns Meta's provider message ID so the ledger can reconcile delivery callbacks", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message_id: "meta-message-123" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      sendInstagramText(config, "access-token", "agency-id", "recipient-id", "Olá!"),
+    ).resolves.toBe("meta-message-123");
   });
 
   it("unwraps Meta's data-array token and profile responses before exchanging the code", async () => {

@@ -333,7 +333,7 @@ function integrationConfig(value: unknown): JsonObject {
   return asObject(value) ?? {};
 }
 
-async function resolveZernioIntegration(
+export async function resolveZernioIntegration(
   accountId: string,
   profileId: string | null,
   integrationId?: string,

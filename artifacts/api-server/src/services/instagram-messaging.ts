@@ -50,6 +50,12 @@ export interface InstagramWebhookMessage {
   sentAt: Date;
 }
 
+export interface InstagramWebhookDeliveryStatus {
+  instagramUserId: string;
+  externalId: string;
+  status: "delivered" | "read";
+}
+
 export class InstagramProviderError extends Error {
   constructor(
     readonly kind: "rejected" | "unknown",
@@ -288,6 +294,38 @@ export function parseInstagramWebhook(payload: unknown): InstagramWebhookMessage
   return result;
 }
 
+export function parseInstagramWebhookDeliveryStatuses(payload: unknown): InstagramWebhookDeliveryStatus[] {
+  const root = asObject(payload);
+  if (!root || root.object !== "instagram" || !Array.isArray(root.entry)) return [];
+  const result = new Map<string, InstagramWebhookDeliveryStatus>();
+  for (const rawEntry of root.entry) {
+    const entry = asObject(rawEntry);
+    const instagramUserId = stringValue(entry?.id);
+    if (!instagramUserId || !Array.isArray(entry?.messaging)) continue;
+    for (const rawEvent of entry.messaging) {
+      const event = asObject(rawEvent);
+      const delivery = asObject(event?.delivery);
+      const read = asObject(event?.read);
+      if (Array.isArray(delivery?.mids)) {
+        for (const rawId of delivery.mids) {
+          const externalId = stringValue(rawId);
+          const key = externalId ? JSON.stringify([instagramUserId, externalId]) : "";
+          if (externalId && result.get(key)?.status !== "read") {
+            result.set(key, { instagramUserId, externalId, status: "delivered" });
+          }
+        }
+      }
+      const readId = stringValue(read?.mid);
+      if (readId) result.set(JSON.stringify([instagramUserId, readId]), {
+        instagramUserId,
+        externalId: readId,
+        status: "read",
+      });
+    }
+  }
+  return [...result.values()];
+}
+
 async function providerJson(
   url: URL,
   init: RequestInit = {},
@@ -491,12 +529,12 @@ export async function sendInstagramText(
   instagramUserId: string,
   recipientId: string,
   text: string,
-): Promise<void> {
+): Promise<string | null> {
   if (Buffer.byteLength(text, "utf8") > MAX_INSTAGRAM_TEXT_BYTES) {
     throw new InstagramProviderError("rejected", 413);
   }
   const url = graphUrl(config, `${encodeURIComponent(instagramUserId)}/messages`);
-  await providerJson(url, {
+  const result = await providerJson(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -507,6 +545,7 @@ export async function sendInstagramText(
       message: { text },
     }),
   });
+  return stringValue(result["message_id"]) ?? stringValue(result["id"]);
 }
 
 function parseInstagramConfig(value: unknown): Record<string, string> {
@@ -515,6 +554,19 @@ function parseInstagramConfig(value: unknown): Record<string, string> {
   return Object.fromEntries(
     Object.entries(config).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   );
+}
+
+export async function resolveInstagramMetaIntegration(instagramUserId: string) {
+  const integrations = await db.select().from(tenantIntegrationsTable)
+    .where(and(
+      eq(tenantIntegrationsTable.type, INSTAGRAM_MESSAGING_TYPE),
+      eq(tenantIntegrationsTable.enabled, true),
+      eq(tenantIntegrationsTable.status, "connected"),
+    ));
+  const matches = integrations.filter((integration) =>
+    parseInstagramConfig(integration.config)["instagramUserId"] === instagramUserId,
+  );
+  return matches.length === 1 ? matches[0] ?? null : null;
 }
 
 export async function refreshInstagramTokens(): Promise<void> {

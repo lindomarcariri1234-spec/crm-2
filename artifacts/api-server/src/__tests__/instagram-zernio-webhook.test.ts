@@ -18,11 +18,19 @@ vi.mock("../services/instagram-zernio.js", async (importOriginal) => {
   return {
     ...actual,
     processZernioInstagramWebhook: vi.fn().mockResolvedValue(1),
+    resolveZernioIntegration: vi.fn().mockResolvedValue({
+      id: "integration-123",
+      tenantId: "tenant-123",
+    }),
   };
 });
+vi.mock("../services/outbound-delivery.js", () => ({
+  updateOutboundDeliveryFromWebhook: vi.fn().mockResolvedValue({ updated: true }),
+}));
 
 import instagramMessagingRouter from "../routes/instagram-messaging.js";
 import * as zernioService from "../services/instagram-zernio.js";
+import * as outboundDelivery from "../services/outbound-delivery.js";
 
 const secret = "test-zernio-webhook-secret";
 const event = {
@@ -201,6 +209,36 @@ describe("Zernio Instagram webhook", () => {
       ...event,
       message: { ...event.message, platform: "whatsapp" },
     })).toBeNull();
+  });
+
+  it("sends Instagram delivery events to the shared outbound ledger", async () => {
+    vi.stubEnv("ZERNIO_WEBHOOK_SECRET", secret);
+    const deliveryEvent = {
+      ...event,
+      id: "evt_delivery_123",
+      event: "message.read",
+      message: {
+        id: "zernio-message-123",
+        conversationId: "conv_123",
+        platform: "instagram",
+        direction: "outgoing",
+      },
+      statusAt: "2026-10-11T12:01:00.000Z",
+    };
+
+    const response = await signedRequest(deliveryEvent);
+
+    expect(response.status).toBe(200);
+    expect(outboundDelivery.updateOutboundDeliveryFromWebhook).toHaveBeenCalledWith({
+      tenantId: "tenant-123",
+      provider: "zernio",
+      integrationId: "integration-123",
+      externalId: "zernio-message-123",
+      status: "accepted",
+      providerStatus: "read",
+    });
+    expect(outboundDelivery.updateOutboundDeliveryFromWebhook.mock.invocationCallOrder[0])
+      .toBeLessThan(zernioService.processZernioInstagramWebhook.mock.invocationCallOrder[0] ?? Infinity);
   });
 
   it("retains only safe Instagram attachment URLs and identifies common image types", () => {
