@@ -23,6 +23,7 @@ import {
   type StoredEvolutionMedia,
 } from "./whatsapp-media.js";
 import { ensureSupportTicketForConversation } from "./support-ticketing.js";
+import type { InboundProviderAdapter } from "./messaging-provider-adapters.js";
 
 function normalizeInboundWhatsAppPhone(raw: string): string | null {
   const phonePart = raw.trim().split("@")[0]?.split(":")[0] ?? "";
@@ -115,6 +116,34 @@ export function parseEvolutionInbound(instanceName: string, payload: unknown): E
     fromMe: key["fromMe"] === true || data["fromMe"] === true || rawJid.endsWith("@g.us"),
   };
 }
+
+export const evolutionInboundAdapter: InboundProviderAdapter<
+  { instanceName: string; payload: unknown },
+  EvolutionInbound
+> = {
+  id: "evolution",
+  normalize({ instanceName, payload }) {
+    const event = parseEvolutionInbound(instanceName, payload);
+    if (event.fromMe || !event.phone || (!event.content && !event.media)) return [];
+    return [{
+      provider: "evolution",
+      channel: "whatsapp",
+      accountId: event.instanceName,
+      conversationId: event.phone,
+      senderId: event.phone,
+      externalId: event.messageId,
+      content: event.content ?? "Mídia recebida",
+      occurredAt: null,
+      media: event.media ? {
+        kind: event.media.kind,
+        mimeType: event.media.mimeType,
+        fileName: event.media.fileName,
+        url: null,
+      } : null,
+      providerData: event,
+    }];
+  },
+};
 
 function parseEvolutionDeliveryStatus(payload: unknown): {
   externalId: string;
@@ -440,8 +469,9 @@ export async function processEvolutionInbound(opts: {
   apiKey?: string;
   payload: unknown;
 }): Promise<WhatsAppInboundOutcome> {
-  const inbound = parseEvolutionInbound(opts.instanceName, opts.payload);
-  if (inbound.fromMe || !inbound.phone || (!inbound.content && !inbound.media)) return "ignored";
+  const event = evolutionInboundAdapter.normalize(opts)[0];
+  if (!event) return "ignored";
+  const inbound = event.providerData;
   const inboundContent = inbound.content ?? "";
   const optOutRequested = isOptOut(inboundContent);
 

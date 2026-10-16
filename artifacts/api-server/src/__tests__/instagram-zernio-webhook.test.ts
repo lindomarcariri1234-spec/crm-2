@@ -209,6 +209,15 @@ describe("Zernio Instagram webhook", () => {
       ...event,
       message: { ...event.message, platform: "whatsapp" },
     })).toBeNull();
+    expect(zernioService.zernioInstagramInboundAdapter.normalize(event)[0]).toMatchObject({
+      provider: "zernio",
+      channel: "instagram",
+      accountId: "account_123",
+      conversationId: "conv_123",
+      senderId: "customer_123",
+      externalId: "msg_123",
+      content: "Olá",
+    });
   });
 
   it("sends Instagram delivery events to the shared outbound ledger", async () => {

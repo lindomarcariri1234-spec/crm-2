@@ -9,6 +9,7 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
+import type { InboundProviderAdapter } from "./messaging-provider-adapters.js";
 
 export const INSTAGRAM_ZERNIO_TYPE = "instagram_zernio";
 
@@ -243,6 +244,33 @@ export function parseZernioInstagramMessage(payload: unknown): ZernioInstagramMe
   };
 }
 
+export const zernioInstagramInboundAdapter: InboundProviderAdapter<unknown, ZernioInstagramMessage> = {
+  id: "zernio",
+  normalize(payload) {
+    const message = parseZernioInstagramMessage(payload);
+    if (!message) return [];
+    return [{
+      provider: "zernio",
+      channel: "instagram",
+      accountId: message.accountId,
+      conversationId: message.conversationId,
+      senderId: message.senderId,
+      externalId: message.messageId,
+      content: message.content,
+      occurredAt: message.sentAt,
+      media: message.mediaUrl || message.mediaMimeType || message.mediaFileName
+        ? {
+            kind: "attachment",
+            mimeType: message.mediaMimeType,
+            fileName: message.mediaFileName,
+            url: message.mediaUrl,
+          }
+        : null,
+      providerData: message,
+    }];
+  },
+};
+
 export function parseZernioInstagramMessageStatus(
   payload: unknown,
 ): ZernioInstagramMessageStatus | null {
@@ -432,8 +460,9 @@ export async function processZernioInstagramWebhook(
     return updated.length;
   }
 
-  const message = parseZernioInstagramMessage(payload);
-  if (!message) return 0;
+  const event = zernioInstagramInboundAdapter.normalize(payload)[0];
+  if (!event) return 0;
+  const message = event.providerData;
 
   const integration = await resolveZernioIntegration(message.accountId, message.profileId, integrationId);
   if (!integration) return 0;

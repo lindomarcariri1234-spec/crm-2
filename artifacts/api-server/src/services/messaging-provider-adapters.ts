@@ -16,6 +16,34 @@ export interface ProviderAdapter<Input> {
   send(input: Input): Promise<ProviderSendResult>;
 }
 
+export type InboundMessagingProvider = "evolution" | "meta" | "zernio";
+export type InboundMessagingChannel = "whatsapp" | "instagram";
+
+export interface NormalizedInboundMedia {
+  kind: string;
+  mimeType: string | null;
+  fileName: string | null;
+  url: string | null;
+}
+
+export interface NormalizedInboundEvent<ProviderData = unknown> {
+  provider: InboundMessagingProvider;
+  channel: InboundMessagingChannel;
+  accountId: string;
+  conversationId: string | null;
+  senderId: string;
+  externalId: string | null;
+  content: string;
+  occurredAt: Date | null;
+  media: NormalizedInboundMedia | null;
+  providerData: ProviderData;
+}
+
+export interface InboundProviderAdapter<Input, ProviderData = unknown> {
+  readonly id: InboundMessagingProvider;
+  normalize(input: Input): NormalizedInboundEvent<ProviderData>[];
+}
+
 export interface EmailProviderInput {
   recipient: string;
   subject: string;

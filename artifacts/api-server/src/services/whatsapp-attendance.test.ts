@@ -118,7 +118,11 @@ vi.mock("./whatsapp-media.js", () => ({
   unwrapEvolutionMessage: vi.fn((message: unknown) => message),
 }));
 
-import { deliverAttendanceReply, processEvolutionInbound } from "./whatsapp-attendance.js";
+import {
+  deliverAttendanceReply,
+  evolutionInboundAdapter,
+  processEvolutionInbound,
+} from "./whatsapp-attendance.js";
 
 function makeQuery<T>(result: T) {
   const query: Record<string, ReturnType<typeof vi.fn>> = {};
@@ -218,6 +222,32 @@ describe("Evolution inbound attendance consent", () => {
       caption: null,
       messageId: "provider-message-1",
       remoteJid: "5511999999999@s.whatsapp.net",
+    });
+  });
+
+  it("normalizes Evolution messages to the shared inbound event contract", () => {
+    const [event] = evolutionInboundAdapter.normalize({
+      instanceName: "agency-connection",
+      payload: {
+        data: {
+          key: {
+            remoteJid: "11987654321@s.whatsapp.net",
+            id: "evolution-message-123",
+            fromMe: false,
+          },
+          message: { conversation: "Olá" },
+        },
+      },
+    });
+
+    expect(event).toMatchObject({
+      provider: "evolution",
+      channel: "whatsapp",
+      accountId: "agency-connection",
+      conversationId: "5511987654321",
+      senderId: "5511987654321",
+      externalId: "evolution-message-123",
+      content: "Olá",
     });
   });
 

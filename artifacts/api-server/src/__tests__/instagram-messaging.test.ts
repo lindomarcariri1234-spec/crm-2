@@ -266,6 +266,25 @@ describe("Instagram Direct integration", () => {
       messageId: "message-2",
       content: "Mídia recebida pelo Instagram",
     });
+    expect(instagramMessagingService.metaInstagramInboundAdapter.normalize({
+      object: "instagram",
+      entry: [{
+        id: "agency-instagram-id",
+        messaging: [{
+          sender: { id: "customer-1" },
+          timestamp: 1_730_000_000_000,
+          message: { mid: "message-1", text: "Olá, gostaria de viajar." },
+        }],
+      }],
+    })[0]).toMatchObject({
+      provider: "meta",
+      channel: "instagram",
+      accountId: "agency-instagram-id",
+      conversationId: "customer-1",
+      senderId: "customer-1",
+      externalId: "message-1",
+      content: "Olá, gostaria de viajar.",
+    });
   });
 
   it("normalizes Meta delivered and read callbacks to provider message IDs", () => {

@@ -10,6 +10,7 @@ import {
 import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { decryptCredential, encryptCredential } from "../lib/crypto";
 import { generateId } from "../lib/id";
+import type { InboundProviderAdapter } from "./messaging-provider-adapters.js";
 import { logger } from "../lib/logger";
 
 const DEFAULT_GRAPH_VERSION = "v26.0";
@@ -293,6 +294,26 @@ export function parseInstagramWebhook(payload: unknown): InstagramWebhookMessage
   }
   return result;
 }
+
+export const metaInstagramInboundAdapter: InboundProviderAdapter<unknown, InstagramWebhookMessage> = {
+  id: "meta",
+  normalize(payload) {
+    return parseInstagramWebhook(payload).map((message) => ({
+      provider: "meta",
+      channel: "instagram",
+      accountId: message.instagramUserId,
+      conversationId: message.senderId,
+      senderId: message.senderId,
+      externalId: message.messageId,
+      content: message.content,
+      occurredAt: message.sentAt,
+      media: message.content === "Mídia recebida pelo Instagram"
+        ? { kind: "attachment", mimeType: null, fileName: null, url: null }
+        : null,
+      providerData: message,
+    }));
+  },
+};
 
 export function parseInstagramWebhookDeliveryStatuses(payload: unknown): InstagramWebhookDeliveryStatus[] {
   const root = asObject(payload);
@@ -643,7 +664,7 @@ export async function refreshInstagramTokens(): Promise<void> {
 }
 
 export async function processInstagramWebhook(payload: unknown): Promise<number> {
-  const incoming = parseInstagramWebhook(payload);
+  const incoming = metaInstagramInboundAdapter.normalize(payload);
   if (incoming.length === 0) return 0;
   const integrations = await db.select().from(tenantIntegrationsTable)
     .where(and(
@@ -663,7 +684,8 @@ export async function processInstagramWebhook(payload: unknown): Promise<number>
   }
 
   let storedCount = 0;
-  for (const message of incoming) {
+  for (const event of incoming) {
+    const message = event.providerData;
     const matches = integrationsByAccount.get(message.instagramUserId) ?? [];
     if (matches.length !== 1) {
       logger.warn("[instagram] Ignored message for an unmapped or ambiguous account");
