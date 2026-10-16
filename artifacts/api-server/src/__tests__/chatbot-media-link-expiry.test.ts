@@ -709,10 +709,11 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       outboundMessageId: "outbound-a",
       channel: "whatsapp",
       content: "Resposta enviada",
-      status: "accepted",
+      status: "unknown",
       createdAt: start,
-      acceptedAt: new Date(start.getTime() + 2000),
-      failedAt: null,
+      acceptedAt: null,
+      failedAt: new Date(start.getTime() + 2000),
+      attempts: 2,
       externalId: "provider-a",
       provider: "evolution",
       origin: "manual",
@@ -723,10 +724,12 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       ...delivery,
       id: "delivery-linked",
       channel: "whatsapp",
-      status: "accepted",
+      status: "failed",
+      failedAt: new Date(start.getTime() + 1500),
+      attempts: 1,
       metadata: { chatbotMessageId: "chat-reply" },
     };
-    const makeBuilder = (result: unknown[], finalMethod: "limit" | "where") => {
+    const makeBuilder = (result: unknown[], finalMethod: "limit" | "where" | "orderBy") => {
       const builder: Record<string, ReturnType<typeof vi.fn>> = {};
       for (const method of ["from", "where", "innerJoin", "limit", "orderBy"]) {
         builder[method] = vi.fn().mockReturnValue(builder);
@@ -739,12 +742,32 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
     const chatbotQuery = makeBuilder([chatbot, chatbotReply], "limit");
     const deliveryQuery = makeBuilder([delivery], "limit");
     const linkedQuery = makeBuilder([linkedDelivery], "where");
+    const attemptQuery = makeBuilder([{
+      deliveryId: "delivery-a",
+      attemptNumber: 1,
+      status: "failed",
+      provider: "evolution",
+      externalId: "provider-a",
+      error: "raw provider secret detail",
+      startedAt: start,
+      completedAt: start,
+    }, {
+      deliveryId: "delivery-linked",
+      attemptNumber: 1,
+      status: "failed",
+      provider: "evolution",
+      externalId: null,
+      error: "another raw provider error",
+      startedAt: start,
+      completedAt: start,
+    }], "orderBy");
     mockState.dbSelect.mockReset()
       .mockImplementationOnce(() => clientQuery)
       .mockImplementationOnce(() => legacyQuery)
       .mockImplementationOnce(() => chatbotQuery)
       .mockImplementationOnce(() => deliveryQuery)
-      .mockImplementationOnce(() => linkedQuery);
+      .mockImplementationOnce(() => linkedQuery)
+      .mockImplementationOnce(() => attemptQuery);
 
     const response = await request(buildApp())
       .get("/api/clients/client-a/communication-timeline?limit=4");
@@ -767,8 +790,32 @@ describe("GET /chatbot-conversations/:id/messages media links", () => {
       direction: "outbound",
       actor: "ai",
       channel: "whatsapp",
-      status: "sent",
+      status: "failed",
+      provider: "evolution",
+      externalId: "provider-a",
+      deliveryAttempts: 1,
+      deliveryIssue: expect.stringContaining("falhou"),
+      deliveryHistory: [{ error: "provider_error" }],
     });
+    expect(response.body.items[3]).toMatchObject({
+      direction: "outbound",
+      source: "outbound",
+      provider: "evolution",
+      externalId: "provider-a",
+      status: "unknown",
+      deliveryAttempts: 2,
+      deliveryIssue: expect.stringContaining("desconhecido"),
+      deliveryHistory: [{
+        attemptNumber: 1,
+        status: "failed",
+        provider: "evolution",
+        externalId: "provider-a",
+        error: "provider_error",
+      }],
+    });
+    expect(JSON.stringify(response.body.items[3])).not.toContain("raw provider secret detail");
+    expect(response.body.items[0]).not.toHaveProperty("provider");
+    expect(response.body.items[1]).not.toHaveProperty("deliveryHistory");
     expect(response.body.items).toHaveLength(4);
     expect(response.body.hasMore).toBe(false);
     expect(mockState.eq).toHaveBeenCalledWith(mockState.clientsTable?.tenantId, TENANT_ID);

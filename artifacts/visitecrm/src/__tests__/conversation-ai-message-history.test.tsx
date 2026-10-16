@@ -764,4 +764,49 @@ describe("WhatsApp conversation history", () => {
     expect(onRetryConversationAiMessages).toHaveBeenCalledTimes(1);
     expect(fetchAiInbox).not.toHaveBeenCalled();
   });
+
+  it("shows provider references and sanitized attempts only for failed or uncertain outbound history", async () => {
+    const inbound = summary.lastMessage;
+    const uncertainOutbound = {
+      ...inbound,
+      id: "outbound:message-1:delivery-1",
+      content: "Sua reserva está confirmada.",
+      direction: "outbound" as const,
+      actor: "team" as const,
+      status: "unknown",
+      source: "outbound" as const,
+      provider: "evolution",
+      externalId: "provider-message-123",
+      deliveryAttempts: 2,
+      deliveryIssue: "O resultado do envio é desconhecido.",
+      deliveryHistory: [{
+        attemptNumber: 1,
+        status: "failed",
+        provider: "evolution",
+        externalId: null,
+        error: "provider_error",
+        startedAt: "2026-10-01T10:00:00.000Z",
+        completedAt: "2026-10-01T10:00:01.000Z",
+      }],
+    };
+    const { container } = await renderComponent(
+      createElement(ConversationsTab, makeProps({
+        conversationMessages: [inbound, uncertainOutbound],
+      })),
+    );
+
+    const reference = container.querySelector(
+      '[data-testid="client-delivery-reference-outbound:message-1:delivery-1"]',
+    );
+    const attempts = container.querySelector(
+      '[data-testid="client-delivery-attempts-outbound:message-1:delivery-1"]',
+    );
+    expect(reference?.textContent).toContain("Provedor: evolution");
+    expect(reference?.textContent).toContain("provider-message-123");
+    expect(attempts?.textContent).toContain("Tentativa 1: failed");
+    expect(attempts?.textContent).toContain("O provedor informou uma falha.");
+    expect(attempts?.textContent).not.toContain("provider_error");
+    expect(container.querySelector('[data-testid="client-delivery-reference-inbound-1"]')).toBeNull();
+    expect(container.querySelector('[data-testid="client-delivery-attempts-inbound-1"]')).toBeNull();
+  });
 });

@@ -626,6 +626,48 @@ export function ConversationsTab({
                             {channelLabels[message.channel] ?? message.channel}
                           </Badge>
                         </div>
+                        {message.direction === "outbound" && (message.provider || message.externalId || message.deliveryAttempts != null) && (
+                          <p
+                            className="mt-1 break-all text-[10px] text-muted-foreground"
+                            data-testid={`client-delivery-reference-${message.id}`}
+                          >
+                            {[
+                              message.provider ? `Provedor: ${message.provider}` : null,
+                              message.externalId ? `Referência: ${message.externalId}` : null,
+                              message.deliveryAttempts != null ? `${message.deliveryAttempts} tentativa(s)` : null,
+                            ].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
+                        {message.direction === "outbound"
+                          && (message.status === "failed" || message.status === "unknown")
+                          && Boolean(message.deliveryHistory?.length) && (
+                            <details
+                              className="mt-1 text-[10px] text-muted-foreground"
+                              data-testid={`client-delivery-attempts-${message.id}`}
+                            >
+                              <summary className="cursor-pointer">
+                                Tentativas de envio ({message.deliveryHistory!.length})
+                              </summary>
+                              <ul className="mt-1 space-y-1 break-all pl-3">
+                                {message.deliveryHistory!.map((attempt) => (
+                                  <li key={`${message.id}-${attempt.attemptNumber}`}>
+                                    Tentativa {attempt.attemptNumber}: {attempt.status}
+                                    {attempt.provider ? ` · ${attempt.provider}` : ""}
+                                    {attempt.externalId ? ` · Ref. ${attempt.externalId}` : ""}
+                                    {attempt.startedAt
+                                      ? ` · ${new Date(attempt.startedAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
+                                      : ""}
+                                    {attempt.error ? " · O provedor informou uma falha." : ""}
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          )}
+                        {message.direction === "outbound" && message.deliveryIssue && (
+                          <p className="mt-1 text-[10px] text-muted-foreground" role="status">
+                            {message.deliveryIssue}
+                          </p>
+                        )}
                       </div>
                     </div>
                   ))}

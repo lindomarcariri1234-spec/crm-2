@@ -725,6 +725,7 @@ router.get("/clients/:clientId/communication-timeline", async (req, res, next: N
       channel: outboundDeliveriesTable.channel,
       content: outboundDeliveriesTable.content,
       status: outboundDeliveriesTable.status,
+      attempts: outboundDeliveriesTable.attempts,
       createdAt: outboundDeliveriesTable.createdAt,
       acceptedAt: outboundDeliveriesTable.acceptedAt,
       failedAt: outboundDeliveriesTable.failedAt,
@@ -809,6 +810,45 @@ router.get("/clients/:clientId/communication-timeline", async (req, res, next: N
         : {};
       return [String(metadata.chatbotMessageId), row];
     }));
+    const attemptDeliveryIds = [...new Set([...deliveryRows, ...linkedRows].map((row) => row.id))];
+    const attemptRows = attemptDeliveryIds.length
+      ? await db.select({
+          deliveryId: outboundDeliveryAttemptsTable.deliveryId,
+          attemptNumber: outboundDeliveryAttemptsTable.attemptNumber,
+          status: outboundDeliveryAttemptsTable.status,
+          provider: outboundDeliveryAttemptsTable.provider,
+          externalId: outboundDeliveryAttemptsTable.externalId,
+          error: outboundDeliveryAttemptsTable.error,
+          startedAt: outboundDeliveryAttemptsTable.startedAt,
+          completedAt: outboundDeliveryAttemptsTable.completedAt,
+        }).from(outboundDeliveryAttemptsTable)
+          .where(and(
+            eq(outboundDeliveryAttemptsTable.tenantId, me.tenantId),
+            inArray(outboundDeliveryAttemptsTable.deliveryId, attemptDeliveryIds),
+          ))
+          .orderBy(outboundDeliveryAttemptsTable.attemptNumber)
+      : [];
+    const attemptsByDelivery = new Map<string, typeof attemptRows>();
+    for (const attempt of attemptRows) {
+      const history = attemptsByDelivery.get(attempt.deliveryId) ?? [];
+      history.push(attempt);
+      attemptsByDelivery.set(attempt.deliveryId, history);
+    }
+    const safeAttemptHistory = (deliveryId: string) =>
+      (attemptsByDelivery.get(deliveryId) ?? []).map((attempt) => ({
+        attemptNumber: attempt.attemptNumber,
+        status: attempt.status,
+        provider: attempt.provider,
+        externalId: attempt.externalId,
+        error: attempt.error ? "provider_error" : null,
+        startedAt: attempt.startedAt,
+        completedAt: attempt.completedAt,
+      }));
+    const safeDeliveryIssue = (status: string) => status === "unknown"
+      ? "O resultado do envio é desconhecido. Confira as tentativas antes de reenviar."
+      : status === "failed"
+        ? "O envio falhou. Consulte as tentativas para ver os detalhes disponíveis."
+        : null;
     const now = Date.now();
     const items = await Promise.all(pageCandidates.map(async (candidate) => {
       if (candidate.kind === "legacy") {
@@ -827,6 +867,9 @@ router.get("/clients/:clientId/communication-timeline", async (req, res, next: N
         };
       }
       if (candidate.kind === "delivery") {
+        const deliveryHistory = ["failed", "unknown"].includes(candidate.row.status)
+          ? safeAttemptHistory(candidate.row.id)
+          : undefined;
         return {
           id: candidate.id,
           clientId: client.id,
@@ -838,6 +881,11 @@ router.get("/clients/:clientId/communication-timeline", async (req, res, next: N
           sentAt: candidate.row.acceptedAt ?? candidate.row.failedAt ?? candidate.row.createdAt,
           status: candidate.row.status === "accepted" ? "sent" : candidate.row.status,
           source: "outbound" as const,
+          provider: candidate.row.provider,
+          externalId: candidate.row.externalId,
+          deliveryAttempts: candidate.row.attempts,
+          ...(deliveryHistory ? { deliveryHistory } : {}),
+          deliveryIssue: safeDeliveryIssue(candidate.row.status),
         };
       }
       let mediaUrl = candidate.row.mediaUrl;
@@ -872,6 +920,15 @@ router.get("/clients/:clientId/communication-timeline", async (req, res, next: N
         sentAt: candidate.row.sentAt,
         status: isInbound ? "received" : linked?.status === "accepted" ? "sent" : linked?.status ?? candidate.row.deliveryStatus,
         source: "chatbot" as const,
+        ...(!isInbound && linked ? {
+          provider: linked.provider,
+          externalId: linked.externalId,
+          deliveryAttempts: linked.attempts,
+          ...(linked.status === "failed" || linked.status === "unknown"
+            ? { deliveryHistory: safeAttemptHistory(linked.id) }
+            : {}),
+          deliveryIssue: safeDeliveryIssue(linked.status),
+        } : {}),
         mediaUrl,
         mediaMimeType: candidate.row.mediaMimeType,
         mediaFileName: candidate.row.mediaFileName,

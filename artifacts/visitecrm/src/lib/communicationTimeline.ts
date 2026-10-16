@@ -69,6 +69,19 @@ export interface CommunicationTimelineEntry {
   sentAt: string;
   status: string | null;
   source: "message" | "outbound" | "chatbot";
+  provider?: string | null;
+  externalId?: string | null;
+  deliveryAttempts?: number | null;
+  deliveryHistory?: Array<{
+    attemptNumber: number;
+    status: string;
+    provider: string | null;
+    externalId: string | null;
+    error: string | null;
+    startedAt: string | Date;
+    completedAt: string | Date | null;
+  }>;
+  deliveryIssue?: string | null;
   mediaUrl?: string | null;
   mediaMimeType?: string | null;
   mediaFileName?: string | null;
