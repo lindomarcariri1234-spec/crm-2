@@ -2,7 +2,7 @@ import { relations } from "drizzle-orm";
 import { boolean, index, integer, json, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 
-export const OUTBOUND_DELIVERY_CHANNELS = ["email", "whatsapp"] as const;
+export const OUTBOUND_DELIVERY_CHANNELS = ["email", "whatsapp", "instagram"] as const;
 export type OutboundDeliveryChannel = (typeof OUTBOUND_DELIVERY_CHANNELS)[number];
 
 export const OUTBOUND_DELIVERY_STATUSES = ["pending", "processing", "accepted", "failed", "skipped", "unknown"] as const;

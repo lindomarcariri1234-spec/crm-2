@@ -16,18 +16,14 @@ import { ALL_STAFF_ROLES, requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { deliverAttendanceReply } from "../services/whatsapp-attendance";
+import { dispatchOutboundMessage } from "../services/outbound-delivery.js";
 import {
   getInstagramMetaConfig,
   isInstagramReplyWindowOpen,
   INSTAGRAM_MESSAGING_TYPE,
-  InstagramProviderError,
-  readInstagramAccessToken,
-  sendInstagramText,
 } from "../services/instagram-messaging";
 import {
   INSTAGRAM_ZERNIO_TYPE,
-  sendZernioInstagramText,
-  ZernioInstagramSendError,
 } from "../services/instagram-zernio.js";
 import { recomputeClientClassification, recordClientClassificationEvent } from "../services/client-classification.js";
 import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
@@ -684,94 +680,32 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         return;
       }
 
-      try {
-        if (provider === "zernio") {
-          const providerMessageId = await sendZernioInstagramText(
-            zernioApiKey!,
-            zernioConfig!.accountId!,
-            metadata["zernioConversationId"] as string,
-            parsed.data.content,
-            parsed.data.idempotencyKey,
-          );
-          await db.update(chatbotMessagesTable).set({
-            providerMessageId,
-            deliveryStatus: "sent",
-            deliveryAttempts: 1,
-            deliveryUpdatedAt: new Date(),
-            lastDeliveryError: null,
-          }).where(and(
-            eq(chatbotMessagesTable.id, id),
-            eq(chatbotMessagesTable.tenantId, me.tenantId),
-          ));
-        } else {
-          const meta = getInstagramMetaConfig();
-          if (!meta.appConfigured) throw new InstagramProviderError("rejected");
-          const integrationConfig = (integration.config ?? {}) as Record<string, string>;
-          const instagramUserId = integrationConfig["instagramUserId"];
-          if (!instagramUserId) throw new InstagramProviderError("rejected");
-          await sendInstagramText(
-            meta,
-            readInstagramAccessToken(integration),
-            instagramUserId,
-            conversation.sessionId,
-            parsed.data.content,
-          );
-          await db.update(chatbotMessagesTable).set({
-            deliveryStatus: "sent",
-            deliveryAttempts: 1,
-            deliveryUpdatedAt: new Date(),
-            lastDeliveryError: null,
-          }).where(and(
-            eq(chatbotMessagesTable.id, id),
-            eq(chatbotMessagesTable.tenantId, me.tenantId),
-          ));
-        }
-        await db.update(chatbotConversationsTable)
-          .set({ status: "human_handoff", assignedUserId: me.id })
-          .where(and(
-            eq(chatbotConversationsTable.id, conversation.id),
-            eq(chatbotConversationsTable.tenantId, me.tenantId),
-          ));
-        const [message] = await db.select().from(chatbotMessagesTable)
-          .where(and(eq(chatbotMessagesTable.id, id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
-          .limit(1);
-        res.status(201).json(message);
-      } catch (error) {
-        const providerError = error instanceof InstagramProviderError ? error : null;
-        const zernioError = error instanceof ZernioInstagramSendError ? error : null;
-        const outcomeUnknown = providerError?.kind === "unknown" || zernioError?.kind === "unknown";
-        await db.update(chatbotMessagesTable).set({
-          deliveryStatus: outcomeUnknown ? "unknown" : "failed",
-          deliveryAttempts: 1,
-          deliveryUpdatedAt: new Date(),
-          lastDeliveryError: outcomeUnknown
-            ? `${provider}-outcome-unknown`
-            : `${provider}-provider-rejected`,
-        }).where(and(
-          eq(chatbotMessagesTable.id, id),
-          eq(chatbotMessagesTable.tenantId, me.tenantId),
-        ));
-        if (provider === "meta" && providerError?.httpStatus === 401) {
-          await db.update(tenantIntegrationsTable).set({
-            enabled: false,
-            status: "error",
-            lastError: "O acesso ao Instagram expirou. Reconecte a conta.",
-          }).where(and(
-            eq(tenantIntegrationsTable.id, integration.id),
-            eq(tenantIntegrationsTable.tenantId, me.tenantId),
-          ));
-        }
-        res.status(outcomeUnknown ? 502 : 422).json({
-          code: outcomeUnknown
-            ? "INSTAGRAM_DELIVERY_UNKNOWN"
-            : provider === "zernio" ? "ZERNIO_DELIVERY_FAILED" : "INSTAGRAM_DELIVERY_FAILED",
-          error: outcomeUnknown
-            ? `A ${provider === "zernio" ? "Zernio" : "Meta"} não confirmou o resultado do envio. Verifique a conversa antes de tentar novamente.`
-            : provider === "zernio"
-              ? "A Zernio recusou o envio. Confira a chave de API e as permissões de mensagens."
-              : "A Meta recusou o envio. Revise a conexão e as permissões do Instagram.",
-        });
-      }
+      await db.update(chatbotConversationsTable)
+        .set({ status: "human_handoff", assignedUserId: me.id })
+        .where(and(eq(chatbotConversationsTable.id, conversation.id), eq(chatbotConversationsTable.tenantId, me.tenantId)));
+      const queued = await dispatchOutboundMessage({
+        tenantId: me.tenantId,
+        eventType: "instagram_human_reply",
+        idempotencyKey: `instagram:staff:${parsed.data.idempotencyKey}`,
+        recipient: { type: "direct", name: "Instagram" },
+        instagram: { text: parsed.data.content },
+        channels: ["instagram"],
+        origin: "instagram-attendance",
+        originChannel: "instagram",
+        createdById: me.id,
+        metadata: {
+          conversationId: conversation.id,
+          chatbotMessageId: id,
+          instagramRecipientId: conversation.sessionId,
+          instagramIntegrationId: integration.id,
+          instagramProvider: provider,
+          zernioConversationId: metadata["zernioConversationId"],
+        },
+      });
+      const [message] = await db.select().from(chatbotMessagesTable)
+        .where(and(eq(chatbotMessagesTable.id, id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
+        .limit(1);
+      res.status(queued.deliveries.some((delivery) => delivery.status === "accepted") ? 201 : 202).json(message);
       return;
     }
     if (conversation.channel !== "whatsapp") {

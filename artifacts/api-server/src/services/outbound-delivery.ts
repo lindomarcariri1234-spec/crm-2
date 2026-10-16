@@ -20,6 +20,9 @@ import {
 } from "@workspace/db";
 import { normalizeBrazilPhone } from "@workspace/shared";
 import { sendReminderHtmlEmail } from "@workspace/email";
+import { getInstagramMetaConfig, isInstagramReplyWindowOpen, readInstagramAccessToken, sendInstagramText, INSTAGRAM_MESSAGING_TYPE } from "./instagram-messaging.js";
+import { INSTAGRAM_ZERNIO_TYPE, sendZernioInstagramText } from "./instagram-zernio.js";
+import { decryptCredential } from "../lib/crypto";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
 import { isQueueRedisDailyLimitCircuitOpen } from "../lib/redis";
@@ -40,6 +43,8 @@ export interface CreateOutboundMessageInput {
   recipient: OutboundRecipient;
   email?: { subject: string; html: string; senderName?: string | null };
   whatsapp?: { text: string };
+  instagram?: { text: string };
+  channels?: OutboundDeliveryChannel[];
   origin?: string;
   originChannel?: OutboundDeliveryChannel | null;
   createdById?: string | null;
@@ -233,6 +238,7 @@ function skippedReason(channel: OutboundDeliveryChannel, recipient: ReturnType<t
   if (!recipient) return `${channel}_address_missing`;
   if (!optedIn) return `${channel}_opted_out`;
   if (channel === "whatsapp" && !normalizeBrazilPhone(recipient)) return "whatsapp_invalid_phone";
+  if (channel === "instagram" && (!recipient || !/^\d+$/.test(recipient))) return "instagram_invalid_recipient";
   return null;
 }
 
@@ -267,8 +273,10 @@ async function syncAttendanceChatbotMessage(
   status: string,
   error: string | null,
   skippedReason: string | null,
+  externalId: string | null = null,
+  attempts = 0,
 ): Promise<void> {
-  if (origin !== "whatsapp-attendance" || metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) return;
+  if (!["whatsapp-attendance", "instagram-attendance"].includes(origin ?? "") || metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) return;
   const metadataRecord = metadata as Record<string, unknown>;
   const chatbotMessageId = metadataRecord["chatbotMessageId"];
   const conversationId = metadataRecord["conversationId"];
@@ -276,12 +284,16 @@ async function syncAttendanceChatbotMessage(
   const optedOut = ["whatsapp_opted_out", "contact_opted_out"].includes(skippedReason ?? error ?? "");
   const deliveryStatus = ["accepted", "delivered", "read", "sent"].includes(status)
     ? "sent"
+    : status === "unknown"
+      ? "unknown"
     : status === "failed" || status === "skipped"
       ? optedOut ? "cancelled" : "failed"
       : "pending";
   await db.update(chatbotMessagesTable)
     .set({
       deliveryStatus,
+      ...(externalId ? { providerMessageId: externalId } : {}),
+      ...(attempts ? { deliveryAttempts: attempts } : {}),
       deliveryUpdatedAt: new Date(),
       lastDeliveryError: deliveryStatus === "sent" ? null : skippedReason ?? error ?? "delivery_pending",
     })
@@ -318,6 +330,7 @@ export async function createOutboundMessage(input: CreateOutboundMessageInput): 
 
   const resolved = await resolveRecipient(input.tenantId, input.recipient);
   const whatsappText = clean(input.whatsapp?.text) ?? (input.email?.html ? htmlToWhatsAppText(input.email.html) : null);
+  const instagramText = clean(input.instagram?.text);
   const emailHtml = clean(input.email?.html);
   const emailSubject = clean(input.email?.subject);
 
@@ -354,12 +367,17 @@ export async function createOutboundMessage(input: CreateOutboundMessageInput): 
     const existing = await tx.select().from(outboundDeliveriesTable)
       .where(and(eq(outboundDeliveriesTable.tenantId, input.tenantId), eq(outboundDeliveriesTable.outboundMessageId, message.id)));
     if (!existing.length) {
-      await tx.insert(outboundDeliveriesTable).values([
+      const deliveries = [
         deliveryValues(input, message.id, "email", resolved.email, emailHtml, emailSubject,
           skippedReason("email", resolved.email, resolved.emailOptIn, emailHtml)),
         deliveryValues(input, message.id, "whatsapp", resolved.whatsapp, whatsappText, null,
           skippedReason("whatsapp", resolved.whatsapp, resolved.whatsappOptIn, whatsappText)),
-      ]);
+        ...(instagramText || input.channels?.includes("instagram")
+          ? [deliveryValues(input, message.id, "instagram", clean(input.metadata?.instagramRecipientId as string | undefined), instagramText, null,
+            skippedReason("instagram", clean(input.metadata?.instagramRecipientId as string | undefined), true, instagramText))]
+          : []),
+      ].filter((delivery) => !input.channels || input.channels.includes(delivery.channel));
+      await tx.insert(outboundDeliveriesTable).values(deliveries);
     }
     const deliveries = await tx.select().from(outboundDeliveriesTable)
       .where(and(eq(outboundDeliveriesTable.tenantId, input.tenantId), eq(outboundDeliveriesTable.outboundMessageId, message.id)));
@@ -615,6 +633,33 @@ async function getWhatsAppBlockReason(
   };
 }
 
+async function getInstagramRoute(tenantId: string, delivery: OutboundDelivery) {
+  const blocked = (reason: string) => ({ reason });
+  const [message] = await db.select({ origin: outboundMessagesTable.origin, metadata: outboundMessagesTable.metadata })
+    .from(outboundMessagesTable).where(and(eq(outboundMessagesTable.id, delivery.outboundMessageId), eq(outboundMessagesTable.tenantId, tenantId))).limit(1);
+  const metadata = message?.metadata;
+  if (message?.origin !== "instagram-attendance" || !metadata || typeof metadata !== "object") return blocked("instagram_route_unavailable");
+  const conversationId = typeof metadata.conversationId === "string" ? metadata.conversationId : "";
+  const provider = metadata.instagramProvider === "zernio" ? "zernio" : "meta";
+  const integrationId = typeof metadata.instagramIntegrationId === "string" ? metadata.instagramIntegrationId : "";
+  const integrationType = provider === "zernio" ? INSTAGRAM_ZERNIO_TYPE : INSTAGRAM_MESSAGING_TYPE;
+  const [conversation] = await db.select().from(chatbotConversationsTable).where(and(
+    eq(chatbotConversationsTable.id, conversationId), eq(chatbotConversationsTable.tenantId, tenantId),
+  )).limit(1);
+  if (!conversation || conversation.channel !== "instagram" || !conversation.sessionId || conversation.sessionId !== delivery.recipient) return blocked("instagram_conversation_unavailable");
+  const [lastInbound] = await db.select({ sentAt: chatbotMessagesTable.sentAt }).from(chatbotMessagesTable).where(and(
+    eq(chatbotMessagesTable.tenantId, tenantId), eq(chatbotMessagesTable.conversationId, conversationId), eq(chatbotMessagesTable.role, "user"),
+  )).orderBy(desc(chatbotMessagesTable.sentAt), desc(chatbotMessagesTable.id)).limit(1);
+  if (!isInstagramReplyWindowOpen(lastInbound?.sentAt ?? null)) return blocked("instagram_reply_window_expired");
+  const [integration] = await db.select().from(tenantIntegrationsTable).where(and(
+    eq(tenantIntegrationsTable.id, integrationId), eq(tenantIntegrationsTable.tenantId, tenantId),
+    eq(tenantIntegrationsTable.type, integrationType), eq(tenantIntegrationsTable.enabled, true),
+    eq(tenantIntegrationsTable.status, "connected"),
+  )).limit(1);
+  if (!integration) return blocked("instagram_connection_unavailable");
+  return { reason: null, provider, integration, conversation, metadata };
+}
+
 async function getWhatsAppIntegrationIdForMessage(
   tenantId: string,
   outboundMessageId: string,
@@ -841,6 +886,7 @@ export async function updateOutboundDeliveryFromWebhook(
     updated.status,
     updated.lastError,
     updated.skippedReason,
+      updated.externalId,
   );
   await refreshMessageStatus(update.tenantId, delivery.outboundMessageId);
   emitOutboundDeliveryUpdate(update.tenantId, {
@@ -879,12 +925,17 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
     const whatsappRoute = delivery.channel === "whatsapp"
       ? await getWhatsAppBlockReason(tenantId, delivery)
       : null;
+    const instagramRoute = delivery.channel === "instagram"
+      ? await getInstagramRoute(tenantId, delivery)
+      : null;
     const whatsappBlockReason = whatsappRoute?.reason ?? null;
-    if (whatsappBlockReason) {
+    const instagramBlockReason = instagramRoute?.reason ?? null;
+    if (whatsappBlockReason || instagramBlockReason) {
+      const blockReason = whatsappBlockReason ?? instagramBlockReason!;
       const [updated] = await db.update(outboundDeliveriesTable).set({
         status: "skipped",
-        skippedReason: whatsappBlockReason,
-        lastError: whatsappBlockReason,
+        skippedReason: blockReason,
+        lastError: blockReason,
         claimedAt: null,
         failedAt: new Date(),
       }).where(and(
@@ -895,7 +946,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
       )).returning();
       await updateAttempt(tenantId, deliveryId, attemptNumber, {
         status: updated ? "skipped" : "unknown",
-        error: updated ? whatsappBlockReason : "delivery_result_unknown",
+        error: updated ? blockReason : "delivery_result_unknown",
       });
       if (updated) await syncLegacyEmailLog(tenantId, updated);
       await refreshMessageStatus(tenantId, delivery.outboundMessageId);
@@ -903,7 +954,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
         deliveryId,
         messageId: delivery.outboundMessageId,
         status: updated ? "skipped" : "unknown",
-        channel: "whatsapp",
+        channel: delivery.channel,
         provider: "consent_guard",
       });
       return false;
@@ -922,6 +973,28 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
       externalId = result.messageId ?? null;
       provider = "resend";
       error = result.error ?? null;
+    } else if (delivery.channel === "instagram" && instagramRoute) {
+      if (!("integration" in instagramRoute)) throw new Error("instagram_route_unavailable");
+      const { integration, metadata } = instagramRoute;
+      const config = (integration.config ?? {}) as Record<string, string>;
+      const providerName = instagramRoute.provider;
+      provider = providerName === "zernio" ? "zernio" : "meta";
+      if (providerName === "zernio") {
+        const decrypted = integration.secretsEncrypted ? JSON.parse(decryptCredential(integration.secretsEncrypted)) as Record<string, unknown> : {};
+        const apiKey = typeof decrypted.apiKey === "string" ? decrypted.apiKey : "";
+        const accountId = config.accountId;
+        const zernioConversationId = typeof metadata.zernioConversationId === "string" ? metadata.zernioConversationId : "";
+        if (!apiKey || !accountId || !zernioConversationId) throw new Error("instagram_connection_unavailable");
+        whatsappProviderCallStarted = true;
+        externalId = await sendZernioInstagramText(apiKey, accountId, zernioConversationId, delivery.content, `outbound:${tenantId}:${delivery.id}`);
+      } else {
+        const meta = getInstagramMetaConfig();
+        const instagramUserId = config.instagramUserId;
+        if (!meta.appConfigured || !instagramUserId) throw new Error("instagram_connection_unavailable");
+        whatsappProviderCallStarted = true;
+        await sendInstagramText(meta, readInstagramAccessToken(integration), instagramUserId, delivery.recipient, delivery.content);
+      }
+      success = true;
     } else {
       if (whatsappRoute?.integrationId) {
         await db.update(outboundMessagesTable).set({
@@ -949,7 +1022,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
     }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
-    outcomeUnknown = delivery.channel === "whatsapp" && whatsappProviderCallStarted;
+    outcomeUnknown = (delivery.channel === "whatsapp" || delivery.channel === "instagram") && whatsappProviderCallStarted;
     const errorCode = err && typeof err === "object" && "code" in err && typeof err.code === "string"
       ? err.code
       : undefined;
@@ -972,7 +1045,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
     )).returning();
     await updateAttempt(tenantId, deliveryId, attemptNumber, { status: "accepted", provider, externalId });
     if (updated) await syncLegacyEmailLog(tenantId, updated);
-  } else if (outcomeUnknown && delivery.channel === "whatsapp") {
+  } else if (outcomeUnknown && (delivery.channel === "whatsapp" || delivery.channel === "instagram")) {
     const unknownReason = "delivery_result_unknown";
     const [updated] = await db.update(outboundDeliveriesTable).set({
       status: "unknown",
@@ -1032,7 +1105,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
     });
     if (exhausted && updated) await syncLegacyEmailLog(tenantId, updated);
   }
-  if (delivery.channel === "whatsapp") {
+  if (delivery.channel === "whatsapp" || delivery.channel === "instagram") {
     const [outboundMessage] = await db.select({
       origin: outboundMessagesTable.origin,
       metadata: outboundMessagesTable.metadata,
@@ -1044,6 +1117,8 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
       status: outboundDeliveriesTable.status,
       lastError: outboundDeliveriesTable.lastError,
       skippedReason: outboundDeliveriesTable.skippedReason,
+      externalId: outboundDeliveriesTable.externalId,
+      attempts: outboundDeliveriesTable.attempts,
     }).from(outboundDeliveriesTable).where(and(
       eq(outboundDeliveriesTable.id, delivery.id),
       eq(outboundDeliveriesTable.tenantId, tenantId),
@@ -1056,6 +1131,8 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
         finalDelivery.status,
         finalDelivery.lastError,
         finalDelivery.skippedReason,
+        finalDelivery.externalId,
+        finalDelivery.attempts,
       );
     }
   }

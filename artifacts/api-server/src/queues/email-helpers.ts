@@ -763,7 +763,7 @@ export async function enqueuePixOrderQr(opts: {
       persistedDeliveryMode === "all"
         ? persistedDeliveryMode
         : deliveryMode;
-    const selectedChannels = new Set(
+    const selectedChannels = new Set<string>(
       [
         retryDeliveryMode === "email" || retryDeliveryMode === "all" ? "email" : null,
         retryDeliveryMode === "whatsapp" || retryDeliveryMode === "all" ? "whatsapp" : null,

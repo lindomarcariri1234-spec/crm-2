@@ -15,6 +15,7 @@ const mockState = vi.hoisted(() => ({
   readInstagramAccessToken: vi.fn(),
   sendInstagramText: vi.fn(),
   sendZernioInstagramText: vi.fn(),
+  dispatchOutboundMessage: vi.fn(),
   decryptCredential: vi.fn(),
   chatbotConversationsTable: {
     id: { table: "chatbot_conversations", column: "id" },
@@ -107,6 +108,9 @@ vi.mock("../lib/uploadthing.js", () => ({
 
 vi.mock("../services/whatsapp-attendance.js", () => ({
   deliverAttendanceReply: vi.fn(),
+}));
+vi.mock("../services/outbound-delivery.js", () => ({
+  dispatchOutboundMessage: mockState.dispatchOutboundMessage,
 }));
 
 vi.mock("../services/client-classification.js", () => ({
@@ -247,6 +251,9 @@ beforeEach(() => {
   mockState.readInstagramAccessToken.mockReturnValue("test-access-token");
   mockState.sendInstagramText.mockResolvedValue(undefined);
   mockState.sendZernioInstagramText.mockResolvedValue("zernio-message-id");
+  mockState.dispatchOutboundMessage.mockReset().mockResolvedValue({
+    deliveries: [{ status: "pending", channel: "instagram" }],
+  });
   mockState.decryptCredential.mockReturnValue(JSON.stringify({ apiKey: "test-zernio-key" }));
 
   const insertBuilder = {
