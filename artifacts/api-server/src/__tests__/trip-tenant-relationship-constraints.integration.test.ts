@@ -396,6 +396,46 @@ describe("trip tenant relationship constraints — PostgreSQL", () => {
         "INSERT INTO pg_temp.trips (id, tenant_id) VALUES ('missing-trip', 'tenant-a')",
       );
       expect(await runMigration()).toBeNull();
+      const validatedConstraints = await client.query<{
+        conname: string;
+        convalidated: boolean;
+      }>(
+        `SELECT conname, convalidated
+           FROM pg_constraint
+          WHERE connamespace = pg_my_temp_schema()
+            AND conname = ANY($1::text[])
+          ORDER BY conname`,
+        [[
+          "reservations_trip_tenant_fk",
+          "trip_checkins_trip_tenant_fk",
+          "trip_checkins_reservation_trip_tenant_fk",
+          "trip_checkins_passenger_reservation_fk",
+        ]],
+      );
+      expect(validatedConstraints.rows).toEqual([
+        { conname: "reservations_trip_tenant_fk", convalidated: true },
+        { conname: "trip_checkins_passenger_reservation_fk", convalidated: true },
+        { conname: "trip_checkins_reservation_trip_tenant_fk", convalidated: true },
+        { conname: "trip_checkins_trip_tenant_fk", convalidated: true },
+      ]);
+      const migrationIndexes = await client.query<{ relname: string }>(
+        `SELECT relname
+           FROM pg_class
+          WHERE relnamespace = pg_my_temp_schema()
+            AND relkind = 'i'
+            AND relname = ANY($1::text[])
+          ORDER BY relname`,
+        [[
+          "trips_id_tenant_id_unique",
+          "reservations_id_trip_tenant_unique",
+          "passengers_id_reservation_unique",
+        ]],
+      );
+      expect(migrationIndexes.rows).toEqual([
+        { relname: "passengers_id_reservation_unique" },
+        { relname: "reservations_id_trip_tenant_unique" },
+        { relname: "trips_id_tenant_id_unique" },
+      ]);
       const resolvedReservations = await client.query(
         `SELECT id, trip_id, tenant_id
            FROM pg_temp.reservations
