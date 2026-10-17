@@ -1273,7 +1273,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
 
   it("sends to referrer who has whatsappOptIn = true", async () => {
     setQueue([
-      REFERRAL_SETTINGS_ENABLED,
+      [{ whatsappEnabled: true, whatsappConvertedMessage: "Conversão de {nome} no código {codigo}: R$ {valor}." }],
       [REFERRER_OPTED_IN],
       TENANT_ROW,
       LATEST_REFERRAL_ROW,
@@ -1283,6 +1283,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
       referrerId: "ref-1",
       referredName: "Ana",
       referralCode: "CODE1",
+      referralId: "ref-1",
       tenantId: "tenant-1",
     });
 
@@ -1290,10 +1291,13 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
     expect((mockDispatchOutboundMessage.mock.calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone("+5511999990001"));
     expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
       eventType: "referral_converted",
-      idempotencyKey: "referral:tenant-1:ref-1:CODE1:converted",
-      email: expect.objectContaining({ html: expect.any(String) }),
+      idempotencyKey: "referral:tenant-1:ref-1:converted",
       whatsapp: expect.objectContaining({ text: expect.any(String) }),
     }));
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      "Conversão de {nome} no código {codigo}: R$ {valor}.",
+      expect.objectContaining({ nome: "Ana", codigo: "CODE1" }),
+    );
   });
 
   it("skips referrer who has whatsappOptIn = false", async () => {
@@ -1306,6 +1310,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
       referrerId: "ref-1",
       referredName: "Ana",
       referralCode: "CODE1",
+      referralId: "ref-1",
       tenantId: "tenant-1",
     });
 
@@ -1319,6 +1324,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
       referrerId: "ref-1",
       referredName: "Ana",
       referralCode: "CODE1",
+      referralId: "ref-1",
       tenantId: "tenant-1",
     });
 
@@ -1334,7 +1340,7 @@ describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
 
   it("sends to referrer who has whatsappOptIn = true", async () => {
     setQueue([
-      REFERRAL_SETTINGS_ENABLED,
+      [{ whatsappEnabled: true, whatsappBonusPaidMessage: "Bônus {codigo}: {bonus}, {agencia}" }],
       [REFERRER_OPTED_IN],
     ]);
 
@@ -1344,12 +1350,21 @@ describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
       referrerName: "João",
       referralCode: "CODE1",
       bonusAmount: 50,
+      referralId: "ref-2",
       tenantId: "tenant-1",
       tenantName: "Agência Teste",
     });
 
     expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect((mockDispatchOutboundMessage.mock.calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone("+5511999990001"));
+    expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
+      idempotencyKey: "referral:tenant-1:ref-2:bonus-paid",
+      whatsapp: expect.objectContaining({ text: expect.any(String) }),
+    }));
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      "Bônus {codigo}: {bonus}, {agencia}",
+      expect.objectContaining({ codigo: "CODE1", agencia: "Agência Teste" }),
+    );
   });
 
   it("skips referrer who has whatsappOptIn = false even when referrerPhone is supplied", async () => {
@@ -1364,6 +1379,7 @@ describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
       referrerName: "João",
       referralCode: "CODE1",
       bonusAmount: 50,
+      referralId: "ref-2",
       tenantId: "tenant-1",
       tenantName: "Agência Teste",
     });
@@ -1380,7 +1396,7 @@ describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
 
   it("sends to referrer who has whatsappOptIn = true", async () => {
     setQueue([
-      REFERRAL_SETTINGS_ENABLED,
+      [{ whatsappEnabled: true, whatsappReversedMessage: "Estorno de {nome}: {valor}; saldo {saldo}; {agencia}" }],
       [REFERRER_OPTED_IN],
       TENANT_ROW,
     ]);
@@ -1390,11 +1406,20 @@ describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
       referredName: "Maria",
       bonusAmount: 50,
       newPendingBalance: 100,
+      referralId: "ref-3",
       tenantId: "tenant-1",
     });
 
     expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect((mockDispatchOutboundMessage.mock.calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone("+5511999990001"));
+    expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
+      idempotencyKey: "referral:tenant-1:ref-3:reversed",
+      whatsapp: expect.objectContaining({ text: expect.any(String) }),
+    }));
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      "Estorno de {nome}: {valor}; saldo {saldo}; {agencia}",
+      expect.objectContaining({ nome: "Maria", agencia: "Agência Teste" }),
+    );
   });
 
   it("skips referrer who has whatsappOptIn = false", async () => {
@@ -1408,6 +1433,7 @@ describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
       referredName: "Maria",
       bonusAmount: 50,
       newPendingBalance: 100,
+      referralId: "ref-3",
       tenantId: "tenant-1",
     });
 

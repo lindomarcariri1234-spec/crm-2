@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { formatCurrencyBRL as formatCurrency } from "@/lib/utils";
 import { formatBRL } from "@workspace/shared";
+import { buildReferralShareText } from "@/lib/referral-message";
 
 interface Props {
   slug: string;
@@ -276,13 +277,18 @@ export default function MyReferralPage({ slug, store }: Props) {
 
   const handleShareWhatsApp = useCallback(() => {
     if (!shareLink) return;
-    const shareMessage = activeCampaign?.shareMessage?.trim() || profile?.referral?.shareMessage;
-    const message = shareMessage
-      ? `${shareMessage}\n\n${shareLink}`
-      : `Olá! Indico a ${store.name} para sua próxima viagem. Use meu link e aproveite condições exclusivas: ${shareLink}`;
+    const shareMessage = activeCampaign?.shareMessage?.trim()
+      || profile?.referral?.shareMessage
+      || `Olá! Indico a ${store.name} para sua próxima viagem. Use meu link e aproveite condições exclusivas.`;
+    const message = buildReferralShareText(shareMessage, {
+      name: profile?.client?.name ?? profile?.user?.name,
+      code: referralCode,
+      link: shareLink,
+      bonus: profile?.referral?.bonusValue,
+    });
     const waUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(waUrl, "_blank", "noopener,noreferrer");
-  }, [shareLink, activeCampaign?.shareMessage, profile?.referral?.shareMessage, store.name]);
+  }, [shareLink, referralCode, activeCampaign?.shareMessage, profile?.referral?.shareMessage, profile?.client?.name, profile?.user?.name, profile?.referral?.bonusValue, store.name]);
 
   const handleNativeShare = useCallback(async () => {
     if (!shareLink) return;
@@ -291,14 +297,22 @@ export default function MyReferralPage({ slug, store }: Props) {
       return;
     }
     const title = `Desconto Exclusivo — ${store.name}`;
-    const text = activeCampaign?.shareMessage?.trim() || `Use meu link para aproveitar benefícios especiais na ${store.name}!`;
+    const shareMessage = activeCampaign?.shareMessage?.trim()
+      || profile?.referral?.shareMessage
+      || `Use meu link para aproveitar benefícios especiais na ${store.name}!`;
+    const text = buildReferralShareText(shareMessage, {
+      name: profile?.client?.name ?? profile?.user?.name,
+      code: referralCode,
+      link: shareLink,
+      bonus: profile?.referral?.bonusValue,
+    });
 
     try {
-      await navigator.share({ title, text, url: shareLink });
+      await navigator.share({ title, text });
     } catch {
       // dismissed by user
     }
-  }, [shareLink, store.name, handleCopyLink, activeCampaign?.shareMessage]);
+  }, [shareLink, referralCode, store.name, handleCopyLink, activeCampaign?.shareMessage, profile?.referral?.shareMessage, profile?.client?.name, profile?.user?.name, profile?.referral?.bonusValue]);
 
   const generateQR = useCallback(async (link: string) => {
     setQrLoading(true);

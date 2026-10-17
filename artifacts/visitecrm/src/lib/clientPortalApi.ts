@@ -144,6 +144,7 @@ export interface ClientPortalProfile {
     totalEarnings: string;
     creditBalance: string;
     shareMessage: string | null;
+    bonusValue: string;
     currentTierLevel: string;
     currentTierLabel: string;
     currentTierMultiplier: number;

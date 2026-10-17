@@ -184,9 +184,10 @@ export async function dispatchWhatsAppReferralConverted(opts: {
   referrerId: string;
   referredName: string;
   referralCode: string;
+  referralId: string;
   tenantId: string;
 }): Promise<void> {
-  const { referrerId, referredName, referralCode, tenantId } = opts;
+  const { referrerId, referredName, referralCode, referralId, tenantId } = opts;
 
   const [settings] = await db
     .select({
@@ -221,17 +222,14 @@ export async function dispatchWhatsAppReferralConverted(opts: {
     .select({ bonusAmount: referralsTable.bonusAmount })
     .from(referralsTable)
     .where(and(
+      eq(referralsTable.id, referralId),
       eq(referralsTable.tenantId, tenantId),
-      eq(referralsTable.referrerId, referrerId),
-      eq(referralsTable.code, referralCode),
-      eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
     ))
-    .orderBy(desc(referralsTable.convertedAt))
     .limit(1);
 
   const bonusValue = parseFloat(String(latestReferral?.bonusAmount ?? "0")) || 0;
 
-  const template = settings.whatsappConvertedMessage ?? DEFAULT_CONVERTED_MESSAGE;
+  const template = settings.whatsappConvertedMessage?.trim() || DEFAULT_CONVERTED_MESSAGE;
   const message = interpolateWhatsAppMessage(template, {
     nome: referredName,
     codigo: referralCode,
@@ -241,7 +239,7 @@ export async function dispatchWhatsAppReferralConverted(opts: {
 
   await enqueueOrSend(phone, message, tenantId, {
     eventType: "referral_converted",
-    idempotencyKey: `referral:${tenantId}:${referrerId}:${referralCode}:converted`,
+    idempotencyKey: `referral:${tenantId}:${referralId}:converted`,
   });
 }
 
@@ -251,10 +249,11 @@ export async function dispatchWhatsAppReferralBonusPaid(opts: {
   referrerName: string | null;
   referralCode: string | null;
   bonusAmount: number;
+  referralId: string;
   tenantId: string;
   tenantName: string;
 }): Promise<void> {
-  const { referrerId, referrerPhone, referrerName, referralCode, bonusAmount, tenantId, tenantName } = opts;
+  const { referrerId, referrerPhone, referrerName, referralCode, bonusAmount, referralId, tenantId, tenantName } = opts;
 
   const [settings] = await db
     .select({
@@ -280,7 +279,7 @@ export async function dispatchWhatsAppReferralBonusPaid(opts: {
   let phone = referrerPhone || referrer.whatsapp || referrer.phone || null;
   if (!phone) return;
 
-  const template = settings.whatsappBonusPaidMessage ?? DEFAULT_BONUS_PAID_MESSAGE;
+  const template = settings.whatsappBonusPaidMessage?.trim() || DEFAULT_BONUS_PAID_MESSAGE;
   const message = interpolateWhatsAppMessage(template, {
     nome: referrerName ?? "",
     codigo: referralCode ?? "",
@@ -291,7 +290,7 @@ export async function dispatchWhatsAppReferralBonusPaid(opts: {
 
   await enqueueOrSend(phone, message, tenantId, {
     eventType: "referral_bonus_paid",
-    idempotencyKey: `referral:${tenantId}:${referrerId}:${referralCode ?? "unknown"}:bonus-paid`,
+    idempotencyKey: `referral:${tenantId}:${referralId}:bonus-paid`,
   });
 }
 
@@ -300,9 +299,11 @@ export async function dispatchWhatsAppReferralReversed(opts: {
   referredName: string;
   bonusAmount: number;
   newPendingBalance: number;
+  referralId?: string | null;
+  reservationId?: string | null;
   tenantId: string;
 }): Promise<void> {
-  const { referrerId, referredName, bonusAmount, newPendingBalance, tenantId } = opts;
+  const { referrerId, referredName, bonusAmount, newPendingBalance, referralId, reservationId, tenantId } = opts;
 
   const [settings] = await db
     .select({
@@ -341,9 +342,11 @@ export async function dispatchWhatsAppReferralReversed(opts: {
     saldo: newPendingBalance.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
   });
 
+  const reversalIdentity = referralId
+    ?? (reservationId ? `reservation:${reservationId}` : `referrer:${referrerId}`);
   await enqueueOrSend(phone, message, tenantId, {
     eventType: "referral_reversed",
-    idempotencyKey: `referral:${tenantId}:${referrerId}:reversed`,
+    idempotencyKey: `referral:${tenantId}:${reversalIdentity}:reversed`,
   });
 }
 

@@ -8,6 +8,7 @@ import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError
 import { ADMIN_ROLES, ALL_STAFF_ROLES } from '../lib/tenant';
 import { ACTIONS, hasPermission, REFERRAL_STATUS, RESOURCES } from "@workspace/permissions";
 import { enqueueReferralBonusPaidEmail, dispatchReferralExpiringSoonEmail, dispatchReferralBonusReleasedEmail } from "../queues/email-helpers";
+import { dispatchWhatsAppReferralBonusPaid } from "../queues/whatsapp-helpers";
 import { interpolateWhatsAppMessage } from "../lib/whatsapp";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
 import { DEFAULT_TIERS as DEFAULT_TIERS_CONFIG, computeReferralTier } from "../lib/referral-tiers";
@@ -833,6 +834,19 @@ router.post("/referrals/:id/pay-bonus", async (req, res, next: NextFunction): Pr
       } catch (emailErr) {
       }
     }
+
+    void dispatchWhatsAppReferralBonusPaid({
+      referrerId: row.referrerId,
+      referrerPhone: null,
+      referrerName,
+      referralCode: row.code,
+      bonusAmount: bonusValue,
+      referralId: row.id,
+      tenantId: me.tenantId,
+      tenantName: agencyName,
+    }).catch((err: unknown) => {
+      req.log?.warn?.({ err, referralId: row.id }, "Falha ao notificar pagamento do bônus por WhatsApp");
+    });
 
     const [updated] = await db.select({
       ...getTableColumns(referralsTable),

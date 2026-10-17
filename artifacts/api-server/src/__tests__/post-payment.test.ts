@@ -524,7 +524,7 @@ describe("runPostPaymentSideEffects", () => {
         referralId: "referral-1",
         tenantId: "tenant-1",
         customerName: "João Silva",
-        referralCode: null,
+        referralCode: "CODE1",
         conversion: {
           tierUpgraded: false,
           newTierLevel: null,
@@ -547,6 +547,13 @@ describe("runPostPaymentSideEffects", () => {
         "tenant-1",
         "referral-1",
       );
+      expect(mockDispatchWhatsAppReferralConverted).toHaveBeenCalledWith({
+        referrerId: "ref-1",
+        referredName: "João Silva",
+        referralCode: "CODE1",
+        referralId: "referral-1",
+        tenantId: "tenant-1",
+      });
       expect(mockDispatchReferralTierUpgradeEmail).not.toHaveBeenCalled();
       expect(mockDispatchReferralLoyaltyPointsEmail).not.toHaveBeenCalled();
     });

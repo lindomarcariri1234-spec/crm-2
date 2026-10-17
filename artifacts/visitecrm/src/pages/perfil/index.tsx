@@ -8,6 +8,7 @@ import { AsyncEmpty, AsyncError, useAsyncResource } from "./async-state";
 import { profileQuery } from "./profile-query";
 import { RESERVATION_STATUS, REFERRAL_STATUS, INVOICE_STATUS } from "@workspace/permissions";
 import { useSignIn, useClerk } from "@clerk/react";
+import { buildReferralShareText, hasReferralShareVariable } from "@/lib/referral-message";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -2260,11 +2261,19 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
   const tenantLogoUrl = tenant?.logoUrl ?? null;
 
   const shareMessage = activeCampaign?.shareMessage?.trim() || referral.shareMessage || "Use meu código e ganhe desconto na sua viagem!";
+  const portalShareTemplate = hasReferralShareVariable(shareMessage, "codigo")
+    ? shareMessage
+    : `${shareMessage}\n\nMeu código: ${code}`;
   const campaignMaterialHref = activeCampaign?.materialUrl && /^https?:\/\//i.test(activeCampaign.materialUrl)
     ? activeCampaign.materialUrl
     : null;
   const whatsappUrl = shareLink
-    ? `https://wa.me/?text=${encodeURIComponent(`${shareMessage}\n\nMeu código: ${code}\n\n${shareLink}`)}`
+    ? `https://wa.me/?text=${encodeURIComponent(buildReferralShareText(portalShareTemplate, {
+      name: profile.client?.name ?? profile.user?.name,
+      code,
+      link: shareLink,
+      bonus: profile.referral.bonusValue,
+    }))}`
     : null;
 
   // Campaign countdown

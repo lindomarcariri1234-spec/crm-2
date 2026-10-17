@@ -14,9 +14,8 @@ import { dispatchWhatsAppReferralReversed } from "./whatsapp-helpers.js";
 import { dispatchOutboundMessage, retryOutboundDelivery } from "../services/outbound-delivery";
 import { REFERRAL_NOTIFICATION_TYPE } from "../lib/referral-notification-types";
 
-/** Single referral delivery path. Keeping the rendering here intentionally
- * plain makes the same content available to both channels without invoking
- * the legacy provider sender a second time. */
+/** Shared email delivery path. Categories with dedicated WhatsApp preferences
+ * send that channel through their specific WhatsApp helper instead. */
 async function dispatchReferralOutbound(
   tenantId: string,
   eventType: string,
@@ -24,7 +23,7 @@ async function dispatchReferralOutbound(
   recipient: { id?: string; name: string; email: string; whatsapp?: string | null },
   subject: string,
   html: string,
-  whatsappText: string,
+  whatsappText: string | null,
   metadata?: Record<string, unknown>,
   referralId?: string,
   reservationId?: string | null,
@@ -39,7 +38,7 @@ async function dispatchReferralOutbound(
       type: "direct", name: recipient.name, email: recipient.email, whatsapp: recipient.whatsapp,
     },
     email: { subject, html, senderName: undefined },
-    whatsapp: { text: whatsappText },
+    ...(whatsappText === null ? {} : { whatsapp: { text: whatsappText } }),
     origin: `referral-${eventType}`,
     metadata: { ...metadata, referralId, reservationId },
   });
@@ -803,7 +802,7 @@ export async function enqueueReferralBonusPaidEmail(
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Bônus de indicação pago!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>A ${escapeHtmlEmail(props.agencyName)} confirmou o pagamento do seu bônus de <strong>${formatBRL(props.bonusAmount)}</strong>, em ${escapeHtmlEmail(props.paidDate)}.</p>`,
-    `Olá, ${props.referrerName}! A ${props.agencyName} confirmou o pagamento do seu bônus de indicação: ${formatBRL(props.bonusAmount)} em ${props.paidDate}.`,
+    null,
     { bonusAmount: props.bonusAmount }, referralId);
   return;
   const queue = getReferralEmailQueue()!;
@@ -870,7 +869,7 @@ export async function enqueueReferralConvertedEmail(
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Indicação confirmada!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>${escapeHtmlEmail(props.referredName)} realizou uma compra usando seu código. Seu bônus de <strong>${formatBRL(props.bonusAmount)}</strong> será liberado em breve.</p>`,
-    `Olá, ${props.referrerName}! ${props.referredName} realizou uma compra usando seu código. Seu bônus de ${formatBRL(props.bonusAmount)} será liberado em breve.`,
+    null,
     { referredName: props.referredName, bonusAmount: props.bonusAmount }, referralId);
   return;
   const queue = getReferralEmailQueue()!;
@@ -1692,11 +1691,6 @@ export async function dispatchReferralReversedEmail(opts: {
     .where(and(eq(clientsTable.id, referrerId), eq(clientsTable.tenantId, tenantId)))
     .limit(1);
 
-  if (!referrer?.email) {
-    logger.warn({ referrerId, tenantId }, "[email-queue] Referral reversed: referrer has no email — skipping");
-    return;
-  }
-
   const [tenant] = await db
     .select({ name: tenantsTable.name, logoUrl: tenantsTable.logoUrl })
     .from(tenantsTable)
@@ -1714,9 +1708,26 @@ export async function dispatchReferralReversedEmail(opts: {
   }
 
   const agencyName = tenant?.name ?? "Agência";
-  const referrerName = referrer.name ?? referrer.email;
+  const referrerName = referrer?.name ?? referrer?.email ?? "Indicador";
   const bonusAmountNum = parseFloat(bonusAmount) || 0;
-  const newPendingBalance = parseFloat(String(referrer.referralEarnings ?? "0")) || 0;
+  const newPendingBalance = parseFloat(String(referrer?.referralEarnings ?? "0")) || 0;
+
+  void dispatchWhatsAppReferralReversed({
+    referrerId,
+    referredName: referredName ?? "",
+    bonusAmount: bonusAmountNum,
+    newPendingBalance,
+    referralId,
+    reservationId,
+    tenantId,
+  }).catch((err: unknown) => {
+    logger.warn({ err, referrerId, tenantId, referralId, reservationId }, "[email-queue] Referral reversed WhatsApp dispatch failed");
+  });
+
+  if (!referrer?.email) {
+    logger.warn({ referrerId, tenantId }, "[email-queue] Referral reversed: referrer has no email — skipping");
+    return;
+  }
 
   const subject = `Atualização sobre sua indicação — ${agencyName}`;
 
@@ -1724,7 +1735,7 @@ export async function dispatchReferralReversedEmail(opts: {
     id: referrerId, name: referrerName, email: referrer.email,
   }, subject,
     `<h2>Atualização sobre sua indicação</h2><p>Olá, ${escapeHtmlEmail(referrerName)}!</p><p>A indicação${referredName ? ` de ${escapeHtmlEmail(referredName)}` : ""} foi revertida. O valor ajustado é ${formatBRL(bonusAmountNum)} e seu saldo pendente é ${formatBRL(newPendingBalance)}.${reason ? ` Motivo: ${escapeHtmlEmail(reason)}` : ""}</p>`,
-    `Olá, ${referrerName}! Sua indicação${referredName ? ` de ${referredName}` : ""} foi revertida. Valor ajustado: ${formatBRL(bonusAmountNum)}. Saldo pendente: ${formatBRL(newPendingBalance)}.${reason ? ` Motivo: ${reason}` : ""}`,
+    null,
     { referredName, bonusAmount: bonusAmountNum, newPendingBalance, reason }, referralId ?? undefined, reservationId);
   logger.info({ referrerId, tenantId, referralId, reservationId }, "[email-queue] Referral reversed dispatched");
   return;

@@ -122,6 +122,7 @@
 - [Lead deal fallback](lead-deal-fallback.md) — client creation must still create a pipeline deal when no stage is supplied; the API resolves the tenant default stage
 - [Referral concurrency and constraints](referral-cap-concurrency.md) — lock before counting conversions; align checks with state transitions and audit legacy rows before validating ([constraints](referral-database-constraints.md)).
 - [Referral notification stamping](referral-notification-stamping.md) — mark D-7/D-1 and bonus-release notices only after durable delivery acceptance; manual retries need a separate attempt key
+- [Referral message boundaries](referral-message-boundaries.md) — keep manual referral invitations in their existing dedicated flow when changing automated notifications
 - [First-purchase referral reservation](first-purchase-referral-reservation.md) — serialize by tenant + normalized customer email; pending orders reserve eligibility while cancelled/refunded orders release it
 - [Commission travel scope](commission-travel-scope.md) — unknown destinations use general rules; preview and reservation sync share trip → travel scope → general precedence
 - [Referral bonus cashback eligibility](referral-bonus-cashback-eligibility.md) — paid referral bonuses are spendable cashback; unpaid bonuses wait for grace period, while expiry/reversal/used amounts remain excluded

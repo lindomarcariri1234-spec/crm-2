@@ -111,6 +111,7 @@ import { ReferralSettingsDialog } from "@/components/referral-settings-dialog";
 import { ReferralCampaignsDialog, type CampaignDraft } from "@/components/referral-campaigns-dialog";
 import { ReferralOperationalDialogs } from "@/components/referral-operational-dialogs";
 import { ReferralShareDialog } from "@/components/referral-share-dialog";
+import { buildReferralShareText } from "@/lib/referral-message";
 import { ReferralDetailDialog } from "@/components/referral-detail-dialog";
 import { PlanFeatureWall, canUpgradeForFeature, getRequiredPlanLabel } from "@/components/plan-limit-wall";
 import type { LinkedData } from "@/lib/linked-data";
@@ -611,7 +612,10 @@ export default function Indicacoes() {
         { type, message, phone },
         { headers: { "Idempotency-Key": attemptId } },
       );
-      toast({ title: "Mensagem de teste enviada!", description: "Verifique o número de destino para teste." });
+      toast({
+        title: "Solicitação aceita para envio",
+        description: "A mensagem pode estar na fila; isso não confirma a entrega no WhatsApp.",
+      });
     } catch (err: unknown) {
       const apiError = (err as { data?: { error?: string } })?.data?.error;
       toast({ title: getWhatsAppTestErrorMessage(apiError), variant: "destructive" });
@@ -714,14 +718,12 @@ export default function Indicacoes() {
 
   function buildWhatsAppShareUrl(phone: string, link: string, message: string, referrerName?: string | null, referralCode?: string | null, bonusAmount?: string | number | null) {
     const num = phone.replace(/\D/g, "");
-    const bonusFormatted = bonusAmount != null ? fmtCurrency(bonusAmount) : "";
-    const personalizedMessage = message
-      .replace(/\{nome\}/g, referrerName ?? "")
-      .replace(/\{codigo\}/g, referralCode ?? "")
-      .replace(/\{bonus\}/g, bonusFormatted)
-      .replace(/\{link\}/g, link);
-    const linkAlreadyEmbedded = /\{link\}/.test(message);
-    const text = personalizedMessage ? (linkAlreadyEmbedded ? personalizedMessage : `${personalizedMessage}\n${link}`) : link;
+    const text = buildReferralShareText(message, {
+      name: referrerName,
+      code: referralCode,
+      link,
+      bonus: bonusAmount,
+    });
     return `https://wa.me/55${num}?text=${encodeURIComponent(text)}`;
   }
 

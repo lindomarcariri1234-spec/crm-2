@@ -19,6 +19,7 @@ const {
   mockDispatchOutboundMessage,
   mockReversePaidReferralBonus,
   mockDispatchReferralReversedEmail,
+  mockDispatchWhatsAppReferralBonusPaid,
   capturedUpdates,
   updateMocks,
 } = vi.hoisted(() => {
@@ -43,6 +44,7 @@ const {
     mockDispatchOutboundMessage,
     mockReversePaidReferralBonus: vi.fn(),
     mockDispatchReferralReversedEmail: vi.fn().mockResolvedValue(undefined),
+    mockDispatchWhatsAppReferralBonusPaid: vi.fn().mockResolvedValue(undefined),
     capturedUpdates,
     updateMocks: { update, set, where, returning },
   };
@@ -152,7 +154,6 @@ vi.mock("../queues/email-helpers.js", () => ({
     idempotencyKey: `referral:${clientId}:bonus_paid`,
     recipient: { type: "client", id: clientId },
     email: { subject: `Seu bônus de indicação foi pago! — ${props.agencyName}`, html: `<p>${props.referrerName}: ${props.bonusAmount}</p>` },
-    whatsapp: { text: `Bônus pago: ${props.bonusAmount}` },
     origin: "referral-bonus_paid",
     metadata: { referralId },
   })),
@@ -174,7 +175,7 @@ vi.mock("../lib/client-notifications.js", () => ({
 }));
 
 vi.mock("../queues/whatsapp-helpers.js", () => ({
-  dispatchWhatsAppReferralBonusPaid: vi.fn().mockResolvedValue(undefined),
+  dispatchWhatsAppReferralBonusPaid: mockDispatchWhatsAppReferralBonusPaid,
 }));
 
 vi.mock("../services/outbound-delivery.js", () => ({
@@ -333,6 +334,11 @@ describe("POST /api/referrals/:id/pay-bonus", () => {
     expect(capturedUpdates[0].set).toMatchObject({ bonusPaid: true });
     expect(capturedUpdates[0].set.bonusPaidAt).toBeInstanceOf(Date);
     expect(capturedUpdates[0].set.updatedAt).toBeInstanceOf(Date);
+    expect(mockDispatchWhatsAppReferralBonusPaid).toHaveBeenCalledWith(expect.objectContaining({
+      referrerId: makeJoinedRow().referrerId,
+      referralId: "ref-001",
+      bonusAmount: Number(makeJoinedRow().bonusAmount),
+    }));
   });
 
   it("returns 422 when bonus has already been paid", async () => {

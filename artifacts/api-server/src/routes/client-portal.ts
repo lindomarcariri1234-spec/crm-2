@@ -203,6 +203,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       totalEarnings: string;
       creditBalance: string;
       shareMessage: string | null;
+      bonusValue: string;
       currentTierLevel: string;
       currentTierLabel: string;
       currentTierMultiplier: number;
@@ -229,6 +230,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       totalEarnings: "0.00",
       creditBalance: "0.00",
       shareMessage: null,
+      bonusValue: "0.00",
       currentTierLevel: "bronze",
       currentTierLabel: "Bronze",
       currentTierMultiplier: 1,
@@ -439,6 +441,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       const [refSettings] = await db
         .select({
           shareMessage: referralSettingsTable.shareMessage,
+          bonusValue: referralSettingsTable.bonusValue,
           tiersConfig: referralSettingsTable.tiersConfig,
           pointsPerReferral: referralSettingsTable.pointsPerReferral,
           bonusValidityDays: referralSettingsTable.bonusValidityDays,
@@ -483,6 +486,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
         totalEarnings: totalEarnings.toFixed(2),
         creditBalance: referralWallet.availableCredit.toFixed(2),
         shareMessage: refSettings?.shareMessage ?? null,
+        bonusValue: refSettings?.bonusValue ?? "0.00",
         currentTierLevel: currentTier.level,
         currentTierLabel: currentTier.label,
         currentTierMultiplier: currentTier.bonusMultiplier,

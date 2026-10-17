@@ -91,11 +91,12 @@ export async function runDeferredOrderAccounting(
           logger.error({ err }, "[checkout/post-payment] Failed to dispatch referral loyalty-points email"),
         );
       }
-      if (deferred.referralCode) {
+      if (deferred.referralCode && deferred.referralId) {
         dispatchWhatsAppReferralConverted({
           referrerId: deferred.referrerId,
           referredName: deferred.customerName ?? "",
           referralCode: deferred.referralCode,
+          referralId: deferred.referralId,
           tenantId: deferred.tenantId,
         }).catch((err) =>
           logger.error({ err }, "[checkout/post-payment] Failed to dispatch referral WhatsApp notification"),
