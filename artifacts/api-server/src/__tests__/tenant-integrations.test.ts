@@ -657,6 +657,19 @@ describe("POST /api/integrations/whatsapp_evolution/connections/refresh", () => 
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(JSON.stringify(res.body)).not.toContain("temporarily unavailable");
   });
+
+  it("does not interpret a missing Evolution instance as a disconnected session", async () => {
+    asAdmin();
+    mockWhere.mockResolvedValueOnce([{ ...WHATSAPP_ROW, isDefault: true }]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 404, text: "" });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/refresh");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, unverified: 1, disconnectedDefaults: 0 });
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
 });
 
 // ─── PUT /api/integrations/:type ─────────────────────────────────────────────
@@ -1005,22 +1018,16 @@ describe("PUT /api/integrations/:type — save configuration", () => {
       expect(options.method).toBe("POST");
       expect(options.headers.apikey).toBe(WA_SECRETS.apiKey);
       const body = JSON.parse(options.body) as {
-        webhook: {
-          enabled: boolean;
-          url: string;
-          webhookByEvents: boolean;
-          webhookBase64: boolean;
-          events: string[];
-          headers: Record<string, string>;
-        };
+        enabled: boolean;
+        url: string;
+        events: string[];
+        base64: boolean;
       };
-      expect(body.webhook).toEqual({
+      expect(body).toEqual({
         enabled: true,
         url: "https://app.example.com/api/webhooks/whatsapp/evolution/my-instance",
-        webhookByEvents: false,
-        webhookBase64: false,
         events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE"],
-        headers: { apikey: WA_SECRETS.apiKey },
+        base64: false,
       });
       expect(res.text).not.toContain(WA_SECRETS.apiKey);
     } finally {

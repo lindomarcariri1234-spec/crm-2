@@ -95,7 +95,7 @@ describe("WhatsApp transport contracts", () => {
       expect.objectContaining({
         method: "POST",
         headers: { "Content-Type": "application/json", apikey: "evolution-key" },
-        body: JSON.stringify({ number: "5511999990001", text: "Olá" }),
+        body: JSON.stringify({ number: "5511999990001", textMessage: { text: "Olá" } }),
       }),
     );
     expect(mockFetch).not.toHaveBeenCalled();

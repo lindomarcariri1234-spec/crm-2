@@ -3,8 +3,8 @@ import { safeErrorLogFields } from "./safe-error-log";
 import { db, tenantIntegrationsTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { decryptCredential } from "./crypto";
-import { ssrfSafeFetchBounded } from "./ssrf";
 import { normalizeBrazilPhone } from "@workspace/shared";
+import { evolutionApiRequest, sendEvolutionText } from "../services/evolution-api";
 
 export interface WhatsAppSendResult {
   success: boolean;
@@ -150,22 +150,9 @@ export async function sendTenantWhatsAppMessage(
           logger.warn({ phone, tenantId }, "[whatsapp] Invalid Brazilian phone number — skipping Evolution send");
           return { success: false, error: "invalid_phone", provider: "evolution" };
         }
-        const encodedInstance = encodeURIComponent(instanceName);
-        const url = `${baseUrl.replace(/\/$/, "")}/message/sendText/${encodedInstance}`;
-
-        // Use ssrfSafeFetchBounded to enforce HTTPS, block private/reserved IP
-        // ranges at connect time (defeating DNS rebinding), and refuse redirects.
-        // This mirrors the protections applied by the save/test endpoints and
-        // prevents a malicious tenant from using DNS rebinding to turn normal
-        // WhatsApp sends into blind SSRF probes against internal services.
         let result;
         try {
-          result = await ssrfSafeFetchBounded(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", apikey: apiKey },
-            body: JSON.stringify({ number: e164, text: message }),
-            timeoutMs: 15_000,
-          });
+          result = await sendEvolutionText(baseUrl, apiKey, instanceName, e164, message);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn(
@@ -324,22 +311,25 @@ export async function reconcileTenantWhatsAppMessage(
     const normalizedPhone = phone ? normalizeBrazilPhone(phone) : null;
     const remoteJid = normalizedPhone ? `${normalizedPhone}@s.whatsapp.net` : undefined;
     const encodedInstance = encodeURIComponent(instanceName);
-    const url = `${baseUrl.replace(/\/$/, "")}/chat/findMessages/${encodedInstance}`;
-    const result = await ssrfSafeFetchBounded(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", apikey: apiKey },
-      body: JSON.stringify({
-        where: {
-          key: {
-            id: normalizedExternalId,
-            ...(remoteJid ? { remoteJid } : {}),
-            fromMe: true,
+    const result = await evolutionApiRequest(
+      baseUrl,
+      apiKey,
+      `/chat/findMessages/${encodedInstance}`,
+      {
+        method: "POST",
+        body: {
+          where: {
+            key: {
+              id: normalizedExternalId,
+              ...(remoteJid ? { remoteJid } : {}),
+              fromMe: true,
+            },
           },
+          limit: 10,
         },
-        limit: 10,
-      }),
-      timeoutMs: 15_000,
-    });
+        timeoutMs: 15_000,
+      },
+    );
 
     if (!result.ok) {
       logger.warn({ tenantId, provider, status: result.status }, "[whatsapp] Evolution reconciliation failed");

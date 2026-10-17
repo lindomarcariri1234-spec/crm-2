@@ -10,6 +10,11 @@ import { generateId } from "../lib/id";
 import { encryptCredential, decryptCredential } from "../lib/crypto";
 import { assertSafeUrl, ssrfSafeFetchBounded } from "../lib/ssrf";
 import {
+  configureEvolutionWebhook,
+  connectEvolutionInstance,
+  getEvolutionConnectionState,
+} from "../services/evolution-api";
+import {
   importZernioInstagramHistoryChunk,
   INSTAGRAM_ZERNIO_TYPE,
 } from "../services/instagram-zernio.js";
@@ -112,27 +117,8 @@ async function configureEvolutionInboundWebhook(
   }
 
   const callbackUrl = `${publicBaseUrl}/api/webhooks/whatsapp/evolution/${encodeURIComponent(instanceName)}`;
-  const endpoint = `${baseUrl.replace(/\/+$/, "")}/webhook/set/${encodeURIComponent(instanceName)}`;
   try {
-    const result = await ssrfSafeFetchBounded(endpoint, {
-      method: "POST",
-      headers: {
-        apikey: apiKey,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        webhook: {
-          enabled: true,
-          url: callbackUrl,
-          webhookByEvents: false,
-          webhookBase64: false,
-          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE"],
-          headers: { apikey: apiKey },
-        },
-      }),
-      timeoutMs: 12000,
-      maxBytes: 16 * 1024,
-    });
+    const result = await configureEvolutionWebhook(baseUrl, apiKey, instanceName, callbackUrl);
     if (!result.ok) {
       return {
         ok: false,
@@ -151,7 +137,8 @@ function parseEvolutionConnectionStatus(
   statusCode: number,
   responseText: string,
 ): EvolutionConnectionStatus {
-  if (statusCode === 404) return "disconnected";
+  // The provider documents 404 as "instance not found", not as a closed session.
+  if (statusCode === 404) return null;
   if (statusCode < 200 || statusCode >= 300) return null;
 
   try {
@@ -332,17 +319,8 @@ const REGISTRY: Record<string, RegistryEntry> = {
         };
       }
 
-      // Path-encode instanceName so any slash or special character cannot escape
-      // the intended URL segment.
-      const encodedInstance = encodeURIComponent(instanceName);
-      const testUrl = `${baseUrl.replace(/\/$/, "")}/instance/connectionState/${encodedInstance}`;
-
       try {
-        const result = await ssrfSafeFetchBounded(testUrl, {
-          headers: { apikey: apiKey },
-          timeoutMs: 12000,
-          maxBytes: 16 * 1024,
-        });
+        const result = await getEvolutionConnectionState(baseUrl, apiKey, instanceName);
 
         if (result.status === 401 || result.status === 403) {
           return {
@@ -709,10 +687,7 @@ router.post(
       }
 
       await assertSafeUrl(baseUrl);
-      const result = await ssrfSafeFetchBounded(
-        `${baseUrl.replace(/\/+$/, "")}/instance/connect/${encodeURIComponent(instanceName)}`,
-        { headers: { apikey: apiKey }, timeoutMs: 15000, maxBytes: 24 * 1024 },
-      );
+      const result = await connectEvolutionInstance(baseUrl, apiKey, instanceName);
       if (!result.ok) {
         const message = result.status === 404
           ? "A instância não foi encontrada na Evolution (HTTP 404)."
@@ -802,10 +777,7 @@ router.post("/integrations/whatsapp_evolution/connections/refresh", async (req, 
           return;
         }
         await assertSafeUrl(baseUrl);
-        const result = await ssrfSafeFetchBounded(
-          `${baseUrl.replace(/\/+$/, "")}/instance/connectionState/${encodeURIComponent(instanceName)}`,
-          { headers: { apikey: apiKey }, timeoutMs: 8000, maxBytes: 16 * 1024 },
-        );
+        const result = await getEvolutionConnectionState(baseUrl, apiKey, instanceName, 8_000);
 
         const nextStatus = parseEvolutionConnectionStatus(result.status, result.text);
         if (!nextStatus) {

@@ -152,4 +152,4 @@
 - [Publish composite foreign-key order](publish-composite-fk-order.md) — unique indexes may be omitted and composite FKs ordered too early; inspect the real diff and stage constraints before FKs.
 - [Production Redis probes](redis-production-probe.md) — private queue Redis DNS may resolve only inside production; local `ENOTFOUND` is not proof that production credentials or service are invalid.
 - [Cross-source timeline cursor ordering](timeline-cursor-ordering.md) — keep database sort, merge comparison, and cursor predicates identical, especially for timestamp ties across sources.
-- [Evolution webhook/session separation](evolution-webhook-session.md) — attempt inbound webhook setup independently; only the provider's webhook response determines whether receiving is configured.
+- [Evolution API contracts and session separation](evolution-webhook-session.md) — match versioned webhook/send payloads; 404 means instance missing, not a closed WhatsApp session.
