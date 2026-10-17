@@ -672,6 +672,8 @@ describe("POST /api/integrations/whatsapp_evolution/connections/:id/qr", () => {
       expect.objectContaining({ headers: { apikey: WA_SECRETS.apiKey } }),
     );
     expect(JSON.stringify(res.body)).not.toContain(WA_SECRETS.apiKey);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    expect(JSON.stringify(mockInsertValues.mock.calls)).not.toContain("aGVsbG8=");
   });
 });
 

@@ -1884,7 +1884,8 @@ function IntegrationCard({
                 <DialogHeader>
                   <DialogTitle>Conectar WhatsApp</DialogTitle>
                   <DialogDescription>
-                    Abra o WhatsApp no celular, acesse Aparelhos conectados e escaneie este QR Code.
+                    No celular, abra o WhatsApp, acesse Aparelhos conectados e escaneie este QR Code.
+                    Depois, feche esta janela para atualizar o status. O painel Chaves API não é necessário.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="flex min-h-56 flex-col items-center justify-center gap-3">

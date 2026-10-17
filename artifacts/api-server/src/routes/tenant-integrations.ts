@@ -761,6 +761,7 @@ router.post(
       const mime = dataUrlMatch?.[1] ?? "png";
       const qrCodeDataUrl = `data:image/${mime};base64,${rawBase64}`;
       await writeLog(me, "whatsapp_evolution", "qr_connect", "info", "QR Code de conexão solicitado.");
+      res.setHeader("Cache-Control", "private, no-store");
       res.json({ qrCodeDataUrl });
     } catch (err) {
       next(err);
