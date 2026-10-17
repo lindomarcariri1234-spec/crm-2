@@ -9,7 +9,13 @@ const { mockWhatsAppSend, mockReconcileWhatsAppMessage } = vi.hoisted(() => ({
     error: null as string | null,
     outcomeUnknown: false,
   })),
-  mockReconcileWhatsAppMessage: vi.fn(async () => ({
+  mockReconcileWhatsAppMessage: vi.fn<() => Promise<{
+    outcome: "accepted" | "inconclusive";
+    provider: "evolution";
+    externalId: string;
+    providerStatus?: string;
+    detail: string;
+  }>>(async () => ({
     outcome: "accepted" as const,
     provider: "evolution" as const,
     externalId: "provider-accepted-after-timeout",
@@ -433,5 +439,79 @@ describe("outbound delivery database idempotency", () => {
       eq(outboundMessagesTable.id, created.message.id),
     ));
     expect(acceptedMessage?.status).toBe("accepted");
+  });
+
+  it("keeps delivery and attempt unknown when provider reconciliation is inconclusive", async () => {
+    mockWhatsAppSend.mockClear();
+    mockReconcileWhatsAppMessage.mockClear();
+    const externalId = "provider-inconclusive-after-timeout";
+    const detail = "provider_lookup_temporarily_unavailable";
+    mockWhatsAppSend.mockResolvedValueOnce({
+      provider: "evolution",
+      externalId,
+      success: false,
+      error: "response_lost_after_send_started",
+      outcomeUnknown: true,
+    });
+    mockReconcileWhatsAppMessage.mockResolvedValueOnce({
+      outcome: "inconclusive",
+      provider: "evolution",
+      externalId,
+      detail,
+    });
+
+    const created = await createOutboundMessage({
+      tenantId,
+      eventType: "trip_whatsapp_broadcast",
+      idempotencyKey: `trip:trip-test:inconclusive:${randomUUID()}:${phone}`,
+      recipient: { type: "direct", whatsapp: phone },
+      whatsapp: { text: "The provider lookup is temporarily unavailable" },
+      channels: ["whatsapp"],
+      origin: "legacy_whatsapp",
+      originChannel: "whatsapp",
+    });
+    expect(created.deliveries).toHaveLength(1);
+    const deliveryId = created.deliveries[0]!.id;
+
+    await expect(processOutboundDelivery(deliveryId, tenantId)).resolves.toBe(false);
+    await expect(reconcileOutboundDelivery(tenantId, deliveryId, {
+      userId: "integration-test-reviewer",
+    })).resolves.toMatchObject({
+      outcome: "inconclusive",
+      canRetry: false,
+      deliveryId,
+      messageId: created.message.id,
+      provider: "evolution",
+      externalId,
+      detail,
+    });
+
+    expect(mockReconcileWhatsAppMessage).toHaveBeenCalledTimes(1);
+    expect(mockWhatsAppSend).toHaveBeenCalledTimes(1);
+    const persistedDeliveries = await db.select().from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.outboundMessageId, created.message.id),
+    ));
+    expect(persistedDeliveries).toHaveLength(1);
+    expect(persistedDeliveries[0]).toMatchObject({
+      id: deliveryId,
+      status: "unknown",
+      provider: "evolution",
+      externalId,
+      lastError: detail,
+      attempts: 1,
+    });
+    const attempts = await db.select().from(outboundDeliveryAttemptsTable).where(and(
+      eq(outboundDeliveryAttemptsTable.tenantId, tenantId),
+      eq(outboundDeliveryAttemptsTable.deliveryId, deliveryId),
+    ));
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      status: "unknown",
+      provider: "evolution",
+      externalId,
+      error: detail,
+      attemptNumber: 1,
+    });
   });
 });
