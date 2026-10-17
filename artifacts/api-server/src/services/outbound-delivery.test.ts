@@ -5,6 +5,7 @@ const {
   mockDbInsert,
   mockAuditValues,
   mockDbUpdate,
+  mockDbTransaction,
   mockUpdateSets,
   mockSendReminderHtmlEmail,
   mockSendTenantWhatsAppMessage,
@@ -12,6 +13,7 @@ const {
   mockGetOutboundDeliveryQueue,
   mockQueueCircuitOpen,
   mockLoggerWarn,
+  mockEmitOutboundDeliveryUpdate,
   mockAnd,
   mockEq,
   mockSql,
@@ -20,6 +22,7 @@ const {
   mockDbInsert: vi.fn(),
   mockAuditValues: vi.fn(),
   mockDbUpdate: vi.fn(),
+  mockDbTransaction: vi.fn(),
   mockUpdateSets: [] as unknown[],
   mockSendReminderHtmlEmail: vi.fn(),
   mockSendTenantWhatsAppMessage: vi.fn(),
@@ -27,6 +30,7 @@ const {
   mockGetOutboundDeliveryQueue: vi.fn(() => null),
   mockQueueCircuitOpen: vi.fn(() => false),
   mockLoggerWarn: vi.fn(),
+  mockEmitOutboundDeliveryUpdate: vi.fn(),
   mockAnd: vi.fn((...conditions: unknown[]) => ({ conditions })),
   mockEq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
   mockSql: vi.fn((strings: readonly string[], ...values: unknown[]) => ({
@@ -40,6 +44,7 @@ vi.mock("@workspace/db", () => ({
     select: mockDbSelect,
     insert: mockDbInsert,
     update: mockDbUpdate,
+    transaction: mockDbTransaction,
   },
   auditLogsTable: {},
   clientsTable: {
@@ -62,6 +67,7 @@ vi.mock("@workspace/db", () => ({
     isDefault: "tenant_integrations.is_default",
     enabled: "tenant_integrations.enabled",
     status: "tenant_integrations.status",
+    secretsEncrypted: "tenant_integrations.secrets_encrypted",
   },
   tenantsTable: {},
   usersTable: {},
@@ -75,6 +81,7 @@ vi.mock("@workspace/db", () => ({
     outboundMessageId: "outbound_deliveries.outbound_message_id",
     channel: "outbound_deliveries.channel",
     status: "outbound_deliveries.status",
+    skippedReason: "outbound_deliveries.skipped_reason",
     externalId: "outbound_deliveries.external_id",
     provider: "outbound_deliveries.provider",
     bounceType: "outbound_deliveries.bounce_type",
@@ -138,7 +145,7 @@ vi.mock("../lib/logger", () => ({
 }));
 
 vi.mock("../lib/outbound-sse", () => ({
-  emitOutboundDeliveryUpdate: vi.fn(),
+  emitOutboundDeliveryUpdate: mockEmitOutboundDeliveryUpdate,
 }));
 
 import {
@@ -211,6 +218,9 @@ beforeEach(() => {
   mockDbInsert.mockReset();
   mockAuditValues.mockReset();
   mockDbUpdate.mockReset();
+  mockDbTransaction.mockReset();
+  mockDbTransaction.mockImplementation((callback: (tx: { update: typeof mockDbUpdate; insert: typeof mockDbInsert }) => Promise<unknown>) =>
+    callback({ update: mockDbUpdate, insert: mockDbInsert }));
   mockSendReminderHtmlEmail.mockReset();
   mockSendTenantWhatsAppMessage.mockReset();
   mockReconcileTenantWhatsAppMessage.mockReset();
@@ -721,6 +731,174 @@ describe("legacy email history synchronization", () => {
     await expect(retryOutboundDelivery("tenant-a", "delivery-1"))
       .rejects.toThrow("delivery_not_retryable");
     expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledOnce();
+  });
+
+  it("allows an administrator to retry a connection-skipped WhatsApp delivery without creating a new campaign row", async () => {
+    const skippedDelivery = makeDelivery({
+      channel: "whatsapp",
+      status: "skipped",
+      skippedReason: "credentials_not_configured",
+      externalId: null,
+      provider: "evolution",
+    });
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ metadata: { whatsappIntegrationId: "integration-1" } }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        id: "integration-1",
+        isDefault: true,
+        enabled: true,
+        status: "connected",
+        secretsEncrypted: "encrypted-secrets",
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "pending" }]))
+      .mockReturnValueOnce(makeSelectQuery([{ id: "delivery-1", status: "pending" }]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([{
+        id: "delivery-1",
+        outboundMessageId: "message-1",
+      }]))
+      .mockReturnValueOnce(makeUpdateQuery());
+    const queueAdd = vi.fn().mockResolvedValue(undefined);
+    mockGetOutboundDeliveryQueue.mockReturnValue({ add: queueAdd } as never);
+
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      ipAddress: "203.0.113.10",
+      userAgent: "test-agent",
+      isAdmin: true,
+    })).resolves.toBeUndefined();
+
+    expect(mockDbTransaction).toHaveBeenCalledOnce();
+    expect(mockAuditValues).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "admin-1",
+      action: "retry_skipped_whatsapp_connection_delivery",
+      entityId: "delivery-1",
+      before: expect.objectContaining({
+        status: "skipped",
+        skippedReason: "credentials_not_configured",
+      }),
+      after: expect.objectContaining({
+        status: "pending",
+        integrationId: "integration-1",
+        outboundMessageId: "message-1",
+      }),
+      ipAddress: "203.0.113.10",
+      userAgent: "test-agent",
+    }));
+    expect(mockUpdateSets[0]).toEqual(expect.objectContaining({
+      status: "pending",
+      skippedReason: null,
+      lastError: null,
+    }));
+    expect(queueAdd).toHaveBeenCalledWith(
+      "outbound-delivery",
+      { deliveryId: "delivery-1", tenantId: "tenant-a" },
+      { jobId: "outbound-delivery:tenant-a:delivery-1" },
+    );
+    expect(mockEmitOutboundDeliveryUpdate).toHaveBeenCalledWith("tenant-a", expect.objectContaining({
+      deliveryId: "delivery-1",
+      messageId: "message-1",
+      status: "pending",
+      channel: "whatsapp",
+    }));
+    expect(mockDbInsert).toHaveBeenCalledTimes(1);
+    expect(mockSendTenantWhatsAppMessage).not.toHaveBeenCalled();
+  });
+
+  it("requires an administrator and a connected credentialed integration for a skipped WhatsApp retry", async () => {
+    const skippedDelivery = makeDelivery({
+      channel: "whatsapp",
+      status: "skipped",
+      skippedReason: "whatsapp_connection_unavailable",
+      externalId: null,
+    });
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]));
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "staff-1",
+      isAdmin: false,
+    })).rejects.toThrow("delivery_admin_required");
+    expect(mockDbTransaction).not.toHaveBeenCalled();
+
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ metadata: { whatsappIntegrationId: "integration-1" } }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        id: "integration-1",
+        isDefault: true,
+        enabled: true,
+        status: "connected",
+        secretsEncrypted: null,
+      }]));
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      isAdmin: true,
+    })).rejects.toThrow("whatsapp_connection_unavailable");
+    expect(mockDbTransaction).not.toHaveBeenCalled();
+
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ metadata: { whatsappIntegrationId: "integration-1" } }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        id: "different-integration",
+        isDefault: true,
+        enabled: true,
+        status: "connected",
+        secretsEncrypted: "encrypted-secrets",
+      }]));
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      isAdmin: true,
+    })).rejects.toThrow("whatsapp_connection_unavailable");
+    expect(mockDbTransaction).not.toHaveBeenCalled();
+  });
+
+  it("does not queue a skipped delivery when the audit transaction fails", async () => {
+    const skippedDelivery = makeDelivery({
+      channel: "whatsapp",
+      status: "skipped",
+      skippedReason: "whatsapp_connection_unavailable",
+      externalId: null,
+    });
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ metadata: { whatsappIntegrationId: "integration-1" } }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        id: "integration-1",
+        isDefault: true,
+        enabled: true,
+        status: "connected",
+        secretsEncrypted: "encrypted-secrets",
+      }]));
+    mockDbUpdate.mockReturnValueOnce(makeUpdateQuery([{
+      id: "delivery-1",
+      outboundMessageId: "message-1",
+    }]));
+    mockAuditValues.mockRejectedValueOnce(new Error("database unavailable"));
+
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      isAdmin: true,
+    })).rejects.toThrow("delivery_retry_audit_failed");
+    expect(mockGetOutboundDeliveryQueue).not.toHaveBeenCalled();
+    expect(mockEmitOutboundDeliveryUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each(["unknown", "accepted"] as const)("never retries a %s WhatsApp delivery through the skipped retry path", async (status) => {
+    mockDbSelect.mockReturnValueOnce(makeSelectQuery([makeDelivery({
+      channel: "whatsapp",
+      status,
+      skippedReason: null,
+      externalId: status === "accepted" ? "provider-accepted-1" : null,
+    })]));
+    mockDbUpdate.mockReturnValueOnce(makeUpdateQuery([]));
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      isAdmin: true,
+    })).rejects.toThrow("delivery_not_retryable");
+    expect(mockDbTransaction).not.toHaveBeenCalled();
+    expect(mockGetOutboundDeliveryQueue).not.toHaveBeenCalled();
   });
 
   it("skips a queued WhatsApp message when the client revokes consent before the provider call", async () => {

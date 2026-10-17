@@ -339,9 +339,15 @@ export function CommunicationHistoryTab({
                             <AlertTriangle className="w-3.5 h-3.5 mr-1" /> Revisar com o provedor
                           </Button>
                         )}
-                        {(delivery.status === "failed" || (delivery.status === "skipped" && delivery.skippedReason === "provider_unavailable")) && (
+                        {(delivery.status === "failed" ||
+                          (delivery.status === "skipped" && delivery.skippedReason === "provider_unavailable") ||
+                          (canManageTemplates &&
+                            delivery.channel === "whatsapp" &&
+                            delivery.status === "skipped" &&
+                            ["credentials_not_configured", "whatsapp_connection_unavailable"].includes(delivery.skippedReason ?? ""))) && (
                           <Button data-testid={`button-retry-delivery-${delivery.id}`} size="sm" variant="outline" className="ml-auto" onClick={() => onRetryDelivery(delivery)} disabled={retryingDelivery}>
-                            <RefreshCcw className="w-3.5 h-3.5 mr-1" /> Tentar novamente neste canal
+                            <RefreshCcw className="w-3.5 h-3.5 mr-1" />
+                            {delivery.status === "skipped" && delivery.channel === "whatsapp" ? "Reenviar WhatsApp" : "Tentar novamente neste canal"}
                           </Button>
                         )}
                       </div>

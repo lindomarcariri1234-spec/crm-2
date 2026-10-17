@@ -1311,17 +1311,183 @@ export async function listOutboundProviderFailureSummary(
   });
 }
 
-export async function retryOutboundDelivery(tenantId: string, deliveryId: string): Promise<void> {
+const RETRYABLE_WHATSAPP_CONNECTION_SKIP_REASONS = [
+  "credentials_not_configured",
+  "whatsapp_connection_unavailable",
+] as const;
+
+export interface RetryOutboundDeliveryContext {
+  userId: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  isAdmin: boolean;
+}
+
+async function requireConnectedWhatsAppIntegration(
+  tenantId: string,
+  outboundMessageId: string,
+): Promise<string> {
+  const [message] = await db.select({ metadata: outboundMessagesTable.metadata })
+    .from(outboundMessagesTable)
+    .where(and(
+      eq(outboundMessagesTable.id, outboundMessageId),
+      eq(outboundMessagesTable.tenantId, tenantId),
+    ))
+    .limit(1);
+  if (!message) throw new Error("delivery_not_retryable");
+
+  const storedIntegrationId = typeof message.metadata?.whatsappIntegrationId === "string"
+    ? message.metadata.whatsappIntegrationId
+    : undefined;
+  const integrations = await db.select({
+    id: tenantIntegrationsTable.id,
+    isDefault: tenantIntegrationsTable.isDefault,
+    enabled: tenantIntegrationsTable.enabled,
+    status: tenantIntegrationsTable.status,
+    secretsEncrypted: tenantIntegrationsTable.secretsEncrypted,
+  }).from(tenantIntegrationsTable)
+    .where(and(
+      eq(tenantIntegrationsTable.tenantId, tenantId),
+      eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+      eq(tenantIntegrationsTable.enabled, true),
+      eq(tenantIntegrationsTable.status, "connected"),
+      storedIntegrationId ? eq(tenantIntegrationsTable.id, storedIntegrationId) : undefined,
+    ))
+    .limit(storedIntegrationId ? 1 : 100);
+  const usable = integrations.filter((integration) =>
+    integration.enabled &&
+    integration.status === "connected" &&
+    Boolean(integration.secretsEncrypted) &&
+    (!storedIntegrationId || integration.id === storedIntegrationId));
+
+  if (storedIntegrationId) {
+    if (usable.length !== 1) throw new Error("whatsapp_connection_unavailable");
+    return usable[0]!.id;
+  }
+
+  const defaults = usable.filter((integration) => integration.isDefault);
+  if (defaults.length === 1) return defaults[0]!.id;
+  if (defaults.length > 1 || usable.length > 1) throw new Error("whatsapp_connection_ambiguous");
+  if (usable.length === 1) return usable[0]!.id;
+  throw new Error("whatsapp_connection_unavailable");
+}
+
+async function retrySkippedWhatsAppConnectionDelivery(
+  tenantId: string,
+  delivery: {
+    id: string;
+    outboundMessageId: string;
+    attempts: number;
+    skippedReason: string | null;
+    provider: string | null;
+  },
+  context: RetryOutboundDeliveryContext,
+): Promise<void> {
+  if (!context.isAdmin) throw new Error("delivery_admin_required");
+  if (delivery.skippedReason !== "credentials_not_configured" &&
+      delivery.skippedReason !== "whatsapp_connection_unavailable") {
+    throw new Error("delivery_not_retryable");
+  }
+
+  const integrationId = await requireConnectedWhatsAppIntegration(tenantId, delivery.outboundMessageId);
+  let updated: { id: string; outboundMessageId: string } | undefined;
+  try {
+    await db.transaction(async (tx) => {
+      const [claimed] = await tx.update(outboundDeliveriesTable).set({
+        status: "pending",
+        nextAttemptAt: new Date(),
+        lastError: null,
+        skippedReason: null,
+        failedAt: null,
+        claimedAt: null,
+      }).where(and(
+        eq(outboundDeliveriesTable.id, delivery.id),
+        eq(outboundDeliveriesTable.tenantId, tenantId),
+        eq(outboundDeliveriesTable.channel, "whatsapp"),
+        eq(outboundDeliveriesTable.status, "skipped"),
+        inArray(outboundDeliveriesTable.skippedReason, RETRYABLE_WHATSAPP_CONNECTION_SKIP_REASONS),
+        isNull(outboundDeliveriesTable.externalId),
+      )).returning({
+        id: outboundDeliveriesTable.id,
+        outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+      });
+      if (!claimed) throw new Error("delivery_not_retryable");
+      updated = claimed;
+
+      await tx.insert(auditLogsTable).values({
+        id: generateId(),
+        tenantId,
+        userId: context.userId,
+        action: "retry_skipped_whatsapp_connection_delivery",
+        entityType: "outbound_delivery",
+        entityId: claimed.id,
+        before: {
+          status: "skipped",
+          skippedReason: delivery.skippedReason,
+          attempts: delivery.attempts,
+          provider: delivery.provider,
+        },
+        after: {
+          status: "pending",
+          nextAttempt: true,
+          provider: "evolution",
+          integrationId,
+          outboundMessageId: claimed.outboundMessageId,
+        },
+        ipAddress: context.ipAddress ?? null,
+        userAgent: context.userAgent ?? null,
+      });
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "delivery_not_retryable") throw error;
+    throw new Error("delivery_retry_audit_failed");
+  }
+
+  if (!updated) throw new Error("delivery_not_retryable");
+  await refreshMessageStatus(tenantId, updated.outboundMessageId);
+  emitOutboundDeliveryUpdate(tenantId, {
+    deliveryId: updated.id,
+    messageId: updated.outboundMessageId,
+    status: "pending",
+    channel: "whatsapp",
+    provider: "manual_retry",
+  });
+  await enqueueOutboundDelivery(updated.id, tenantId);
+}
+
+export async function retryOutboundDelivery(
+  tenantId: string,
+  deliveryId: string,
+  context?: RetryOutboundDeliveryContext,
+): Promise<void> {
   const [existing] = await db.select({
     id: outboundDeliveriesTable.id,
     outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+    channel: outboundDeliveriesTable.channel,
     status: outboundDeliveriesTable.status,
+    attempts: outboundDeliveriesTable.attempts,
+    provider: outboundDeliveriesTable.provider,
+    externalId: outboundDeliveriesTable.externalId,
     skippedReason: outboundDeliveriesTable.skippedReason,
   }).from(outboundDeliveriesTable).where(and(
     eq(outboundDeliveriesTable.id, deliveryId),
     eq(outboundDeliveriesTable.tenantId, tenantId),
   )).limit(1);
   if (!existing) throw new Error("delivery_not_found");
+
+  if (
+    existing.channel === "whatsapp" &&
+    existing.status === "skipped" &&
+    RETRYABLE_WHATSAPP_CONNECTION_SKIP_REASONS.includes(
+      existing.skippedReason as typeof RETRYABLE_WHATSAPP_CONNECTION_SKIP_REASONS[number],
+    )
+  ) {
+    if (existing.externalId) throw new Error("delivery_not_retryable");
+    if (!context) throw new Error("delivery_admin_required");
+    await retrySkippedWhatsAppConnectionDelivery(tenantId, existing, context);
+    return;
+  }
+
   if (existing.status === "skipped" && existing.skippedReason !== "provider_unavailable") {
     throw new Error("delivery_not_authorized");
   }

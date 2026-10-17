@@ -80,21 +80,32 @@ function formatProvider(provider: string) {
 function toDeliveryReviewEntry(log: AuditLogWithTenant): DeliveryReviewEntry | null {
   if (
     log.entityType !== "outbound_delivery" ||
-    (log.action !== "reconcile_outbound_delivery" && log.action !== "retry_reconciled_outbound_delivery")
+    (log.action !== "reconcile_outbound_delivery" &&
+      log.action !== "retry_reconciled_outbound_delivery" &&
+      log.action !== "retry_skipped_whatsapp_connection_delivery")
   ) {
     return null;
   }
 
   const outcome = metadataString(log.after, "outcome");
-  const provider = metadataString(log.after, "provider") ?? metadataString(log.before, "provider") ?? "Não identificado";
+  const provider = metadataString(log.after, "provider") ??
+    metadataString(log.before, "provider") ??
+    (log.action === "retry_skipped_whatsapp_connection_delivery" ? "evolution" : "Não identificado");
   const operator = log.userName ?? log.userId ?? "Sistema";
 
-  if (log.action === "retry_reconciled_outbound_delivery") {
+  if (
+    log.action === "retry_reconciled_outbound_delivery" ||
+    log.action === "retry_skipped_whatsapp_connection_delivery"
+  ) {
     return {
       log,
       status: "resend",
-      label: "Reenvio autorizado",
-      detail: "Nova tentativa liberada após confirmação de ausência",
+      label: log.action === "retry_skipped_whatsapp_connection_delivery"
+        ? "Reenvio após reconexão"
+        : "Reenvio autorizado",
+      detail: log.action === "retry_skipped_whatsapp_connection_delivery"
+        ? "Administrador autorizou a tentativa após validar a conexão WhatsApp"
+        : "Nova tentativa liberada após confirmação de ausência",
       provider: formatProvider(provider),
       operator,
     };

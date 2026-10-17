@@ -554,16 +554,42 @@ router.post("/outbound-messages/:deliveryId/retry", async (req, res, next: NextF
   try {
     const me = await requireOutboundStaff(req, res, next);
     if (!me) return;
-    await retryOutboundDelivery(me.tenantId, req.params.deliveryId);
+    await retryOutboundDelivery(me.tenantId, req.params.deliveryId, {
+      userId: me.id,
+      ipAddress: getClientIp(req),
+      userAgent: req.headers["user-agent"] ?? null,
+      isAdmin: ADMIN_ROLES.includes(me.role),
+    });
     res.status(202).json({ ok: true });
   } catch (error) {
-    if (error instanceof Error && ["delivery_not_found", "delivery_not_authorized", "delivery_not_retryable"].includes(error.message)) {
+    if (error instanceof Error && [
+      "delivery_not_found",
+      "delivery_not_authorized",
+      "delivery_not_retryable",
+      "delivery_admin_required",
+      "whatsapp_connection_unavailable",
+      "whatsapp_connection_ambiguous",
+      "delivery_retry_audit_failed",
+    ].includes(error.message)) {
       const messages: Record<string, string> = {
         delivery_not_found: "A entrega não foi encontrada neste espaço de trabalho.",
         delivery_not_authorized: "Esta entrega foi ignorada por opt-out, contato ausente ou número inválido e não pode ser repetida sem corrigir a autorização.",
         delivery_not_retryable: "A entrega não está em um estado que permita nova tentativa.",
+        delivery_admin_required: "Somente administradores podem reenviar uma entrega WhatsApp ignorada por falta de conexão ou credenciais.",
+        whatsapp_connection_unavailable: "Ative e conecte a integração WhatsApp vinculada a esta entrega antes de tentar novamente.",
+        whatsapp_connection_ambiguous: "Há mais de uma conexão WhatsApp possível. Defina a conexão correta antes de tentar novamente.",
+        delivery_retry_audit_failed: "A nova tentativa foi interrompida porque não foi possível registrar a auditoria.",
       };
-      next(new AppError(messages[error.message], error.message === "delivery_not_found" ? 404 : 422, error.message.toUpperCase()));
+      const status = error.message === "delivery_not_found"
+        ? 404
+        : error.message === "delivery_admin_required"
+          ? 403
+          : error.message === "delivery_retry_audit_failed"
+            ? 500
+            : error.message === "whatsapp_connection_ambiguous"
+              ? 409
+              : 422;
+      next(new AppError(messages[error.message], status, error.message.toUpperCase()));
       return;
     }
     next(error);
@@ -575,16 +601,42 @@ router.post("/outbound-deliveries/:deliveryId/retry", async (req, res, next: Nex
   try {
     const me = await requireOutboundStaff(req, res, next);
     if (!me) return;
-    await retryOutboundDelivery(me.tenantId, req.params.deliveryId);
+    await retryOutboundDelivery(me.tenantId, req.params.deliveryId, {
+      userId: me.id,
+      ipAddress: getClientIp(req),
+      userAgent: req.headers["user-agent"] ?? null,
+      isAdmin: ADMIN_ROLES.includes(me.role),
+    });
     res.status(202).json({ ok: true });
   } catch (error) {
-    if (error instanceof Error && ["delivery_not_found", "delivery_not_authorized", "delivery_not_retryable"].includes(error.message)) {
+    if (error instanceof Error && [
+      "delivery_not_found",
+      "delivery_not_authorized",
+      "delivery_not_retryable",
+      "delivery_admin_required",
+      "whatsapp_connection_unavailable",
+      "whatsapp_connection_ambiguous",
+      "delivery_retry_audit_failed",
+    ].includes(error.message)) {
       const messages: Record<string, string> = {
         delivery_not_found: "A entrega não foi encontrada neste espaço de trabalho.",
         delivery_not_authorized: "Esta entrega foi ignorada por opt-out, contato ausente ou número inválido e não pode ser repetida sem corrigir a autorização.",
         delivery_not_retryable: "A entrega não está em um estado que permita nova tentativa.",
+        delivery_admin_required: "Somente administradores podem reenviar uma entrega WhatsApp ignorada por falta de conexão ou credenciais.",
+        whatsapp_connection_unavailable: "Ative e conecte a integração WhatsApp vinculada a esta entrega antes de tentar novamente.",
+        whatsapp_connection_ambiguous: "Há mais de uma conexão WhatsApp possível. Defina a conexão correta antes de tentar novamente.",
+        delivery_retry_audit_failed: "A nova tentativa foi interrompida porque não foi possível registrar a auditoria.",
       };
-      next(new AppError(messages[error.message], error.message === "delivery_not_found" ? 404 : 422, error.message.toUpperCase()));
+      const status = error.message === "delivery_not_found"
+        ? 404
+        : error.message === "delivery_admin_required"
+          ? 403
+          : error.message === "delivery_retry_audit_failed"
+            ? 500
+            : error.message === "whatsapp_connection_ambiguous"
+              ? 409
+              : 422;
+      next(new AppError(messages[error.message], status, error.message.toUpperCase()));
       return;
     }
     next(error);

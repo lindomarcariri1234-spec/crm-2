@@ -1000,11 +1000,16 @@ export default function Communication() {
       refetchOutboundMessages();
     } catch (error) {
       const message = (error as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      const retryErrorDescriptions: Record<string, string> = {
+        delivery_not_authorized: "Esta entrega foi ignorada por opt-out, contato ausente ou número inválido. Corrija a autorização/contato antes de enviar.",
+        delivery_admin_required: "Somente administradores podem reenviar uma mensagem ignorada por falta de conexão ou credenciais.",
+        whatsapp_connection_unavailable: "Ative e conecte a integração WhatsApp vinculada à mensagem antes de tentar novamente.",
+        whatsapp_connection_ambiguous: "Defina uma única conexão WhatsApp adequada antes de tentar novamente.",
+        delivery_retry_audit_failed: "O reenvio foi interrompido porque não foi possível registrar a auditoria.",
+      };
       toast({
         title: "Não foi possível reenviar",
-        description: message === "delivery_not_authorized"
-          ? "Esta entrega foi ignorada por opt-out, contato ausente ou número inválido. Corrija a autorização/contato antes de enviar."
-          : "Verifique a integração responsável e tente novamente.",
+        description: message ? retryErrorDescriptions[message] ?? "Verifique a integração responsável e tente novamente." : "Verifique a integração responsável e tente novamente.",
         variant: "destructive",
       });
     }
