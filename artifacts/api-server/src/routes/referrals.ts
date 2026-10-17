@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable, paymentsTable, auditLogsTable, outboundMessagesTable } from "@workspace/db";
-import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull, gte, lte, lt } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
@@ -2307,36 +2307,25 @@ router.get("/referrals/campaigns", async (req, res, next: NextFunction): Promise
 
     if (campaigns.length === 0) { res.json([]); return; }
 
-    // Single grouped query for all campaign stats to avoid N+1
+    // Single grouped query for all campaign stats to avoid N+1. Joining by
+    // campaign window avoids grouping on a correlated scalar subquery, which
+    // fails on PostgreSQL once the first campaign exists.
     const statsRows = await db.select({
-      campaignId: sql<string>`
-        (SELECT c2.id FROM referral_campaigns c2
-         WHERE c2.tenant_id = ${me.tenantId}
-           AND ${referralsTable.convertedAt} >= c2.starts_at
-           AND ${referralsTable.convertedAt} < c2.ends_at
-         LIMIT 1)
-      `,
-      referralsCount: count(),
+      campaignId: referralCampaignsTable.id,
+      referralsCount: count(referralsTable.id),
       bonusPaidAmount: sql<number>`COALESCE(SUM(${referralsTable.bonusAmount}) FILTER (WHERE ${referralsTable.bonusPaid} = true), 0)`,
     })
-    .from(referralsTable)
-    .where(and(
-      eq(referralsTable.tenantId, me.tenantId),
+    .from(referralCampaignsTable)
+    .leftJoin(referralsTable, and(
+      eq(referralsTable.tenantId, referralCampaignsTable.tenantId),
       eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
-      sql`EXISTS (
-        SELECT 1 FROM referral_campaigns c2
-        WHERE c2.tenant_id = ${me.tenantId}
-          AND ${referralsTable.convertedAt} >= c2.starts_at
-          AND ${referralsTable.convertedAt} < c2.ends_at
-      )`,
+      gte(referralsTable.convertedAt, referralCampaignsTable.startsAt),
+      lt(referralsTable.convertedAt, referralCampaignsTable.endsAt),
     ))
-    .groupBy(sql`
-      (SELECT c2.id FROM referral_campaigns c2
-       WHERE c2.tenant_id = ${me.tenantId}
-         AND ${referralsTable.convertedAt} >= c2.starts_at
-         AND ${referralsTable.convertedAt} < c2.ends_at
-       LIMIT 1)
-    `);
+    .where(and(
+      eq(referralCampaignsTable.tenantId, me.tenantId),
+    ))
+    .groupBy(referralCampaignsTable.id);
 
     const statsMap = new Map(statsRows.map((r) => [r.campaignId, r]));
 

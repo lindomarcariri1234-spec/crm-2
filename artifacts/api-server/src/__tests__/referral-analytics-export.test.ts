@@ -4,22 +4,11 @@ import express from "express";
 import request from "supertest";
 import ExcelJS from "exceljs";
 
-const { selectQueue, mockRequireAuth } = vi.hoisted(() => {
+const { selectQueue, mockRequireAuth, selectCalls } = vi.hoisted(() => {
   const selectQueue: unknown[][] = [];
   const mockRequireAuth = vi.fn();
-
-  function makeChain(rows: unknown[]) {
-    const chain: Record<string, unknown> = {
-      then: (resolve: (value: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
-        Promise.resolve(rows).then(resolve, reject),
-    };
-    for (const method of ["from", "where", "leftJoin", "groupBy", "orderBy", "limit"]) {
-      chain[method] = vi.fn(() => chain);
-    }
-    return chain;
-  }
-
-  return { selectQueue, mockRequireAuth, makeChain };
+  const selectCalls: Array<Array<{ method: string; args: unknown[] }>> = [];
+  return { selectQueue, mockRequireAuth, selectCalls };
 });
 
 vi.mock("@workspace/db", () => {
@@ -28,12 +17,17 @@ vi.mock("@workspace/db", () => {
   });
   const mockSelect = vi.fn(() => {
     const rows = selectQueue.shift() ?? [];
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    selectCalls.push(calls);
     const chain: Record<string, unknown> = {
       then: (resolve: (value: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
         Promise.resolve(rows).then(resolve, reject),
     };
     for (const method of ["from", "where", "leftJoin", "groupBy", "orderBy", "limit"]) {
-      chain[method] = vi.fn(() => chain);
+      chain[method] = vi.fn((...args: unknown[]) => {
+        calls.push({ method, args });
+        return chain;
+      });
     }
     return chain;
   });
@@ -57,11 +51,13 @@ vi.mock("drizzle-orm", () => ({
   count: vi.fn(() => "count"),
   desc: vi.fn(() => "desc"),
   eq: vi.fn((column: unknown, value: unknown) => `${String(column)}=${String(value)}`),
+  gte: vi.fn((column: unknown, value: unknown) => `${String(column)}>=${String(value)}`),
   getTableColumns: vi.fn(() => ({})),
   ilike: vi.fn(() => "ilike"),
   inArray: vi.fn(() => "inArray"),
   isNotNull: vi.fn(() => "isNotNull"),
   isNull: vi.fn(() => "isNull"),
+  lt: vi.fn((column: unknown, value: unknown) => `${String(column)}<${String(value)}`),
   or: vi.fn((...args: unknown[]) => args),
   sql: Object.assign(vi.fn(() => "sql"), { raw: vi.fn() }),
 }));
@@ -153,8 +149,45 @@ function commercialRow(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   selectQueue.length = 0;
+  selectCalls.length = 0;
   mockRequireAuth.mockReset();
   mockRequireAuth.mockResolvedValue(ADMIN);
+});
+
+describe("GET /api/referrals/campaigns", () => {
+  it("loads campaigns with grouped stats through a campaign-window join", async () => {
+    const startsAt = new Date("2026-10-01T00:00:00.000Z");
+    const endsAt = new Date("2026-11-01T00:00:00.000Z");
+    selectQueue.push(
+      [{
+        id: "campaign-1",
+        tenantId: ADMIN.tenantId,
+        name: "Bônus de outubro",
+        startsAt,
+        endsAt,
+        bonusType: "multiplier",
+        bonusValue: "2",
+        bannerText: null,
+      }],
+      [{ campaignId: "campaign-1", referralsCount: 3, bonusPaidAmount: "25.00" }],
+    );
+
+    const response = await request(buildApp())
+      .get("/api/referrals/campaigns")
+      .expect(200);
+
+    expect(response.body).toEqual([
+      expect.objectContaining({
+        id: "campaign-1",
+        bonusValue: 2,
+        referralsCount: 3,
+        bonusPaidAmount: 25,
+      }),
+    ]);
+    expect(selectCalls).toHaveLength(2);
+    expect(selectCalls[1].map(({ method }) => method)).toContain("leftJoin");
+    expect(selectCalls[1].map(({ method }) => method)).toContain("groupBy");
+  });
 });
 
 describe("GET /api/referrals/analytics/export", () => {
