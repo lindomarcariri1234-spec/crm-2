@@ -1049,7 +1049,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
     } else {
       if (whatsappRoute?.integrationId) {
         await db.update(outboundMessagesTable).set({
-          metadata: sql`(COALESCE(${outboundMessagesTable.metadata}::jsonb, '{}'::jsonb) || jsonb_build_object('whatsappIntegrationId', ${whatsappRoute.integrationId}))::json`,
+          metadata: sql`(COALESCE(${outboundMessagesTable.metadata}::jsonb, '{}'::jsonb) || jsonb_build_object('whatsappIntegrationId', ${whatsappRoute.integrationId}::text))::json`,
         }).where(and(
           eq(outboundMessagesTable.id, delivery.outboundMessageId),
           eq(outboundMessagesTable.tenantId, tenantId),

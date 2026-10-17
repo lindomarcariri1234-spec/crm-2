@@ -583,6 +583,7 @@ describe("legacy email history synchronization", () => {
       values && typeof values === "object" && "metadata" in values,
     ) as { metadata?: { query?: string } } | undefined;
     expect(metadataUpdate?.metadata?.query).toContain("COALESCE(?::jsonb, '{}'::jsonb)");
+    expect(metadataUpdate?.metadata?.query).toContain("jsonb_build_object('whatsappIntegrationId', ?::text)");
     expect(metadataUpdate?.metadata?.query).toContain("))::json");
     expect(mockLoggerWarn.mock.calls).toContainEqual([
       { tenantId: "tenant-a", deliveryId: "delivery-1" },
