@@ -1110,6 +1110,81 @@ describe("client timeline request scoping", () => {
   });
 });
 
+describe("overlapping client timeline pages", () => {
+  it("retries the same cursor and prepends only unseen entries in order", async () => {
+    const requests = installDeferredClientTimelineFetch();
+    const { container } = await renderComponent(createElement(ClientTimelineRaceHarness));
+    const timeline = container.querySelector<HTMLElement>('[data-testid="timeline-messages"]')!;
+    const cursor = "client-a-older-cursor";
+    const currentNewest = {
+      ...firstMessage,
+      id: "overlap-current-newest",
+      content: "Mensagem atual mais recente",
+    };
+    const currentShared = {
+      ...firstMessage,
+      id: "overlap-current-shared",
+      content: "Mensagem atual compartilhada",
+    };
+
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a"),
+        [currentNewest, currentShared],
+        cursor,
+        true,
+      );
+    });
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="load-older-client-timeline"]',
+    )!.click());
+    await flushAct(async () => {
+      await settleClientTimelineFailure(
+        getClientTimelineRequest(requests, "client-a", cursor),
+      );
+    });
+    expect(container.querySelector('[data-testid="timeline-error"]')?.textContent)
+      .toContain("Não foi possível carregar");
+    expect(container.querySelector('[data-testid="timeline-cursor"]')?.textContent)
+      .toBe(cursor);
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="load-older-client-timeline"]',
+    )!.click());
+    expect(requests.get(`client-a:${cursor}`)).toHaveLength(2);
+
+    const olderOnly = {
+      ...firstMessage,
+      id: "overlap-older-only",
+      content: "Mensagem antiga inédita",
+    };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", cursor, 1),
+        [olderOnly, currentShared, currentNewest],
+        "client-a-next-cursor",
+        false,
+      );
+    });
+
+    const renderedMessages = Array.from(
+      timeline.querySelectorAll("p"),
+      (element) => element.textContent,
+    );
+    expect(renderedMessages).toEqual([
+      olderOnly.content,
+      currentNewest.content,
+      currentShared.content,
+    ]);
+    expect(renderedMessages.filter((content) => content === olderOnly.content)).toHaveLength(1);
+    expect(renderedMessages.filter((content) => content === currentNewest.content)).toHaveLength(1);
+    expect(renderedMessages.filter((content) => content === currentShared.content)).toHaveLength(1);
+    expect(container.querySelector('[data-testid="timeline-cursor"]')?.textContent)
+      .toBe("client-a-next-cursor");
+  });
+});
+
 describe("client timeline scroll position", () => {
   it("anchors older-page prepends and discards scroll measurements from a previous client", async () => {
     const requests = installDeferredClientTimelineFetch();
