@@ -120,7 +120,8 @@ function compareChronologically(
   left: CommunicationTimelineEntry,
   right: CommunicationTimelineEntry,
 ): number {
-  return timeValue(left.sentAt) - timeValue(right.sentAt) || left.id.localeCompare(right.id);
+  return timeValue(left.sentAt) - timeValue(right.sentAt)
+    || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
 }
 
 function basicTimelineEntries(
