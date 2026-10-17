@@ -302,7 +302,11 @@ beforeEach(() => {
 
   // SSRF mocks: safe by default
   mockAssertSafeUrl.mockResolvedValue(undefined);
-  mockSsrfFetch.mockResolvedValue({ ok: true, status: 200 });
+  mockSsrfFetch.mockResolvedValue({
+    ok: true,
+    status: 200,
+    text: JSON.stringify({ instance: { state: "open" } }),
+  });
 });
 
 // ─── GET /api/integrations ────────────────────────────────────────────────────
@@ -948,7 +952,11 @@ describe("PUT /api/integrations/:type — save configuration", () => {
       asAdmin();
       mockLimit.mockResolvedValueOnce([]);
       mockSsrfFetch
-        .mockResolvedValueOnce({ ok: true, status: 200 })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: JSON.stringify({ instance: { state: "open" } }),
+        })
         .mockResolvedValueOnce({ ok: true, status: 201 });
 
       const res = await request(buildApp())
@@ -1003,7 +1011,11 @@ describe("PUT /api/integrations/:type — save configuration", () => {
       asAdmin();
       mockLimit.mockResolvedValueOnce([]);
       mockSsrfFetch
-        .mockResolvedValueOnce({ ok: true, status: 200 })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: JSON.stringify({ instance: { state: "open" } }),
+        })
         .mockResolvedValueOnce({ ok: false, status: 401 });
 
       const res = await request(buildApp())
@@ -1231,7 +1243,11 @@ describe("POST /api/integrations/:type/test — transient probe, never persists 
     asAdmin();
     mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
     mockAssertSafeUrl.mockResolvedValueOnce(undefined);
-    mockSsrfFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ instance: { state: "open" } }),
+    });
 
     const res = await request(buildApp())
       .post("/api/integrations/whatsapp_evolution/test")
@@ -1242,6 +1258,29 @@ describe("POST /api/integrations/:type/test — transient probe, never persists 
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("whatsapp_evolution: a 200 response with a closed session is not reported as connected", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockAssertSafeUrl.mockResolvedValueOnce(undefined);
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ instance: { state: "close" } }),
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/test")
+      .send({
+        config: { baseUrl: "https://evo.example.com", instanceName: "my-instance" },
+        secrets: { apiKey: MASK },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.message).toMatch(/sessão do WhatsApp está desconectada/i);
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 

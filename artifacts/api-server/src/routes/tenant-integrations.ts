@@ -145,6 +145,33 @@ async function configureEvolutionInboundWebhook(
   }
 }
 
+type EvolutionConnectionStatus = "connected" | "disconnected" | null;
+
+function parseEvolutionConnectionStatus(
+  statusCode: number,
+  responseText: string,
+): EvolutionConnectionStatus {
+  if (statusCode === 404) return "disconnected";
+  if (statusCode < 200 || statusCode >= 300) return null;
+
+  try {
+    const payload: unknown = JSON.parse(responseText);
+    const root = typeof payload === "object" && payload !== null
+      ? payload as Record<string, unknown>
+      : {};
+    const instance = typeof root.instance === "object" && root.instance !== null
+      ? root.instance as Record<string, unknown>
+      : {};
+    const state = String(instance.state ?? root.state ?? root.connectionState ?? "").toLowerCase();
+    if (state === "open" || state === "connected") return "connected";
+    if (state === "close" || state === "closed" || state === "disconnected") return "disconnected";
+  } catch {
+    // A 2xx response without a recognized JSON connection state is not proof
+    // that the WhatsApp session is open.
+  }
+  return null;
+}
+
 // ─── Audit log ────────────────────────────────────────────────────────────────
 
 async function writeLog(
@@ -317,9 +344,6 @@ const REGISTRY: Record<string, RegistryEntry> = {
           maxBytes: 16 * 1024,
         });
 
-        if (result.ok) {
-          return { ok: true, message: "Instância WhatsApp conectada." };
-        }
         if (result.status === 401 || result.status === 403) {
           return {
             ok: false,
@@ -332,7 +356,22 @@ const REGISTRY: Record<string, RegistryEntry> = {
             message: "Instância não encontrada neste servidor (HTTP 404). Confirme a URL Base e o Nome da Instância exatos na mesma instalação Evolution.",
           };
         }
-        return { ok: false, message: `Falha na conexão (HTTP ${result.status}).` };
+        if (!result.ok) return { ok: false, message: `Falha na conexão (HTTP ${result.status}).` };
+
+        const connectionStatus = parseEvolutionConnectionStatus(result.status, result.text);
+        if (connectionStatus === "connected") {
+          return { ok: true, message: "Instância WhatsApp conectada." };
+        }
+        if (connectionStatus === "disconnected") {
+          return {
+            ok: false,
+            message: "A instância foi encontrada, mas a sessão do WhatsApp está desconectada. Conecte o aparelho na Evolution e atualize o status.",
+          };
+        }
+        return {
+          ok: false,
+          message: "A Evolution respondeu, mas não confirmou que a sessão está conectada. Confira o estado da instância e atualize o status.",
+        };
       } catch (err) {
         return { ok: false, message: sanitizeExternalError(err) };
       }
@@ -674,27 +713,7 @@ router.post("/integrations/whatsapp_evolution/connections/refresh", async (req, 
           { headers: { apikey: apiKey }, timeoutMs: 8000, maxBytes: 16 * 1024 },
         );
 
-        let nextStatus: "connected" | "disconnected" | null = result.status === 404
-          ? "disconnected"
-          : null;
-        if (result.ok) {
-          try {
-            const payload: unknown = JSON.parse(result.text);
-            const root = typeof payload === "object" && payload !== null
-              ? payload as Record<string, unknown>
-              : {};
-            const instance = typeof root.instance === "object" && root.instance !== null
-              ? root.instance as Record<string, unknown>
-              : {};
-            const state = String(instance.state ?? root.state ?? root.connectionState ?? "").toLowerCase();
-            if (state === "open" || state === "connected") nextStatus = "connected";
-            else if (state === "close" || state === "closed" || state === "disconnected") {
-              nextStatus = "disconnected";
-            }
-          } catch {
-            // A 200 response without a recognized state is not proof of disconnection.
-          }
-        }
+        const nextStatus = parseEvolutionConnectionStatus(result.status, result.text);
         if (!nextStatus) {
           unverified += 1;
           return;
