@@ -93,8 +93,15 @@ const CAMPAIGN = {
   id: "camp-001",
   tenantId: "tenant-001",
   triggerType: "reactivation",
-  triggerConfig: { sendHour: 8, inactiveDays: 90 },
-  type: "email",
+  triggerConfig: {
+    sendHour: 8,
+    inactiveDays: 90,
+    channels: {
+      email: { subject: "Olá, saudades!", html: "Olá {nome}, temos novidades!" },
+      whatsapp: { text: "Olá {nome}, temos novidades!" },
+    },
+  },
+  type: "unified",
   subject: "Olá, saudades!",
   content: "Olá {nome}, temos novidades!",
   autoEnabled: true,
@@ -113,9 +120,9 @@ const CLIENT = { id: "client-001", name: "Maria", email: "maria@test.com" };
  *  3. clientsTable   (resolveClientsByTrigger → reactivation path)
  *  4. campaignSendsTable (getAlreadySentClientIds)
  */
-function setupSelectCalls() {
+function setupSelectCalls(campaign = CAMPAIGN) {
   mockSelect.mockImplementationOnce(() => ({
-    from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([CAMPAIGN]) }),
+    from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([campaign]) }),
   }));
   mockSelect.mockImplementationOnce(() => ({
     from: vi.fn().mockResolvedValue([TENANT]),
@@ -173,6 +180,7 @@ describe("campaign-automation: DB write failure regression", () => {
         eventType: "campaign_message",
         idempotencyKey: `campaign:${CAMPAIGN.id}:${CLIENT.id}`,
         recipient: { type: "client", id: CLIENT.id },
+        channels: ["email", "whatsapp"],
         email: {
           subject: CAMPAIGN.subject,
           html: "Olá Maria, temos novidades!",
@@ -190,6 +198,65 @@ describe("campaign-automation: DB write failure regression", () => {
         expect.stringContaining("Multichannel dispatch failed"),
       );
       expect(mockUpdate).toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        type: "email",
+        expectedChannels: ["email"],
+        expectedEmail: { subject: "Somente e-mail", html: "E-mail para Maria", senderName: TENANT.name },
+        expectedWhatsapp: undefined,
+      },
+      {
+        type: "whatsapp",
+        expectedChannels: ["whatsapp"],
+        expectedEmail: undefined,
+        expectedWhatsapp: { text: "WhatsApp para Maria" },
+      },
+    ])("dispatches a $type campaign only to its selected channel", async ({
+      type,
+      expectedChannels,
+      expectedEmail,
+      expectedWhatsapp,
+    }) => {
+      const campaign = {
+        ...CAMPAIGN,
+        type,
+        triggerConfig: {
+          ...CAMPAIGN.triggerConfig,
+          channels: {
+            email: { subject: "Somente e-mail", html: "E-mail para {nome}" },
+            whatsapp: { text: "WhatsApp para {nome}" },
+          },
+        },
+      };
+      setupSelectCalls(campaign);
+      mockInsert.mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          onConflictDoNothing: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([{ id: "test-send-id" }]),
+          }),
+        }),
+      });
+      mockDispatchOutboundMessage.mockResolvedValue({
+        created: true,
+        message: { status: "accepted" },
+        deliveries: [{ channel: type, status: "accepted" }],
+      });
+      mockUpdate.mockImplementation(() => ({
+        set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+      }));
+
+      await runCampaignAutomationCron();
+
+      expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+        channels: expectedChannels,
+        ...(expectedEmail ? { email: expectedEmail } : {}),
+        ...(expectedWhatsapp ? { whatsapp: expectedWhatsapp } : {}),
+        originChannel: type,
+      }));
+      const dispatched = mockDispatchOutboundMessage.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(dispatched).not.toHaveProperty(type === "email" ? "whatsapp" : "email");
     });
 
     it("handles a dispatcher failure as an error outcome without reporting a sent delivery", async () => {

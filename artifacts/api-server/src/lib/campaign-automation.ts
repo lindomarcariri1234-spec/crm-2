@@ -484,11 +484,51 @@ async function processTenantCampaignMultichannel(
 ) {
   let successCount = 0;
   let errorCount = 0;
+  const triggerConfig = (campaign.triggerConfig ?? {}) as Record<string, unknown>;
+  const channelConfig = (
+    triggerConfig["channels"] &&
+    typeof triggerConfig["channels"] === "object" &&
+    !Array.isArray(triggerConfig["channels"])
+  )
+    ? triggerConfig["channels"] as Record<string, unknown>
+    : {};
+  const emailConfig = (
+    channelConfig["email"] &&
+    typeof channelConfig["email"] === "object" &&
+    !Array.isArray(channelConfig["email"])
+  )
+    ? channelConfig["email"] as Record<string, unknown>
+    : {};
+  const whatsappConfig = (
+    channelConfig["whatsapp"] &&
+    typeof channelConfig["whatsapp"] === "object" &&
+    !Array.isArray(channelConfig["whatsapp"])
+  )
+    ? channelConfig["whatsapp"] as Record<string, unknown>
+    : {};
+  const selectedChannels = campaign.type === "unified"
+    ? ["email", "whatsapp"] as const
+    : campaign.type === "whatsapp"
+      ? ["whatsapp"] as const
+      : ["email"] as const;
+  const sendsEmail = campaign.type !== "whatsapp";
+  const sendsWhatsapp = campaign.type === "whatsapp" || campaign.type === "unified";
 
   for (const client of eligible) {
-    const personalised = campaign.content
+    const personalise = (content: string) => content
       .replace(/\{nome\}/gi, client.name)
       .replace(/\{name\}/gi, client.name);
+    // New campaigns keep channel-specific content in triggerConfig.channels.
+    // Older campaigns have only campaigns.content, so retain that as a fallback.
+    const emailHtml = personalise(
+      typeof emailConfig["html"] === "string" ? emailConfig["html"] : campaign.content,
+    );
+    const whatsappText = personalise(
+      typeof whatsappConfig["text"] === "string" ? whatsappConfig["text"] : campaign.content,
+    );
+    const emailSubject = typeof emailConfig["subject"] === "string"
+      ? emailConfig["subject"]
+      : campaign.subject;
     try {
       const [send] = await db
         .insert(campaignSendsTable)
@@ -510,12 +550,15 @@ async function processTenantCampaignMultichannel(
         eventType: "campaign_message",
         idempotencyKey: `campaign:${campaign.id}:${client.id}`,
         recipient: { type: "client", id: client.id },
-        email: campaign.subject
-          ? { subject: campaign.subject, html: personalised, senderName: tenantName }
-          : undefined,
-        whatsapp: { text: personalised },
+        channels: [...selectedChannels],
+        ...(sendsEmail && emailSubject
+          ? { email: { subject: emailSubject, html: emailHtml, senderName: tenantName } }
+          : {}),
+        ...(sendsWhatsapp
+          ? { whatsapp: { text: whatsappText } }
+          : {}),
         origin: "campaign",
-        originChannel: campaign.type === "whatsapp" ? "whatsapp" : "email",
+        originChannel: selectedChannels.length === 1 ? selectedChannels[0] : null,
         metadata: { campaignId: campaign.id, campaignSendId: send.id, clientId: client.id },
       });
       const hasPending = result.deliveries.some((delivery) => delivery.status === "pending");
