@@ -81,7 +81,9 @@ export function configureEvolutionWebhook(
   instanceName: string,
   callbackUrl: string,
 ): Promise<EvolutionApiResponse> {
-  // Evolution API's documented Set Webhook contract uses a flat body.
+  // Evolution API v2.3.7 requires the webhook settings under a `webhook`
+  // property. A flat body is rejected with HTTP 400 even when the instance
+  // itself is connected.
   return evolutionApiRequest(
     baseUrl,
     apiKey,
@@ -89,10 +91,13 @@ export function configureEvolutionWebhook(
     {
       method: "POST",
       body: {
-        enabled: true,
-        url: callbackUrl,
-        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"],
-        base64: false,
+        webhook: {
+          enabled: true,
+          url: callbackUrl,
+          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"],
+          base64: false,
+          byEvents: false,
+        },
       },
       timeoutMs: 12_000,
     },
@@ -112,7 +117,8 @@ export function sendEvolutionText(
     instancePath("message/sendText", instanceName),
     {
       method: "POST",
-      body: { number, textMessage: { text } },
+      // Evolution API v2.3.7 SendTextDto requires `text` at the root.
+      body: { number, text },
       timeoutMs: 15_000,
       maxBytes: 64 * 1024,
     },

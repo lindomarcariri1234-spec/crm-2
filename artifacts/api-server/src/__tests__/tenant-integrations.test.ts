@@ -1071,16 +1071,22 @@ describe("PUT /api/integrations/:type — save configuration", () => {
       expect(options.method).toBe("POST");
       expect(options.headers.apikey).toBe(WA_SECRETS.apiKey);
       const body = JSON.parse(options.body) as {
-        enabled: boolean;
-        url: string;
-        events: string[];
-        base64: boolean;
+        webhook: {
+          enabled: boolean;
+          url: string;
+          events: string[];
+          base64: boolean;
+          byEvents: boolean;
+        };
       };
       expect(body).toEqual({
-        enabled: true,
-        url: "https://app.example.com/api/webhooks/whatsapp/evolution/my-instance",
-        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"],
-        base64: false,
+        webhook: {
+          enabled: true,
+          url: "https://app.example.com/api/webhooks/whatsapp/evolution/my-instance",
+          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"],
+          base64: false,
+          byEvents: false,
+        },
       });
       expect(res.text).not.toContain(WA_SECRETS.apiKey);
     } finally {
