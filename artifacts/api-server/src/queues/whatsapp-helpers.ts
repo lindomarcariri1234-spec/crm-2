@@ -21,6 +21,7 @@ export interface WhatsAppDispatchResult {
   mode: "queued" | "direct";
   success: boolean;
   status: "queued" | "accepted" | "skipped" | "failed" | "unknown";
+  deduplicated?: boolean;
   error?: string;
 }
 
@@ -145,6 +146,7 @@ export async function enqueueOrSend(
     mode: status === "queued" ? "queued" : "direct",
     success,
     status,
+    ...(result.created === false ? { deduplicated: true } : {}),
     error: whatsappDelivery?.lastError ?? whatsappDelivery?.skippedReason
       ?? (whatsappDelivery ? undefined : "whatsapp_delivery_missing"),
   };

@@ -228,6 +228,11 @@ export function WhatsAppBroadcastModal({
                   {result.recipientCount} contato(s) único(s) com telefone válido analisado(s)
                 </p>
               </div>
+              {result.deduplicated > 0 && (
+                <div role="status" className="w-full rounded-lg border border-amber-300 bg-amber-50 p-3 text-left text-sm text-amber-900">
+                  <strong>{result.deduplicated}</strong> aviso(s) desta campanha já estavam registrados. Não iniciamos um novo envio para esses contatos.
+                </div>
+              )}
               <div className="w-full space-y-1 text-sm text-left">
                 {result.accepted > 0 && (
                   <p><strong>{result.accepted}</strong> aceita(s) pelo provedor do WhatsApp</p>
@@ -263,7 +268,25 @@ export function WhatsAppBroadcastModal({
                 )}
               </div>
             </div>
-            <Button className="w-full" variant="outline" onClick={handleClose}>Fechar</Button>
+            <div className="flex gap-2">
+              {result.deduplicated > 0 && (
+                <Button
+                  className="flex-1"
+                  variant="outline"
+                  onClick={() => {
+                    setResult(null);
+                    setNewCampaign(true);
+                    newCampaignIdRef.current = {
+                      signature: JSON.stringify([tripId, filter, messageTemplate.trim()]),
+                      id: crypto.randomUUID(),
+                    };
+                  }}
+                >
+                  Preparar novo disparo
+                </Button>
+              )}
+              <Button className="flex-1" variant="outline" onClick={handleClose}>Fechar</Button>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">

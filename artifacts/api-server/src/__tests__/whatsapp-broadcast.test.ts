@@ -637,6 +637,7 @@ describe("POST /trips/:id/whatsapp-broadcast route", () => {
       failed: 0,
       unknown: 0,
       skipped: 2,
+      deduplicated: 0,
       skippedReasons: [
         { code: "whatsapp_opted_out", count: 1 },
         { code: "whatsapp_connection_unavailable", count: 1 },
@@ -669,6 +670,15 @@ describe("POST /trips/:id/whatsapp-broadcast route", () => {
       if (authArrivals === 2) releaseAuthBarrier();
       await authBarrier;
       return { id: "staff-1", tenantId: "tenant-1", role: ROLES.AGENCY_ADMIN };
+    });
+    const storedCampaignKeys = new Set<string>();
+    mockDispatchOutboundMessage.mockImplementation(async (input: { idempotencyKey: string }) => {
+      const created = !storedCampaignKeys.has(input.idempotencyKey);
+      storedCampaignKeys.add(input.idempotencyKey);
+      return {
+        created,
+        deliveries: [{ channel: "whatsapp", status: "accepted" }],
+      };
     });
     const tripRows = [{
       id: "trip-1",
@@ -722,6 +732,7 @@ describe("POST /trips/:id/whatsapp-broadcast route", () => {
     ]);
     expect(first.status).toBe(200);
     expect(concurrent.status, JSON.stringify(concurrent.body)).toBe(200);
+    expect([first.body.deduplicated, concurrent.body.deduplicated].sort()).toEqual([0, 1]);
     const concurrentKeys = mockDispatchOutboundMessage.mock.calls
       .slice(0, 2)
       .map(([input]) => (input as { idempotencyKey: string }).idempotencyKey);
@@ -731,6 +742,7 @@ describe("POST /trips/:id/whatsapp-broadcast route", () => {
     setQueue([tripRows, tenantRows, reservationRows, passengerRows, clientRows, lookupRows]);
     const repeated = await send("d933186c-3b69-40a8-8e3e-ccf5d0b7b8d8");
     expect(repeated.status).toBe(200);
+    expect(repeated.body.deduplicated).toBe(1);
     const repeatedKey = (mockDispatchOutboundMessage.mock.calls[2][0] as { idempotencyKey: string }).idempotencyKey;
     expect(repeatedKey).toBe(concurrentKeys[0]);
 
@@ -740,6 +752,7 @@ describe("POST /trips/:id/whatsapp-broadcast route", () => {
       "f1553a8e-5d8b-42ca-9a60-ee17f2d9d0fa",
     );
     expect(intentional.status).toBe(200);
+    expect(intentional.body.deduplicated).toBe(0);
     const intentionalKey = (mockDispatchOutboundMessage.mock.calls[3][0] as { idempotencyKey: string }).idempotencyKey;
     expect(intentionalKey).not.toBe(concurrentKeys[0]);
   });

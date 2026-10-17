@@ -14,5 +14,7 @@ export interface WhatsAppBroadcastResult {
   failed: number;
   unknown: number;
   skipped: number;
+  /** Existing campaign deliveries reused; no new send was started for these recipients. */
+  deduplicated: number;
   skippedReasons: WhatsAppBroadcastResultSkippedReasonsItem[];
 }

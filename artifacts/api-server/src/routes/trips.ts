@@ -3750,6 +3750,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
     let accepted = 0;
     let failed = 0;
     let unknown = 0;
+    let deduplicated = 0;
     let skipped = selection.skipped + (passengers.length - passengerContacts.length);
     const safeSkipReasonCodes = new Set([
       "whatsapp_opted_out",
@@ -3799,6 +3800,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
           recipientClientId: recipient.recipientClientId,
           inlineOnQueueFailure: true,
         });
+        if (dispatch.deduplicated) deduplicated++;
         switch (dispatch.status) {
           case "queued":
             queued++;
@@ -3832,6 +3834,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
       failed,
       unknown,
       skipped,
+      deduplicated,
       skippedReasons: [...skipReasonCounts].map(([code, count]) => ({ code, count })),
     });
   } catch (err) {

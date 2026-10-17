@@ -7302,6 +7302,7 @@ components:
         failed: { type: integer }
         unknown: { type: integer }
         skipped: { type: integer }
+        deduplicated: { type: integer, description: Existing campaign deliveries reused; no new send was started for these recipients. }
         skippedReasons:
           type: array
           items:
@@ -7328,7 +7329,7 @@ components:
                   - other
               count: { type: integer }
             required: [code, count]
-      required: [recipientCount, queued, accepted, failed, unknown, skipped, skippedReasons]
+      required: [recipientCount, queued, accepted, failed, unknown, skipped, deduplicated, skippedReasons]
     ReverseReferralBonusBody:
       type: object
       properties:

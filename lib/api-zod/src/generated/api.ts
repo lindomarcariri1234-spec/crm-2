@@ -11428,6 +11428,12 @@ export const BroadcastTripWhatsAppResponse = zod.object({
   failed: zod.number().int(),
   unknown: zod.number().int(),
   skipped: zod.number().int(),
+  deduplicated: zod
+    .number()
+    .int()
+    .describe(
+      "Existing campaign deliveries reused; no new send was started for these recipients.",
+    ),
   skippedReasons: zod.array(
     zod.object({
       code: zod.enum([

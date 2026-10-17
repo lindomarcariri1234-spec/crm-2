@@ -20,3 +20,9 @@ For trip WhatsApp broadcasts, deduplicate by a stable logical campaign identity 
 **Why:** Request IDs are generated independently by each staff member, so request-level keys cannot prevent overlapping campaigns. The outbound-message unique index makes a stable per-recipient campaign key atomic, while an explicit campaign UUID preserves intentional repeat sends.
 
 **How to apply:** Compute the default campaign identity server-side from the selected audience and payload; preserve the explicit campaign UUID on retries and expose a clear user action for intentional identical sends. Report only WhatsApp delivery: pending is queued, accepted means the provider accepted it (not delivered), and processing or an ambiguous exception is unknown.
+
+When a broadcast reuses an existing outbox row, expose that outcome separately from accepted/queued counts so staff are not told that a new send just occurred.
+
+**Why:** Idempotent replays return the previous delivery state; without a distinct marker, a reused accepted row looks like a freshly sent message.
+
+**How to apply:** Propagate the outbox `created` result through the WhatsApp helper and aggregate a recipient count in the route response. Keep the UI message aggregate-only and offer the explicit new-campaign path.
