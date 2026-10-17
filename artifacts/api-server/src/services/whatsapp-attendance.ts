@@ -57,12 +57,25 @@ interface EvolutionInbound {
   content: string | null;
   media: EvolutionInboundMedia | null;
   fromMe: boolean;
+  occurredAt: Date | null;
 }
 
 function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function evolutionOccurredAt(value: unknown): Date | null {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const numeric = typeof value === "number" || /^\d{10,13}$/.test(value)
+    ? Number(value)
+    : Number.NaN;
+  const timestamp = Number.isFinite(numeric)
+    ? new Date(numeric < 100_000_000_000 ? numeric * 1_000 : numeric)
+    : new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp;
 }
 
 /** Evolution emits slightly different envelopes between versions. */
@@ -114,6 +127,7 @@ export function parseEvolutionInbound(instanceName: string, payload: unknown): E
     content: textContent?.trim().slice(0, 4_000) || mediaLabel,
     media,
     fromMe: key["fromMe"] === true || data["fromMe"] === true || rawJid.endsWith("@g.us"),
+    occurredAt: evolutionOccurredAt(data["messageTimestamp"] ?? data["timestamp"] ?? root["timestamp"]),
   };
 }
 
@@ -133,7 +147,7 @@ export const evolutionInboundAdapter: InboundProviderAdapter<
       senderId: event.phone,
       externalId: event.messageId,
       content: event.content ?? "Mídia recebida",
-      occurredAt: null,
+      occurredAt: event.occurredAt,
       media: event.media ? {
         kind: event.media.kind,
         mimeType: event.media.mimeType,
@@ -470,19 +484,26 @@ export async function processEvolutionInbound(opts: {
   payload: unknown;
 }): Promise<WhatsAppInboundOutcome> {
   const event = evolutionInboundAdapter.normalize(opts)[0];
-  if (!event) return "ignored";
+  if (!event) {
+    // Authenticate even malformed, outgoing, or unsupported events so the
+    // webhook does not become an unauthenticated success oracle.
+    return await resolveIntegration(opts.instanceName, opts.apiKey) ? "ignored" : "unauthorized";
+  }
   const inbound = event.providerData;
-  const inboundContent = inbound.content ?? "";
+  const inboundMedia = event.media ? inbound.media : null;
+  const inboundContent = event.content;
   const optOutRequested = isOptOut(inboundContent);
 
-  const integration = await resolveIntegration(inbound.instanceName, opts.apiKey);
+  const integration = await resolveIntegration(event.accountId, opts.apiKey);
   if (!integration) return "unauthorized";
   const tenantId = integration.tenantId;
+  const senderId = event.senderId;
+  const externalId = event.externalId;
 
   const transactionResult = await db.transaction(async (tx) => {
     await tx.execute(sql`
       SELECT pg_advisory_xact_lock(
-        hashtextextended(${`client-whatsapp:${tenantId}:${inbound.phone}`}, 0)
+        hashtextextended(${`client-whatsapp:${tenantId}:${senderId}`}, 0)
       )
     `);
     const clients = await tx.select({
@@ -495,15 +516,15 @@ export async function processEvolutionInbound(opts: {
       .where(and(
         eq(chatbotConversationsTable.tenantId, tenantId),
         eq(chatbotConversationsTable.channel, "whatsapp"),
-        eq(chatbotConversationsTable.sessionId, inbound.phone!),
+        eq(chatbotConversationsTable.sessionId, senderId),
         eq(chatbotConversationsTable.whatsappIntegrationId, integration.id),
       ))
       .orderBy(desc(chatbotConversationsTable.createdAt))
       .limit(1);
 
     const matches = [...new Map(clients.filter((row) =>
-      normalizeInboundWhatsAppPhone(row.whatsapp ?? "") === inbound.phone
-      || normalizeInboundWhatsAppPhone(row.phone ?? "") === inbound.phone,
+      normalizeInboundWhatsAppPhone(row.whatsapp ?? "") === senderId
+      || normalizeInboundWhatsAppPhone(row.phone ?? "") === senderId,
     ).map((row) => [row.id, row])).values()];
     const linkedClient = existingConversation?.clientId
       ? clients.find((row) => row.id === existingConversation.clientId) ?? null
@@ -529,8 +550,8 @@ export async function processEvolutionInbound(opts: {
         tenantId,
         name: "Contato WhatsApp",
         email: "",
-        whatsapp: inbound.phone!,
-        phone: inbound.phone!,
+        whatsapp: senderId,
+        phone: senderId,
         classification: "new",
         origin: "whatsapp",
         createdById: null,
@@ -564,7 +585,7 @@ export async function processEvolutionInbound(opts: {
         clientId: nextClientId,
         channel: "whatsapp",
         whatsappIntegrationId: integration.id,
-        sessionId: inbound.phone!,
+        sessionId: senderId,
         metadata,
       }).returning();
     } else if (
@@ -587,7 +608,7 @@ export async function processEvolutionInbound(opts: {
         tenantId,
         clientId: existingConversation.clientId,
         eventType: "whatsapp_identity_unlinked",
-        idempotencyKey: `whatsapp-identity-unlinked:${conversation.id}:${inbound.messageId ?? conversation.id}`,
+        idempotencyKey: `whatsapp-identity-unlinked:${conversation.id}:${externalId ?? conversation.id}`,
         sourceType: "chatbot_conversation",
         sourceId: conversation.id,
         reason: "O vínculo automático foi removido por ambiguidade ou conflito de identidade.",
@@ -608,7 +629,7 @@ export async function processEvolutionInbound(opts: {
         tenantId,
         clientId: null,
         eventType: "whatsapp_identity_ambiguous",
-        idempotencyKey: `whatsapp-identity-review:${conversation.id}:${inbound.messageId ?? conversation.id}`,
+        idempotencyKey: `whatsapp-identity-review:${conversation.id}:${externalId ?? conversation.id}`,
         sourceType: "chatbot_conversation",
         sourceId: conversation.id,
         reason: identityMatchStatus === "ambiguous"
@@ -641,12 +662,13 @@ export async function processEvolutionInbound(opts: {
         id: generateId(),
         tenantId,
         conversationId: conversation.id,
-        sourceMessageId: inbound.messageId,
+        sourceMessageId: externalId,
         role: "user",
-        content: inbound.content ?? "Mídia recebida",
+        content: event.content,
         mediaUrl: null,
-        mediaMimeType: optedOut ? null : inbound.media?.mimeType ?? null,
-        mediaFileName: optedOut ? null : inbound.media?.fileName ?? null,
+        ...(event.occurredAt ? { sentAt: event.occurredAt } : {}),
+        mediaMimeType: optedOut ? null : event.media?.mimeType ?? null,
+        mediaFileName: optedOut ? null : event.media?.fileName ?? null,
         isBot: false,
       })
       .onConflictDoNothing()
@@ -657,7 +679,7 @@ export async function processEvolutionInbound(opts: {
       inserted
       && !optedOut
       && (
-        inbound.media
+        event.media
         || conversation.assignedUserId
         || conversation.status === "human_handoff"
         || mustHandoff(inboundContent)
@@ -673,7 +695,7 @@ export async function processEvolutionInbound(opts: {
     }
 
     let existingMediaMessage: { id: string; mediaUrl: string | null } | undefined;
-    if (!inserted && inbound.messageId && inbound.media && !optedOut) {
+    if (!inserted && externalId && event.media && !optedOut) {
       const [existing] = await tx.select({
         id: chatbotMessagesTable.id,
         mediaUrl: chatbotMessagesTable.mediaUrl,
@@ -682,7 +704,7 @@ export async function processEvolutionInbound(opts: {
         .where(and(
           eq(chatbotMessagesTable.tenantId, tenantId),
           eq(chatbotMessagesTable.conversationId, conversation.id),
-          eq(chatbotMessagesTable.sourceMessageId, inbound.messageId),
+          eq(chatbotMessagesTable.sourceMessageId, externalId),
         ))
         .limit(1);
       existingMediaMessage = existing;
@@ -704,7 +726,7 @@ export async function processEvolutionInbound(opts: {
         tenantId,
         clientId: client.id,
         eventType: "whatsapp_inbound",
-        idempotencyKey: `whatsapp-inbound:${inbound.messageId ?? inserted.id}`,
+        idempotencyKey: `whatsapp-inbound:${externalId ?? inserted.id}`,
         sourceType: "chatbot_conversation",
         sourceId: conversation.id,
         reason: "Mensagem recebida de um contato associado a este cadastro.",
@@ -725,7 +747,7 @@ export async function processEvolutionInbound(opts: {
       mediaMessageId,
       supportTicketId,
       shouldStoreMedia: Boolean(
-        inbound.media
+        event.media
         && !optedOut
         && mediaMessageId
         && !existingMediaMessage?.mediaUrl,
@@ -738,7 +760,7 @@ export async function processEvolutionInbound(opts: {
   }
   if (optedOut) return "opted_out";
 
-  if (inbound.media && mediaMessageId && shouldStoreMedia) {
+  if (inboundMedia && mediaMessageId && shouldStoreMedia) {
     const config = (integration.config ?? {}) as Record<string, unknown>;
     let apiKey: string | null = null;
     try {
@@ -750,7 +772,7 @@ export async function processEvolutionInbound(opts: {
     const baseUrl = typeof config["baseUrl"] === "string" ? config["baseUrl"].trim() : "";
     const instanceName = typeof config["instanceName"] === "string" ? config["instanceName"].trim() : "";
     const result = baseUrl && instanceName && apiKey
-      ? await storeEvolutionInboundMedia({ baseUrl, instanceName, apiKey, media: inbound.media })
+      ? await storeEvolutionInboundMedia({ baseUrl, instanceName, apiKey, media: inboundMedia })
       : { ok: false as const, reason: "request_failed" as const };
     if (result.ok) {
       const uploadedMedia: StoredEvolutionMedia = result.media;
@@ -796,8 +818,8 @@ export async function processEvolutionInbound(opts: {
       );
     }
   }
-  const outboundKey = inbound.messageId ? `outbound:${inbound.messageId}` : null;
-  if (inbound.messageId && !inserted && outboundKey && !inbound.media) {
+  const outboundKey = externalId ? `outbound:${externalId}` : null;
+  if (externalId && !inserted && outboundKey && !event.media) {
     const [existingReply] = await db.select({ id: chatbotMessagesTable.id })
       .from(chatbotMessagesTable)
       .where(and(
@@ -813,7 +835,7 @@ export async function processEvolutionInbound(opts: {
   }
 
   if (
-    inbound.media
+    event.media
     || conversation.assignedUserId
     || conversation.status === "human_handoff"
     || mustHandoff(inboundContent)

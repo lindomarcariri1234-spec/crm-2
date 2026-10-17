@@ -11,6 +11,7 @@ const {
   mockConsentState,
   mockTxUpdateSets,
   mockInsertedMessages,
+  mockInsertResults,
 } = vi.hoisted(() => ({
   mockDbSelect: vi.fn(),
   mockDbTransaction: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockConsentState: { clientOptIn: true, conversationStatus: "open" },
   mockTxUpdateSets: [] as Record<string, unknown>[],
   mockInsertedMessages: [] as Record<string, unknown>[],
+  mockInsertResults: [] as Array<Array<{ id: string }>>,
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -148,6 +150,7 @@ describe("Evolution inbound attendance consent", () => {
     mockConsentState.conversationStatus = "open";
     mockTxUpdateSets.length = 0;
     mockInsertedMessages.length = 0;
+    mockInsertResults.length = 0;
     mockDbUpdate.mockReset();
     mockStoreEvolutionInboundMedia.mockReset();
     mockGetAIClientForTenant.mockReset();
@@ -188,33 +191,33 @@ describe("Evolution inbound attendance consent", () => {
     });
 
     mockDbSelect.mockReturnValue(makeWhereQuery([integration]));
-    const clientQuery = makeWhereQuery([client]);
-    const conversationQuery = makeQuery([conversation]);
-    const transaction = {
-      execute: vi.fn(async () => undefined),
-      select: vi.fn()
-        .mockReturnValueOnce(clientQuery)
-        .mockReturnValueOnce(conversationQuery),
-      update: vi.fn(() => ({
-        set: vi.fn((values: Record<string, unknown>) => {
-          mockTxUpdateSets.push(values);
-          return { where: vi.fn(async () => undefined) };
-        }),
-      })),
-      insert: vi.fn(() => ({
-        values: vi.fn((values: Record<string, unknown>) => {
-          mockInsertedMessages.push(values);
-          return {
-            onConflictDoNothing: vi.fn(() => ({
-              returning: vi.fn(async () => [{ id: "message-row-1" }]),
-            })),
-          };
-        }),
-      })),
-    };
-    mockDbTransaction.mockImplementation(async (callback: (tx: typeof transaction) => unknown) =>
-      await callback(transaction),
-    );
+    mockDbTransaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => unknown) => {
+      const transaction = {
+        execute: vi.fn(async () => undefined),
+        select: vi.fn()
+          .mockReturnValueOnce(makeWhereQuery([client]))
+          .mockReturnValueOnce(makeQuery([conversation])),
+        update: vi.fn(() => ({
+          set: vi.fn((values: Record<string, unknown>) => {
+            mockTxUpdateSets.push(values);
+            return { where: vi.fn(async () => undefined) };
+          }),
+        })),
+        insert: vi.fn(() => ({
+          values: vi.fn((values: Record<string, unknown>) => {
+            mockInsertedMessages.push(values);
+            return {
+              onConflictDoNothing: vi.fn(() => ({
+                returning: vi.fn(async () =>
+                  mockInsertResults.shift() ?? [{ id: "message-row-1" }],
+                ),
+              })),
+            };
+          }),
+        })),
+      };
+      return await callback(transaction);
+    });
     mockExtractEvolutionInboundMedia.mockReturnValue({
       kind: "image",
       mimeType: "image/jpeg",
@@ -226,10 +229,12 @@ describe("Evolution inbound attendance consent", () => {
   });
 
   it("normalizes Evolution messages to the shared inbound event contract", () => {
+    mockExtractEvolutionInboundMedia.mockReturnValueOnce(null);
     const [event] = evolutionInboundAdapter.normalize({
       instanceName: "agency-connection",
       payload: {
         data: {
+          messageTimestamp: 1_700_000_000,
           key: {
             remoteJid: "11987654321@s.whatsapp.net",
             id: "evolution-message-123",
@@ -248,7 +253,80 @@ describe("Evolution inbound attendance consent", () => {
       senderId: "5511987654321",
       externalId: "evolution-message-123",
       content: "Olá",
+      occurredAt: new Date(1_700_000_000_000),
     });
+  });
+
+  it("keeps provider identity stable when Evolution redelivers the same event", () => {
+    const payload = {
+      data: {
+        key: {
+          remoteJid: "5511999999999@s.whatsapp.net",
+          id: "provider-message-duplicate",
+          fromMe: false,
+        },
+        message: { conversation: "Oi" },
+      },
+    };
+    const first = evolutionInboundAdapter.normalize({ instanceName: "agency-connection", payload })[0];
+    const replay = evolutionInboundAdapter.normalize({ instanceName: "agency-connection", payload })[0];
+
+    expect(first).toMatchObject({
+      accountId: "agency-connection",
+      senderId: "5511999999999",
+      externalId: "provider-message-duplicate",
+    });
+    expect(replay?.externalId).toBe(first?.externalId);
+  });
+
+  it("keeps duplicate webhook inserts on the same provider message key", async () => {
+    mockExtractEvolutionInboundMedia.mockReturnValue(null);
+    mockInsertResults.push([{ id: "message-row-1" }], []);
+    const payload = {
+      data: {
+        key: {
+          remoteJid: "5511999999999@s.whatsapp.net",
+          id: "provider-message-replayed",
+          fromMe: false,
+        },
+        message: { conversation: "STOP" },
+      },
+    };
+    const opts = {
+      instanceName: "agency-instance",
+      apiKey: "integration-api-key",
+      payload,
+    };
+
+    await expect(processEvolutionInbound(opts)).resolves.toBe("opted_out");
+    await expect(processEvolutionInbound(opts)).resolves.toBe("opted_out");
+
+    expect(mockInsertedMessages).toHaveLength(2);
+    expect(mockInsertedMessages.map((message) => message["sourceMessageId"])).toEqual([
+      "provider-message-replayed",
+      "provider-message-replayed",
+    ]);
+    expect(mockInsertResults).toHaveLength(0);
+  });
+
+  it("ignores malformed payloads only after authenticating the configured instance", async () => {
+    expect(evolutionInboundAdapter.normalize({
+      instanceName: "agency-instance",
+      payload: { data: { key: {}, message: {} } },
+    })).toEqual([]);
+
+    await expect(processEvolutionInbound({
+      instanceName: "agency-instance",
+      apiKey: "integration-api-key",
+      payload: { data: { key: {}, message: {} } },
+    })).resolves.toBe("ignored");
+
+    mockDbSelect.mockReturnValueOnce(makeWhereQuery([]));
+    await expect(processEvolutionInbound({
+      instanceName: "unknown-instance",
+      apiKey: "wrong-key",
+      payload: { data: { key: {}, message: {} } },
+    })).resolves.toBe("unauthorized");
   });
 
   it("records an opt-out before downloading or attaching media from that message", async () => {
@@ -338,6 +416,7 @@ describe("Evolution inbound attendance consent", () => {
             remoteJid: "5511999999999@s.whatsapp.net",
             fromMe: false,
           },
+          messageTimestamp: 1_700_000_000,
           message: { imageMessage: { mimetype: "image/jpeg" } },
           text: "Veja esta imagem",
         },
@@ -345,6 +424,13 @@ describe("Evolution inbound attendance consent", () => {
     });
 
     expect(result).toBe("human_handoff");
+    expect(mockInsertedMessages[0]).toEqual(expect.objectContaining({
+      sourceMessageId: "provider-message-1",
+      content: "Veja esta imagem",
+      sentAt: new Date(1_700_000_000_000),
+      mediaMimeType: "image/jpeg",
+      mediaFileName: "image.jpg",
+    }));
     expect(mockStoreEvolutionInboundMedia).toHaveBeenCalledOnce();
     expect(attachmentUpdate.set).toHaveBeenCalledWith({
       mediaUrl: uploadedMedia.mediaUrl,
