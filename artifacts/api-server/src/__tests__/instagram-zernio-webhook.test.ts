@@ -246,8 +246,8 @@ describe("Zernio Instagram webhook", () => {
       status: "accepted",
       providerStatus: "read",
     });
-    expect(outboundDelivery.updateOutboundDeliveryFromWebhook.mock.invocationCallOrder[0])
-      .toBeLessThan(zernioService.processZernioInstagramWebhook.mock.invocationCallOrder[0] ?? Infinity);
+    expect(vi.mocked(outboundDelivery.updateOutboundDeliveryFromWebhook).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(zernioService.processZernioInstagramWebhook).mock.invocationCallOrder[0] ?? Infinity);
   });
 
   it("retains only safe Instagram attachment URLs and identifies common image types", () => {
