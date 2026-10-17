@@ -1751,35 +1751,44 @@ export async function recoverOutboundDeliveries(
   let recovered = 0;
   for (const candidate of staleCandidates) {
     try {
-      const [delivery] = await db.update(outboundDeliveriesTable).set({
-        status: "unknown", claimedAt: null, nextAttemptAt: unknownAt, lastError: unknownReason,
-      }).where(and(
-        eq(outboundDeliveriesTable.id, candidate.id),
-        eq(outboundDeliveriesTable.tenantId, candidate.tenantId),
-        eq(outboundDeliveriesTable.status, "processing"),
-        lte(outboundDeliveriesTable.claimedAt, staleBefore),
-      )).returning({
-        id: outboundDeliveriesTable.id,
-        tenantId: outboundDeliveriesTable.tenantId,
-        outboundMessageId: outboundDeliveriesTable.outboundMessageId,
-        attempts: outboundDeliveriesTable.attempts,
+      const delivery = await db.transaction(async (tx) => {
+        const [recoveredDelivery] = await tx.update(outboundDeliveriesTable).set({
+          status: "unknown", claimedAt: null, nextAttemptAt: unknownAt, lastError: unknownReason,
+        }).where(and(
+          eq(outboundDeliveriesTable.id, candidate.id),
+          eq(outboundDeliveriesTable.tenantId, candidate.tenantId),
+          eq(outboundDeliveriesTable.status, "processing"),
+          lte(outboundDeliveriesTable.claimedAt, staleBefore),
+        )).returning({
+          id: outboundDeliveriesTable.id,
+          tenantId: outboundDeliveriesTable.tenantId,
+          outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+          attempts: outboundDeliveriesTable.attempts,
+        });
+        if (!recoveredDelivery) return null;
+
+        const [recoveredAttempt] = await tx.update(outboundDeliveryAttemptsTable).set({
+          status: "unknown",
+          error: unknownReason,
+          completedAt: unknownAt,
+        }).where(and(
+          eq(outboundDeliveryAttemptsTable.tenantId, recoveredDelivery.tenantId),
+          eq(outboundDeliveryAttemptsTable.deliveryId, recoveredDelivery.id),
+          eq(outboundDeliveryAttemptsTable.attemptNumber, recoveredDelivery.attempts),
+          or(
+            eq(outboundDeliveryAttemptsTable.status, "processing"),
+            eq(outboundDeliveryAttemptsTable.status, "unknown"),
+          ),
+        )).returning({ id: outboundDeliveryAttemptsTable.id });
+
+        // Do not commit the delivery transition if its active attempt cannot
+        // be closed. The next sweep can retry the whole transaction safely.
+        if (!recoveredAttempt) throw new Error("outbound_delivery_attempt_not_recovered");
+        return recoveredDelivery;
       });
       if (!delivery) continue;
-      await db.update(outboundDeliveryAttemptsTable).set({
-        status: "unknown",
-        error: unknownReason,
-        completedAt: unknownAt,
-      }).where(and(
-        eq(outboundDeliveryAttemptsTable.tenantId, delivery.tenantId),
-        eq(outboundDeliveryAttemptsTable.deliveryId, delivery.id),
-        eq(outboundDeliveryAttemptsTable.attemptNumber, delivery.attempts),
-        or(
-          eq(outboundDeliveryAttemptsTable.status, "processing"),
-          eq(outboundDeliveryAttemptsTable.status, "unknown"),
-        ),
-      ));
-      await refreshMessageStatus(delivery.tenantId, delivery.outboundMessageId);
       recovered++;
+      await refreshMessageStatus(delivery.tenantId, delivery.outboundMessageId);
     } catch (error) {
       logger.warn({
         tenantId: candidate.tenantId,

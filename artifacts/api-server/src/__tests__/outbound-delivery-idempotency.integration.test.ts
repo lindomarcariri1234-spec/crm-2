@@ -600,4 +600,127 @@ describe("outbound delivery database idempotency", () => {
       completedAt: expect.any(Date),
     });
   });
+
+  it("rolls back both recovery writes when closing the attempt fails, then recovers without sending", async () => {
+    mockWhatsAppSend.mockClear();
+    mockReconcileWhatsAppMessage.mockClear();
+    const created = await createOutboundMessage({
+      tenantId,
+      eventType: "trip_whatsapp_broadcast",
+      idempotencyKey: `trip:trip-test:recovery-rollback:${randomUUID()}:${phone}`,
+      recipient: { type: "direct", whatsapp: phone },
+      whatsapp: { text: "The worker stopped after starting the provider request" },
+      channels: ["whatsapp"],
+      origin: "legacy_whatsapp",
+      originChannel: "whatsapp",
+    });
+    expect(created.deliveries).toHaveLength(1);
+    const deliveryId = created.deliveries[0]!.id;
+    const expiredClaimAt = new Date(Date.now() - 16 * 60 * 1000);
+
+    await db.update(outboundDeliveriesTable).set({
+      status: "processing",
+      provider: "evolution",
+      attempts: 1,
+      claimedAt: expiredClaimAt,
+      nextAttemptAt: expiredClaimAt,
+    }).where(and(
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.id, deliveryId),
+    ));
+    await db.insert(outboundDeliveryAttemptsTable).values({
+      id: randomUUID(),
+      tenantId,
+      deliveryId,
+      attemptNumber: 1,
+      provider: "evolution",
+      status: "processing",
+      startedAt: expiredClaimAt,
+    });
+
+    const triggerSuffix = runId.slice(0, 12);
+    const triggerName = `fail_recovery_attempt_${triggerSuffix}`;
+    const functionName = `raise_recovery_attempt_error_${triggerSuffix}`;
+    try {
+      await pool.query(`
+        CREATE FUNCTION ${functionName}() RETURNS trigger
+        LANGUAGE plpgsql AS $trigger$
+        BEGIN
+          IF OLD.status = 'processing' AND NEW.status = 'unknown' THEN
+            RAISE EXCEPTION 'injected attempt update failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $trigger$
+      `);
+      await pool.query(`
+        CREATE TRIGGER ${triggerName}
+        BEFORE UPDATE ON outbound_delivery_attempts
+        FOR EACH ROW EXECUTE FUNCTION ${functionName}()
+      `);
+
+      await expect(recoverOutboundDeliveries({ databaseFallback: true })).resolves.toEqual({
+        recovered: 0,
+        enqueued: 0,
+        inlineAttempted: 0,
+      });
+
+      const [deliveryAfterFailure] = await db.select().from(outboundDeliveriesTable).where(and(
+        eq(outboundDeliveriesTable.tenantId, tenantId),
+        eq(outboundDeliveriesTable.id, deliveryId),
+      ));
+      const attemptsAfterFailure = await db.select().from(outboundDeliveryAttemptsTable).where(and(
+        eq(outboundDeliveryAttemptsTable.tenantId, tenantId),
+        eq(outboundDeliveryAttemptsTable.deliveryId, deliveryId),
+      ));
+      expect(deliveryAfterFailure).toMatchObject({
+        status: "processing",
+        attempts: 1,
+        claimedAt: expiredClaimAt,
+      });
+      expect(attemptsAfterFailure).toHaveLength(1);
+      expect(attemptsAfterFailure[0]).toMatchObject({
+        attemptNumber: 1,
+        status: "processing",
+        completedAt: null,
+      });
+      expect(mockWhatsAppSend).not.toHaveBeenCalled();
+      expect(mockReconcileWhatsAppMessage).not.toHaveBeenCalled();
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS ${triggerName} ON outbound_delivery_attempts`);
+      await pool.query(`DROP FUNCTION IF EXISTS ${functionName}()`);
+    }
+
+    await expect(recoverOutboundDeliveries({ databaseFallback: true })).resolves.toEqual({
+      recovered: 1,
+      enqueued: 0,
+      inlineAttempted: 0,
+    });
+    expect(mockWhatsAppSend).not.toHaveBeenCalled();
+    expect(mockReconcileWhatsAppMessage).not.toHaveBeenCalled();
+
+    const deliveries = await db.select().from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.outboundMessageId, created.message.id),
+    ));
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      id: deliveryId,
+      status: "unknown",
+      attempts: 1,
+      claimedAt: null,
+      lastError: "delivery_result_unknown",
+    });
+    const attempts = await db.select().from(outboundDeliveryAttemptsTable).where(and(
+      eq(outboundDeliveryAttemptsTable.tenantId, tenantId),
+      eq(outboundDeliveryAttemptsTable.deliveryId, deliveryId),
+    ));
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      attemptNumber: 1,
+      status: "unknown",
+      error: "delivery_result_unknown",
+      completedAt: expect.any(Date),
+    });
+  });
 });
