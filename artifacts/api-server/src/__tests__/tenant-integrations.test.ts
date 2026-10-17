@@ -1005,6 +1005,41 @@ describe("PUT /api/integrations/:type — save configuration", () => {
     }
   });
 
+  it("configures the receive webhook even when the WhatsApp session is disconnected", async () => {
+    const restoreEnv = setWebhookTestEnvironment("https://app.example.com");
+    try {
+      asAdmin();
+      mockLimit.mockResolvedValueOnce([]);
+      mockSsrfFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: JSON.stringify({ instance: { state: "close" } }),
+        })
+        .mockResolvedValueOnce({ ok: true, status: 201 });
+
+      const res = await request(buildApp())
+        .put("/api/integrations/whatsapp_evolution")
+        .send({
+          enabled: true,
+          config: { baseUrl: "https://evo.example.com", instanceName: "my-instance" },
+          secrets: { apiKey: WA_SECRETS.apiKey },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.webhook).toEqual({
+        ok: true,
+        message: "Webhook de recebimento do WhatsApp configurado.",
+      });
+      expect(mockSsrfFetch).toHaveBeenCalledTimes(2);
+      expect(mockUpdateSet.mock.calls.map(([values]) => values)).toContainEqual(
+        expect.objectContaining({ status: "error", isDefault: false }),
+      );
+    } finally {
+      restoreEnv();
+    }
+  });
+
   it("keeps the Evolution integration connected if webhook setup is rejected", async () => {
     const restoreEnv = setWebhookTestEnvironment("https://app.example.com");
     try {

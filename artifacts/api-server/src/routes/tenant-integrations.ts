@@ -1195,12 +1195,13 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
         }
 
         if (type === "whatsapp_evolution") {
-          webhookSetup = testResult.ok
-            ? await configureEvolutionInboundWebhook(resolvedConfig, secrets["apiKey"] ?? "")
-            : {
-                ok: false,
-                message: "O webhook de recebimento não foi configurado porque o teste da conexão Evolution falhou.",
-              };
+          // Webhook configuration is independent of the WhatsApp session state.
+          // Evolution can accept the callback while the phone is disconnected;
+          // the test result still determines the stored connection status above.
+          webhookSetup = await configureEvolutionInboundWebhook(
+            resolvedConfig,
+            secrets["apiKey"] ?? "",
+          );
           await writeLog(
             me,
             type,
@@ -1227,11 +1228,17 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
           );
         await writeLog(me, type, "test", "error", `Falha ao verificar após salvar: ${msg}`);
         if (type === "whatsapp_evolution") {
-          webhookSetup = {
-            ok: false,
-            message: "O webhook de recebimento não foi configurado porque o teste da conexão Evolution falhou.",
-          };
-          await writeLog(me, type, "webhook_setup", "warn", webhookSetup.message);
+          webhookSetup = await configureEvolutionInboundWebhook(
+            resolvedConfig,
+            decryptSecrets(newSecretsEncrypted!)["apiKey"] ?? "",
+          );
+          await writeLog(
+            me,
+            type,
+            "webhook_setup",
+            webhookSetup.ok ? "info" : "warn",
+            webhookSetup.message,
+          );
         }
       }
     } else if (enabled && type === "whatsapp_evolution") {
