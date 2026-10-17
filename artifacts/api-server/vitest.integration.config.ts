@@ -45,6 +45,7 @@ export default defineConfig({
       "src/__tests__/instagram-zernio-import-dedup.integration.test.ts",
       "src/__tests__/instagram-messaging-account-scope.integration.test.ts",
       "src/__tests__/instagram-zernio-webhook-persistence.integration.test.ts",
+      "src/__tests__/outbound-delivery-idempotency.integration.test.ts",
       "src/__tests__/trip-tenant-relationship-constraints.integration.test.ts",
     ],
   },
