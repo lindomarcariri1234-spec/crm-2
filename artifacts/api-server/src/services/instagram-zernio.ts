@@ -10,6 +10,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
 import type { InboundProviderAdapter } from "./messaging-provider-adapters.js";
+import { persistNormalizedInboundMessage } from "./inbound-message-persistence.js";
 
 export const INSTAGRAM_ZERNIO_TYPE = "instagram_zernio";
 
@@ -549,19 +550,11 @@ export async function processZernioInstagramWebhook(
     }
     if (!conversation) throw new Error("Could not persist Zernio Instagram conversation");
 
-    const [created] = await tx.insert(chatbotMessagesTable).values({
-      id: generateId(),
+    const created = await persistNormalizedInboundMessage(tx, event, {
       tenantId: integration.tenantId,
       conversationId: conversation.id,
-      sourceMessageId: `zernio:${message.messageId}`,
-      role: "user",
-      content: message.content,
-      mediaUrl: message.mediaUrl,
-      mediaMimeType: message.mediaMimeType,
-      mediaFileName: message.mediaFileName,
-      sentAt: message.sentAt,
-      isBot: false,
-    }).onConflictDoNothing().returning({ id: chatbotMessagesTable.id });
+      sourceMessageId: event.externalId ? `zernio:${event.externalId}` : null,
+    });
     return created ? 1 : 0;
   });
 }

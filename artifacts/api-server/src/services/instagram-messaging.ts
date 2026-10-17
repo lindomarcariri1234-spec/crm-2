@@ -12,6 +12,7 @@ import { decryptCredential, encryptCredential } from "../lib/crypto";
 import { generateId } from "../lib/id";
 import type { InboundProviderAdapter } from "./messaging-provider-adapters.js";
 import { logger } from "../lib/logger";
+import { persistNormalizedInboundMessage } from "./inbound-message-persistence.js";
 
 const DEFAULT_GRAPH_VERSION = "v26.0";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -751,16 +752,11 @@ export async function processInstagramWebhook(payload: unknown): Promise<number>
           .returning();
       }
       if (!conversation) throw new Error("Could not persist Instagram conversation");
-      const [created] = await tx.insert(chatbotMessagesTable).values({
-        id: generateId(),
+      const created = await persistNormalizedInboundMessage(tx, event, {
         tenantId: integration.tenantId,
         conversationId: conversation.id,
-        sourceMessageId: `instagram:${message.messageId}`,
-        role: "user",
-        content: message.content,
-        sentAt: message.sentAt,
-        isBot: false,
-      }).onConflictDoNothing().returning({ id: chatbotMessagesTable.id });
+        sourceMessageId: event.externalId ? `instagram:${event.externalId}` : null,
+      });
       return created ? 1 : 0;
     });
     storedCount += stored;

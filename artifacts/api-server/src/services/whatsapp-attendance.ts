@@ -24,6 +24,7 @@ import {
 } from "./whatsapp-media.js";
 import { ensureSupportTicketForConversation } from "./support-ticketing.js";
 import type { InboundProviderAdapter } from "./messaging-provider-adapters.js";
+import { persistNormalizedInboundMessage } from "./inbound-message-persistence.js";
 
 function normalizeInboundWhatsAppPhone(raw: string): string | null {
   const phonePart = raw.trim().split("@")[0]?.split(":")[0] ?? "";
@@ -657,22 +658,16 @@ export async function processEvolutionInbound(opts: {
         ));
     }
 
-    const [inserted] = await tx.insert(chatbotMessagesTable)
-      .values({
-        id: generateId(),
-        tenantId,
-        conversationId: conversation.id,
-        sourceMessageId: externalId,
-        role: "user",
-        content: event.content,
-        mediaUrl: null,
-        ...(event.occurredAt ? { sentAt: event.occurredAt } : {}),
-        mediaMimeType: optedOut ? null : event.media?.mimeType ?? null,
-        mediaFileName: optedOut ? null : event.media?.fileName ?? null,
-        isBot: false,
-      })
-      .onConflictDoNothing()
-      .returning({ id: chatbotMessagesTable.id });
+    const inserted = await persistNormalizedInboundMessage(tx, event, {
+      tenantId,
+      conversationId: conversation.id,
+      sourceMessageId: externalId,
+      media: optedOut
+        ? null
+        : event.media
+          ? { ...event.media, url: null }
+          : null,
+    });
 
     let supportTicketId: string | null = null;
     if (
