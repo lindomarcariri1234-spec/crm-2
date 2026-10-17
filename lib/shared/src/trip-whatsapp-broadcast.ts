@@ -35,10 +35,10 @@ export interface TripWhatsAppBroadcastSelection {
 
 export function buildTripWhatsAppBroadcastIdempotencyKey(
   tripId: string,
-  requestId: string,
+  campaignId: string,
   normalizedPhone: string,
 ): string {
-  return `trip:${tripId}:whatsapp-broadcast:${requestId}:${normalizedPhone}`;
+  return `trip:${tripId}:whatsapp-broadcast:${campaignId}:${normalizedPhone}`;
 }
 
 export function selectTripWhatsAppBroadcastRecipients(

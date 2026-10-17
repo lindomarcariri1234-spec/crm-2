@@ -3441,6 +3441,7 @@ const WhatsAppBroadcastBody = z.object({
   messageTemplate: z.string().min(1).max(2000),
   filter: z.enum(["all", "confirmed", "pending"]),
   requestId: z.string().uuid(),
+  campaignId: z.string().uuid().optional(),
 });
 
 const WhatsAppBroadcastPreviewBody = z.object({
@@ -3734,6 +3735,16 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
         phones: [{ phone: passenger.whatsapp }],
       })),
     );
+    // A trip, audience, message and recipient set identify one logical
+    // campaign across different staff request IDs. An explicit campaignId
+    // represents a deliberate new send of the same campaign.
+    const campaignId = parsed.data.campaignId ?? createHash("sha256")
+      .update(JSON.stringify([
+        parsed.data.filter,
+        parsed.data.messageTemplate.trim(),
+        selection.recipients.map((recipient) => recipient.phone).sort(),
+      ]))
+      .digest("hex");
 
     let queued = 0;
     let accepted = 0;
@@ -3781,7 +3792,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
           eventType: "trip_whatsapp_broadcast",
           idempotencyKey: buildTripWhatsAppBroadcastIdempotencyKey(
             trip.id,
-            parsed.data.requestId,
+            campaignId,
             recipient.phone,
           ),
           whatsappOnly: true,

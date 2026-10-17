@@ -7270,6 +7270,7 @@ components:
         messageTemplate: { type: string, minLength: 1, maxLength: 2000 }
         filter: { type: string, enum: [all, confirmed, pending] }
         requestId: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid, description: Set only when the staff member explicitly intends a new campaign with the same content and audience. }
       required: [messageTemplate, filter, requestId]
     WhatsAppBroadcastPreviewBody:
       type: object

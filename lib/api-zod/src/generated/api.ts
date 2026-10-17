@@ -11412,6 +11412,13 @@ export const BroadcastTripWhatsAppBody = zod.object({
     .max(broadcastTripWhatsAppBodyMessageTemplateMax),
   filter: zod.enum(["all", "confirmed", "pending"]),
   requestId: zod.string().uuid(),
+  campaignId: zod
+    .string()
+    .uuid()
+    .optional()
+    .describe(
+      "Set only when the staff member explicitly intends a new campaign with the same content and audience.",
+    ),
 });
 
 export const BroadcastTripWhatsAppResponse = zod.object({

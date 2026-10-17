@@ -15,8 +15,8 @@ For multi-stage checkout, keep the same key alive until every stage that depends
 
 **How to apply:** Clear the checkout key only after payment setup succeeds (or after a non-card order is fully submitted); keep the already-created cart state available so the customer can retry the payment step.
 
-For repeatable broadcasts, keep one request ID stable across retries and include it with the trip and normalized recipient phone in the persisted delivery idempotency key. After a successful response, issue a new request ID for the next intentional send. Report only the WhatsApp delivery: pending is queued, accepted means the provider accepted it (not delivered), and processing or an ambiguous exception is unknown.
+For trip WhatsApp broadcasts, deduplicate by a stable logical campaign identity (trip, filter, normalized message, and sorted recipient set), plus each normalized recipient phone. Different staff request IDs must not split one campaign; a deliberate identical resend gets an explicit fresh campaign UUID.
 
-**Why:** A permanent trip-and-phone key suppresses later legitimate reminders, while a transient provider result must not be reported as success or retried as a definite failure.
+**Why:** Request IDs are generated independently by each staff member, so request-level keys cannot prevent overlapping campaigns. The outbound-message unique index makes a stable per-recipient campaign key atomic, while an explicit campaign UUID preserves intentional repeat sends.
 
-**How to apply:** Keep the ID when retrying an uncertain request and direct staff to check the delivery history before sending again; reset it after confirmed request success.
+**How to apply:** Compute the default campaign identity server-side from the selected audience and payload; preserve the explicit campaign UUID on retries and expose a clear user action for intentional identical sends. Report only WhatsApp delivery: pending is queued, accepted means the provider accepted it (not delivered), and processing or an ambiguous exception is unknown.

@@ -82,6 +82,8 @@ export function WhatsAppBroadcastModal({
   const [previewError, setPreviewError] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const requestIdRef = useRef<{ signature: string; id: string } | null>(null);
+  const [newCampaign, setNewCampaign] = useState(false);
+  const newCampaignIdRef = useRef<{ signature: string; id: string } | null>(null);
 
   // Fetch tenant WhatsApp notification settings to pre-fill templates
   useEffect(() => {
@@ -158,10 +160,24 @@ export function WhatsAppBroadcastModal({
       request = { signature, id: crypto.randomUUID() };
       requestIdRef.current = request;
     }
+    let campaignId: string | undefined;
+    if (newCampaign) {
+      let explicitCampaign = newCampaignIdRef.current;
+      if (!explicitCampaign || explicitCampaign.signature !== signature) {
+        explicitCampaign = { signature, id: crypto.randomUUID() };
+        newCampaignIdRef.current = explicitCampaign;
+      }
+      campaignId = explicitCampaign.id;
+    }
     try {
       const res = await broadcast.mutateAsync({
         id: tripId,
-        data: { messageTemplate: trimmedTemplate, filter, requestId: request.id },
+        data: {
+          messageTemplate: trimmedTemplate,
+          filter,
+          requestId: request.id,
+          ...(campaignId ? { campaignId } : {}),
+        },
       });
       setResult(res);
       requestIdRef.current = null;
@@ -174,6 +190,9 @@ export function WhatsAppBroadcastModal({
     setResult(null);
     setPreview(null);
     setSettingsLoaded(false);
+    setNewCampaign(false);
+    newCampaignIdRef.current = null;
+    requestIdRef.current = null;
     onClose();
   };
 
@@ -332,6 +351,26 @@ export function WhatsAppBroadcastModal({
                 </div>
               )}
             </div>
+
+            <label className="flex items-start gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={newCampaign}
+                onChange={(event) => {
+                  const checked = event.currentTarget.checked;
+                  setNewCampaign(checked);
+                  newCampaignIdRef.current = checked
+                    ? {
+                        signature: JSON.stringify([tripId, filter, messageTemplate.trim()]),
+                        id: crypto.randomUUID(),
+                      }
+                    : null;
+                }}
+                disabled={broadcast.isPending}
+                className="mt-0.5"
+              />
+              <span>Iniciar um novo disparo, mesmo que esta mensagem já tenha sido enviada</span>
+            </label>
 
             <div className="flex gap-2 pt-1">
               <Button variant="outline" className="flex-1" onClick={handleClose} disabled={broadcast.isPending}>

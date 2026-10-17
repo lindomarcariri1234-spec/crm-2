@@ -658,6 +658,92 @@ describe("POST /trips/:id/whatsapp-broadcast route", () => {
     expect(response.body.accepted).toBe(0);
   });
 
+  it("shares one recipient key across concurrent and repeated requests, but permits an explicit new campaign", async () => {
+    let authArrivals = 0;
+    let releaseAuthBarrier!: () => void;
+    const authBarrier = new Promise<void>((resolve) => {
+      releaseAuthBarrier = resolve;
+    });
+    mockRequireAuth.mockImplementation(async () => {
+      authArrivals++;
+      if (authArrivals === 2) releaseAuthBarrier();
+      await authBarrier;
+      return { id: "staff-1", tenantId: "tenant-1", role: ROLES.AGENCY_ADMIN };
+    });
+    const tripRows = [{
+      id: "trip-1",
+      tenantId: "tenant-1",
+      name: "Litoral Norte",
+      departureDate: new Date("2026-12-10T12:00:00-03:00"),
+      boardingPoints: [],
+      freePassengers: [],
+    }];
+    const tenantRows = [{ name: "Agência Teste" }];
+    const reservationRows = [{
+      id: "reservation-1",
+      clientId: "client-1",
+      status: "confirmed",
+      reservationNumber: "R-1",
+    }];
+    const passengerRows = [{
+      id: "passenger-1",
+      reservationId: "reservation-1",
+      name: "Passageiro",
+      phone: null,
+    }];
+    const clientRows = [{
+      id: "client-1",
+      name: "Cliente",
+      whatsapp: "5511999990001",
+      phone: null,
+    }];
+    const lookupRows = [{ id: "client-1" }];
+    const app = express();
+    app.use(express.json());
+    app.use("/api", tripsRouter);
+    app.use(errorHandler);
+    const send = (requestId: string, campaignId?: string) =>
+      request(app).post("/api/trips/trip-1/whatsapp-broadcast").send({
+        messageTemplate: "Aviso de embarque",
+        filter: "confirmed",
+        requestId,
+        ...(campaignId ? { campaignId } : {}),
+      });
+
+    // The query mock consumes rows in select-call order: trip and tenant reads
+    // interleave, then both requests resolve their audience and contact lookup.
+    setQueue([
+      tripRows, tripRows, tenantRows, tenantRows, reservationRows, reservationRows,
+      passengerRows, clientRows, passengerRows, clientRows, lookupRows, lookupRows,
+    ]);
+    const [first, concurrent] = await Promise.all([
+      send("b711f64a-19a7-48e6-ae1c-aad3b8f58f64"),
+      send("c822075b-2a58-49f7-bf2d-bbe4c9a69f75"),
+    ]);
+    expect(first.status).toBe(200);
+    expect(concurrent.status, JSON.stringify(concurrent.body)).toBe(200);
+    const concurrentKeys = mockDispatchOutboundMessage.mock.calls
+      .slice(0, 2)
+      .map(([input]) => (input as { idempotencyKey: string }).idempotencyKey);
+    expect(concurrentKeys).toHaveLength(2);
+    expect(concurrentKeys[0]).toBe(concurrentKeys[1]);
+
+    setQueue([tripRows, tenantRows, reservationRows, passengerRows, clientRows, lookupRows]);
+    const repeated = await send("d933186c-3b69-40a8-8e3e-ccf5d0b7b8d8");
+    expect(repeated.status).toBe(200);
+    const repeatedKey = (mockDispatchOutboundMessage.mock.calls[2][0] as { idempotencyKey: string }).idempotencyKey;
+    expect(repeatedKey).toBe(concurrentKeys[0]);
+
+    setQueue([tripRows, tenantRows, reservationRows, passengerRows, clientRows, lookupRows]);
+    const intentional = await send(
+      "e044297d-4c7a-41b9-9f4f-dd06e1c8c9e9",
+      "f1553a8e-5d8b-42ca-9a60-ee17f2d9d0fa",
+    );
+    expect(intentional.status).toBe(200);
+    const intentionalKey = (mockDispatchOutboundMessage.mock.calls[3][0] as { idempotencyKey: string }).idempotencyKey;
+    expect(intentionalKey).not.toBe(concurrentKeys[0]);
+  });
+
   it("previews only tenant-scoped counts and never starts a send", async () => {
     setQueue([
       [{
