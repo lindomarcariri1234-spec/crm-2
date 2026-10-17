@@ -20,10 +20,18 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { normalizeBrazilPhone } from "@workspace/shared";
+import express from "express";
+import request from "supertest";
 
 // ─── Hoisted state (must exist before any vi.mock factory runs) ───────────────
 
-const { setQueue, mockDispatchOutboundMessage, mockInterpolate, mockDb } = vi.hoisted(() => {
+const {
+  setQueue,
+  mockDispatchOutboundMessage,
+  mockInterpolate,
+  mockRequireAuth,
+  mockDb,
+} = vi.hoisted(() => {
   // Shared select queue — tests populate this before each assertion.
   const queue: unknown[][] = [];
 
@@ -59,12 +67,14 @@ const { setQueue, mockDispatchOutboundMessage, mockInterpolate, mockDb } = vi.ho
   const mockInterpolate = vi.fn(
     (_template: string, vars: Record<string, string>) => JSON.stringify(vars),
   );
+  const mockRequireAuth = vi.fn();
 
   return {
     setQueue:  (rows: unknown[][]) => { queue.length = 0; queue.push(...rows); },
     mockDb,
     mockDispatchOutboundMessage,
     mockInterpolate,
+    mockRequireAuth,
   };
 });
 
@@ -73,13 +83,36 @@ const { setQueue, mockDispatchOutboundMessage, mockInterpolate, mockDb } = vi.ho
 vi.mock("@workspace/db", () => ({
   db: mockDb,
   systemConfigsTable:  {},
-  passengersTable:     {},
-  reservationsTable:   {},
-  clientsTable:        {},
-  tripsTable:          {},
-  tenantsTable:        {},
   referralSettingsTable: {},
   referralsTable:      {},
+  tripsTable: {
+    id: "trips.id",
+    tenantId: "trips.tenant_id",
+  },
+  reservationsTable: {
+    id: "reservations.id",
+    tripId: "reservations.trip_id",
+    tenantId: "reservations.tenant_id",
+    status: "reservations.status",
+    clientId: "reservations.client_id",
+    reservationNumber: "reservations.reservation_number",
+    voucherCode: "reservations.voucher_code",
+  },
+  passengersTable: {
+    id: "passengers.id",
+    reservationId: "passengers.reservation_id",
+    name: "passengers.name",
+    phone: "passengers.phone",
+    boardingLocationId: "passengers.boarding_location_id",
+  },
+  clientsTable: {
+    id: "clients.id",
+    name: "clients.name",
+    whatsapp: "clients.whatsapp",
+    phone: "clients.phone",
+    tenantId: "clients.tenant_id",
+  },
+  tenantsTable: { id: "tenants.id", name: "tenants.name" },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -103,6 +136,18 @@ vi.mock("../lib/whatsapp.js", () => ({
 
 vi.mock("../services/outbound-delivery.js", () => ({
   dispatchOutboundMessage: mockDispatchOutboundMessage,
+}));
+
+vi.mock("../lib/tenant.js", () => ({
+  requireAuth: mockRequireAuth,
+  getTenantUser: vi.fn(),
+  MANAGEMENT_ROLES: ["admin", "agencia", "gerente"],
+  ADMIN_ROLES: ["admin", "agencia"],
+}));
+
+vi.mock("../services/pipeline-automation.js", () => ({
+  cancelDealOnReservationCancellation: vi.fn(),
+  moveDealToStage: vi.fn(),
 }));
 
 vi.mock("../lib/redis.js", () => ({
@@ -134,6 +179,9 @@ import {
   enqueueWhatsAppMessage,
   enqueueOrSend,
 } from "../queues/whatsapp-helpers.js";
+import { ROLES } from "@workspace/permissions";
+import tripsRouter from "../routes/trips.js";
+import { errorHandler } from "../middlewares/errorHandler.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -507,6 +555,99 @@ describe("broadcastToReservationPassengers", () => {
 
     // Passenger's own phone is sent once; client phone is the same digits → no second send.
     expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /trips/:id/whatsapp-broadcast route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRequireAuth.mockResolvedValue({
+      id: "staff-1",
+      tenantId: "tenant-1",
+      role: ROLES.AGENCY_ADMIN,
+    });
+    mockDispatchOutboundMessage.mockImplementation(async (input: {
+      recipient: { type: string; id?: string };
+    }) => {
+      const reason = input.recipient.id === "client-opted-out"
+        ? "whatsapp_opted_out"
+        : "whatsapp_connection_unavailable";
+      return {
+        deliveries: [{
+          channel: "whatsapp",
+          status: "skipped",
+          skippedReason: reason,
+        }],
+      };
+    });
+  });
+
+  it("reports opt-out and unavailable-connection skip counts without accepting the opted-out contact", async () => {
+    setQueue([
+      [{
+        id: "trip-1",
+        tenantId: "tenant-1",
+        name: "Litoral Norte",
+        departureDate: new Date("2026-12-10T12:00:00-03:00"),
+        boardingPoints: [],
+        freePassengers: [],
+      }],
+      [{ name: "Agência Teste" }],
+      [
+        { id: "reservation-1", clientId: "client-opted-out", status: "confirmed", reservationNumber: "R-1" },
+        { id: "reservation-2", clientId: "client-disconnected", status: "confirmed", reservationNumber: "R-2" },
+      ],
+      [
+        { id: "passenger-1", reservationId: "reservation-1", name: "Pessoa sem consentimento", phone: null },
+        { id: "passenger-2", reservationId: "reservation-2", name: "Pessoa sem conexão", phone: null },
+      ],
+      [
+        { id: "client-opted-out", name: "Cliente opt-out", whatsapp: "5511999990001", phone: null, whatsappOptIn: false },
+        { id: "client-disconnected", name: "Cliente desconectado", whatsapp: "5511999990002", phone: null, whatsappOptIn: true },
+      ],
+      [{ id: "client-opted-out" }],
+      [{ id: "client-disconnected" }],
+    ]);
+
+    const app = express();
+    app.use(express.json());
+    app.use("/api", tripsRouter);
+    app.use(errorHandler);
+    const response = await request(app)
+      .post("/api/trips/trip-1/whatsapp-broadcast")
+      .send({
+        messageTemplate: "Olá {nome}",
+        filter: "all",
+        requestId: "b711f64a-19a7-48e6-ae1c-aad3b8f58f64",
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      recipientCount: 2,
+      queued: 0,
+      accepted: 0,
+      failed: 0,
+      unknown: 0,
+      skipped: 2,
+      skippedReasons: [
+        { code: "whatsapp_opted_out", count: 1 },
+        { code: "whatsapp_connection_unavailable", count: 1 },
+      ],
+    });
+    expect(response.body.skippedReasons.reduce(
+      (total: number, reason: { count: number }) => total + reason.count,
+      0,
+    )).toBe(response.body.skipped);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipient: { type: "client", id: "client-opted-out" },
+        originChannel: "whatsapp",
+        eventType: "trip_whatsapp_broadcast",
+      }),
+      { inlineOnQueueFailure: true },
+    );
+    expect(response.body.accepted).toBe(0);
   });
 });
 

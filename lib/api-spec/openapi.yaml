@@ -7260,7 +7260,25 @@ components:
           items:
             type: object
             properties:
-              code: { type: string }
+              code:
+                type: string
+                enum:
+                  - whatsapp_opted_out
+                  - contact_opted_out
+                  - whatsapp_connection_unavailable
+                  - whatsapp_connection_ambiguous
+                  - credentials_not_configured
+                  - provider_unavailable
+                  - invalid_phone
+                  - whatsapp_invalid_phone
+                  - whatsapp_address_missing
+                  - whatsapp_recipient_unavailable
+                  - recipient_client_not_found
+                  - whatsapp_recipient_changed
+                  - whatsapp_content_missing
+                  - invalid_or_duplicate_phone
+                  - passenger_data_unavailable
+                  - other
               count: { type: integer }
             required: [code, count]
       required: [recipientCount, queued, accepted, failed, unknown, skipped, skippedReasons]
