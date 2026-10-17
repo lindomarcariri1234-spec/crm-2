@@ -669,6 +669,100 @@ router.get("/integrations/whatsapp_evolution/connections", async (req, res, next
   }
 });
 
+router.post(
+  "/integrations/whatsapp_evolution/connections/:id/qr",
+  async (req, res, next: NextFunction): Promise<void> => {
+    try {
+      const me = await requireIntegrationAdmin(req, res, next);
+      if (!me) return;
+
+      const [row] = await db.select({
+        id: tenantIntegrationsTable.id,
+        config: tenantIntegrationsTable.config,
+        secretsEncrypted: tenantIntegrationsTable.secretsEncrypted,
+        enabled: tenantIntegrationsTable.enabled,
+      }).from(tenantIntegrationsTable)
+        .where(and(
+          eq(tenantIntegrationsTable.id, req.params.id!),
+          eq(tenantIntegrationsTable.tenantId, me.tenantId),
+          eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+        ))
+        .limit(1);
+      if (!row) {
+        next(new NotFoundError("Integração WhatsApp não encontrada.", "NOT_FOUND"));
+        return;
+      }
+      if (!row.enabled) {
+        next(new ValidationError("Ative a integração antes de conectar o WhatsApp.", "INTEGRATION_DISABLED"));
+        return;
+      }
+
+      const config = (row.config ?? {}) as Record<string, string>;
+      const baseUrl = config.baseUrl?.trim();
+      const instanceName = config.instanceName?.trim();
+      const apiKey = row.secretsEncrypted
+        ? decryptSecrets(row.secretsEncrypted).apiKey?.trim()
+        : undefined;
+      if (!baseUrl || !instanceName || !apiKey) {
+        next(new ValidationError("Salve a URL Base, o Nome da Instância e a API Key antes de conectar.", "INTEGRATION_CONFIG_INCOMPLETE"));
+        return;
+      }
+
+      await assertSafeUrl(baseUrl);
+      const result = await ssrfSafeFetchBounded(
+        `${baseUrl.replace(/\/+$/, "")}/instance/connect/${encodeURIComponent(instanceName)}`,
+        { headers: { apikey: apiKey }, timeoutMs: 15000, maxBytes: 24 * 1024 },
+      );
+      if (!result.ok) {
+        const message = result.status === 404
+          ? "A instância não foi encontrada na Evolution (HTTP 404)."
+          : result.status === 401 || result.status === 403
+            ? `A Evolution recusou a API Key (HTTP ${result.status}).`
+            : `Falha ao solicitar o QR Code à Evolution (HTTP ${result.status}).`;
+        await writeLog(me, "whatsapp_evolution", "qr_connect", "warn", message);
+        res.status(502).json({ message });
+        return;
+      }
+
+      const payload: unknown = JSON.parse(result.text);
+      const root = typeof payload === "object" && payload !== null
+        ? payload as Record<string, unknown>
+        : {};
+      const rawQr = typeof root.base64 === "string"
+        ? root.base64
+        : typeof root.qrcode === "object" && root.qrcode !== null &&
+            typeof (root.qrcode as Record<string, unknown>).base64 === "string"
+          ? (root.qrcode as Record<string, string>).base64
+          : "";
+      const dataUrlMatch = rawQr.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/);
+      const rawBase64 = dataUrlMatch?.[2] ?? rawQr;
+      if (
+        rawBase64.length > 20000 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(rawBase64)
+      ) {
+        await writeLog(
+          me,
+          "whatsapp_evolution",
+          "qr_connect",
+          "warn",
+          "A Evolution não retornou um QR Code válido para esta instância.",
+        );
+        res.status(502).json({
+          message: "A Evolution não retornou um QR Code. Confirme se a instância ainda precisa ser conectada.",
+        });
+        return;
+      }
+
+      const mime = dataUrlMatch?.[1] ?? "png";
+      const qrCodeDataUrl = `data:image/${mime};base64,${rawBase64}`;
+      await writeLog(me, "whatsapp_evolution", "qr_connect", "info", "QR Code de conexão solicitado.");
+      res.json({ qrCodeDataUrl });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // Refreshes only provider-confirmed Evolution connection states. Network errors,
 // auth failures, malformed payloads, and transitional states leave stored flags
 // untouched so a temporary outage cannot remove a usable default.

@@ -132,6 +132,7 @@ import type {
   FinancialSummary,
   FreePassengerCheckIn,
   GenerateClientReferralCode200,
+  GenerateEvolutionConnectionQr200,
   GetBirthdayHistoryParams,
   GetBirthdayUpcomingParams,
   GetCalendarCallbackParams,
@@ -1971,6 +1972,103 @@ export const useAssignPmsReservationUnits = <
 > => {
   return useMutation(
     getAssignPmsReservationUnitsMutationOptions(options),
+    queryClient,
+  );
+};
+
+export const getGenerateEvolutionConnectionQrUrl = (id: string) => {
+  return `/api/integrations/whatsapp_evolution/connections/${id}/qr`;
+};
+
+/**
+ * @summary Generate a WhatsApp connection QR code
+ */
+export const generateEvolutionConnectionQr = async (
+  id: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<GenerateEvolutionConnectionQr200> => {
+  return customFetch<GenerateEvolutionConnectionQr200>(
+    getGenerateEvolutionConnectionQrUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getGenerateEvolutionConnectionQrMutationKey = () =>
+  ["generateEvolutionConnectionQr"] as const;
+
+export const getGenerateEvolutionConnectionQrMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+    TError,
+    GenerateEvolutionConnectionQrMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+  TError,
+  GenerateEvolutionConnectionQrMutationVariables,
+  TContext
+> => {
+  const mutationKey = getGenerateEvolutionConnectionQrMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+    GenerateEvolutionConnectionQrMutationVariables
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return generateEvolutionConnectionQr(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type GenerateEvolutionConnectionQrMutationResult = NonNullable<
+  Awaited<ReturnType<typeof generateEvolutionConnectionQr>>
+>;
+
+export type GenerateEvolutionConnectionQrMutationError = ErrorType<void>;
+export type GenerateEvolutionConnectionQrMutationVariables = { id: string };
+
+/**
+ * @summary Generate a WhatsApp connection QR code
+ */
+export const useGenerateEvolutionConnectionQr = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+      TError,
+      GenerateEvolutionConnectionQrMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+  TError,
+  GenerateEvolutionConnectionQrMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getGenerateEvolutionConnectionQrMutationOptions(options),
     queryClient,
   );
 };

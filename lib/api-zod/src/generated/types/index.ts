@@ -187,6 +187,7 @@ export * from "./freePassenger";
 export * from "./freePassengerCheckIn";
 export * from "./freePassengerRole";
 export * from "./generateClientReferralCode200";
+export * from "./generateEvolutionConnectionQr200";
 export * from "./getBirthdayHistoryParams";
 export * from "./getBirthdayUpcomingParams";
 export * from "./getCalendarCallbackParams";

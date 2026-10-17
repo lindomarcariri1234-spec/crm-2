@@ -1218,6 +1218,10 @@ function IntegrationCard({
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
+  const [qrError, setQrError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
@@ -1353,6 +1357,32 @@ function IntegrationCard({
       toast({ title: "Falha ao testar conexão", variant: "destructive" });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function requestConnectionQr() {
+    if (!integrationId) return;
+    setQrLoading(true);
+    setQrCodeDataUrl(null);
+    setQrError(null);
+    setQrOpen(true);
+    try {
+      const res = await fetch(
+        `${BASE}/api/integrations/whatsapp_evolution/connections/${encodeURIComponent(integrationId)}/qr`,
+        { method: "POST", credentials: "include" },
+      );
+      const result = await res.json().catch(() => ({})) as {
+        qrCodeDataUrl?: string;
+        message?: string;
+      };
+      if (!res.ok || !result.qrCodeDataUrl) {
+        throw new Error(result.message || "Não foi possível gerar o QR Code.");
+      }
+      setQrCodeDataUrl(result.qrCodeDataUrl);
+    } catch (error) {
+      setQrError(error instanceof Error ? error.message : "Não foi possível gerar o QR Code.");
+    } finally {
+      setQrLoading(false);
     }
   }
 
@@ -1689,6 +1719,19 @@ function IntegrationCard({
             )}
 
             <div className="flex flex-wrap gap-2 pt-1">
+              {type === "whatsapp_evolution" && integrationId && enabled && status !== "connected" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void requestConnectionQr()}
+                  disabled={qrLoading || saving || testing || dirty}
+                  className="gap-1.5"
+                  title={dirty ? "Salve as alterações antes de conectar." : undefined}
+                >
+                  {qrLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
+                  Conectar com QR Code
+                </Button>
+              )}
               {type === "whatsapp_evolution" && integrationId && getWhatsAppDefaultActionLabel({
                 isDefault,
                 enabled,
@@ -1816,6 +1859,46 @@ function IntegrationCard({
                 )}
               </div>
             )}
+            <Dialog
+              open={qrOpen}
+              onOpenChange={(open) => {
+                setQrOpen(open);
+                if (!open) {
+                  setQrCodeDataUrl(null);
+                  setQrError(null);
+                  onSaved?.();
+                }
+              }}
+            >
+              <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Conectar WhatsApp</DialogTitle>
+                  <DialogDescription>
+                    Abra o WhatsApp no celular, acesse Aparelhos conectados e escaneie este QR Code.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="flex min-h-56 flex-col items-center justify-center gap-3">
+                  {qrLoading && <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />}
+                  {qrCodeDataUrl && (
+                    <img
+                      src={qrCodeDataUrl}
+                      alt="QR Code temporário para conectar o WhatsApp"
+                      className="h-56 w-56 rounded-md border bg-white p-2"
+                    />
+                  )}
+                  {qrError && <p role="alert" className="text-sm text-destructive">{qrError}</p>}
+                  {!qrLoading && !qrError && !qrCodeDataUrl && (
+                    <p className="text-sm text-muted-foreground">Solicitando QR Code à Evolution...</p>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => void requestConnectionQr()} disabled={qrLoading}>
+                    Gerar novo QR Code
+                  </Button>
+                  <Button onClick={() => setQrOpen(false)}>Fechar</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </>
         )}
       </CardContent>

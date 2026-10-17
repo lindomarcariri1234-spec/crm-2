@@ -5895,6 +5895,10 @@ export type AssignPmsReservationUnitsBody = {
   assignments: PmsUnitAssignment[];
 };
 
+export type GenerateEvolutionConnectionQr200 = {
+  qrCodeDataUrl: string;
+};
+
 export type ListAdminInvoicesParams = {
   tenantId?: string;
   status?: string;

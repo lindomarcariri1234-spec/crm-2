@@ -292,6 +292,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PmsReservationDetail"
+  /integrations/whatsapp_evolution/connections/{id}/qr:
+    post:
+      operationId: generateEvolutionConnectionQr
+      summary: Generate a WhatsApp connection QR code
+      tags: [messages]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Temporary QR code for pairing the WhatsApp device
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [qrCodeDataUrl]
+                properties:
+                  qrCodeDataUrl:
+                    type: string
+        "400":
+          description: Integration is disabled or missing required configuration
+        "403":
+          description: Administrator access required
+        "404":
+          description: Integration not found
+        "502":
+          description: Evolution API could not provide a valid QR code
+
   /health:
     get:
       operationId: healthCheck

@@ -1092,6 +1092,17 @@ export const AssignPmsReservationUnitsResponse = zod.object({
 });
 
 /**
+ * @summary Generate a WhatsApp connection QR code
+ */
+export const GenerateEvolutionConnectionQrParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GenerateEvolutionConnectionQrResponse = zod.object({
+  qrCodeDataUrl: zod.string(),
+});
+
+/**
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({

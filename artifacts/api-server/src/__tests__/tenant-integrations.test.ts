@@ -599,6 +599,29 @@ describe("GET /api/integrations/whatsapp_evolution/connections", () => {
   });
 });
 
+describe("POST /api/integrations/whatsapp_evolution/connections/:id/qr", () => {
+  it("returns only a validated QR image and sends the saved API key to the encoded instance endpoint", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ base64: "data:image/png;base64,aGVsbG8=" }),
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ qrCodeDataUrl: "data:image/png;base64,aGVsbG8=" });
+    expect(mockSsrfFetch).toHaveBeenCalledWith(
+      "https://evo.example.com/instance/connect/my-instance",
+      expect.objectContaining({ headers: { apikey: WA_SECRETS.apiKey } }),
+    );
+    expect(JSON.stringify(res.body)).not.toContain(WA_SECRETS.apiKey);
+  });
+});
+
 describe("POST /api/integrations/whatsapp_evolution/connections/refresh", () => {
   it("clears the default only when Evolution confirms the instance is closed", async () => {
     asAdmin();
