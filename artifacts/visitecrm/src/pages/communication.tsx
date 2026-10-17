@@ -106,8 +106,6 @@ import {
 } from "@/lib/communicationTemplates";
 import {
   buildClientConversationSummaries,
-  normalizeTimelineContent,
-  type CommunicationTimelineEntry,
 } from "@/lib/communicationTimeline";
 import {
   ConversationsTab,
@@ -153,6 +151,7 @@ import {
   shouldRetainAiReplyAttempt,
 } from "./communication/aiReplyRetryPolicy";
 import SupportTicketsTab from "./communication/SupportTicketsTab";
+import { useClientCommunicationTimeline } from "./communication/useClientCommunicationTimeline";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const OUTBOUND_HISTORY_PAGE_SIZE = 50;
@@ -270,12 +269,25 @@ export default function Communication() {
   const [tplChannel, setTplChannel] = useState<string>("whatsapp");
 
   const [selectedConversationClientId, setSelectedConversationClientId] = useState<string | null>(null);
-  const [clientTimelineMessages, setClientTimelineMessages] = useState<CommunicationTimelineEntry[]>([]);
-  const [clientTimelineCursor, setClientTimelineCursor] = useState<string | null>(null);
-  const [clientTimelineHasMore, setClientTimelineHasMore] = useState(false);
-  const [loadingClientTimeline, setLoadingClientTimeline] = useState(false);
-  const [loadingOlderClientTimeline, setLoadingOlderClientTimeline] = useState(false);
-  const [clientTimelineError, setClientTimelineError] = useState<string | null>(null);
+  const onOlderClientTimelineError = useCallback(() => {
+    toast({
+      title: "Não foi possível carregar mensagens anteriores.",
+      variant: "destructive",
+    });
+  }, [toast]);
+  const {
+    messages: clientTimelineMessages,
+    hasMore: clientTimelineHasMore,
+    loading: loadingClientTimeline,
+    loadingOlder: loadingOlderClientTimeline,
+    error: clientTimelineError,
+    retry: retryClientTimeline,
+    loadOlder: loadOlderClientTimeline,
+  } = useClientCommunicationTimeline({
+    enabled: tab === "conversations",
+    selectedClientId: selectedConversationClientId,
+    onOlderLoadError: onOlderClientTimelineError,
+  });
   const [inboxChannel, setInboxChannel] = useState<"whatsapp" | "email">("whatsapp");
   const [inboxMessage, setInboxMessage] = useState("");
   const [aiConversations, setAiConversations] = useState<AiConversation[]>([]);
@@ -322,7 +334,6 @@ export default function Communication() {
   const aiReplyKeys = useRef(new Map<string, { conversationId: string; content: string; idempotencyKey: string }>());
   const aiConversationRequestId = useRef(0);
   const aiInboxRequestId = useRef(0);
-  const clientTimelineRequestId = useRef(0);
   const aiMessagesScrollRef = useRef<HTMLDivElement>(null);
   const pendingTimelinePrependScroll = useRef<{ height: number; top: number } | null>(null);
 
@@ -441,99 +452,6 @@ export default function Communication() {
       if (requestId === aiInboxRequestId.current) setLoadingAiInbox(false);
     }
   }, [toast]);
-
-  const fetchClientTimeline = useCallback(async (
-    clientId: string,
-    cursor: string | null = null,
-    append = false,
-  ) => {
-    const requestId = append
-      ? clientTimelineRequestId.current
-      : ++clientTimelineRequestId.current;
-    if (append) setLoadingOlderClientTimeline(true);
-    else {
-      setLoadingClientTimeline(true);
-      setClientTimelineError(null);
-    }
-    try {
-      const params = new URLSearchParams({ limit: "50" });
-      if (cursor) params.set("cursor", cursor);
-      const res = await fetch(
-        `${BASE}/api/clients/${encodeURIComponent(clientId)}/communication-timeline?${params.toString()}`,
-        { credentials: "include" },
-      );
-      if (!res.ok) throw new Error("failed");
-      const page = await res.json() as {
-        items: CommunicationTimelineEntry[];
-        hasMore: boolean;
-        nextCursor: string | null;
-      };
-      if (!Array.isArray(page.items) || typeof page.hasMore !== "boolean") {
-        throw new Error("invalid timeline response");
-      }
-      if (requestId !== clientTimelineRequestId.current || clientId !== selectedConversationClientId) return;
-      const pageItems = page.items.map((item) => ({
-        ...item,
-        content: normalizeTimelineContent(item.channel, item.content),
-      }));
-      if (append) {
-        setClientTimelineMessages((current) => {
-          const knownIds = new Set(current.map((item) => item.id));
-          return [...pageItems.filter((item) => !knownIds.has(item.id)), ...current];
-        });
-      } else {
-        setClientTimelineMessages(pageItems);
-      }
-      setClientTimelineCursor(page.nextCursor);
-      setClientTimelineHasMore(page.hasMore);
-      setClientTimelineError(null);
-    } catch {
-      if (requestId === clientTimelineRequestId.current) {
-        setClientTimelineError("Não foi possível carregar o histórico deste cliente.");
-        if (append) {
-          toast({
-            title: "Não foi possível carregar mensagens anteriores.",
-            variant: "destructive",
-          });
-        }
-      }
-    } finally {
-      if (requestId === clientTimelineRequestId.current) {
-        if (append) setLoadingOlderClientTimeline(false);
-        else setLoadingClientTimeline(false);
-      }
-    }
-  }, [selectedConversationClientId, toast]);
-
-  useEffect(() => {
-    clientTimelineRequestId.current += 1;
-    setClientTimelineMessages([]);
-    setClientTimelineCursor(null);
-    setClientTimelineHasMore(false);
-    setClientTimelineError(null);
-    setLoadingOlderClientTimeline(false);
-    if (tab !== "conversations" || !selectedConversationClientId) {
-      setLoadingClientTimeline(false);
-      return;
-    }
-    void fetchClientTimeline(selectedConversationClientId);
-    return () => {
-      clientTimelineRequestId.current += 1;
-    };
-  }, [tab, selectedConversationClientId, fetchClientTimeline]);
-
-  const loadOlderClientTimeline = useCallback(() => {
-    if (!selectedConversationClientId || !clientTimelineCursor || !clientTimelineHasMore || loadingOlderClientTimeline) {
-      return;
-    }
-    return fetchClientTimeline(selectedConversationClientId, clientTimelineCursor, true);
-  }, [
-    selectedConversationClientId,
-    clientTimelineCursor,
-    clientTimelineHasMore,
-    loadingOlderClientTimeline,
-    fetchClientTimeline,
-  ]);
 
   const selectAiConversation = useCallback(async (id: string, silent = false) => {
     const requestId = ++aiConversationRequestId.current;
@@ -1735,7 +1653,7 @@ export default function Communication() {
             conversationAiError={clientTimelineError}
             onOpenFailedConversation={openFailedWhatsAppConversation}
             onRetryConversationAiMessages={() => selectedConversationClientId
-              ? fetchClientTimeline(selectedConversationClientId)
+              ? retryClientTimeline()
               : undefined}
             hasMoreClientTimeline={clientTimelineHasMore}
             loadingOlderClientTimeline={loadingOlderClientTimeline}

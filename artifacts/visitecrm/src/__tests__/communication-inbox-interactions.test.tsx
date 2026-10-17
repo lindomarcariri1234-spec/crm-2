@@ -24,6 +24,7 @@ import type {
   CommunicationTimelineEntry,
 } from "../lib/communicationTimeline";
 import { useConversationAiMessages } from "../pages/communication/useConversationAiMessages";
+import { useClientCommunicationTimeline } from "../pages/communication/useClientCommunicationTimeline";
 
 type ConversationsTabProps = ComponentProps<typeof ConversationsTab>;
 
@@ -383,6 +384,103 @@ function LargeConversationHistoryHarness({ conversationCount }: { conversationCo
       messages.map((message) => createElement("p", { key: message.id }, message.content)),
     ),
   );
+}
+
+function ClientTimelineRaceHarness() {
+  const [selectedClientId, setSelectedClientId] = useState<string | null>("client-a");
+  const timeline = useClientCommunicationTimeline({
+    enabled: true,
+    selectedClientId,
+  });
+
+  return createElement(
+    "section",
+    null,
+    createElement("button", {
+      "data-testid": "select-timeline-client-a",
+      onClick: () => setSelectedClientId("client-a"),
+    }, "Selecionar Ana"),
+    createElement("button", {
+      "data-testid": "select-timeline-client-b",
+      onClick: () => setSelectedClientId("client-b"),
+    }, "Selecionar Bruna"),
+    createElement("button", {
+      "data-testid": "load-older-client-timeline",
+      onClick: () => void timeline.loadOlder(),
+    }, "Carregar anteriores"),
+    createElement("button", {
+      "data-testid": "retry-client-timeline",
+      onClick: () => void timeline.retry(),
+    }, "Tentar novamente"),
+    createElement("p", { "data-testid": "timeline-selected-client" }, selectedClientId),
+    createElement("p", { "data-testid": "timeline-loading" }, String(timeline.loading)),
+    createElement("p", { "data-testid": "timeline-loading-older" }, String(timeline.loadingOlder)),
+    createElement("p", { "data-testid": "timeline-error" }, timeline.error ?? ""),
+    createElement("p", { "data-testid": "timeline-cursor" }, timeline.cursor ?? ""),
+    createElement(
+      "div",
+      { "data-testid": "timeline-messages" },
+      timeline.messages.map((message) => createElement("p", { key: message.id }, message.content)),
+    ),
+  );
+}
+
+function installDeferredClientTimelineFetch() {
+  const requests = new Map<string, Deferred<Response>[]>();
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://example.test");
+    const clientId = url.pathname.match(/\/clients\/([^/]+)\/communication-timeline/)?.[1];
+    if (!clientId) throw new Error(`Unexpected client timeline URL: ${url.pathname}`);
+    const cursor = url.searchParams.get("cursor") ?? "first";
+    const key = `${decodeURIComponent(clientId)}:${cursor}`;
+    const request = createDeferred<Response>();
+    requests.set(key, [...(requests.get(key) ?? []), request]);
+    return request.promise;
+  }));
+  return requests;
+}
+
+function getClientTimelineRequest(
+  requests: Map<string, Deferred<Response>[]>,
+  clientId: string,
+  cursor = "first",
+  attempt = 0,
+) {
+  const request = requests.get(`${clientId}:${cursor}`)?.[attempt];
+  if (!request) throw new Error(`No pending timeline request for ${clientId} at ${cursor}`);
+  return request;
+}
+
+function makeClientTimelineResponse(
+  items: CommunicationTimelineEntry[],
+  nextCursor: string | null,
+  hasMore: boolean,
+): Response {
+  return {
+    ok: true,
+    json: async () => ({ items, nextCursor, hasMore }),
+  } as unknown as Response;
+}
+
+async function settleClientTimelineSuccess(
+  request: Deferred<Response>,
+  items: CommunicationTimelineEntry[],
+  nextCursor: string | null,
+  hasMore: boolean,
+) {
+  request.resolve(makeClientTimelineResponse(items, nextCursor, hasMore));
+  await request.promise;
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+async function settleClientTimelineFailure(request: Deferred<Response>) {
+  request.reject(new Error("Falha de rede"));
+  await request.promise.catch(() => undefined);
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 function setInputValue(input: HTMLInputElement, value: string) {
@@ -879,5 +977,108 @@ describe("delayed conversation history refreshes", () => {
     expect(history?.textContent).toContain("Histórico carregado 0");
     expect(history?.textContent).toContain("Histórico carregado 12");
     expect(history?.textContent).not.toContain("Histórico carregado 7");
+  });
+});
+
+describe("client timeline request scoping", () => {
+  it("ignores delayed selected-client and older-page responses after switching clients", async () => {
+    const requests = installDeferredClientTimelineFetch();
+    const { container } = await renderComponent(createElement(ClientTimelineRaceHarness));
+    const read = (testId: string) =>
+      container.querySelector(`[data-testid="${testId}"]`)?.textContent ?? "";
+    const timeline = container.querySelector<HTMLElement>('[data-testid="timeline-messages"]')!;
+
+    expect(read("timeline-selected-client")).toBe("client-a");
+    expect(read("timeline-loading")).toBe("true");
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="select-timeline-client-b"]',
+    )!.click());
+    expect(read("timeline-selected-client")).toBe("client-b");
+    expect(read("timeline-loading")).toBe("true");
+
+    const delayedA = {
+      ...firstMessage,
+      id: "delayed-client-a-message",
+      content: "Resposta atrasada da Ana",
+    };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a"),
+        [delayedA],
+        null,
+        false,
+      );
+    });
+    expect(read("timeline-loading")).toBe("true");
+    expect(read("timeline-error")).toBe("");
+    expect(timeline.textContent).not.toContain(delayedA.content);
+
+    const currentB = { ...secondMessage, id: "current-client-b-message" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-b"),
+        [currentB],
+        "client-b-older",
+        true,
+      );
+    });
+    expect(read("timeline-loading")).toBe("false");
+    expect(timeline.textContent).toContain(currentB.content);
+    expect(read("timeline-cursor")).toBe("client-b-older");
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="load-older-client-timeline"]',
+    )!.click());
+    expect(read("timeline-loading-older")).toBe("true");
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="select-timeline-client-a"]',
+    )!.click());
+    expect(read("timeline-selected-client")).toBe("client-a");
+    expect(read("timeline-loading")).toBe("true");
+    expect(read("timeline-loading-older")).toBe("false");
+    expect(timeline.textContent).toBe("");
+
+    const olderB = { ...secondMessage, id: "older-client-b-message", content: "Página antiga da Bruna" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-b", "client-b-older"),
+        [olderB],
+        null,
+        false,
+      );
+    });
+    expect(read("timeline-loading")).toBe("true");
+    expect(read("timeline-cursor")).toBe("");
+    expect(timeline.textContent).not.toContain(olderB.content);
+
+    await flushAct(async () => {
+      await settleClientTimelineFailure(getClientTimelineRequest(requests, "client-a", "first", 1));
+    });
+    expect(read("timeline-loading")).toBe("false");
+    expect(read("timeline-error")).toContain("Não foi possível carregar");
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="retry-client-timeline"]',
+    )!.click());
+    expect(read("timeline-loading")).toBe("true");
+    expect(read("timeline-error")).toBe("");
+    const retriedA = { ...latestFirstMessage, id: "retried-client-a-message" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", "first", 2),
+        [retriedA],
+        null,
+        false,
+      );
+    });
+
+    expect(read("timeline-loading")).toBe("false");
+    expect(read("timeline-error")).toBe("");
+    expect(timeline.textContent).toContain(retriedA.content);
+    expect(timeline.textContent).not.toContain(currentB.content);
+    expect(timeline.textContent).not.toContain(olderB.content);
+    expect(timeline.textContent).not.toContain(delayedA.content);
   });
 });
