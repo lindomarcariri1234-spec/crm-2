@@ -43,6 +43,7 @@ export default defineConfig({
       "src/__tests__/communication-timeline-pagination.integration.test.ts",
       "src/__tests__/trip-financial-report.integration.test.ts",
       "src/__tests__/instagram-zernio-import-dedup.integration.test.ts",
+      "src/__tests__/instagram-messaging-account-scope.integration.test.ts",
       "src/__tests__/trip-tenant-relationship-constraints.integration.test.ts",
     ],
   },

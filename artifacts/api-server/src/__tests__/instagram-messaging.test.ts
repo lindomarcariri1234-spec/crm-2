@@ -28,6 +28,7 @@ import {
   isInstagramReplyWindowOpen,
   parseInstagramWebhook,
   parseInstagramWebhookDeliveryStatuses,
+  resolveUniqueInstagramAccountIntegration,
   sendInstagramText,
   verifyInstagramSignedRequest,
   verifyInstagramWebhookSignature,
@@ -64,6 +65,15 @@ afterEach(() => {
 });
 
 describe("Instagram Direct integration", () => {
+  it("accepts only a unique connected integration for an Instagram account", () => {
+    const integrationA = { id: "integration-a" };
+    const integrationB = { id: "integration-b" };
+
+    expect(resolveUniqueInstagramAccountIntegration([])).toBeNull();
+    expect(resolveUniqueInstagramAccountIntegration([integrationA])).toBe(integrationA);
+    expect(resolveUniqueInstagramAccountIntegration([integrationA, integrationB])).toBeNull();
+  });
+
   it("builds the Instagram Business Login URL with the current message permissions", () => {
     const authorizationUrl = createInstagramAuthorizationUrl(config, "state-value");
     expect(authorizationUrl).not.toBeNull();

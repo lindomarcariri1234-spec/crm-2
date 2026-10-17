@@ -316,6 +316,12 @@ export const metaInstagramInboundAdapter: InboundProviderAdapter<unknown, Instag
   },
 };
 
+export function resolveUniqueInstagramAccountIntegration<T>(
+  matches: readonly T[],
+): T | null {
+  return matches.length === 1 ? matches[0] ?? null : null;
+}
+
 export function parseInstagramWebhookDeliveryStatuses(payload: unknown): InstagramWebhookDeliveryStatus[] {
   const root = asObject(payload);
   if (!root || root.object !== "instagram" || !Array.isArray(root.entry)) return [];
@@ -687,12 +693,13 @@ export async function processInstagramWebhook(payload: unknown): Promise<number>
   let storedCount = 0;
   for (const event of incoming) {
     const message = event.providerData;
-    const matches = integrationsByAccount.get(message.instagramUserId) ?? [];
-    if (matches.length !== 1) {
+    const integration = resolveUniqueInstagramAccountIntegration(
+      integrationsByAccount.get(message.instagramUserId) ?? [],
+    );
+    if (!integration) {
       logger.warn("[instagram] Ignored message for an unmapped or ambiguous account");
       continue;
     }
-    const integration = matches[0]!;
     const stored = await db.transaction(async (tx) => {
       await tx.execute(sql`
         SELECT pg_advisory_xact_lock(
