@@ -555,10 +555,10 @@ export interface TestWhatsAppMessageBody {
   type: TestWhatsAppMessageBodyType;
   message?: string;
   /**
-   * Optional test destination; defaults to the configured agency WhatsApp number.
+   * Explicit test destination; never defaults to the agency WhatsApp number.
    * @minLength 8
    */
-  phone?: string;
+  phone: string;
 }
 
 export interface TestWhatsAppMessageResult {

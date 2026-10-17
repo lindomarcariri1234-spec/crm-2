@@ -6804,7 +6804,7 @@ paths:
     post:
       operationId: testWhatsAppMessage
       tags: [Referrals]
-      summary: Send a referral WhatsApp test message to the configured agency number
+      summary: Send a referral WhatsApp test message to an explicit test destination
       requestBody:
         required: true
         content:
@@ -7363,8 +7363,8 @@ components:
         phone:
           type: string
           minLength: 8
-          description: Optional test destination; defaults to the configured agency WhatsApp number.
-      required: [type]
+          description: Explicit test destination; never defaults to the agency WhatsApp number.
+      required: [type, phone]
     TestWhatsAppMessageResult:
       type: object
       properties:

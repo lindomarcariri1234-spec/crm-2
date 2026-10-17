@@ -11759,7 +11759,7 @@ export const ReversePaidReferralBonusResponse = zod
   );
 
 /**
- * @summary Send a referral WhatsApp test message to the configured agency number
+ * @summary Send a referral WhatsApp test message to an explicit test destination
  */
 export const testWhatsAppMessageBodyPhoneMin = 8;
 
@@ -11769,9 +11769,8 @@ export const TestWhatsAppMessageBody = zod.object({
   phone: zod
     .string()
     .min(testWhatsAppMessageBodyPhoneMin)
-    .optional()
     .describe(
-      "Optional test destination; defaults to the configured agency WhatsApp number.",
+      "Explicit test destination; never defaults to the agency WhatsApp number.",
     ),
 });
 

@@ -278,6 +278,7 @@ describe("indicações após a refatoração", () => {
     }));
 
     expect(container.textContent).toContain("Configurações do Programa de Indicações");
+    expect(container.querySelector('[data-testid="input-referral-whatsapp-test-destination"]')).not.toBeNull();
     const valueInput = Array.from(container.querySelectorAll("input")).find(
       (input) => input.value === "5.00",
     ) as HTMLInputElement;

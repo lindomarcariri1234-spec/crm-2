@@ -877,22 +877,16 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
     }));
   });
 
-  it("falls back to the configured agency number when no explicit destination is sent", async () => {
+  it("requires an explicit test destination instead of falling back to the agency number", async () => {
     (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
-    (db.select as ReturnType<typeof vi.fn>)
-      .mockImplementationOnce(() => makeChain([{ whatsappPhoneNumber: "5511888888888", bonusValue: "25" }]))
-      .mockImplementationOnce(() => makeChain([{ name: "Agência Teste" }]));
 
     const res = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
       .set("Idempotency-Key", "attempt-configured-001")
       .send({ type: "share", message: "Use o código {codigo}." });
 
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true });
-    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
-      recipient: { type: "direct", whatsapp: "5511888888888" },
-    }));
+    expect(res.status).toBe(400);
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -995,15 +989,15 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
     const first = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
       .set("Idempotency-Key", "attempt-share-001")
-      .send({ type: "share", message: "Use o código {codigo}." });
+      .send({ type: "share", message: "Use o código {codigo}.", phone: "5511999999999" });
     const repeated = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
       .set("Idempotency-Key", "attempt-share-001")
-      .send({ type: "share", message: "Use o código {codigo}." });
+      .send({ type: "share", message: "Use o código {codigo}.", phone: "5511999999999" });
     const later = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
       .set("Idempotency-Key", "attempt-share-002")
-      .send({ type: "share", message: "Use o código {codigo}." });
+      .send({ type: "share", message: "Use o código {codigo}.", phone: "5511999999999" });
 
     expect(first.status).toBe(200);
     expect(repeated.status).toBe(200);
@@ -1022,7 +1016,7 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
 
     const res = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
-      .send({ type: "share", message: "Use o código {codigo}." });
+      .send({ type: "share", message: "Use o código {codigo}.", phone: "5511999999999" });
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "idempotency_key_required" });

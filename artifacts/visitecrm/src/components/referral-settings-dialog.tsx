@@ -95,6 +95,18 @@ export function ReferralSettingsDialog({
             <div className="rounded-md bg-amber-100/70 border border-amber-200 p-3 text-xs text-amber-900 space-y-1"><p className="font-medium">Códigos são permanentes e gerenciados pela agência</p><p>Cada cliente possui um código único, gerado automaticamente no cadastro. Os códigos não expiram e não podem ser alterados ou regenerados pelo cliente — apenas a agência pode ativar ou bloquear um código.</p></div>
           </section>
 
+          <div className="space-y-1 border border-dashed rounded-md p-2.5 bg-muted/20">
+            <Label htmlFor="referral-whatsapp-test-destination" className="text-xs">Número para receber mensagens de teste</Label>
+            <Input
+              id="referral-whatsapp-test-destination"
+              data-testid="input-referral-whatsapp-test-destination"
+              className="h-8 text-xs"
+              value={whatsappTestPhone}
+              onChange={(event) => setWhatsappTestPhone(event.target.value)}
+              placeholder="5511999999999 (DDI + DDD + número)"
+            />
+            <p className="text-[11px] text-muted-foreground">Usado somente pelos botões de teste; não altera o número da agência nem os convites reais.</p>
+          </div>
           <MessageSetting label="Mensagem de compartilhamento" value={String(draft.shareMessage ?? "")} onChange={(value) => update({ shareMessage: value })} preview={String(draft.shareMessage ?? "").replace(/\{nome\}/g, "João").replace(/\{codigo\}/g, "JOAO123").replace(/\{link\}/g, "https://exemplo.com.br/ind/JOAO123").replace(/\{bonus\}/g, fmtCurrency(settingsBonusValue))} testLabel="Testar mensagem" onTest={() => sendWhatsAppTest("share")} loading={settingsWhatsappTestLoading} />
 
           <section className="space-y-3 border rounded-lg p-3 bg-indigo-50/50">
@@ -114,7 +126,6 @@ export function ReferralSettingsDialog({
             <div className="flex items-center justify-between"><Label className="font-semibold text-green-800 flex items-center gap-1.5"><Phone className="w-4 h-4" />Notificações WhatsApp</Label><Switch checked={draft.whatsappEnabled ?? false} onCheckedChange={(value) => update({ whatsappEnabled: value })} /></div>
             {draft.whatsappEnabled && <div className="space-y-3">
               <div className="space-y-1"><Label className="text-xs">Número WhatsApp Business da agência</Label><Input value={String(draft.whatsappPhoneNumber ?? "")} onChange={(event) => update({ whatsappPhoneNumber: event.target.value })} placeholder="5511999999999 (código do país + DDD + número)" /></div>
-              <div className="space-y-1 border border-dashed rounded-md p-2.5 bg-muted/20"><Label className="text-[11px]">Número de destino para teste</Label><Input className="h-7 text-xs" value={whatsappTestPhone} onChange={(event) => setWhatsappTestPhone(event.target.value)} placeholder="5511999999999 (DDI+DDD+número)" /></div>
               <MessageSetting label="Mensagem — conversão confirmada" multiline value={String(draft.whatsappConvertedMessage ?? "")} onChange={(value) => update({ whatsappConvertedMessage: value })} preview={previewTemplate(String(draft.whatsappConvertedMessage ?? ""), tenantName, settingsBonusValue)} testLabel="Testar envio" onTest={() => testWhatsappTemplate("converted")} testState={whatsappTestState.converted} />
               <MessageSetting label="Mensagem — bônus pago" multiline value={String(draft.whatsappBonusPaidMessage ?? "")} onChange={(value) => update({ whatsappBonusPaidMessage: value })} preview={previewTemplate(String(draft.whatsappBonusPaidMessage ?? ""), tenantName, settingsBonusValue)} testLabel="Testar envio" onTest={() => testWhatsappTemplate("bonusPaid")} testState={whatsappTestState.bonusPaid} />
               <MessageSetting label="Mensagem de estorno (reversão de bônus)" multiline value={String(draft.whatsappReversedMessage ?? "")} onChange={(value) => update({ whatsappReversedMessage: value })} preview={previewTemplate(String(draft.whatsappReversedMessage ?? ""), tenantName, settingsBonusValue)} testLabel="Testar envio" onTest={() => testWhatsappTemplate("reversed")} testState={whatsappTestState.reversed} />

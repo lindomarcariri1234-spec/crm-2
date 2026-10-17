@@ -1894,7 +1894,7 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const parsed = z.object({
       type: z.enum(["converted", "bonusPaid", "reversed", "share"]),
       message: z.string().optional(),
-      phone: z.string().trim().min(8).optional(),
+      phone: z.string().trim().min(8),
     }).safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -1907,11 +1907,7 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const [settings] = await db.select().from(referralSettingsTable)
       .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
 
-    const phone = parsed.data.phone || settings?.whatsappPhoneNumber;
-    if (!phone) {
-      res.status(400).json({ error: "whatsapp_not_configured" });
-      return;
-    }
+    const phone = parsed.data.phone;
 
     const [tenant] = await db.select().from(tenantsTable)
       .where(eq(tenantsTable.id, me.tenantId)).limit(1);

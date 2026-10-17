@@ -40566,7 +40566,7 @@ export const getTestWhatsAppMessageUrl = () => {
 };
 
 /**
- * @summary Send a referral WhatsApp test message to the configured agency number
+ * @summary Send a referral WhatsApp test message to an explicit test destination
  */
 export const testWhatsAppMessage = async (
   testWhatsAppMessageBody: TestWhatsAppMessageBody,
@@ -40655,7 +40655,7 @@ export type TestWhatsAppMessageMutationVariables = {
 };
 
 /**
- * @summary Send a referral WhatsApp test message to the configured agency number
+ * @summary Send a referral WhatsApp test message to an explicit test destination
  */
 export const useTestWhatsAppMessage = <
   TError = ErrorType<unknown>,

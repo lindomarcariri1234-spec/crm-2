@@ -593,12 +593,13 @@ export default function Indicacoes() {
       : type === "bonusPaid"
       ? (localSettings.whatsappBonusPaidMessage as string | undefined) ?? ""
       : (localSettings.shareMessage as string | undefined) ?? "";
+    const phone = whatsappTestPhone.trim();
     if (!message.trim()) {
       toast({ title: "Preencha o texto da mensagem antes de testar", variant: "destructive" });
       return;
     }
-    if (type !== "share" && !(localSettings.whatsappPhoneNumber as string | undefined)?.trim()) {
-      toast({ title: "Configure o número WhatsApp da agência antes de testar", variant: "destructive" });
+    if (!phone) {
+      toast({ title: "Informe um número de WhatsApp para teste", variant: "destructive" });
       return;
     }
     const scope = `settings:${type}`;
@@ -607,10 +608,10 @@ export default function Indicacoes() {
     setSettingsWhatsappTestLoading(true);
     try {
       await testWhatsAppMessage(
-        { type, message },
+        { type, message, phone },
         { headers: { "Idempotency-Key": attemptId } },
       );
-      toast({ title: "Mensagem de teste enviada!", description: "Verifique o WhatsApp configurado na agência." });
+      toast({ title: "Mensagem de teste enviada!", description: "Verifique o número de destino para teste." });
     } catch (err: unknown) {
       const apiError = (err as { data?: { error?: string } })?.data?.error;
       toast({ title: getWhatsAppTestErrorMessage(apiError), variant: "destructive" });
