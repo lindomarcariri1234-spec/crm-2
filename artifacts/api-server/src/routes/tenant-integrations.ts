@@ -49,7 +49,24 @@ function maskSecret(value: string): string {
 
 function sanitizeExternalError(err: unknown): string {
   const name = (err as { name?: string } | null)?.name;
-  if (name === "AbortError" || name === "TimeoutError") return "Tempo de conexão esgotado.";
+  // Undici wraps connect failures in a TypeError; the safe cause code is more
+  // useful than its generic "fetch failed" message. Never return the raw cause.
+  const networkError = err as { code?: unknown; cause?: { code?: unknown } } | null;
+  const code = networkError?.cause?.code ?? networkError?.code;
+  if (name === "AbortError" || name === "TimeoutError"
+    || code === "UND_ERR_CONNECT_TIMEOUT" || code === "ETIMEDOUT") {
+    return "Tempo de conexão esgotado. Verifique se o serviço está disponível e se a porta HTTPS (443) permite conexões do servidor do CRM.";
+  }
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return "Não foi possível resolver o endereço do serviço. Confira a URL Base e o DNS do servidor.";
+  }
+  if (code === "ECONNREFUSED" || code === "ECONNRESET") {
+    return "O servidor externo recusou ou interrompeu a conexão. Confira o serviço, o proxy HTTPS e o firewall.";
+  }
+  if (code === "CERT_HAS_EXPIRED" || code === "DEPTH_ZERO_SELF_SIGNED_CERT"
+    || code === "ERR_TLS_CERT_ALTNAME_INVALID" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
+    return "Não foi possível validar o certificado HTTPS do serviço. Confira o certificado da URL Base.";
+  }
   if (
     err instanceof Error &&
     err.message.length < 120 &&
@@ -686,8 +703,16 @@ router.post(
         return;
       }
 
-      await assertSafeUrl(baseUrl);
-      const result = await connectEvolutionInstance(baseUrl, apiKey, instanceName);
+      let result;
+      try {
+        await assertSafeUrl(baseUrl);
+        result = await connectEvolutionInstance(baseUrl, apiKey, instanceName);
+      } catch (err) {
+        const message = `Não foi possível solicitar o QR Code à Evolution. ${sanitizeExternalError(err)}`;
+        await writeLog(me, "whatsapp_evolution", "qr_connect", "warn", message);
+        res.status(502).json({ message });
+        return;
+      }
       if (!result.ok) {
         const message = result.status === 404
           ? "A instância não foi encontrada na Evolution (HTTP 404)."
@@ -699,7 +724,12 @@ router.post(
         return;
       }
 
-      const payload: unknown = JSON.parse(result.text);
+      let payload: unknown = null;
+      try {
+        payload = JSON.parse(result.text);
+      } catch {
+        // HTML/empty provider responses follow the same safe invalid-QR branch.
+      }
       const root = typeof payload === "object" && payload !== null
         ? payload as Record<string, unknown>
         : {};

@@ -12,3 +12,9 @@ For the published Evolution API v2.3.7 contract, `POST /webhook/set/{instanceNam
 **Why:** Session state, webhook configuration, and device pairing are separate operations. A QR contains a temporary pairing credential and cannot connect the device without its owner scanning it.
 
 **How to apply:** In save flows, run connection-state checks and authenticated webhook setup independently. Treat only the connection-state response as proof of a connected WhatsApp session, and only the webhook endpoint response as proof that receiving is configured. Match the payloads and status interpretation to the exact Evolution API version. When pairing is requested, return only a validated QR image to an authorized administrator; never imply that generating it completed the connection.
+
+An Evolution endpoint responding from the development workspace does not prove it is reachable from the published runtime. Do not reset credentials or device sessions based only on a network failure.
+
+**Why:** Production pairing requests have failed after the connect-timeout window while the same public host responded normally from development; the generic fetch error hid the distinction from an authentication or session error.
+
+**How to apply:** Classify transport failures by safe error names/cause codes, without returning or logging raw provider exceptions, credentials, or QR content. Verify the published path separately before claiming the WhatsApp connection is restored.

@@ -600,6 +600,59 @@ describe("GET /api/integrations/whatsapp_evolution/connections", () => {
 });
 
 describe("POST /api/integrations/whatsapp_evolution/connections/:id/qr", () => {
+  it("reports a DNS validation failure without attempting a provider request", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockAssertSafeUrl.mockRejectedValueOnce(new Error("Não foi possível resolver o host."));
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(502);
+    expect(res.body.message).toMatch(/Não foi possível resolver o host/);
+    expect(mockSsrfFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["UND_ERR_CONNECT_TIMEOUT", /Tempo de conexão esgotado/],
+    ["ENOTFOUND", /resolver o endereço/],
+    ["ECONNREFUSED", /recusou ou interrompeu/],
+    ["CERT_HAS_EXPIRED", /certificado HTTPS/],
+  ])("reports a safe provider error instead of HTTP 500 for %s", async (code, message) => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockSsrfFetch.mockRejectedValueOnce(Object.assign(
+      new TypeError(`fetch failed; apikey=${WA_SECRETS.apiKey}`),
+      { cause: { code } },
+    ));
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(502);
+    expect(res.body.message).toMatch(message);
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      event: "qr_connect",
+      level: "warn",
+      message: res.body.message,
+    }));
+    expect(JSON.stringify(res.body)).not.toContain(WA_SECRETS.apiKey);
+    expect(JSON.stringify(mockInsertValues.mock.calls)).not.toContain(WA_SECRETS.apiKey);
+  });
+
+  it("treats a non-JSON provider success as an invalid QR rather than an internal error", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: true, status: 200, text: "<html>unavailable</html>" });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(502);
+    expect(res.body.message).toMatch(/não retornou um QR Code/);
+    expect(JSON.stringify(res.body)).not.toContain("<html>");
+  });
+
   it("returns only a validated QR image and sends the saved API key to the encoded instance endpoint", async () => {
     asAdmin();
     mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
