@@ -1,13 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-const { mockWhatsAppSend } = vi.hoisted(() => ({
+const { mockWhatsAppSend, mockReconcileWhatsAppMessage } = vi.hoisted(() => ({
   mockWhatsAppSend: vi.fn(async () => ({
     provider: "integration-test",
     externalId: "provider-accepted-once",
     success: true,
-    error: null,
+    error: null as string | null,
     outcomeUnknown: false,
+  })),
+  mockReconcileWhatsAppMessage: vi.fn(async () => ({
+    outcome: "accepted" as const,
+    provider: "evolution" as const,
+    externalId: "provider-accepted-after-timeout",
+    providerStatus: "SERVER_ACK",
+    detail: "provider_message_found",
   })),
 }));
 
@@ -19,6 +26,14 @@ vi.mock("../services/messaging-provider-adapters.js", async (importOriginal) => 
       ...actual.whatsappProviderAdapter,
       send: mockWhatsAppSend,
     },
+  };
+});
+
+vi.mock("../lib/whatsapp", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/whatsapp")>();
+  return {
+    ...actual,
+    reconcileTenantWhatsAppMessage: mockReconcileWhatsAppMessage,
   };
 });
 
@@ -34,6 +49,8 @@ import { and, eq } from "drizzle-orm";
 import {
   createOutboundMessage,
   processOutboundDelivery,
+  reconcileOutboundDelivery,
+  recoverOutboundDeliveries,
 } from "../services/outbound-delivery.js";
 
 const runId = randomUUID().replaceAll("-", "");
@@ -302,5 +319,119 @@ describe("outbound delivery database idempotency", () => {
     ));
     expect(attemptsBAfterProcessing?.status).toBe("accepted");
     expect(mockWhatsAppSend).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an ambiguous provider result in reconciliation until the same delivery is confirmed accepted", async () => {
+    mockWhatsAppSend.mockClear();
+    mockReconcileWhatsAppMessage.mockClear();
+    const externalId = "provider-accepted-after-timeout";
+    const logicalCampaignKey = `trip:trip-test:ambiguous:${randomUUID()}:${phone}`;
+    mockWhatsAppSend.mockResolvedValueOnce({
+      provider: "evolution",
+      externalId,
+      success: false,
+      error: "response_lost_after_send_started",
+      outcomeUnknown: true,
+    });
+    mockReconcileWhatsAppMessage.mockResolvedValueOnce({
+      outcome: "accepted",
+      provider: "evolution",
+      externalId,
+      providerStatus: "SERVER_ACK",
+      detail: "provider_message_found",
+    });
+
+    const created = await createOutboundMessage({
+      tenantId,
+      eventType: "trip_whatsapp_broadcast",
+      idempotencyKey: logicalCampaignKey,
+      recipient: { type: "direct", whatsapp: phone },
+      whatsapp: { text: "A response was lost after the provider call started" },
+      channels: ["whatsapp"],
+      origin: "legacy_whatsapp",
+      originChannel: "whatsapp",
+    });
+    expect(created.deliveries).toHaveLength(1);
+    const deliveryId = created.deliveries[0]!.id;
+
+    await expect(processOutboundDelivery(deliveryId, tenantId)).resolves.toBe(false);
+    expect(mockWhatsAppSend).toHaveBeenCalledTimes(1);
+    const [unknownDelivery] = await db.select().from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.id, deliveryId),
+    ));
+    expect(unknownDelivery).toMatchObject({
+      status: "unknown",
+      provider: "evolution",
+      externalId,
+      lastError: "delivery_result_unknown",
+      attempts: 1,
+    });
+    const [unknownAttempt] = await db.select().from(outboundDeliveryAttemptsTable).where(and(
+      eq(outboundDeliveryAttemptsTable.tenantId, tenantId),
+      eq(outboundDeliveryAttemptsTable.deliveryId, deliveryId),
+    ));
+    expect(unknownAttempt).toMatchObject({
+      status: "unknown",
+      provider: "evolution",
+      externalId,
+      attemptNumber: 1,
+    });
+
+    await expect(recoverOutboundDeliveries({ databaseFallback: true })).resolves.toEqual({
+      recovered: 0,
+      enqueued: 0,
+      inlineAttempted: 0,
+    });
+    expect(mockWhatsAppSend).toHaveBeenCalledTimes(1);
+    const stillUnknown = await db.select().from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.id, deliveryId),
+      eq(outboundDeliveriesTable.status, "unknown"),
+    ));
+    expect(stillUnknown).toHaveLength(1);
+
+    await expect(reconcileOutboundDelivery(tenantId, deliveryId, {
+      userId: "integration-test-reviewer",
+    })).resolves.toMatchObject({
+      outcome: "accepted",
+      canRetry: false,
+      deliveryId,
+      messageId: created.message.id,
+      provider: "evolution",
+      externalId,
+      providerStatus: "SERVER_ACK",
+    });
+    expect(mockReconcileWhatsAppMessage).toHaveBeenCalledTimes(1);
+    expect(mockWhatsAppSend).toHaveBeenCalledTimes(1);
+
+    const persistedDeliveries = await db.select().from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.outboundMessageId, created.message.id),
+    ));
+    expect(persistedDeliveries).toHaveLength(1);
+    expect(persistedDeliveries[0]).toMatchObject({
+      id: deliveryId,
+      status: "accepted",
+      provider: "evolution",
+      externalId,
+      lastError: null,
+      acceptedAt: expect.any(Date),
+    });
+    const [acceptedAttempt] = await db.select().from(outboundDeliveryAttemptsTable).where(and(
+      eq(outboundDeliveryAttemptsTable.tenantId, tenantId),
+      eq(outboundDeliveryAttemptsTable.deliveryId, deliveryId),
+    ));
+    expect(acceptedAttempt).toMatchObject({
+      status: "accepted",
+      provider: "evolution",
+      externalId,
+      attemptNumber: 1,
+    });
+    const [acceptedMessage] = await db.select().from(outboundMessagesTable).where(and(
+      eq(outboundMessagesTable.tenantId, tenantId),
+      eq(outboundMessagesTable.id, created.message.id),
+    ));
+    expect(acceptedMessage?.status).toBe("accepted");
   });
 });
