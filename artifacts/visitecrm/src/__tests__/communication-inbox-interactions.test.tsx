@@ -425,6 +425,33 @@ function ClientTimelineRaceHarness() {
   );
 }
 
+function ScrollAnchoredClientTimelineHarness() {
+  const [selectedClientId, setSelectedClientId] = useState<string | null>("client-a");
+  const timeline = useClientCommunicationTimeline({
+    enabled: true,
+    selectedClientId,
+  });
+  return createElement(
+    "section",
+    null,
+    createElement("button", {
+      "data-testid": "select-scroll-client-b",
+      onClick: () => setSelectedClientId("client-b"),
+    }, "Selecionar Bruna"),
+    createElement("p", { "data-testid": "scroll-selected-client" }, selectedClientId),
+    createElement("p", { "data-testid": "scroll-client-loading" }, String(timeline.loading)),
+    createElement(ConversationsTab, {
+      ...makeProps(selectedClientId, setSelectedClientId, timeline.messages),
+      hasMoreClientTimeline: timeline.hasMore,
+      loadingOlderClientTimeline: timeline.loadingOlder,
+      onLoadOlderClientTimeline: timeline.loadOlder,
+      loadingConversationAiMessages: timeline.loading,
+      conversationAiError: timeline.error,
+      onRetryConversationAiMessages: timeline.retry,
+    }),
+  );
+}
+
 function installDeferredClientTimelineFetch() {
   const requests = new Map<string, Deferred<Response>[]>();
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
@@ -1080,5 +1107,109 @@ describe("client timeline request scoping", () => {
     expect(timeline.textContent).not.toContain(currentB.content);
     expect(timeline.textContent).not.toContain(olderB.content);
     expect(timeline.textContent).not.toContain(delayedA.content);
+  });
+});
+
+describe("client timeline scroll position", () => {
+  it("anchors older-page prepends and discards scroll measurements from a previous client", async () => {
+    const requests = installDeferredClientTimelineFetch();
+    const { container } = await renderComponent(
+      createElement(ScrollAnchoredClientTimelineHarness),
+    );
+    const timeline = container.querySelector<HTMLDivElement>(
+      '[data-testid="client-conversation-timeline"]',
+    );
+    expect(timeline).not.toBeNull();
+
+    let scrollHeight = 2_000;
+    Object.defineProperty(timeline!, "scrollHeight", {
+      configurable: true,
+      get: () => scrollHeight,
+    });
+    Object.defineProperty(timeline!, "clientHeight", {
+      configurable: true,
+      value: 500,
+    });
+
+    const currentA = { ...firstMessage, id: "scroll-current-a" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a"),
+        [currentA],
+        "a-older-1",
+        true,
+      );
+    });
+
+    timeline!.scrollTop = 600;
+    await flushAct(() => timeline!.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-load-older-client-timeline"]',
+    )!.click());
+    expect(container.querySelector('[data-testid="button-load-older-client-timeline"]')?.textContent)
+      .toContain("Carregando");
+
+    const olderA = { ...firstMessage, id: "scroll-older-a", content: "Mensagem anterior da Ana" };
+    scrollHeight = 2_300;
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", "a-older-1"),
+        [olderA],
+        "a-older-2",
+        true,
+      );
+    });
+    expect(timeline!.textContent).toContain(olderA.content);
+    expect(timeline!.scrollTop).toBe(900);
+
+    timeline!.scrollTop = 350;
+    await flushAct(() => timeline!.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-load-older-client-timeline"]',
+    )!.click());
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="select-scroll-client-b"]',
+    )!.click());
+
+    expect(container.querySelector('[data-testid="scroll-selected-client"]')?.textContent)
+      .toBe("client-b");
+    expect(container.querySelector('[data-testid="scroll-client-loading"]')?.textContent)
+      .toBe("true");
+    expect(timeline!.scrollTop).toBe(2_300);
+    expect(timeline!.textContent).not.toContain(olderA.content);
+
+    const staleOlderA = {
+      ...firstMessage,
+      id: "stale-older-a",
+      content: "Página atrasada da Ana",
+    };
+    scrollHeight = 2_600;
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", "a-older-2"),
+        [staleOlderA],
+        null,
+        false,
+      );
+    });
+    expect(timeline!.scrollTop).toBe(2_300);
+    expect(timeline!.textContent).not.toContain(staleOlderA.content);
+    expect(container.querySelector('[data-testid="scroll-client-loading"]')?.textContent)
+      .toBe("true");
+
+    const currentB = { ...secondMessage, id: "scroll-current-b" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-b"),
+        [currentB],
+        null,
+        false,
+      );
+    });
+    expect(timeline!.textContent).toContain(currentB.content);
+    expect(timeline!.textContent).not.toContain(staleOlderA.content);
+    expect(timeline!.scrollTop).toBe(2_600);
+    expect(container.querySelector('[data-testid="scroll-client-loading"]')?.textContent)
+      .toBe("false");
   });
 });
