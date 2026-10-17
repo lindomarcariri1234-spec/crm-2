@@ -1,4 +1,5 @@
 - [Testing harness and Vitest selection](testing-harness-gotchas.md) — brittle mocks and database setup; register integration files and run Vitest directly ([selection](api-vitest-integration-selection.md)).
+- [Disposable PostgreSQL integration tests](outbound-idempotency-integration-db.md) — Replit's local PostgreSQL needs its Unix socket directed to a writable temp folder; keep tests on isolated loopback databases.
 - [BullMQ worker resume rejections](bullmq-worker-resume-rejections.md) — catch async resume failures; keep the quota circuit open during a short worker validation window.
 - [Checkout now synchronous](persist-order-no-client.md) — client/reservation/deal/portal-account creation moved from post-payment to checkout time (idempotent); referral crediting still deferred to post-payment
 - [logger warn vs console warn in tests](logger-warn-test-spy.md) — production code uses logger.warn (src/lib/logger); tests spying on console.warn will miss it; add vi.mock("../lib/logger.js") with a mockLogWarn vi.fn() closure

@@ -25,6 +25,7 @@ vi.mock("../services/messaging-provider-adapters.js", async (importOriginal) => 
 import {
   db,
   outboundDeliveriesTable,
+  outboundDeliveryAttemptsTable,
   outboundMessagesTable,
   pool,
   tenantsTable,
@@ -38,6 +39,8 @@ import {
 const runId = randomUUID().replaceAll("-", "");
 const tenantId = `outbound-idem-${runId}`;
 const tenantSlug = `outbound-idem-${runId}`;
+const secondTenantId = `outbound-idem-other-${runId}`;
+const secondTenantSlug = `outbound-idem-other-${runId}`;
 const phone = "5511999912345";
 const campaignId = randomUUID();
 const newCampaignId = randomUUID();
@@ -98,12 +101,20 @@ beforeAll(async () => {
     slug: tenantSlug,
     email: `${tenantSlug}@example.test`,
   });
+  await db.insert(tenantsTable).values({
+    id: secondTenantId,
+    name: "Outbound delivery idempotency test (second tenant)",
+    slug: secondTenantSlug,
+    email: `${secondTenantSlug}@example.test`,
+  });
 });
 
 afterAll(async () => {
   if (!isolatedDatabaseVerified) return;
   await db.delete(outboundMessagesTable).where(eq(outboundMessagesTable.tenantId, tenantId));
+  await db.delete(outboundMessagesTable).where(eq(outboundMessagesTable.tenantId, secondTenantId));
   await db.delete(tenantsTable).where(eq(tenantsTable.id, tenantId));
+  await db.delete(tenantsTable).where(eq(tenantsTable.id, secondTenantId));
   await pool.end();
 });
 
@@ -177,5 +188,119 @@ describe("outbound delivery database idempotency", () => {
       .where(eq(outboundDeliveriesTable.tenantId, tenantId));
     expect(persistedMessages).toHaveLength(2);
     expect(persistedDeliveries).toHaveLength(2);
+  });
+
+  it("keeps concurrent identical keys and delivery processing isolated between tenants", async () => {
+    mockWhatsAppSend.mockClear();
+    const logicalCampaignKey = `trip:trip-test:shared-campaign:${phone}`;
+    const inputForTenant = (tenantId: string) => ({
+      tenantId,
+      eventType: "trip_whatsapp_broadcast",
+      idempotencyKey: logicalCampaignKey,
+      recipient: { type: "direct" as const, whatsapp: phone },
+      whatsapp: { text: "Same logical key sent by two agencies" },
+      channels: ["whatsapp" as const],
+      origin: "legacy_whatsapp",
+      originChannel: "whatsapp" as const,
+    });
+
+    const [aFirst, bFirst, aSecond, bSecond] = await Promise.all([
+      createOutboundMessage(inputForTenant(tenantId)),
+      createOutboundMessage(inputForTenant(secondTenantId)),
+      createOutboundMessage(inputForTenant(tenantId)),
+      createOutboundMessage(inputForTenant(secondTenantId)),
+    ]);
+    const tenantAMessages = [aFirst, aSecond];
+    const tenantBMessages = [bFirst, bSecond];
+
+    for (const tenantMessages of [tenantAMessages, tenantBMessages]) {
+      expect(new Set(tenantMessages.map(({ message }) => message.id)).size).toBe(1);
+      expect(tenantMessages.filter(({ created }) => created)).toHaveLength(1);
+    }
+    const [messagesA, messagesB] = await Promise.all([
+      db.select().from(outboundMessagesTable).where(and(
+        eq(outboundMessagesTable.tenantId, tenantId),
+        eq(outboundMessagesTable.idempotencyKey, logicalCampaignKey),
+      )),
+      db.select().from(outboundMessagesTable).where(and(
+        eq(outboundMessagesTable.tenantId, secondTenantId),
+        eq(outboundMessagesTable.idempotencyKey, logicalCampaignKey),
+      )),
+    ]);
+    expect(messagesA).toHaveLength(1);
+    expect(messagesB).toHaveLength(1);
+    const messageA = messagesA[0]!;
+    const messageB = messagesB[0]!;
+    expect(messageA.id).not.toBe(messageB.id);
+    expect(messageA.id).toBe(aFirst.message.id);
+    expect(messageB.id).toBe(bFirst.message.id);
+    expect(messageA.tenantId).toBe(tenantId);
+    expect(messageB.tenantId).toBe(secondTenantId);
+    expect(messageA.idempotencyKey).toBe(logicalCampaignKey);
+    expect(messageB.idempotencyKey).toBe(logicalCampaignKey);
+
+    const [deliveriesA, deliveriesB] = await Promise.all([
+      db.select().from(outboundDeliveriesTable).where(and(
+        eq(outboundDeliveriesTable.tenantId, tenantId),
+        eq(outboundDeliveriesTable.outboundMessageId, messageA.id),
+      )),
+      db.select().from(outboundDeliveriesTable).where(and(
+        eq(outboundDeliveriesTable.tenantId, secondTenantId),
+        eq(outboundDeliveriesTable.outboundMessageId, messageB.id),
+      )),
+    ]);
+    expect(deliveriesA).toHaveLength(1);
+    expect(deliveriesB).toHaveLength(1);
+    const deliveryA = deliveriesA[0]!;
+    const deliveryB = deliveriesB[0]!;
+    expect(deliveryA.id).not.toBe(deliveryB.id);
+    expect(deliveryA.tenantId).toBe(tenantId);
+    expect(deliveryB.tenantId).toBe(secondTenantId);
+    expect(deliveryA.channel).toBe("whatsapp");
+    expect(deliveryB.channel).toBe("whatsapp");
+
+    await expect(processOutboundDelivery(deliveryA.id, tenantId)).resolves.toBe(true);
+    const [acceptedDeliveryA] = await db.select().from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.id, deliveryA.id),
+    ));
+    const [untouchedDeliveryB] = await db.select().from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.tenantId, secondTenantId),
+      eq(outboundDeliveriesTable.id, deliveryB.id),
+    ));
+    const [untouchedMessageB] = await db.select().from(outboundMessagesTable).where(and(
+      eq(outboundMessagesTable.tenantId, secondTenantId),
+      eq(outboundMessagesTable.id, messageB.id),
+    ));
+    const [attemptsA, attemptsB] = await Promise.all([
+      db.select().from(outboundDeliveryAttemptsTable).where(and(
+        eq(outboundDeliveryAttemptsTable.tenantId, tenantId),
+        eq(outboundDeliveryAttemptsTable.deliveryId, deliveryA.id),
+      )),
+      db.select().from(outboundDeliveryAttemptsTable).where(and(
+        eq(outboundDeliveryAttemptsTable.tenantId, secondTenantId),
+        eq(outboundDeliveryAttemptsTable.deliveryId, deliveryB.id),
+      )),
+    ]);
+    expect(acceptedDeliveryA?.status).toBe("accepted");
+    expect(untouchedDeliveryB?.status).toBe("pending");
+    expect(untouchedMessageB?.status).toBe("pending");
+    expect(attemptsA).toHaveLength(1);
+    expect(attemptsA[0]?.status).toBe("accepted");
+    expect(attemptsB).toHaveLength(0);
+    expect(mockWhatsAppSend).toHaveBeenCalledTimes(1);
+
+    await expect(processOutboundDelivery(deliveryB.id, secondTenantId)).resolves.toBe(true);
+    const [acceptedDeliveryB] = await db.select().from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.tenantId, secondTenantId),
+      eq(outboundDeliveriesTable.id, deliveryB.id),
+    ));
+    expect(acceptedDeliveryB?.status).toBe("accepted");
+    const [attemptsBAfterProcessing] = await db.select().from(outboundDeliveryAttemptsTable).where(and(
+      eq(outboundDeliveryAttemptsTable.tenantId, secondTenantId),
+      eq(outboundDeliveryAttemptsTable.deliveryId, deliveryB.id),
+    ));
+    expect(attemptsBAfterProcessing?.status).toBe("accepted");
+    expect(mockWhatsAppSend).toHaveBeenCalledTimes(2);
   });
 });
