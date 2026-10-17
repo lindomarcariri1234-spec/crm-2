@@ -3558,6 +3558,31 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
     let failed = 0;
     let unknown = 0;
     let skipped = selection.skipped + (passengers.length - passengerContacts.length);
+    const safeSkipReasonCodes = new Set([
+      "whatsapp_opted_out",
+      "contact_opted_out",
+      "whatsapp_connection_unavailable",
+      "whatsapp_connection_ambiguous",
+      "credentials_not_configured",
+      "provider_unavailable",
+      "invalid_phone",
+      "whatsapp_invalid_phone",
+      "whatsapp_address_missing",
+      "whatsapp_recipient_unavailable",
+      "recipient_client_not_found",
+      "whatsapp_recipient_changed",
+      "whatsapp_content_missing",
+      "invalid_or_duplicate_phone",
+      "passenger_data_unavailable",
+    ]);
+    const skipReasonCounts = new Map<string, number>();
+    const addSkipReason = (rawCode: string, count = 1) => {
+      const code = safeSkipReasonCodes.has(rawCode) ? rawCode : "other";
+      skipReasonCounts.set(code, (skipReasonCounts.get(code) ?? 0) + count);
+    };
+    if (selection.skipped > 0) addSkipReason("invalid_or_duplicate_phone", selection.skipped);
+    const missingPassengerData = passengers.length - passengerContacts.length;
+    if (missingPassengerData > 0) addSkipReason("passenger_data_unavailable", missingPassengerData);
 
     for (const recipient of selection.recipients) {
       const message = interpolateWhatsAppMessage(parsed.data.messageTemplate, {
@@ -3596,6 +3621,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
             break;
           case "skipped":
             skipped++;
+            addSkipReason(dispatch.error ?? "other");
             break;
         }
       } catch {
@@ -3613,6 +3639,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
       failed,
       unknown,
       skipped,
+      skippedReasons: [...skipReasonCounts].map(([code, count]) => ({ code, count })),
     });
   } catch (err) {
     next(err);

@@ -24,6 +24,36 @@ const FILTER_LABELS: Record<FilterOption, string> = {
   pending: "Somente pendentes",
 };
 
+function skippedReasonLabel(code: string): string {
+  switch (code) {
+    case "whatsapp_opted_out":
+    case "contact_opted_out":
+      return "sem autorização para receber WhatsApp ou optaram por não receber";
+    case "whatsapp_connection_unavailable":
+    case "credentials_not_configured":
+    case "provider_unavailable":
+      return "conexão Evolution indisponível";
+    case "whatsapp_connection_ambiguous":
+      return "há mais de uma conexão Evolution definida";
+    case "invalid_phone":
+    case "whatsapp_invalid_phone":
+    case "whatsapp_address_missing":
+    case "invalid_or_duplicate_phone":
+      return "telefone ausente, inválido ou duplicado";
+    case "whatsapp_recipient_unavailable":
+    case "recipient_client_not_found":
+      return "cadastro do contato não foi localizado";
+    case "whatsapp_recipient_changed":
+      return "o telefone mudou desde a seleção; atualize a lista";
+    case "passenger_data_unavailable":
+      return "dados da reserva ou do passageiro não puderam ser associados";
+    case "whatsapp_content_missing":
+      return "a mensagem está vazia";
+    default:
+      return "motivo não classificado; confira o histórico de envios";
+  }
+}
+
 const VARIABLES = [
   { key: "{nome}", desc: "Nome do passageiro" },
   { key: "{viagem}", desc: "Nome da viagem" },
@@ -185,13 +215,20 @@ export function WhatsAppBroadcastModal({
                   <p className="text-amber-800"><strong>{result.unknown}</strong> com resultado indefinido; confira o histórico antes de reenviar</p>
                 )}
                 {result.skipped > 0 && (
-                  <p className="text-muted-foreground">
-                    <strong>{result.skipped}</strong> não enviada(s). Revise telefones, duplicidades, autorização de WhatsApp e conexão Evolution.
-                  </p>
+                  <div className="text-muted-foreground">
+                    <p><strong>{result.skipped}</strong> não enviada(s).</p>
+                    {result.skippedReasons?.length > 0 && (
+                      <ul className="mt-1 list-disc pl-5">
+                        {result.skippedReasons.map(({ code, count }) => (
+                          <li key={code}><strong>{count}</strong> {skippedReasonLabel(code)}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 )}
                 {result.accepted + result.queued === 0 && result.recipientCount > 0 && (
                   <p className="text-amber-800">
-                    Nenhuma mensagem foi enviada. Confirme a conexão Evolution e a autorização de WhatsApp dos contatos antes de tentar novamente.
+                    Nenhuma mensagem foi aceita. Confira os motivos acima antes de tentar novamente; a autorização de WhatsApp continua obrigatória.
                   </p>
                 )}
                 {result.recipientCount === 0 && (

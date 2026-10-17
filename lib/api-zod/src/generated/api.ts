@@ -11410,6 +11410,12 @@ export const BroadcastTripWhatsAppResponse = zod.object({
   failed: zod.number().int(),
   unknown: zod.number().int(),
   skipped: zod.number().int(),
+  skippedReasons: zod.array(
+    zod.object({
+      code: zod.string(),
+      count: zod.number().int(),
+    }),
+  ),
 });
 
 /**

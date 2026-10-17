@@ -2941,7 +2941,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [email, whatsapp]
+            enum: [email, whatsapp, instagram]
         - name: deliveryStatus
           in: query
           description: Filter messages that have a delivery with this status
@@ -3037,7 +3037,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [email, whatsapp]
+            enum: [email, whatsapp, instagram]
         - name: deliveryStatus
           in: query
           description: Keep only messages that have a delivery with this status
@@ -3104,7 +3104,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [email, whatsapp]
+            enum: [email, whatsapp, instagram]
         - name: deliveryStatus
           in: query
           description: Filter exported rows by delivery status
@@ -7224,7 +7224,15 @@ components:
         failed: { type: integer }
         unknown: { type: integer }
         skipped: { type: integer }
-      required: [recipientCount, queued, accepted, failed, unknown, skipped]
+        skippedReasons:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              count: { type: integer }
+            required: [code, count]
+      required: [recipientCount, queued, accepted, failed, unknown, skipped, skippedReasons]
     ReverseReferralBonusBody:
       type: object
       properties:
@@ -10162,7 +10170,7 @@ components:
           type: string
         channel:
           type: string
-          enum: [email, whatsapp]
+          enum: [email, whatsapp, instagram]
         content:
           type: string
         mediaUrl:
@@ -10188,7 +10196,7 @@ components:
       properties:
         id: { type: string }
         outboundMessageId: { type: string }
-        channel: { type: string, enum: [email, whatsapp] }
+        channel: { type: string, enum: [email, whatsapp, instagram] }
         recipient: { type: ["string", "null"] }
         subject: { type: ["string", "null"] }
         content: { type: string }
@@ -10336,7 +10344,7 @@ components:
           type: string
         channel:
           type: string
-          enum: [email, whatsapp]
+          enum: [email, whatsapp, instagram]
         subject:
           type: ["string", "null"]
         content:

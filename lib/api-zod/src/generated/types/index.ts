@@ -512,3 +512,4 @@ export * from "./verifyInstagramWebhookParams";
 export * from "./whatsAppBroadcastBody";
 export * from "./whatsAppBroadcastBodyFilter";
 export * from "./whatsAppBroadcastResult";
+export * from "./whatsAppBroadcastResultSkippedReasonsItem";

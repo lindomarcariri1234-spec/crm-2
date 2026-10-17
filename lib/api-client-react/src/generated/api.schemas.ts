@@ -381,6 +381,11 @@ export interface WhatsAppBroadcastBody {
   requestId: string;
 }
 
+export type WhatsAppBroadcastResultSkippedReasonsItem = {
+  code: string;
+  count: number;
+};
+
 export interface WhatsAppBroadcastResult {
   recipientCount: number;
   queued: number;
@@ -388,6 +393,7 @@ export interface WhatsAppBroadcastResult {
   failed: number;
   unknown: number;
   skipped: number;
+  skippedReasons: WhatsAppBroadcastResultSkippedReasonsItem[];
 }
 
 export interface ReverseReferralBonusBody {
@@ -2695,6 +2701,7 @@ export type SendMessageBodyChannel =
 export const SendMessageBodyChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export interface SendMessageBody {
@@ -2938,6 +2945,7 @@ export type CreateMessageTemplateBodyChannel =
 export const CreateMessageTemplateBodyChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export interface CreateMessageTemplateBody {
@@ -6371,6 +6379,7 @@ export type ListOutboundMessagesChannel =
 export const ListOutboundMessagesChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export type ListOutboundMessagesDeliveryStatus =
@@ -6423,6 +6432,7 @@ export type ListOutboundProviderFailureSummaryChannel =
 export const ListOutboundProviderFailureSummaryChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export type ListOutboundProviderFailureSummaryDeliveryStatus =
@@ -6484,6 +6494,7 @@ export type ExportOutboundMessagesChannel =
 export const ExportOutboundMessagesChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export type ExportOutboundMessagesDeliveryStatus =
