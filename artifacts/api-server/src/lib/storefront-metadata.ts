@@ -50,6 +50,13 @@ const DEFAULT_STORE_PUBLIC_ORIGIN = "https://visitecrm.com";
 const FALLBACK_DESCRIPTION = "Conheça nossas viagens, pacotes e experiências.";
 const FALLBACK_KEYWORDS = "agência de viagens, turismo, viagens, pacotes de viagem";
 
+export function shouldServePublishedStorefront(
+  nodeEnv = process.env["NODE_ENV"],
+  publicationVersion = process.env["PUBLICATION_EXPECTED_VERSION"],
+): boolean {
+  return nodeEnv === "production" || Boolean(publicationVersion?.trim());
+}
+
 function normalizedText(value: string | null | undefined, fallback: string, maxLength: number): string {
   const text = value?.replace(/\s+/g, " ").trim();
   return (text || fallback).slice(0, maxLength);

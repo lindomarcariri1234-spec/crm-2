@@ -19,6 +19,7 @@ import {
   buildStorefrontMetadata,
   injectStorefrontMetadata,
   productSlugFromStorefrontPath,
+  shouldServePublishedStorefront,
 } from "./lib/storefront-metadata";
 import {
   canonicalizeInstagramConnectClerkRequest,
@@ -516,7 +517,7 @@ app.use("/api", (_req, _res, next) => {
   next(new NotFoundError("API route not found", "API_ROUTE_NOT_FOUND"));
 });
 
-if (!isDev) {
+if (shouldServePublishedStorefront()) {
   const frontendDist = path.join(process.cwd(), "artifacts/visitecrm/dist/public");
   const storefrontIndexPath = path.join(frontendDist, "index.html");
   let storefrontIndexHtml: Promise<string> | null = null;

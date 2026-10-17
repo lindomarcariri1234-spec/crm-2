@@ -3,6 +3,7 @@ import {
   buildStorefrontMetadata,
   injectStorefrontMetadata,
   productSlugFromStorefrontPath,
+  shouldServePublishedStorefront,
 } from "../lib/storefront-metadata.js";
 import { shouldBypassClerkForPath } from "../lib/clerk-request.js";
 
@@ -26,6 +27,12 @@ afterEach(() => {
 });
 
 describe("storefront sharing metadata", () => {
+  it("serves crawler HTML in published runs even when NODE_ENV is unset", () => {
+    expect(shouldServePublishedStorefront(undefined, "published-build")).toBe(true);
+    expect(shouldServePublishedStorefront("production", undefined)).toBe(true);
+    expect(shouldServePublishedStorefront(undefined, undefined)).toBe(false);
+  });
+
   it("keeps storefront HTML routes public before metadata injection", () => {
     expect(shouldBypassClerkForPath("/loja/visite-cariri-cearense-receptivo")).toBe(true);
     expect(shouldBypassClerkForPath(
