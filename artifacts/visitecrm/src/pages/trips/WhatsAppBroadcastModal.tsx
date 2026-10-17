@@ -185,7 +185,14 @@ export function WhatsAppBroadcastModal({
                   <p className="text-amber-800"><strong>{result.unknown}</strong> com resultado indefinido; confira o histórico antes de reenviar</p>
                 )}
                 {result.skipped > 0 && (
-                  <p className="text-muted-foreground"><strong>{result.skipped}</strong> ignorada(s): sem telefone válido, repetida ou sem autorização</p>
+                  <p className="text-muted-foreground">
+                    <strong>{result.skipped}</strong> não enviada(s). Revise telefones, duplicidades, autorização de WhatsApp e conexão Evolution.
+                  </p>
+                )}
+                {result.accepted + result.queued === 0 && result.recipientCount > 0 && (
+                  <p className="text-amber-800">
+                    Nenhuma mensagem foi enviada. Confirme a conexão Evolution e a autorização de WhatsApp dos contatos antes de tentar novamente.
+                  </p>
                 )}
                 {result.recipientCount === 0 && (
                   <p className="text-amber-800">Nenhum destinatário válido foi encontrado para este filtro.</p>

@@ -1264,6 +1264,32 @@ describe("POST /api/integrations/:type/test — transient probe, never persists 
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
+  it("whatsapp_evolution: 404 identifies the base URL and instance-name mismatch", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockAssertSafeUrl.mockResolvedValueOnce(undefined);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/test")
+      .send({
+        config: { baseUrl: "https://evo.example.com", instanceName: "my-instance" },
+        secrets: { apiKey: MASK },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      ok: false,
+      status: "error",
+      message: "Instância não encontrada neste servidor (HTTP 404). Confirme a URL Base e o Nome da Instância exatos na mesma instalação Evolution.",
+    });
+    expect(mockSsrfFetch).toHaveBeenCalledWith(
+      "https://evo.example.com/instance/connectionState/my-instance",
+      expect.any(Object),
+    );
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
   it("whatsapp_evolution: SSRF block during test → ok=false, no db.update", async () => {
     asAdmin();
     mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);

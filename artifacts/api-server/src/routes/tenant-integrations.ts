@@ -329,7 +329,7 @@ const REGISTRY: Record<string, RegistryEntry> = {
         if (result.status === 404) {
           return {
             ok: false,
-            message: "Instância não encontrada (HTTP 404). Verifique o Nome da Instância.",
+            message: "Instância não encontrada neste servidor (HTTP 404). Confirme a URL Base e o Nome da Instância exatos na mesma instalação Evolution.",
           };
         }
         return { ok: false, message: `Falha na conexão (HTTP ${result.status}).` };
