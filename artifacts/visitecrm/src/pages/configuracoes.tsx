@@ -1425,6 +1425,7 @@ function IntegrationCard({
         title: error instanceof Error ? error.message : "Erro ao definir o número padrão",
         variant: "destructive",
       });
+      onSaved?.();
     } finally {
       setSaving(false);
     }

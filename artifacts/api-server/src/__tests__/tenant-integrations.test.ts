@@ -654,6 +654,48 @@ describe("PUT /api/integrations/:type — save configuration", () => {
     ]));
   });
 
+  it("leaves one default and gives the losing concurrent admin a safe refresh instruction", async () => {
+    const adminA = { id: "admin-a", tenantId: TENANT_ID, role: "admin", name: "Admin A" };
+    const adminB = { id: "admin-b", tenantId: TENANT_ID, role: "admin", name: "Admin B" };
+    mockRequireAuth.mockResolvedValueOnce(adminA).mockResolvedValueOnce(adminB);
+    const currentDefault = { ...WHATSAPP_ROW, id: "wa-current", isDefault: true };
+    const selectedA = { ...WHATSAPP_ROW, id: "wa-a", isDefault: false };
+    const selectedB = { ...WHATSAPP_ROW, id: "wa-b", isDefault: false };
+    mockLimit
+      .mockResolvedValueOnce([currentDefault])
+      .mockResolvedValueOnce([currentDefault])
+      .mockResolvedValueOnce([selectedA])
+      .mockResolvedValueOnce([selectedB]);
+
+    let transactionNumber = 0;
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => unknown) => {
+      transactionNumber += 1;
+      if (transactionNumber === 1) {
+        await callback({ update: mockUpdate, insert: mockInsert });
+        return;
+      }
+      throw { code: "23505", constraint: "tenant_integrations_whatsapp_default_uq" };
+    });
+
+    const [responseA, responseB] = await Promise.all([
+      request(buildApp())
+        .put("/api/integrations/whatsapp_evolution")
+        .send({ integrationId: selectedA.id, isDefault: true }),
+      request(buildApp())
+        .put("/api/integrations/whatsapp_evolution")
+        .send({ integrationId: selectedB.id, isDefault: true }),
+    ]);
+
+    expect(mockTransaction).toHaveBeenCalledTimes(2);
+    const bodies = [responseA.body, responseB.body];
+    expect(bodies.filter((body) => body.isDefault)).toHaveLength(1);
+    const losingResponse = bodies.find((body) => !body.isDefault);
+    expect(losingResponse?.message).toBe(
+      "Outro administrador definiu o número padrão ao mesmo tempo. Atualize a lista e tente novamente.",
+    );
+    expect(JSON.stringify(losingResponse)).not.toContain("23505");
+  });
+
   it("rejects selecting a disabled Evolution connection as default", async () => {
     asAdmin();
     const selected = { ...WHATSAPP_ROW, enabled: false, isDefault: false };

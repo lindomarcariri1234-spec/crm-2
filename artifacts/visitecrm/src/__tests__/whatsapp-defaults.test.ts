@@ -41,4 +41,15 @@ describe("WhatsApp connection default settings", () => {
       status: "connected",
     }, 0)).toBe("Tornar padrão");
   });
+
+  it("reflects the winner after settings reload the connections list", () => {
+    const refreshedConnections: WhatsAppDefaultCandidate[] = [
+      { isDefault: false, enabled: true, status: "connected" },
+      { isDefault: true, enabled: true, status: "connected" },
+    ];
+
+    expect(countWhatsAppDefaults(refreshedConnections)).toBe(1);
+    expect(getWhatsAppDefaultActionLabel(refreshedConnections[0]!, 1)).toBe("Tornar padrão");
+    expect(getWhatsAppDefaultActionLabel(refreshedConnections[1]!, 1)).toBeNull();
+  });
 });

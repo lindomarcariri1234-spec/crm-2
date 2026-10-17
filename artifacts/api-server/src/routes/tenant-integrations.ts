@@ -212,6 +212,13 @@ async function promoteConnectedEvolutionDefault(
   });
 }
 
+function isEvolutionDefaultConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const dbError = error as { code?: unknown; constraint?: unknown };
+  return dbError.code === "23505"
+    && dbError.constraint === "tenant_integrations_whatsapp_default_uq";
+}
+
 // ─── Registry ─────────────────────────────────────────────────────────────────
 // Each entry declares the fields (config = non-secret, secrets = encrypted),
 // which config fields need SSRF validation, and how to test the connection.
@@ -1109,6 +1116,7 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
     );
 
     let webhookSetup: { ok: boolean; message: string } | undefined;
+    let defaultSelectionMessage: string | undefined;
 
     // Auto-verify the saved config so the persisted status always reflects the
     // stored credentials. Never auto-test disabled integrations (stale status).
@@ -1134,14 +1142,18 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
             try {
               await promoteConnectedEvolutionDefault(me.tenantId, integrationId);
               isDefault = true;
-            } catch {
+            } catch (promotionError) {
               isDefault = false;
+              const defaultMessage = isEvolutionDefaultConflict(promotionError)
+                ? "Outro administrador definiu o número padrão ao mesmo tempo. Atualize a lista e tente novamente."
+                : "O número não pôde ser definido porque não está mais ativo e conectado. Atualize a lista e tente novamente.";
+              defaultSelectionMessage = defaultMessage;
               await writeLog(
                 me,
                 type,
                 "default_selection",
                 "warn",
-                "O número não foi definido como padrão porque não está mais ativo e conectado.",
+                defaultMessage,
               );
             }
           }
@@ -1216,7 +1228,10 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       integrationId,
       isDefault,
       ...(type === "whatsapp_evolution" && requestedIsDefault && !isDefault
-        ? { message: "O número só pode ser padrão depois de uma verificação bem-sucedida." }
+        ? {
+            message: defaultSelectionMessage
+              ?? "O número só pode ser padrão depois de uma verificação bem-sucedida.",
+          }
         : {}),
       ...(webhookSetup ? { webhook: webhookSetup } : {}),
     });
