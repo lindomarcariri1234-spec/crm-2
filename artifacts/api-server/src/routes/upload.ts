@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import multer, { memoryStorage } from "multer";
 import { utapi } from "../lib/uploadthing";
-import { requireAuth, MANAGEMENT_ROLES } from "../lib/tenant";
+import { requireAuth, MANAGEMENT_ROLES, type AuthedUser } from "../lib/tenant";
 import { db } from "@workspace/db";
 import { tripsTable, tripMediaTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
@@ -12,6 +12,27 @@ const router = Router();
 const MAX_MULTI_IMAGE_COUNT = 10;
 const UPLOAD_PROVIDER_ERROR_MESSAGE = "Não foi possível enviar o arquivo. Tente novamente.";
 const MULTI_UPLOAD_PROVIDER_ERROR_MESSAGE = "Não foi possível enviar os arquivos. Tente novamente.";
+
+async function authenticateUpload(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    res.locals["uploadUser"] = me;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+function getAuthenticatedUploadUser(res: Response): AuthedUser {
+  const me = res.locals["uploadUser"] as AuthedUser | undefined;
+  if (!me) throw new Error("Upload authentication middleware did not run");
+  return me;
+}
 
 const imageUpload = multer({
   storage: memoryStorage(),
@@ -84,10 +105,9 @@ function uploadErrorHandler(
   next(err);
 }
 
-router.post("/image", imageUpload.single("file"), async (req, res, next: NextFunction) => {
+router.post("/image", authenticateUpload, imageUpload.single("file"), async (req, res, next: NextFunction) => {
   try {
-    const me = await requireAuth(req, res);
-    if (!me) return;
+    const me = getAuthenticatedUploadUser(res);
 
     if (!req.file) {
       res.status(400).json({ error: "Nenhum arquivo enviado" });
@@ -186,10 +206,9 @@ router.post("/image", imageUpload.single("file"), async (req, res, next: NextFun
   }
 });
 
-router.post("/images", imageUpload.array("files", MAX_MULTI_IMAGE_COUNT), async (req, res, next: NextFunction) => {
+router.post("/images", authenticateUpload, imageUpload.array("files", MAX_MULTI_IMAGE_COUNT), async (req, res, next: NextFunction) => {
   try {
-    const me = await requireAuth(req, res);
-    if (!me) return;
+    getAuthenticatedUploadUser(res);
 
     const files = req.files as Express.Multer.File[] | undefined;
     if (!files || files.length === 0) {
@@ -216,6 +235,19 @@ router.post("/images", imageUpload.array("files", MAX_MULTI_IMAGE_COUNT), async 
 
     const errors = results.filter((r) => r.error);
     if (errors.length > 0) {
+      const uploadedKeys = results.flatMap((result) =>
+        !result.data ? [] : [result.data.key],
+      );
+      await Promise.all(uploadedKeys.map(async (key) => {
+        try {
+          await utapi.deleteFiles(key);
+        } catch (err) {
+          req.log?.warn(
+            { providerError: safeErrorLogFields(err) },
+            "[upload] failed to clean up a successful file from a partial batch",
+          );
+        }
+      }));
       res.status(500).json({ error: MULTI_UPLOAD_PROVIDER_ERROR_MESSAGE });
       return;
     }
@@ -252,10 +284,9 @@ const videoUpload = multer({
   },
 });
 
-router.post("/video", videoUpload.single("file"), async (req, res, next: NextFunction) => {
+router.post("/video", authenticateUpload, videoUpload.single("file"), async (req, res, next: NextFunction) => {
   try {
-    const me = await requireAuth(req, res);
-    if (!me) return;
+    const me = getAuthenticatedUploadUser(res);
 
     if (!req.file) {
       res.status(400).json({ error: "Nenhum arquivo enviado" });
@@ -339,10 +370,9 @@ router.post("/video", videoUpload.single("file"), async (req, res, next: NextFun
   }
 });
 
-router.post("/document", documentUpload.single("file"), async (req, res, next: NextFunction) => {
+router.post("/document", authenticateUpload, documentUpload.single("file"), async (req, res, next: NextFunction) => {
   try {
-    const me = await requireAuth(req, res);
-    if (!me) return;
+    getAuthenticatedUploadUser(res);
 
     if (!req.file) {
       res.status(400).json({ error: "Nenhum arquivo enviado" });

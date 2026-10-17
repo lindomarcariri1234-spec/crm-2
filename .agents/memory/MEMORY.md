@@ -35,6 +35,7 @@
 - [Disabled-user authorization](disabled-user-authorization.md) — inactive local accounts get 403 across protected paths; preserve self-deletion and intentional first-time provisioning.
 - [Clerk instance mismatch](clerk-instance-mismatch.md) — pk_live_ + sk_test_ from different instances → silent 401 on all requests; secrets override env vars in Replit so delete conflicting env var entirely.
 - [UploadThing SDK v7 CDN upload bug](uploadthing-sdk-v7-cdn-bug.md) — Effect-Platform adds spurious Range header + double-encodes URL params; patch globalThis.fetch in uploadthing.ts before UTApi instantiation.
+- [Authenticate before buffering uploads](upload-auth-before-multer.md) — run authentication before in-memory multipart parsers so unauthenticated requests cannot consume upload-sized memory.
 - [stripe-replit-sync migrations bundling](stripe-sync-migrations-bundling.md) — call runMigrations() in initStripeSync + copy package migrations into bundle dir (esbuild __dirname trap), else stripe.* tables missing.
 - [stripe-sync managed webhook auto-secret](stripe-sync-webhook-auto-secret.md) — signing secret auto-cached from stripe._managed_webhooks.secret; use getStripeSecretKey() not env var in initStripeSync for prod live key.
 - [Stripe plan→price link](stripe-plan-price-link.md) — checkout resolves price via prices.search planSlug metadata (no stripePriceId col); empty plans table → /subscriptions/upgrade 404; missing planSlug → silent one-time-payment fallback; search is eventually consistent.
