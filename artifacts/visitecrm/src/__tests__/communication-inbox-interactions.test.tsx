@@ -440,6 +440,7 @@ function ScrollAnchoredClientTimelineHarness() {
     }, "Selecionar Bruna"),
     createElement("p", { "data-testid": "scroll-selected-client" }, selectedClientId),
     createElement("p", { "data-testid": "scroll-client-loading" }, String(timeline.loading)),
+    createElement("p", { "data-testid": "scroll-client-cursor" }, timeline.cursor ?? ""),
     createElement(ConversationsTab, {
       ...makeProps(selectedClientId, setSelectedClientId, timeline.messages),
       hasMoreClientTimeline: timeline.hasMore,
@@ -1182,6 +1183,54 @@ describe("overlapping client timeline pages", () => {
     expect(renderedMessages.filter((content) => content === currentShared.content)).toHaveLength(1);
     expect(container.querySelector('[data-testid="timeline-cursor"]')?.textContent)
       .toBe("client-a-next-cursor");
+  });
+
+  it("stops offering older messages when the server repeats the current cursor", async () => {
+    const requests = installDeferredClientTimelineFetch();
+    const { container } = await renderComponent(
+      createElement(ScrollAnchoredClientTimelineHarness),
+    );
+    const current = {
+      ...firstMessage,
+      id: "stalled-cursor-current",
+      content: "Mensagem mais recente",
+    };
+
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a"),
+        [current],
+        "cursor-does-not-advance",
+        true,
+      );
+    });
+
+    const olderButton = () => container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-load-older-client-timeline"]',
+    );
+    expect(olderButton()).not.toBeNull();
+
+    await flushAct(() => olderButton()!.click());
+    const older = {
+      ...firstMessage,
+      id: "stalled-cursor-older",
+      content: "Mensagem antiga recebida",
+    };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", "cursor-does-not-advance"),
+        [older, current],
+        "cursor-does-not-advance",
+        true,
+      );
+    });
+
+    expect(container.querySelector('[data-testid="scroll-client-cursor"]')?.textContent)
+      .toBe("");
+    expect(container.querySelector('[data-testid="client-conversation-timeline"]')?.textContent)
+      .toContain(older.content);
+    expect(olderButton()).toBeNull();
+    expect(requests.get("client-a:cursor-does-not-advance")).toHaveLength(1);
   });
 });
 

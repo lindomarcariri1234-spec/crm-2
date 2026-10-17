@@ -68,8 +68,11 @@ export function useClientCommunicationTimeline({
       } else {
         setMessages(pageItems);
       }
-      setCursor(page.nextCursor);
-      setHasMore(page.hasMore);
+      const paginationDidNotAdvance = append
+        && page.hasMore
+        && (!page.nextCursor || page.nextCursor === pageCursor);
+      setCursor(paginationDidNotAdvance ? null : page.nextCursor);
+      setHasMore(page.hasMore && !paginationDidNotAdvance);
       setError(null);
     } catch {
       if (requestId === requestIdRef.current) {
