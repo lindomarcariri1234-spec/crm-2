@@ -514,4 +514,76 @@ describe("outbound delivery database idempotency", () => {
       attemptNumber: 1,
     });
   });
+
+  it("moves an expired processing lease to unknown without retrying or sending again", async () => {
+    mockWhatsAppSend.mockClear();
+    const created = await createOutboundMessage({
+      tenantId,
+      eventType: "trip_whatsapp_broadcast",
+      idempotencyKey: `trip:trip-test:worker-crash:${randomUUID()}:${phone}`,
+      recipient: { type: "direct", whatsapp: phone },
+      whatsapp: { text: "The worker stopped after starting the provider request" },
+      channels: ["whatsapp"],
+      origin: "legacy_whatsapp",
+      originChannel: "whatsapp",
+    });
+    expect(created.deliveries).toHaveLength(1);
+    const deliveryId = created.deliveries[0]!.id;
+    const expiredClaimAt = new Date(Date.now() - 16 * 60 * 1000);
+
+    // Simulate the durable state left behind when the worker dies after
+    // claiming the delivery and starting the provider attempt.
+    await db.update(outboundDeliveriesTable).set({
+      status: "processing",
+      provider: "evolution",
+      attempts: 1,
+      claimedAt: expiredClaimAt,
+      nextAttemptAt: expiredClaimAt,
+    }).where(and(
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.id, deliveryId),
+    ));
+    await db.insert(outboundDeliveryAttemptsTable).values({
+      id: randomUUID(),
+      tenantId,
+      deliveryId,
+      attemptNumber: 1,
+      provider: "evolution",
+      status: "processing",
+      startedAt: expiredClaimAt,
+    });
+
+    await expect(recoverOutboundDeliveries({ databaseFallback: true })).resolves.toEqual({
+      recovered: 1,
+      enqueued: 0,
+      inlineAttempted: 0,
+    });
+    expect(mockWhatsAppSend).not.toHaveBeenCalled();
+
+    const deliveries = await db.select().from(outboundDeliveriesTable).where(and(
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.outboundMessageId, created.message.id),
+    ));
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      id: deliveryId,
+      status: "unknown",
+      provider: "evolution",
+      attempts: 1,
+      claimedAt: null,
+      lastError: "delivery_result_unknown",
+    });
+    const attempts = await db.select().from(outboundDeliveryAttemptsTable).where(and(
+      eq(outboundDeliveryAttemptsTable.tenantId, tenantId),
+      eq(outboundDeliveryAttemptsTable.deliveryId, deliveryId),
+    ));
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      attemptNumber: 1,
+      provider: "evolution",
+      status: "unknown",
+      error: "delivery_result_unknown",
+      completedAt: expect.any(Date),
+    });
+  });
 });
