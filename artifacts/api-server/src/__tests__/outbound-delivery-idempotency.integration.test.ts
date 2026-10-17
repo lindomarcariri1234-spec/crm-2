@@ -515,8 +515,9 @@ describe("outbound delivery database idempotency", () => {
     });
   });
 
-  it("moves an expired processing lease to unknown without retrying or sending again", async () => {
+  it("recovers an expired processing lease only once across concurrent sweeps", async () => {
     mockWhatsAppSend.mockClear();
+    mockReconcileWhatsAppMessage.mockClear();
     const created = await createOutboundMessage({
       tenantId,
       eventType: "trip_whatsapp_broadcast",
@@ -553,12 +554,25 @@ describe("outbound delivery database idempotency", () => {
       startedAt: expiredClaimAt,
     });
 
-    await expect(recoverOutboundDeliveries({ databaseFallback: true })).resolves.toEqual({
+    const recoveries = await Promise.all([
+      recoverOutboundDeliveries({ databaseFallback: true }),
+      recoverOutboundDeliveries({ databaseFallback: true }),
+    ]);
+    expect(recoveries.map((result) => result.recovered).sort()).toEqual([0, 1]);
+    expect(recoveries.reduce(
+      (total, result) => ({
+        recovered: total.recovered + result.recovered,
+        enqueued: total.enqueued + result.enqueued,
+        inlineAttempted: total.inlineAttempted + result.inlineAttempted,
+      }),
+      { recovered: 0, enqueued: 0, inlineAttempted: 0 },
+    )).toEqual({
       recovered: 1,
       enqueued: 0,
       inlineAttempted: 0,
     });
     expect(mockWhatsAppSend).not.toHaveBeenCalled();
+    expect(mockReconcileWhatsAppMessage).not.toHaveBeenCalled();
 
     const deliveries = await db.select().from(outboundDeliveriesTable).where(and(
       eq(outboundDeliveriesTable.tenantId, tenantId),
