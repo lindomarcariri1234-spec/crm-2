@@ -20,6 +20,8 @@ export interface CampaignBonusResult {
 export interface CampaignPolicyContext {
   productIds?: string[];
   referrerTierLevel?: string | null;
+  /** Used to decide whether the final tier-adjusted bonus fits the campaign budget. */
+  tierBonusMultiplier?: number;
   /** Derived from valid conversions before the current checkout. */
   activitySegment?: "active" | "occasional" | "inactive";
   /** Normalized source or source:medium attribution captured in the referral cookie. */
@@ -58,23 +60,26 @@ export async function applyActiveCampaignBonus(
   asOf: Date = new Date(),
   context: CampaignPolicyContext = {},
 ): Promise<CampaignBonusResult> {
-  const [activeCampaign] = await qr
+  const campaignSelection = {
+    bonusType: referralCampaignsTable.bonusType,
+    bonusValue: referralCampaignsTable.bonusValue,
+    id: referralCampaignsTable.id,
+    eligibleStoreProductIds: referralCampaignsTable.eligibleStoreProductIds,
+    eligibleTierLevels: referralCampaignsTable.eligibleTierLevels,
+    eligibleActivitySegments: referralCampaignsTable.eligibleActivitySegments,
+    eligibleChannels: referralCampaignsTable.eligibleChannels,
+    conversionCap: referralCampaignsTable.conversionCap,
+    budgetAmount: referralCampaignsTable.budgetAmount,
+    commissionType: referralCampaignsTable.commissionType,
+    commissionValue: referralCampaignsTable.commissionValue,
+    commissionRecipientType: referralCampaignsTable.commissionRecipientType,
+    eligiblePartnerIds: referralCampaignsTable.eligiblePartnerIds,
+    startsAt: referralCampaignsTable.startsAt,
+    endsAt: referralCampaignsTable.endsAt,
+  };
+  const [selectedCampaign] = await qr
     .select({
-      bonusType: referralCampaignsTable.bonusType,
-      bonusValue: referralCampaignsTable.bonusValue,
-      id: referralCampaignsTable.id,
-      eligibleStoreProductIds: referralCampaignsTable.eligibleStoreProductIds,
-      eligibleTierLevels: referralCampaignsTable.eligibleTierLevels,
-      eligibleActivitySegments: referralCampaignsTable.eligibleActivitySegments,
-      eligibleChannels: referralCampaignsTable.eligibleChannels,
-      conversionCap: referralCampaignsTable.conversionCap,
-      budgetAmount: referralCampaignsTable.budgetAmount,
-      commissionType: referralCampaignsTable.commissionType,
-      commissionValue: referralCampaignsTable.commissionValue,
-      commissionRecipientType: referralCampaignsTable.commissionRecipientType,
-      eligiblePartnerIds: referralCampaignsTable.eligiblePartnerIds,
-      startsAt: referralCampaignsTable.startsAt,
-      endsAt: referralCampaignsTable.endsAt,
+      ...campaignSelection,
     })
     .from(referralCampaignsTable)
     .where(and(
@@ -85,7 +90,27 @@ export async function applyActiveCampaignBonus(
     .orderBy(desc(referralCampaignsTable.startsAt))
     .limit(1);
 
-  if (!activeCampaign) return { adjustedBase: baseBonusValue, fixedExtra: 0, rewardOutcome: "base" };
+  if (!selectedCampaign) return { adjustedBase: baseBonusValue, fixedExtra: 0, rewardOutcome: "base" };
+
+  let activeCampaign = selectedCampaign;
+  // A row lock serializes only campaigns with configured limits. Keep it until
+  // the caller's conversion transaction commits, so the next conversion sees
+  // the completed referral before it checks capacity or spend.
+  if (activeCampaign.conversionCap != null || activeCampaign.budgetAmount != null) {
+    const [lockedCampaign] = await qr
+      .select(campaignSelection)
+      .from(referralCampaignsTable)
+      .where(and(
+        eq(referralCampaignsTable.id, activeCampaign.id),
+        eq(referralCampaignsTable.tenantId, tenantId),
+        sql`${referralCampaignsTable.startsAt} <= ${asOf}`,
+        sql`${referralCampaignsTable.endsAt} > ${asOf}`,
+      ))
+      .for("update")
+      .limit(1);
+    if (!lockedCampaign) return { adjustedBase: baseBonusValue, fixedExtra: 0, rewardOutcome: "base" };
+    activeCampaign = lockedCampaign;
+  }
 
   const eligibleProducts = activeCampaign.eligibleStoreProductIds ?? [];
   const eligibleTiers = activeCampaign.eligibleTierLevels ?? [];
@@ -109,9 +134,25 @@ export async function applyActiveCampaignBonus(
     return { adjustedBase: baseBonusValue, fixedExtra: 0, rewardOutcome: "base", campaignId: activeCampaign.id };
   }
 
+  const campaignVal = Number(activeCampaign.bonusValue);
+  const tierBonusMultiplier = context.tierBonusMultiplier ?? 1;
+  const projectedBonus = activeCampaign.bonusType === "multiplier"
+    ? Math.max(baseBonusValue, baseBonusValue * campaignVal) * tierBonusMultiplier
+    : activeCampaign.bonusType === "fixed_bonus"
+      ? Math.max(0, campaignVal)
+      : activeCampaign.bonusType === "percentage_bonus"
+        ? Math.max(0, baseBonusValue * campaignVal / 100) * tierBonusMultiplier
+        : activeCampaign.bonusType === "reduced_bonus"
+          ? Math.max(0, baseBonusValue * campaignVal) * tierBonusMultiplier
+          : activeCampaign.bonusType === "no_reward"
+            ? 0
+            : (baseBonusValue * tierBonusMultiplier) + Math.max(0, campaignVal);
+
   // Campaigns do not overlap. Aggregate historical conversions in its window so
-  // old referral rows remain compatible without a campaign_id column.
-  if (activeCampaign.conversionCap || activeCampaign.budgetAmount) {
+  // old referral rows remain compatible without a campaign_id column. For
+  // capped/budgeted campaigns, the campaign row lock above makes this check
+  // atomic with the referral insert/update performed by the caller.
+  if (activeCampaign.conversionCap != null || activeCampaign.budgetAmount != null) {
     const [usage] = await qr.select({
       conversions: count(),
       bonusCost: sql<string>`COALESCE(SUM(${referralsTable.bonusAmount}), 0)`,
@@ -121,13 +162,16 @@ export async function applyActiveCampaignBonus(
       sql`${referralsTable.convertedAt} >= ${activeCampaign.startsAt}`,
       sql`${referralsTable.convertedAt} < ${activeCampaign.endsAt}`,
     ));
-    if ((activeCampaign.conversionCap && Number(usage?.conversions ?? 0) >= activeCampaign.conversionCap)
-      || (activeCampaign.budgetAmount && Number(usage?.bonusCost ?? 0) >= Number(activeCampaign.budgetAmount))) {
+    const conversionCapReached = activeCampaign.conversionCap != null
+      && Number(usage?.conversions ?? 0) >= activeCampaign.conversionCap;
+    const budgetExceeded = activeCampaign.budgetAmount != null
+      && Math.round((Number(usage?.bonusCost ?? 0) + projectedBonus) * 100) / 100
+        > Number(activeCampaign.budgetAmount);
+    if (conversionCapReached || budgetExceeded) {
       return { adjustedBase: 0, fixedExtra: 0, rewardOutcome: "no_reward", campaignId: activeCampaign.id };
     }
   }
 
-  const campaignVal = Number(activeCampaign.bonusValue);
   const commission = {
     commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"],
     commissionValue: Number(activeCampaign.commissionValue),

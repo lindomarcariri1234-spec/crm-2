@@ -23,6 +23,7 @@ import {
   outboundDeliveryAttemptsTable,
   outboundMessagesTable,
   referralsTable,
+  referralCampaignsTable,
   referralSettingsTable,
   referralTrackingTable,
   tenantsTable,
@@ -102,6 +103,7 @@ const RUN = randomUUID().replaceAll("-", "").slice(0, 10);
 const TENANT_ID = `rpc-tenant-${RUN}`;
 const USER_ID = `rpc-user-${RUN}`;
 const REFERRER_ID = `rpc-referrer-${RUN}`;
+const CAMPAIGN_REFERRER_ID = `rpc-campaign-referrer-${RUN}`;
 const REFERRED_ID = `rpc-referred-${RUN}`;
 const REFERRAL_ID = `rpc-referral-${RUN}`;
 const FOREIGN_TENANT_ID = `rpc-foreign-tenant-${RUN}`;
@@ -193,6 +195,14 @@ beforeAll(async () => {
       name: "Live Referrer",
       email: `rpc-referrer-${RUN}@example.com`,
       whatsapp: "85999990001",
+      createdById: USER_ID,
+    },
+    {
+      id: CAMPAIGN_REFERRER_ID,
+      tenantId: TENANT_ID,
+      name: "Campaign Limit Referrer",
+      email: `rpc-campaign-referrer-${RUN}@example.com`,
+      whatsapp: "85999990004",
       createdById: USER_ID,
     },
     {
@@ -338,6 +348,89 @@ describe("referral conversion cap under concurrent checkouts — real PostgreSQL
     const [referrer] = await db.select({ successfulReferrals: clientsTable.successfulReferrals })
       .from(clientsTable).where(and(eq(clientsTable.id, REFERRER_ID), eq(clientsTable.tenantId, TENANT_ID)));
     expect(referrer?.successfulReferrals).toBe(1);
+  });
+});
+
+describe("referral campaign limits under concurrent conversions — real PostgreSQL", () => {
+  async function runConcurrentCampaignConversions(
+    limits: { conversionCap: number | null; budgetAmount: string | null },
+  ) {
+    await clearPaymentsAndDeliveries();
+    await db.delete(referralCampaignsTable).where(eq(referralCampaignsTable.tenantId, TENANT_ID));
+    await db.update(referralSettingsTable)
+      .set({ maxReferralsPerUser: 0, pointsPerReferral: 0 })
+      .where(eq(referralSettingsTable.tenantId, TENANT_ID));
+    await db.update(clientsTable).set({ successfulReferrals: 0, referralEarnings: "0.00" })
+      .where(and(
+        eq(clientsTable.tenantId, TENANT_ID),
+        eq(clientsTable.id, REFERRER_ID),
+      ));
+    await db.update(clientsTable).set({ successfulReferrals: 0, referralEarnings: "0.00" })
+      .where(and(
+        eq(clientsTable.tenantId, TENANT_ID),
+        eq(clientsTable.id, CAMPAIGN_REFERRER_ID),
+      ));
+
+    const campaignId = `rpc-campaign-${RUN}`;
+    const referralIds = [`rpc-campaign-a-${RUN}`, `rpc-campaign-b-${RUN}`];
+    const startsAt = new Date(Date.now() - 60_000);
+    const endsAt = new Date(Date.now() + 60_000);
+    await db.insert(referralCampaignsTable).values({
+      id: campaignId,
+      tenantId: TENANT_ID,
+      name: "Concurrent conversion limit",
+      startsAt,
+      endsAt,
+      bonusType: "fixed_bonus",
+      bonusValue: "10",
+      ...limits,
+    });
+    await db.insert(referralsTable).values(referralIds.map((id, index) => ({
+      id,
+      tenantId: TENANT_ID,
+      referrerId: index === 0 ? REFERRER_ID : CAMPAIGN_REFERRER_ID,
+      code: `RPC-CAMPAIGN-${RUN}`,
+      status: REFERRAL_STATUS.PENDING,
+      source: "store" as const,
+    })));
+
+    try {
+      await Promise.all(referralIds.map((existingReferralId, index) => db.transaction((tx) =>
+        recordReferralConversion(tx, {
+          tenantId: TENANT_ID,
+          referrerId: index === 0 ? REFERRER_ID : CAMPAIGN_REFERRER_ID,
+          referralCode: `RPC-CAMPAIGN-${RUN}`,
+          referredClientId: null,
+          customerEmail: `campaign-${index}-${RUN}@example.com`,
+          customerName: `Campaign customer ${index}`,
+          discountAmount: 5,
+          discountValue: 5,
+          discountType: "percentage",
+          existingReferralId,
+        }))));
+
+      const conversions = await db.select({
+        id: referralsTable.id,
+        status: referralsTable.status,
+        bonusAmount: referralsTable.bonusAmount,
+      }).from(referralsTable).where(eq(referralsTable.tenantId, TENANT_ID));
+      expect(conversions).toHaveLength(2);
+      expect(conversions.every((row) => row.status === REFERRAL_STATUS.COMPLETED)).toBe(true);
+      const grantedBonuses = conversions.map((row) => Number(row.bonusAmount)).filter((amount) => amount > 0);
+      expect(grantedBonuses).toEqual([10]);
+      expect(conversions.reduce((sum, row) => sum + Number(row.bonusAmount), 0)).toBeLessThanOrEqual(10);
+    } finally {
+      await db.delete(referralCampaignsTable).where(eq(referralCampaignsTable.id, campaignId));
+      await clearPaymentsAndDeliveries();
+    }
+  }
+
+  it("grants at most the configured conversion cap while converting both referrals", async () => {
+    await runConcurrentCampaignConversions({ conversionCap: 1, budgetAmount: null });
+  });
+
+  it("keeps total campaign bonuses within budget while converting both referrals", async () => {
+    await runConcurrentCampaignConversions({ conversionCap: null, budgetAmount: "10.00" });
   });
 });
 
