@@ -17,7 +17,7 @@ import { ROLES, REFERRAL_STATUS } from "@workspace/permissions";
 import QRCode from "qrcode";
 import {
   Loader2, Copy, Check, Share2, MessageCircle, Clock, CheckCircle, XCircle,
-  QrCode, Coins, AlertTriangle, Wallet, Award, History, Zap, Compass,
+  QrCode, Coins, AlertTriangle, Wallet, Award, History, Zap, Compass, ExternalLink,
   Plane, Target, Star, Sparkles, ShieldCheck, Gift, Users
 } from "lucide-react";
 import { formatCurrencyBRL as formatCurrency } from "@/lib/utils";
@@ -68,6 +68,27 @@ function maskEmail(email: string | null): string {
   if (!domain) return email;
   const visible = local.slice(0, Math.min(3, local.length));
   return `${visible}***@${domain}`;
+}
+
+function safeExternalHref(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function campaignBannerCopy(campaign: ClientReferralCampaign): string {
+  switch (campaign.bonusType) {
+    case "multiplier": return `Bônus ${campaign.bonusValue}× por tempo limitado!`;
+    case "fixed_extra": return `Bônus extra de ${formatCurrency(campaign.bonusValue)}`;
+    case "fixed_bonus": return `Bônus fixo de ${formatCurrency(campaign.bonusValue)}`;
+    case "percentage_bonus": return `Bônus de ${campaign.bonusValue}% do valor-base`;
+    case "reduced_bonus": return "Recompensa especial de indicação";
+    case "no_reward": return "Campanha de indicação ativa";
+  }
 }
 
 function ReferralHistoryRow({ r, primaryColor }: { r: ClientReferral; primaryColor: string }) {
@@ -255,13 +276,13 @@ export default function MyReferralPage({ slug, store }: Props) {
 
   const handleShareWhatsApp = useCallback(() => {
     if (!shareLink) return;
-    const shareMessage = profile?.referral?.shareMessage;
+    const shareMessage = activeCampaign?.shareMessage?.trim() || profile?.referral?.shareMessage;
     const message = shareMessage
       ? `${shareMessage}\n\n${shareLink}`
       : `Olá! Indico a ${store.name} para sua próxima viagem. Use meu link e aproveite condições exclusivas: ${shareLink}`;
     const waUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(waUrl, "_blank", "noopener,noreferrer");
-  }, [shareLink, profile?.referral?.shareMessage, store.name]);
+  }, [shareLink, activeCampaign?.shareMessage, profile?.referral?.shareMessage, store.name]);
 
   const handleNativeShare = useCallback(async () => {
     if (!shareLink) return;
@@ -270,14 +291,14 @@ export default function MyReferralPage({ slug, store }: Props) {
       return;
     }
     const title = `Desconto Exclusivo — ${store.name}`;
-    const text = `Use meu link para aproveitar benefícios especiais na ${store.name}!`;
+    const text = activeCampaign?.shareMessage?.trim() || `Use meu link para aproveitar benefícios especiais na ${store.name}!`;
 
     try {
       await navigator.share({ title, text, url: shareLink });
     } catch {
       // dismissed by user
     }
-  }, [shareLink, store.name, handleCopyLink]);
+  }, [shareLink, store.name, handleCopyLink, activeCampaign?.shareMessage]);
 
   const generateQR = useCallback(async (link: string) => {
     setQrLoading(true);
@@ -408,9 +429,17 @@ export default function MyReferralPage({ slug, store }: Props) {
               </div>
               <div>
                 <h3 className="font-bold text-lg leading-tight">
-                  {activeCampaign.bannerText || (activeCampaign.bonusType === "multiplier" ? `Super Bônus ${activeCampaign.bonusValue}x` : `Bônus Extra Garantido!`)}
+                  {activeCampaign.bannerText || campaignBannerCopy(activeCampaign)}
                 </h3>
-                <p className="text-white/90 text-sm mt-0.5 font-medium">Válido para convites enviados e convertidos no período.</p>
+                  <p className="text-white/90 text-sm mt-0.5 font-medium">Válido para convites enviados e convertidos no período.</p>
+                  {safeExternalHref(activeCampaign.materialUrl) && <a
+                    href={safeExternalHref(activeCampaign.materialUrl)!}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-flex items-center gap-1 text-xs font-semibold underline underline-offset-2 text-white"
+                  >
+                    Abrir material da campanha <ExternalLink className="h-3.5 w-3.5" />
+                  </a>}
               </div>
             </div>
             <div className="bg-black/20 px-4 py-2 rounded-lg text-center shrink-0 relative z-10 flex flex-col sm:flex-row items-center gap-2 sm:gap-3">

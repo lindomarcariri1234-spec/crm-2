@@ -2380,6 +2380,10 @@ router.post("/referrals/campaigns", async (req, res, next: NextFunction): Promis
       { message: "Comissão deve ser maior que zero", path: ["commissionValue"] },
     ).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    if (parsed.data.bonusType === "reduced_bonus" && parsed.data.bonusValue > 1) {
+      next(new ValidationError("Fator do bônus reduzido deve ser ≤ 1", "VALIDATION_ERROR"));
+      return;
+    }
 
     const starts = new Date(parsed.data.startsAt);
     const ends = new Date(parsed.data.endsAt);
@@ -2501,6 +2505,12 @@ router.patch("/referrals/campaigns/:id", async (req, res, next: NextFunction): P
       { message: "Configuração de comissão inválida", path: ["commissionValue"] },
     ).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    const effectiveType = parsed.data.bonusType ?? existing.bonusType;
+    const effectiveBonusValue = parsed.data.bonusValue ?? Number(existing.bonusValue);
+    if (effectiveType === "reduced_bonus" && effectiveBonusValue > 1) {
+      next(new ValidationError("Fator do bônus reduzido deve ser ≤ 1", "VALIDATION_ERROR"));
+      return;
+    }
 
     const starts = parsed.data.startsAt ? new Date(parsed.data.startsAt) : new Date(existing.startsAt);
     const ends = parsed.data.endsAt ? new Date(parsed.data.endsAt) : new Date(existing.endsAt);

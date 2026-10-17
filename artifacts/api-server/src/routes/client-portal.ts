@@ -1653,6 +1653,7 @@ router.get("/client/me/referral-campaign", async (req, res, next: NextFunction):
         shareMessage: referralCampaignsTable.shareMessage,
         materialUrl: referralCampaignsTable.materialUrl,
         eligibleActivitySegments: referralCampaignsTable.eligibleActivitySegments,
+        eligibleTierLevels: referralCampaignsTable.eligibleTierLevels,
       })
       .from(referralCampaignsTable)
       .where(and(
@@ -1678,8 +1679,20 @@ router.get("/client/me/referral-campaign", async (req, res, next: NextFunction):
       res.json(null);
       return;
     }
+    const eligibleTiers = campaign.eligibleTierLevels ?? [];
+    if (eligibleTiers.length > 0) {
+      const [settings] = await db.select({ tiersConfig: referralSettingsTable.tiersConfig })
+        .from(referralSettingsTable)
+        .where(eq(referralSettingsTable.tenantId, me.tenantId))
+        .limit(1);
+      const currentTier = computeReferralTier(client.successfulReferrals, settings?.tiersConfig).tier;
+      if (!eligibleTiers.includes(currentTier.level)) {
+        res.json(null);
+        return;
+      }
+    }
 
-    const { eligibleActivitySegments: _internalSegmentPolicy, ...safeCampaign } = campaign;
+    const { eligibleActivitySegments: _internalSegmentPolicy, eligibleTierLevels: _internalTierPolicy, ...safeCampaign } = campaign;
     res.json({ ...safeCampaign, bonusValue: Number(campaign.bonusValue) });
   } catch (err) {
     next(err);

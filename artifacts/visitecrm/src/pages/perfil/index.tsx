@@ -2259,7 +2259,10 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
   const primaryForeground = readablePortalText(primaryColor);
   const tenantLogoUrl = tenant?.logoUrl ?? null;
 
-  const shareMessage = referral.shareMessage ?? "Use meu código e ganhe desconto na sua viagem!";
+  const shareMessage = activeCampaign?.shareMessage?.trim() || referral.shareMessage || "Use meu código e ganhe desconto na sua viagem!";
+  const campaignMaterialHref = activeCampaign?.materialUrl && /^https?:\/\//i.test(activeCampaign.materialUrl)
+    ? activeCampaign.materialUrl
+    : null;
   const whatsappUrl = shareLink
     ? `https://wa.me/?text=${encodeURIComponent(`${shareMessage}\n\nMeu código: ${code}\n\n${shareLink}`)}`
     : null;
@@ -2472,7 +2475,15 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
                 ? activeCampaign.bannerText
                 : activeCampaign.bonusType === "multiplier"
                   ? `Bônus ${activeCampaign.bonusValue}× por tempo limitado!`
-                  : `Bônus extra de R$ ${Number(activeCampaign.bonusValue).toFixed(2).replace(".", ",")} nesta campanha!`}
+                  : activeCampaign.bonusType === "fixed_extra"
+                    ? `Bônus extra de R$ ${Number(activeCampaign.bonusValue).toFixed(2).replace(".", ",")}`
+                    : activeCampaign.bonusType === "fixed_bonus"
+                      ? `Bônus fixo de R$ ${Number(activeCampaign.bonusValue).toFixed(2).replace(".", ",")}`
+                      : activeCampaign.bonusType === "percentage_bonus"
+                        ? `Bônus de ${activeCampaign.bonusValue}% do valor-base`
+                        : activeCampaign.bonusType === "reduced_bonus"
+                          ? "Recompensa especial de indicação"
+                          : "Campanha de indicação ativa"}
             </span>
           </div>
           <p className="text-xs opacity-80">
@@ -2481,6 +2492,14 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
               {countdown}
             </span>
           </p>
+          {campaignMaterialHref && <a
+            href={campaignMaterialHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex items-center gap-1 text-xs font-semibold underline underline-offset-2"
+          >
+            Abrir material da campanha <ExternalLink className="h-3.5 w-3.5" />
+          </a>}
         </div>
       ) : <p className="text-xs text-muted-foreground">Nenhuma campanha ativa no momento.</p>}
 
