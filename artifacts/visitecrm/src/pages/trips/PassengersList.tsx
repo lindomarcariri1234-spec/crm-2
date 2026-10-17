@@ -644,8 +644,6 @@ export function PassengersList({ tripId }: { tripId: string }) {
         open={whatsappBroadcastOpen}
         onClose={() => setWhatsappBroadcastOpen(false)}
         tripId={tripId}
-        passengers={allPassengers}
-        freePassengers={panel?.freePassengers ?? []}
       />
     </div>
   );

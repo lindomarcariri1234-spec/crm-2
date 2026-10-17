@@ -113,6 +113,14 @@ vi.mock("@workspace/db", () => ({
     tenantId: "clients.tenant_id",
   },
   tenantsTable: { id: "tenants.id", name: "tenants.name" },
+  tenantIntegrationsTable: {
+    tenantId: "tenant_integrations.tenant_id",
+    type: "tenant_integrations.type",
+    enabled: "tenant_integrations.enabled",
+    status: "tenant_integrations.status",
+    isDefault: "tenant_integrations.is_default",
+    secretsEncrypted: "tenant_integrations.secrets_encrypted",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -648,6 +656,56 @@ describe("POST /trips/:id/whatsapp-broadcast route", () => {
       { inlineOnQueueFailure: true },
     );
     expect(response.body.accepted).toBe(0);
+  });
+
+  it("previews only tenant-scoped counts and never starts a send", async () => {
+    setQueue([
+      [{
+        id: "trip-1",
+        tenantId: "tenant-1",
+        freePassengers: [],
+      }],
+      [
+        { id: "reservation-1", clientId: "client-opted-out", status: "confirmed" },
+        { id: "reservation-2", clientId: "client-disconnected", status: "confirmed" },
+      ],
+      [
+        { reservationId: "reservation-1", name: "Pessoa opt-out", phone: "5511999990001" },
+        { reservationId: "reservation-2", name: "Pessoa desconectada", phone: null },
+      ],
+      [
+        { id: "client-opted-out", whatsapp: "5511999990001", phone: null, whatsappOptIn: false },
+        { id: "client-disconnected", whatsapp: "5511999990002", phone: null, whatsappOptIn: true },
+      ],
+      [{
+        enabled: true,
+        status: "disconnected",
+        isDefault: true,
+        secretsEncrypted: "encrypted",
+      }],
+      [{ whatsapp: "5511999990001", phone: null, whatsappOptIn: false }],
+    ]);
+
+    const app = express();
+    app.use(express.json());
+    app.use("/api", tripsRouter);
+    app.use(errorHandler);
+    const response = await request(app)
+      .post("/api/trips/trip-1/whatsapp-broadcast/preview")
+      .send({ messageTemplate: "Aviso {nome}", filter: "confirmed" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      recipientCount: 2,
+      eligibleCount: 0,
+      skipped: 2,
+      skippedReasons: [
+        { code: "whatsapp_opted_out", count: 1 },
+        { code: "whatsapp_connection_unavailable", count: 1 },
+      ],
+    });
+    expect(JSON.stringify(response.body)).not.toContain("Pessoa opt-out");
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });
 

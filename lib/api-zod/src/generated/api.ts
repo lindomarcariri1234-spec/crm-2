@@ -11423,6 +11423,51 @@ export const BroadcastTripWhatsAppResponse = zod.object({
   skipped: zod.number().int(),
   skippedReasons: zod.array(
     zod.object({
+      code: zod.enum([
+        "whatsapp_opted_out",
+        "contact_opted_out",
+        "whatsapp_connection_unavailable",
+        "whatsapp_connection_ambiguous",
+        "credentials_not_configured",
+        "provider_unavailable",
+        "invalid_phone",
+        "whatsapp_invalid_phone",
+        "whatsapp_address_missing",
+        "whatsapp_recipient_unavailable",
+        "recipient_client_not_found",
+        "whatsapp_recipient_changed",
+        "whatsapp_content_missing",
+        "invalid_or_duplicate_phone",
+        "passenger_data_unavailable",
+        "other",
+      ]),
+      count: zod.number().int(),
+    }),
+  ),
+});
+
+/**
+ * @summary Preview eligible and skipped WhatsApp broadcast recipients
+ */
+export const PreviewTripWhatsAppBroadcastParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const previewTripWhatsAppBroadcastBodyMessageTemplateMax = 2000;
+
+export const PreviewTripWhatsAppBroadcastBody = zod.object({
+  messageTemplate: zod
+    .string()
+    .max(previewTripWhatsAppBroadcastBodyMessageTemplateMax),
+  filter: zod.enum(["all", "confirmed", "pending"]),
+});
+
+export const PreviewTripWhatsAppBroadcastResponse = zod.object({
+  recipientCount: zod.number().int(),
+  eligibleCount: zod.number().int(),
+  skipped: zod.number().int(),
+  skippedReasons: zod.array(
+    zod.object({
       code: zod.string(),
       count: zod.number().int(),
     }),

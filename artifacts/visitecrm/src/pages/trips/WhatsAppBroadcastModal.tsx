@@ -5,9 +5,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Loader2, Send, MessageCircle, CheckCircle2, AlertCircle } from "lucide-react";
-import { useBroadcastTripWhatsApp } from "@workspace/api-client-react";
-import type { BoardingPassenger, FreePassenger, WhatsAppBroadcastResult } from "@workspace/api-client-react";
-import { selectTripWhatsAppBroadcastRecipients } from "@workspace/shared";
+import { previewTripWhatsAppBroadcast, useBroadcastTripWhatsApp } from "@workspace/api-client-react";
+import type { WhatsAppBroadcastPreviewResult, WhatsAppBroadcastResult } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 
 const DEFAULT_CONFIRMED =
@@ -17,7 +16,6 @@ const DEFAULT_BOARDING =
 
 type FilterOption = "all" | "confirmed" | "pending";
 type MessageType = "confirmed" | "boarding" | "custom";
-
 const FILTER_LABELS: Record<FilterOption, string> = {
   all: "Todos (exceto cancelados e reembolsados)",
   confirmed: "Somente confirmados",
@@ -67,22 +65,21 @@ interface WhatsAppBroadcastModalProps {
   open: boolean;
   onClose: () => void;
   tripId: string;
-  passengers: BoardingPassenger[];
-  freePassengers: FreePassenger[];
 }
 
 export function WhatsAppBroadcastModal({
   open,
   onClose,
   tripId,
-  passengers,
-  freePassengers,
 }: WhatsAppBroadcastModalProps) {
   const { toast } = useToast();
   const [messageType, setMessageType] = useState<MessageType>("confirmed");
   const [filter, setFilter] = useState<FilterOption>("all");
   const [messageTemplate, setMessageTemplate] = useState(DEFAULT_CONFIRMED);
   const [result, setResult] = useState<WhatsAppBroadcastResult | null>(null);
+  const [preview, setPreview] = useState<WhatsAppBroadcastPreviewResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const requestIdRef = useRef<{ signature: string; id: string } | null>(null);
 
@@ -122,22 +119,32 @@ export function WhatsAppBroadcastModal({
 
   const broadcast = useBroadcastTripWhatsApp();
 
-  const recipientEstimate = selectTripWhatsAppBroadcastRecipients(
-    filter,
-    passengers.map((passenger) => ({
-      reservationStatus: passenger.reservationStatus,
-      name: passenger.name,
-      phones: [
-        { phone: passenger.passengerPhone },
-        { phone: passenger.whatsapp },
-        { phone: passenger.phone },
-      ],
-    })),
-    freePassengers.map((passenger) => ({
-      name: passenger.name,
-      phones: [{ phone: passenger.whatsapp }],
-    })),
-  ).recipients.length;
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    setPreview(null);
+    setPreviewError(false);
+    setPreviewLoading(true);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          setPreview(await previewTripWhatsAppBroadcast(
+            tripId,
+            { filter, messageTemplate },
+            { signal: controller.signal },
+          ));
+        } catch {
+          if (!controller.signal.aborted) setPreviewError(true);
+        } finally {
+          if (!controller.signal.aborted) setPreviewLoading(false);
+        }
+      })();
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, tripId, filter, messageTemplate]);
 
   const handleSend = async () => {
     if (!messageTemplate.trim()) {
@@ -165,6 +172,7 @@ export function WhatsAppBroadcastModal({
 
   const handleClose = () => {
     setResult(null);
+    setPreview(null);
     setSettingsLoaded(false);
     onClose();
   };
@@ -292,10 +300,37 @@ export function WhatsAppBroadcastModal({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">
-                Estimativa: <span className="font-medium">{recipientEstimate}</span> contato(s) único(s) com telefone válido neste filtro.
-                Passageiros livres só entram em “Todos”; a autorização é verificada novamente no envio.
-              </p>
+            </div>
+
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm" aria-live="polite">
+              <p className="font-medium">Prévia do disparo</p>
+              {previewLoading && (
+                <p className="mt-1 text-muted-foreground">Atualizando destinatários e motivos...</p>
+              )}
+              {previewError && (
+                <p className="mt-1 text-amber-800">
+                  Não foi possível carregar a prévia. Reabra a janela ou altere o filtro para tentar novamente.
+                </p>
+              )}
+              {preview && !previewLoading && (
+                <div className="mt-1 space-y-1">
+                  <p><strong>{preview.eligibleCount}</strong> contato(s) elegível(is) para envio.</p>
+                  <p><strong>{preview.skipped}</strong> contato(s) ignorado(s).</p>
+                  {preview.skippedReasons.length > 0 && (
+                    <ul className="list-disc pl-5 text-muted-foreground">
+                      {preview.skippedReasons.map(({ code, count }) => (
+                        <li key={code}><strong>{count}</strong> {skippedReasonLabel(code)}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {preview.recipientCount === 0 && preview.skipped === 0 && (
+                    <p className="text-muted-foreground">Nenhum destinatário válido foi encontrado para este filtro.</p>
+                  )}
+                  <p className="pt-1 text-xs text-muted-foreground">
+                    A autorização e a conexão serão verificadas novamente no momento do envio.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2 pt-1">
@@ -305,7 +340,7 @@ export function WhatsAppBroadcastModal({
               <Button
                 className="flex-1 bg-green-600 hover:bg-green-700"
                 onClick={handleSend}
-                disabled={broadcast.isPending || !messageTemplate.trim() || recipientEstimate === 0}
+                disabled={broadcast.isPending || !messageTemplate.trim() || previewLoading || !preview || preview.eligibleCount === 0}
               >
                 {broadcast.isPending ? (
                   <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Enviando...</>

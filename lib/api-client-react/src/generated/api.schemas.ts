@@ -381,8 +381,57 @@ export interface WhatsAppBroadcastBody {
   requestId: string;
 }
 
-export type WhatsAppBroadcastResultSkippedReasonsItem = {
+export type WhatsAppBroadcastPreviewBodyFilter =
+  (typeof WhatsAppBroadcastPreviewBodyFilter)[keyof typeof WhatsAppBroadcastPreviewBodyFilter];
+
+export const WhatsAppBroadcastPreviewBodyFilter = {
+  all: "all",
+  confirmed: "confirmed",
+  pending: "pending",
+} as const;
+
+export interface WhatsAppBroadcastPreviewBody {
+  /** @maxLength 2000 */
+  messageTemplate: string;
+  filter: WhatsAppBroadcastPreviewBodyFilter;
+}
+
+export type WhatsAppBroadcastPreviewResultSkippedReasonsItem = {
   code: string;
+  count: number;
+};
+
+export interface WhatsAppBroadcastPreviewResult {
+  recipientCount: number;
+  eligibleCount: number;
+  skipped: number;
+  skippedReasons: WhatsAppBroadcastPreviewResultSkippedReasonsItem[];
+}
+
+export type WhatsAppBroadcastResultSkippedReasonsItemCode =
+  (typeof WhatsAppBroadcastResultSkippedReasonsItemCode)[keyof typeof WhatsAppBroadcastResultSkippedReasonsItemCode];
+
+export const WhatsAppBroadcastResultSkippedReasonsItemCode = {
+  whatsapp_opted_out: "whatsapp_opted_out",
+  contact_opted_out: "contact_opted_out",
+  whatsapp_connection_unavailable: "whatsapp_connection_unavailable",
+  whatsapp_connection_ambiguous: "whatsapp_connection_ambiguous",
+  credentials_not_configured: "credentials_not_configured",
+  provider_unavailable: "provider_unavailable",
+  invalid_phone: "invalid_phone",
+  whatsapp_invalid_phone: "whatsapp_invalid_phone",
+  whatsapp_address_missing: "whatsapp_address_missing",
+  whatsapp_recipient_unavailable: "whatsapp_recipient_unavailable",
+  recipient_client_not_found: "recipient_client_not_found",
+  whatsapp_recipient_changed: "whatsapp_recipient_changed",
+  whatsapp_content_missing: "whatsapp_content_missing",
+  invalid_or_duplicate_phone: "invalid_or_duplicate_phone",
+  passenger_data_unavailable: "passenger_data_unavailable",
+  other: "other",
+} as const;
+
+export type WhatsAppBroadcastResultSkippedReasonsItem = {
+  code: WhatsAppBroadcastResultSkippedReasonsItemCode;
   count: number;
 };
 

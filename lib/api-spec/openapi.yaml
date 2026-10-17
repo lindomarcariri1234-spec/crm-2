@@ -6662,6 +6662,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/WhatsAppBroadcastResult"
 
+  /trips/{id}/whatsapp-broadcast/preview:
+    post:
+      operationId: previewTripWhatsAppBroadcast
+      tags: [trips]
+      summary: Preview eligible and skipped WhatsApp broadcast recipients
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WhatsAppBroadcastPreviewBody"
+      responses:
+        "200":
+          description: Recipient counts and categorized skip reasons; no messages are sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhatsAppBroadcastPreviewResult"
+
   /referrals/{id}/pay-bonus:
     post:
       operationId: payReferralBonus
@@ -7246,6 +7271,27 @@ components:
         filter: { type: string, enum: [all, confirmed, pending] }
         requestId: { type: string, format: uuid }
       required: [messageTemplate, filter, requestId]
+    WhatsAppBroadcastPreviewBody:
+      type: object
+      properties:
+        messageTemplate: { type: string, maxLength: 2000 }
+        filter: { type: string, enum: [all, confirmed, pending] }
+      required: [messageTemplate, filter]
+    WhatsAppBroadcastPreviewResult:
+      type: object
+      properties:
+        recipientCount: { type: integer }
+        eligibleCount: { type: integer }
+        skipped: { type: integer }
+        skippedReasons:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              count: { type: integer }
+            required: [code, count]
+      required: [recipientCount, eligibleCount, skipped, skippedReasons]
     WhatsAppBroadcastResult:
       type: object
       properties:

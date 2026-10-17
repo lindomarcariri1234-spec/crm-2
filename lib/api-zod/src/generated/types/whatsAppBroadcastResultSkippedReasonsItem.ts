@@ -5,8 +5,9 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { WhatsAppBroadcastResultSkippedReasonsItemCode } from "./whatsAppBroadcastResultSkippedReasonsItemCode";
 
 export type WhatsAppBroadcastResultSkippedReasonsItem = {
-  code: string;
+  code: WhatsAppBroadcastResultSkippedReasonsItemCode;
   count: number;
 };
