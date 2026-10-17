@@ -675,6 +675,25 @@ describe("POST /api/integrations/whatsapp_evolution/connections/:id/qr", () => {
     expect(res.headers["cache-control"]).toContain("no-store");
     expect(JSON.stringify(mockInsertValues.mock.calls)).not.toContain("aGVsbG8=");
   });
+
+  it("renders a QR image from Evolution's code field when base64 is absent", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ pairingCode: null, code: "2@temporary-pairing-code", count: 1 }),
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(200);
+    expect(res.body.qrCodeDataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    expect(JSON.stringify(res.body)).not.toContain("temporary-pairing-code");
+    expect(JSON.stringify(mockInsertValues.mock.calls)).not.toContain("temporary-pairing-code");
+  });
 });
 
 describe("POST /api/integrations/whatsapp_evolution/connections/refresh", () => {

@@ -13,6 +13,7 @@ import {
   configureEvolutionWebhook,
   connectEvolutionInstance,
   getEvolutionConnectionState,
+  parseEvolutionQrDataUrl,
 } from "../services/evolution-api";
 import {
   importZernioInstagramHistoryChunk,
@@ -724,27 +725,8 @@ router.post(
         return;
       }
 
-      let payload: unknown = null;
-      try {
-        payload = JSON.parse(result.text);
-      } catch {
-        // HTML/empty provider responses follow the same safe invalid-QR branch.
-      }
-      const root = typeof payload === "object" && payload !== null
-        ? payload as Record<string, unknown>
-        : {};
-      const rawQr = typeof root.base64 === "string"
-        ? root.base64
-        : typeof root.qrcode === "object" && root.qrcode !== null &&
-            typeof (root.qrcode as Record<string, unknown>).base64 === "string"
-          ? (root.qrcode as Record<string, string>).base64
-          : "";
-      const dataUrlMatch = rawQr.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/);
-      const rawBase64 = dataUrlMatch?.[2] ?? rawQr;
-      if (
-        rawBase64.length > 20000 ||
-        !/^[A-Za-z0-9+/]+={0,2}$/.test(rawBase64)
-      ) {
+      const qrCodeDataUrl = await parseEvolutionQrDataUrl(result.text);
+      if (!qrCodeDataUrl) {
         await writeLog(
           me,
           "whatsapp_evolution",
@@ -758,8 +740,6 @@ router.post(
         return;
       }
 
-      const mime = dataUrlMatch?.[1] ?? "png";
-      const qrCodeDataUrl = `data:image/${mime};base64,${rawBase64}`;
       await writeLog(me, "whatsapp_evolution", "qr_connect", "info", "QR Code de conexão solicitado.");
       res.setHeader("Cache-Control", "private, no-store");
       res.json({ qrCodeDataUrl });

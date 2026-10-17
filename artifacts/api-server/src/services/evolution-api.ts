@@ -75,6 +75,57 @@ export function connectEvolutionInstance(
   );
 }
 
+export async function parseEvolutionQrDataUrl(responseText: string): Promise<string | null> {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(responseText);
+  } catch {
+    return null;
+  }
+
+  const root = typeof payload === "object" && payload !== null
+    ? payload as Record<string, unknown>
+    : {};
+  const nestedQr = typeof root.qrcode === "object" && root.qrcode !== null
+    ? root.qrcode as Record<string, unknown>
+    : {};
+  const rawBase64 = typeof root.base64 === "string"
+    ? root.base64
+    : typeof nestedQr.base64 === "string"
+      ? nestedQr.base64
+      : "";
+  const dataUrlMatch = rawBase64.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/);
+  const base64 = dataUrlMatch?.[2] ?? rawBase64;
+  if (base64.length <= 20_000 && /^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+    return `data:image/${dataUrlMatch?.[1] ?? "png"};base64,${base64}`;
+  }
+
+  // Evolution may return the pairing QR contents in `code` without a
+  // pre-rendered `base64` image. Render it transiently for the admin UI.
+  const qrContents = typeof root.code === "string"
+    ? root.code
+    : typeof nestedQr.code === "string"
+      ? nestedQr.code
+      : "";
+  if (
+    qrContents.length === 0
+    || qrContents.length > 2_048
+    || /[\u0000-\u001f\u007f]/.test(qrContents)
+  ) {
+    return null;
+  }
+
+  try {
+    const QRCode = await import("qrcode");
+    const generated = await QRCode.default.toDataURL(qrContents, { margin: 2, width: 256 });
+    return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(generated)
+      ? generated
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function configureEvolutionWebhook(
   baseUrl: string,
   apiKey: string,
