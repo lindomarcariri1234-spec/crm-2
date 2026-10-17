@@ -51,6 +51,13 @@ export type WhatsAppDeliveryWebhookOutcome =
   | "not_found"
   | "updated";
 
+export type WhatsAppConnectionWebhookOutcome =
+  | "not_connection"
+  | "unauthorized"
+  | "ignored"
+  | "unchanged"
+  | "updated";
+
 interface EvolutionInbound {
   instanceName: string;
   messageId: string | null;
@@ -275,6 +282,64 @@ export async function processEvolutionDeliveryStatus(opts: {
     error: status.error,
   });
   return result.updated ? "updated" : "not_found";
+}
+
+/** Applies authenticated Evolution CONNECTION_UPDATE events to one exact integration. */
+export async function processEvolutionConnectionUpdate(opts: {
+  instanceName: string;
+  apiKey?: string;
+  payload: unknown;
+  eventName?: string;
+}): Promise<WhatsAppConnectionWebhookOutcome> {
+  const root = opts.payload && typeof opts.payload === "object" && !Array.isArray(opts.payload)
+    ? opts.payload as Record<string, unknown>
+    : {};
+  const eventName = String(opts.eventName ?? root["event"] ?? root["type"] ?? root["eventType"] ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]/g, ".");
+  if (eventName !== "connection.update") return "not_connection";
+
+  const integration = await resolveIntegration(opts.instanceName, opts.apiKey);
+  if (!integration) return "unauthorized";
+  const encryptedSecrets = integration.secretsEncrypted;
+  if (!encryptedSecrets) return "unauthorized";
+
+  const data = root["data"] && typeof root["data"] === "object" && !Array.isArray(root["data"])
+    ? root["data"] as Record<string, unknown>
+    : root;
+  const instance = data["instance"] && typeof data["instance"] === "object" && !Array.isArray(data["instance"])
+    ? data["instance"] as Record<string, unknown>
+    : {};
+  const rawState = instance["state"] ?? data["state"] ?? data["status"] ?? root["state"];
+  if (typeof rawState !== "string") return "ignored";
+  const state = rawState.trim().toLowerCase();
+  const status = state === "open" || state === "connected"
+    ? "connected"
+    : state === "close" || state === "closed" || state === "disconnected"
+      ? "disconnected"
+      : null;
+  if (!status) return "ignored";
+  if (integration.status === status) return "unchanged";
+
+  const [updated] = await db.update(tenantIntegrationsTable)
+    .set({
+      status,
+      lastSyncAt: new Date(),
+      lastError: status === "connected" ? null : "A Evolution confirmou que esta instância está desconectada.",
+      ...(status === "disconnected" ? { isDefault: false } : {}),
+    })
+    .where(and(
+      eq(tenantIntegrationsTable.id, integration.id),
+      eq(tenantIntegrationsTable.tenantId, integration.tenantId),
+      eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+      eq(tenantIntegrationsTable.enabled, true),
+      eq(tenantIntegrationsTable.status, integration.status),
+      eq(tenantIntegrationsTable.config, integration.config),
+      eq(tenantIntegrationsTable.secretsEncrypted, encryptedSecrets),
+    ))
+    .returning({ id: tenantIntegrationsTable.id });
+  return updated ? "updated" : "unchanged";
 }
 
 /** Delivers a persisted outbound chat message. The conditional claim lets a

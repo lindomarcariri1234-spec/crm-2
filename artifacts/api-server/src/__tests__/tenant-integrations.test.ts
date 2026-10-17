@@ -1026,7 +1026,7 @@ describe("PUT /api/integrations/:type — save configuration", () => {
       expect(body).toEqual({
         enabled: true,
         url: "https://app.example.com/api/webhooks/whatsapp/evolution/my-instance",
-        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE"],
+        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"],
         base64: false,
       });
       expect(res.text).not.toContain(WA_SECRETS.apiKey);

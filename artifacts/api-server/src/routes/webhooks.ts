@@ -32,6 +32,7 @@ import { ValidationError, AppError } from "../lib/errors";
 import { adjustOrderSettlement, recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
 import { processEvolutionInbound } from "../services/whatsapp-attendance";
 import { processEvolutionDeliveryStatus } from "../services/whatsapp-attendance";
+import { processEvolutionConnectionUpdate } from "../services/whatsapp-attendance";
 import { moveDealToStage } from "../services/pipeline-automation";
 import { updateOutboundDeliveryFromWebhook } from "../services/outbound-delivery";
 
@@ -73,6 +74,23 @@ function parseResendBounceType(data: Record<string, unknown>): "permanent" | "te
 // tenant; no tenant identifier is accepted from the external caller.
 async function handleEvolutionWebhook(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const connectionOutcome = await processEvolutionConnectionUpdate({
+      instanceName: evolutionInstanceName(req),
+      apiKey: evolutionWebhookApiKey(req),
+      payload: req.body,
+      eventName: typeof req.params["eventName"] === "string"
+        ? req.params["eventName"]
+        : req.params["eventName"]?.[0],
+    });
+    if (connectionOutcome !== "not_connection") {
+      if (connectionOutcome === "unauthorized") {
+        res.status(401).json({ received: false });
+        return;
+      }
+      res.status(200).json({ received: true, outcome: connectionOutcome });
+      return;
+    }
+
     const statusOutcome = await processEvolutionDeliveryStatus({
       instanceName: evolutionInstanceName(req),
       apiKey: evolutionWebhookApiKey(req),
@@ -102,7 +120,11 @@ async function handleEvolutionWebhook(req: Request, res: Response, next: NextFun
   }
 }
 
-const EVOLUTION_WEBHOOK_EVENTS = new Set(["messages-upsert", "messages-update"]);
+const EVOLUTION_WEBHOOK_EVENTS = new Set([
+  "messages-upsert",
+  "messages-update",
+  "connection-update",
+]);
 router.post("/webhooks/whatsapp/evolution/:instanceName", handleEvolutionWebhook);
 router.post("/webhooks/whatsapp/evolution/:instanceName/:eventName", (req, res, next): void => {
   const eventName = req.params["eventName"]?.toLowerCase();

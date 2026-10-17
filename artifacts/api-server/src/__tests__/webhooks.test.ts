@@ -7,10 +7,12 @@ const {
   mockUpdateOutboundDeliveryFromWebhook,
   mockProcessEvolutionInbound,
   mockProcessEvolutionDeliveryStatus,
+  mockProcessEvolutionConnectionUpdate,
 } = vi.hoisted(() => ({
   mockUpdateOutboundDeliveryFromWebhook: vi.fn(),
   mockProcessEvolutionInbound: vi.fn(),
   mockProcessEvolutionDeliveryStatus: vi.fn(),
+  mockProcessEvolutionConnectionUpdate: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -64,6 +66,7 @@ vi.mock("../lib/reservation-payments.js", () => ({
 vi.mock("../services/whatsapp-attendance.js", () => ({
   processEvolutionInbound: mockProcessEvolutionInbound,
   processEvolutionDeliveryStatus: mockProcessEvolutionDeliveryStatus,
+  processEvolutionConnectionUpdate: mockProcessEvolutionConnectionUpdate,
 }));
 vi.mock("../services/pipeline-automation.js", () => ({
   moveDealToStage: vi.fn(),
@@ -369,6 +372,7 @@ describe("Resend webhook route", () => {
 describe("Evolution WhatsApp webhook route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProcessEvolutionConnectionUpdate.mockResolvedValue("not_connection");
   });
 
   it("accepts the API key Evolution includes in the webhook body when no auth header is set", async () => {

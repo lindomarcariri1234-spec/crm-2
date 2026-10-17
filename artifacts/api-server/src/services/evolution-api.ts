@@ -91,7 +91,7 @@ export function configureEvolutionWebhook(
       body: {
         enabled: true,
         url: callbackUrl,
-        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE"],
+        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"],
         base64: false,
       },
       timeoutMs: 12_000,

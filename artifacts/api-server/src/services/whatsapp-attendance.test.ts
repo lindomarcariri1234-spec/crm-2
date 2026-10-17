@@ -4,6 +4,9 @@ const {
   mockDbSelect,
   mockDbTransaction,
   mockDbUpdate,
+  mockUpdateSet,
+  mockUpdateWhere,
+  mockUpdateReturning,
   mockStoreEvolutionInboundMedia,
   mockGetAIClientForTenant,
   mockExtractEvolutionInboundMedia,
@@ -16,6 +19,9 @@ const {
   mockDbSelect: vi.fn(),
   mockDbTransaction: vi.fn(),
   mockDbUpdate: vi.fn(),
+  mockUpdateSet: vi.fn(),
+  mockUpdateWhere: vi.fn(),
+  mockUpdateReturning: vi.fn(),
   mockStoreEvolutionInboundMedia: vi.fn(),
   mockGetAIClientForTenant: vi.fn(),
   mockExtractEvolutionInboundMedia: vi.fn(),
@@ -71,7 +77,16 @@ vi.mock("@workspace/db", () => ({
     createdById: "clients.created_by_id",
   },
   tenantIntegrationsTable: {
+    id: "tenant_integrations.id",
+    tenantId: "tenant_integrations.tenant_id",
     type: "tenant_integrations.type",
+    enabled: "tenant_integrations.enabled",
+    status: "tenant_integrations.status",
+    config: "tenant_integrations.config",
+    secretsEncrypted: "tenant_integrations.secrets_encrypted",
+    lastSyncAt: "tenant_integrations.last_sync_at",
+    lastError: "tenant_integrations.last_error",
+    isDefault: "tenant_integrations.is_default",
   },
 }));
 
@@ -123,6 +138,7 @@ vi.mock("./whatsapp-media.js", () => ({
 import {
   deliverAttendanceReply,
   evolutionInboundAdapter,
+  processEvolutionConnectionUpdate,
   processEvolutionInbound,
 } from "./whatsapp-attendance.js";
 
@@ -530,5 +546,81 @@ describe("Evolution inbound attendance consent", () => {
       deliveryStatus: "unknown",
       lastDeliveryError: "delivery_result_unknown",
     }));
+  });
+});
+
+describe("Evolution connection update webhooks", () => {
+  const integration = {
+    id: "integration-1",
+    tenantId: "tenant-1",
+    enabled: true,
+    status: "disconnected",
+    isDefault: true,
+    config: { instanceName: "agency-instance", baseUrl: "https://evolution.example" },
+    secretsEncrypted: JSON.stringify({ apiKey: "integration-api-key" }),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbSelect.mockReturnValue(makeWhereQuery([integration]));
+    mockDbUpdate.mockReturnValue({ set: mockUpdateSet });
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockReturnValue({ returning: mockUpdateReturning });
+    mockUpdateReturning.mockResolvedValue([{ id: integration.id }]);
+  });
+
+  it("updates only the authenticated tenant instance when the session opens", async () => {
+    const outcome = await processEvolutionConnectionUpdate({
+      instanceName: "agency-instance",
+      apiKey: "integration-api-key",
+      payload: { event: "CONNECTION_UPDATE", data: { state: "open" } },
+    });
+
+    expect(outcome).toBe("updated");
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      status: "connected",
+      lastSyncAt: expect.any(Date),
+      lastError: null,
+    }));
+    const whereArgument = mockUpdateWhere.mock.calls[0]?.[0] as {
+      conditions: Array<{ column: string; value: unknown }>;
+    };
+    expect(whereArgument.conditions).toEqual(expect.arrayContaining([
+      { column: "tenant_integrations.id", value: "integration-1" },
+      { column: "tenant_integrations.tenant_id", value: "tenant-1" },
+      { column: "tenant_integrations.type", value: "whatsapp_evolution" },
+      { column: "tenant_integrations.enabled", value: true },
+    ]));
+  });
+
+  it("clears the default when the session closes and does not rewrite duplicate or invalid states", async () => {
+    mockDbSelect.mockReturnValue(makeWhereQuery([{ ...integration, status: "connected" }]));
+    await expect(processEvolutionConnectionUpdate({
+      instanceName: "agency-instance",
+      apiKey: "integration-api-key",
+      payload: { event: "connection.update", data: { state: "close" } },
+    })).resolves.toBe("updated");
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      status: "disconnected",
+      isDefault: false,
+    }));
+
+    mockDbSelect.mockReturnValue(makeWhereQuery([{ ...integration, status: "connected" }]));
+    await expect(processEvolutionConnectionUpdate({
+      instanceName: "agency-instance",
+      apiKey: "integration-api-key",
+      payload: { event: "connection.update", data: { state: "open" } },
+    })).resolves.toBe("unchanged");
+    await expect(processEvolutionConnectionUpdate({
+      instanceName: "agency-instance",
+      apiKey: "integration-api-key",
+      payload: { event: "connection.update", data: { state: "connecting" } },
+    })).resolves.toBe("ignored");
+    await expect(processEvolutionConnectionUpdate({
+      instanceName: "agency-instance",
+      apiKey: "wrong-key",
+      payload: { event: "connection.update", data: { state: "open" } },
+    })).resolves.toBe("unauthorized");
+    expect(mockUpdateSet).toHaveBeenCalledTimes(1);
   });
 });

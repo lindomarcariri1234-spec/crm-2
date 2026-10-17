@@ -7,10 +7,12 @@ const {
   mockUpdateDelivery,
   mockEvolutionStatus,
   mockEvolutionInbound,
+  mockEvolutionConnection,
 } = vi.hoisted(() => ({
   mockUpdateDelivery: vi.fn(),
   mockEvolutionStatus: vi.fn(),
   mockEvolutionInbound: vi.fn(),
+  mockEvolutionConnection: vi.fn(),
 }));
 
 vi.mock("../services/outbound-delivery.js", () => ({
@@ -20,6 +22,7 @@ vi.mock("../services/outbound-delivery.js", () => ({
 vi.mock("../services/whatsapp-attendance.js", () => ({
   processEvolutionDeliveryStatus: mockEvolutionStatus,
   processEvolutionInbound: mockEvolutionInbound,
+  processEvolutionConnectionUpdate: mockEvolutionConnection,
 }));
 
 import webhooksRouter from "../routes/webhooks";
@@ -52,6 +55,7 @@ describe("outbound provider webhook contracts", () => {
     process.env["RESEND_WEBHOOK_SECRET"] = SECRET;
     mockUpdateDelivery.mockResolvedValue({ updated: true });
     mockEvolutionStatus.mockResolvedValue("updated");
+    mockEvolutionConnection.mockResolvedValue("not_connection");
   });
 
   it.each([
@@ -131,6 +135,26 @@ describe("outbound provider webhook contracts", () => {
       apiKey: "test-key",
       payload,
     });
+  });
+
+  it("accepts authenticated Evolution connection updates on the event-specific route", async () => {
+    mockEvolutionConnection.mockResolvedValue("updated");
+    const payload = { event: "connection.update", data: { state: "open" } };
+    const response = await request(makeApp())
+      .post("/webhooks/whatsapp/evolution/agency-instance/connection-update")
+      .set("apikey", "test-key")
+      .send(payload);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ received: true, outcome: "updated" });
+    expect(mockEvolutionConnection).toHaveBeenCalledWith({
+      instanceName: "agency-instance",
+      apiKey: "test-key",
+      payload,
+      eventName: "connection-update",
+    });
+    expect(mockEvolutionStatus).not.toHaveBeenCalled();
+    expect(mockEvolutionInbound).not.toHaveBeenCalled();
   });
 
   it("rejects unknown Evolution webhook event suffixes", async () => {

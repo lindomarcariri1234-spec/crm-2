@@ -1063,34 +1063,36 @@ function WhatsAppIntegrationCards() {
   const [refreshing, setRefreshing] = useState(false);
   const [disconnectedDefaultCount, setDisconnectedDefaultCount] = useState(0);
 
-  const loadConnections = useCallback(async () => {
+  const loadConnections = useCallback(async (refreshProvider = true) => {
     setLoadError(false);
-    setRefreshing(true);
-    try {
-      const refreshRes = await fetch(`${BASE}/api/integrations/whatsapp_evolution/connections/refresh`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (refreshRes.status === 403) {
-        setForbidden(true);
-        setLoading(false);
-        setRefreshing(false);
-        return;
-      }
-      if (refreshRes.ok) {
-        const refreshResult = await refreshRes.json().catch(() => ({})) as {
-          unverified?: number;
-          disconnectedDefaults?: number;
-        };
-        setRefreshWarning((refreshResult.unverified ?? 0) > 0);
-        setDisconnectedDefaultCount(refreshResult.disconnectedDefaults ?? 0);
-      } else {
+    setRefreshing(refreshProvider);
+    if (refreshProvider) {
+      try {
+        const refreshRes = await fetch(`${BASE}/api/integrations/whatsapp_evolution/connections/refresh`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (refreshRes.status === 403) {
+          setForbidden(true);
+          setLoading(false);
+          setRefreshing(false);
+          return;
+        }
+        if (refreshRes.ok) {
+          const refreshResult = await refreshRes.json().catch(() => ({})) as {
+            unverified?: number;
+            disconnectedDefaults?: number;
+          };
+          setRefreshWarning((refreshResult.unverified ?? 0) > 0);
+          setDisconnectedDefaultCount(refreshResult.disconnectedDefaults ?? 0);
+        } else {
+          setRefreshWarning(true);
+          setDisconnectedDefaultCount(0);
+        }
+      } catch {
         setRefreshWarning(true);
         setDisconnectedDefaultCount(0);
       }
-    } catch {
-      setRefreshWarning(true);
-      setDisconnectedDefaultCount(0);
     }
     try {
       const res = await fetch(`${BASE}/api/integrations/whatsapp_evolution/connections`, {
@@ -1114,6 +1116,14 @@ function WhatsAppIntegrationCards() {
   useEffect(() => {
     if (canManage) void loadConnections();
     else setLoading(false);
+  }, [canManage, loadConnections]);
+
+  useEffect(() => {
+    if (!canManage) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadConnections(false);
+    }, 15_000);
+    return () => window.clearInterval(timer);
   }, [canManage, loadConnections]);
 
   if (!canManage || forbidden) return null;
