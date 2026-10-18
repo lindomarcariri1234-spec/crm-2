@@ -50,6 +50,8 @@ const TRIP_ID = `test-race-trip-${generateId()}`;
 const CLIENT_ID = `test-race-client-${generateId()}`;
 const LAP_CHILD_CLIENT_ID = `test-lap-child-client-${generateId()}`;
 const SEATED_CHILD_CLIENT_ID = `test-seated-child-client-${generateId()}`;
+const SEAT_RACE_CLIENT_ID_A = `test-seat-race-client-a-${generateId()}`;
+const SEAT_RACE_CLIENT_ID_B = `test-seat-race-client-b-${generateId()}`;
 const PRODUCT_ID = `test-race-product-${generateId()}`;
 
 // Accumulators for cleanup — order matters (children before parents)
@@ -183,6 +185,7 @@ beforeAll(async () => {
       "1": { status: "available" },
       "2": { status: "available" },
       "3": { status: "available" },
+      "4": { status: "available" },
     },
     priceAdult: "150.00",
     createdById: USER_ID,
@@ -217,6 +220,22 @@ beforeAll(async () => {
       name: "Bruno Seated Test",
       email: `seated-child-${generateId()}@example.com`,
       whatsapp: "11999990002",
+      createdById: USER_ID,
+    },
+    {
+      id: SEAT_RACE_CLIENT_ID_A,
+      tenantId: TENANT_ID,
+      name: "Carla Seat Race A",
+      email: `seat-race-a-${generateId()}@example.com`,
+      whatsapp: "11999990003",
+      createdById: USER_ID,
+    },
+    {
+      id: SEAT_RACE_CLIENT_ID_B,
+      tenantId: TENANT_ID,
+      name: "Diego Seat Race B",
+      email: `seat-race-b-${generateId()}@example.com`,
+      whatsapp: "11999990004",
       createdById: USER_ID,
     },
   ]);
@@ -466,5 +485,95 @@ describe("createReservationsForOrder — real DB unique-constraint guard", () =>
     });
     expect(afterTrip?.availableSeats).toBe(beforeTrip!.availableSeats - 2);
     expect(afterTrip?.reservedSeats).toBe(beforeTrip!.reservedSeats + 2);
+  });
+
+  it("allows only one concurrent checkout to reserve the same seat", async () => {
+    const orderIdA = makeOrderId();
+    const orderIdB = makeOrderId();
+    const orderNumberA = makeOrderNumber();
+    const orderNumberB = makeOrderNumber();
+    orderIds.push(orderIdA, orderIdB);
+    await Promise.all([
+      insertOrder(orderIdA, orderNumberA, {
+        clientId: SEAT_RACE_CLIENT_ID_A,
+        customerName: "Carla Seat Race A",
+        customerEmail: "carla.seat-race@example.com",
+        seats: ["4"],
+      }),
+      insertOrder(orderIdB, orderNumberB, {
+        clientId: SEAT_RACE_CLIENT_ID_B,
+        customerName: "Diego Seat Race B",
+        customerEmail: "diego.seat-race@example.com",
+        seats: ["4"],
+      }),
+    ]);
+
+    const [beforeTrip] = await db
+      .select({
+        availableSeats: tripsTable.availableSeats,
+        reservedSeats: tripsTable.reservedSeats,
+      })
+      .from(tripsTable)
+      .where(eq(tripsTable.id, TRIP_ID));
+
+    const results = await Promise.allSettled([
+      createReservationsForOrder(orderIdA),
+      createReservationsForOrder(orderIdB),
+    ]);
+    const fulfilled = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result) => result.status === "rejected");
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.reason).toMatchObject({ code: "SEAT_CONFLICT" });
+
+    const winningResult = fulfilled[0] as PromiseFulfilledResult<
+      Awaited<ReturnType<typeof createReservationsForOrder>>
+    >;
+    const winningReservationIds = winningResult.value.reservationIds;
+    reservationIds.push(...winningReservationIds);
+    expect(winningReservationIds).toHaveLength(1);
+
+    const committedRows = await db
+      .select({
+        id: reservationsTable.id,
+        seats: reservationsTable.seats,
+        capacityUnits: reservationsTable.capacityUnits,
+      })
+      .from(reservationsTable)
+      .where(and(
+        eq(reservationsTable.tenantId, TENANT_ID),
+        eq(reservationsTable.tripId, TRIP_ID),
+        inArray(reservationsTable.storeOrderId, [orderNumberA, orderNumberB]),
+      ));
+    const winningPassengerRows = await db
+      .select({
+        name: passengersTable.name,
+        seatNumber: passengersTable.seatNumber,
+        isPrimary: passengersTable.isPrimary,
+      })
+      .from(passengersTable)
+      .where(eq(passengersTable.reservationId, winningReservationIds[0]!));
+    const [afterTrip] = await db
+      .select({
+        availableSeats: tripsTable.availableSeats,
+        reservedSeats: tripsTable.reservedSeats,
+      })
+      .from(tripsTable)
+      .where(eq(tripsTable.id, TRIP_ID));
+
+    expect(committedRows).toHaveLength(1);
+    expect(committedRows[0]).toMatchObject({
+      id: winningReservationIds[0],
+      seats: ["4"],
+      capacityUnits: 1,
+    });
+    expect(winningPassengerRows).toHaveLength(1);
+    expect(winningPassengerRows[0]).toMatchObject({
+      seatNumber: "4",
+      isPrimary: true,
+    });
+    expect(afterTrip?.availableSeats).toBe(beforeTrip!.availableSeats - 1);
+    expect(afterTrip?.reservedSeats).toBe(beforeTrip!.reservedSeats + 1);
   });
 });
