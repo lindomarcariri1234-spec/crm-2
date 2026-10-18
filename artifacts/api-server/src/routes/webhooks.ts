@@ -136,14 +136,33 @@ router.post("/webhooks/whatsapp/evolution/:instanceName/:eventName", (req, res, 
   void handleEvolutionWebhook(req, res, next);
 });
 
+function getResendWebhookSecret(tenantId: string): string | null {
+  const secretsJson = process.env["RESEND_WEBHOOK_SECRETS_JSON"];
+  if (secretsJson !== undefined) {
+    try {
+      const secrets = JSON.parse(secretsJson) as unknown;
+      if (!secrets || typeof secrets !== "object" || Array.isArray(secrets)) return null;
+      const secret = (secrets as Record<string, unknown>)[tenantId];
+      return typeof secret === "string" && secret.trim() ? secret.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Backward compatibility for a single Resend webhook/tenant. Resend creates
+  // a distinct signing secret for each webhook, so multi-tenant deployments
+  // must use RESEND_WEBHOOK_SECRETS_JSON instead.
+  return process.env["RESEND_WEBHOOK_SECRET"]?.trim() || null;
+}
+
 // Resend sends provider callbacks without a user session. The tenant is
 // explicit in the webhook URL because Resend's email event does not carry an
-// agency identity by default. Configure the same URL and signing secret in
-// Resend for each tenant.
+// agency identity by default. Each tenant's endpoint secret is selected from
+// RESEND_WEBHOOK_SECRETS_JSON using the tenant ID in the URL.
 router.post("/webhooks/resend/:tenantId", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const tenantId = req.params["tenantId"]?.trim();
-    const secret = process.env["RESEND_WEBHOOK_SECRET"]?.trim();
+    const secret = tenantId ? getResendWebhookSecret(tenantId) : null;
     if (!tenantId || !secret) {
       next(new ValidationError("Webhook not configured", "VALIDATION_ERROR"));
       return;

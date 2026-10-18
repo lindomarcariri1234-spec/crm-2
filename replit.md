@@ -32,7 +32,8 @@ VisiteCRM is built as a pnpm workspace monorepo utilizing TypeScript.
 - **Runtime**: Node.js 24 and pnpm workspaces. Install the locked dependency tree with `pnpm install --frozen-lockfile`.
 - **Web preview**: run the `artifacts/visitecrm: web` workflow (Vite on port 19951). It proxies `/api` requests to the local API.
 - **API**: run the `artifacts/api-server: API Server` workflow (Express on port 8080). It requires `CLERK_SECRET_KEY`, `CREDENTIAL_ENCRYPTION_KEY`, and Replit-provided `DATABASE_URL`; the development Clerk publishable key is configured as an environment variable.
-- **Optional integrations**: uploads require `UPLOADTHING_TOKEN`; email delivery requires `RESEND_API_KEY`; Redis-backed queues require `REDIS_URL`. The API starts without these optional services, using its documented development fallbacks.
+- **Optional integrations**: uploads require `UPLOADTHING_TOKEN`; email delivery uses `RESEND_API_KEY` when set, otherwise the connected Replit Resend connector; Redis-backed queues require `REDIS_URL`. The API starts without these optional services, using its documented development fallbacks.
+- **Resend webhooks**: configure `RESEND_WEBHOOK_SECRETS_JSON` as a Replit Secret containing a JSON object from tenant IDs to their individual Resend `whsec_` signing secrets. The endpoint is `/api/webhooks/resend/:tenantId`. `RESEND_WEBHOOK_SECRET` remains supported only as a single-tenant fallback.
 
 ### Post-Merge and Full Validation
 

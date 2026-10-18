@@ -13,11 +13,9 @@
 - [Expo Metro version pins](expo-metro-version-pins.md) — metro-* must be at 0.83.7 EXCEPT metro-file-map (keep 0.83.3) for guide-app Expo artifact to start without crashing.
 - [SSRF for tenant base URLs](ssrf-tenant-base-url.md) — connect-time IP enforcement (not just a pre-check); canonicalize IPv4-in-IPv6 literals; guard empty custom baseURL to avoid leaking keys to OpenAI.
 - [Connection tests vs saved status](ai-config-test-vs-save.md) — keep credential tests transient; test unsaved values, persist only on Save, and never expose write-only secrets.
-- [Published Stripe test mode](stripe-test-key-production-warning.md) — warn on published test keys without blocking activation; keep test credentials usable in development checkout.
+- [Stripe payment lifecycle](stripe-payment-confirmation-activation.md) — activate only confirmed payments; preserve livemode/test distinctions and warn without blocking published test keys ([mode](stripe-payment-mode-accounting.md), [warning](stripe-test-key-production-warning.md)).
 - [Referral conversion and reservation links](referral-tier-upgrade-pattern.md) — preserve tier-upgrade effects and set reservationId only when a trip reservation exists ([ID invariant](referral-reservation-id.md)).
-- [Calendar dedup not-found pattern](calendar-dedup.md) — updateEvent returns boolean|"not-found"; "not-found"=404 means event deleted externally; upsertCalendarEvent deletes stale DB record and recreates. isEventNotFoundError exported from calendar-service.ts.
-- [Calendar trip-event concurrency](calendar-trip-concurrency.md) — serialize trip event lookup, Google call, and persistence by tenant+trip+user; leave other event types unchanged.
-- [Customer Google Calendar invitations](calendar-customer-invitations.md) — invite each confirmed published reservation separately; keep attendees off the agency’s shared trip event and do not add customer OAuth.
+- [Google Calendar sync](calendar-dedup.md) — recover stale events; serialize trip sync; keep customer invites separate from staff events ([concurrency](calendar-trip-concurrency.md), [policy](calendar-customer-invitations.md)).
 - [Migration journal timestamps](migration-journal-timestamps.md) — reconcile live-only columns with additive DDL above both watermarks; never replay historical backfills over populated data.
 - [Host-header token links](host-header-token-links.md) — public/anonymous email links carrying secret tokens must use trusted `STORE_PUBLIC_BASE`, never req Host header (phishing/token-capture).
 - [Brazil date handling](brazil-tz-patterns.md) — timezone-safe server/client date formatting; see [storefront local day](vitrine-local-date.md) for storefront-specific rules.
@@ -37,29 +35,24 @@
 - [Clerk instance mismatch](clerk-instance-mismatch.md) — pk_live_ + sk_test_ from different instances → silent 401 on all requests; secrets override env vars in Replit so delete conflicting env var entirely.
 - [UploadThing SDK v7 CDN upload bug](uploadthing-sdk-v7-cdn-bug.md) — Effect-Platform adds spurious Range header + double-encodes URL params; patch globalThis.fetch in uploadthing.ts before UTApi instantiation.
 - [Authenticate before buffering uploads](upload-auth-before-multer.md) — run authentication before in-memory multipart parsers so unauthenticated requests cannot consume upload-sized memory.
-- [stripe-replit-sync migrations bundling](stripe-sync-migrations-bundling.md) — call runMigrations() in initStripeSync + copy package migrations into bundle dir (esbuild __dirname trap), else stripe.* tables missing.
-- [stripe-sync managed webhook auto-secret](stripe-sync-webhook-auto-secret.md) — signing secret auto-cached from stripe._managed_webhooks.secret; use getStripeSecretKey() not env var in initStripeSync for prod live key.
+- [Stripe Replit sync](stripe-sync-migrations-bundling.md) — bundle provider migrations and load managed webhook secrets from Stripe storage ([secret handling](stripe-sync-webhook-auto-secret.md)).
 - [Stripe plan→price link](stripe-plan-price-link.md) — checkout resolves price via prices.search planSlug metadata (no stripePriceId col); empty plans table → /subscriptions/upgrade 404; missing planSlug → silent one-time-payment fallback; search is eventually consistent.
 - [Stripe payment lifecycle](stripe-payment-confirmation-activation.md) — activate only on confirmed payments; see [mode accounting](stripe-payment-mode-accounting.md) for livemode and unknown historical rows.
 - [Mock services not raw db chains in route tests](mock-service-not-db-chain.md) — when a route delegates to an already-unit-tested service fn, vi.mock the service directly instead of chaining db.select/insert mocks; far less brittle to call-order changes.
 - [broadcastSeatUpdate dual-query mock](broadcast-seat-update-dual-query.md) — realtime.ts makes 2 db.select() calls (reservations then trip freePassengers); use mock.calls.length to route different chains per call.
 - [SSL sslmode strip pattern](ssl-sslmode-strip.md) — explicit ssl option alongside sslmode=require in connectionString does NOT suppress pg-connection-string warning; must strip sslmode from URL before passing to Pool.
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
-- [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
-- [Replit Git stale operation state](replit-git-stale-operation-state.md) — stale operation markers or a nonempty `packed-refs.new` can disrupt Git; inspect state and processes before cleanup.
-- [GitHub API push limits](github-api-push-limits.md) — Git Database uploads need small tree batches, paced blob requests, and a separate strategy for oversized generated artifacts
+- [GitHub repo repair](github-history-resync.md) — verify tree hashes; inspect stale operation state; batch Git Database uploads ([state](replit-git-stale-operation-state.md), [limits](github-api-push-limits.md)).
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
 - [Metro parser remediation](metro-image-parser-remediation.md) — retain an API-compatible replacement when an upstream parser remains unpatched.
 - [Trial expiry notification idempotency](trial-expiry-notification-idempotency.md) — use the platform-settings ledger for atomic per-tenant, per-trial-window email claims without changing the immutable tenant schema
 - [Vite canonical URL handling](vite-canonical-url.md) — a relative canonical href="/" is processed as a filesystem asset and breaks this Vite production build; use an absolute fallback URL
 - [Shared UploadThing file references](shared-uploadthing-file-references.md) — after a cascade, protect files still referenced by another record in the same tenant, not only by another tenant
 - [Attached files can be auto-committed](attached-file-auto-commit.md) — inspect HEAD and attached_assets before pushing; a clean status can hide an auto-committed upload
-- [Marketplace capacity lifecycle](marketplace-capacity-lifecycle.md) — dated partner capacity is claimed atomically after payment, never at anonymous checkout
-- [Distribution operation finalization](distribution-operation-finalization.md) — capacity, booking ledger and terminal operation status must commit together; replays repair any ledger gap
-- [WhatsApp attendance delivery](whatsapp-attendance-delivery.md) — persist and conditionally claim replies before provider calls; recovery must honor opt-out.
-- [WhatsApp support ticketing scope](whatsapp-support-ticketing-scope.md) — human handoffs only; no historical backfill, multi-number support, or full realtime unless scope expands.
+- [Partner distribution lifecycle](marketplace-capacity-lifecycle.md) — claim dated capacity after payment and finalize booking ledger/status atomically ([finalization](distribution-operation-finalization.md)).
+- [WhatsApp delivery and support](whatsapp-attendance-delivery.md) — persist replies before provider calls, honor opt-out, and keep support ticketing human-only ([scope](whatsapp-support-ticketing-scope.md)).
 - [Expo build port isolation](expo-build-port-isolation.md) — mobile static builds must use a configurable Metro port when the component sandbox also occupies 8081.
-- [Resend production verification](resend-production-verification.md) — the connected production credential may be send-only; verify the exact sender domain externally before testing delivery.
+- [Resend delivery](resend-production-verification.md) — verify sender DNS and isolate callbacks with each tenant’s signing secret ([webhooks](resend-webhook-tenant-secrets.md)).
 - [GitHub Actions IPv4-mapped loopback](github-actions-ipv4-mapped-loopback.md) — GitHub runners may expose localhost as ::ffff:127.0.0.1; queue/audit payloads should use the canonical client-IP helper.
 - [Pipeline lifecycle scope](pipeline-lifecycle-scope.md) — reservation cards stay tenant+trip-scoped in the default pipeline; only trip-less leads may be adopted.
 - [Manual reservation payment propagation](manual-reservation-payment-propagation.md) — a fully paid reservation may promote its storefront order only after all sibling reservations are paid, under the order lock.
@@ -103,20 +96,16 @@
 - [Referral credit reservation](referral-credit-reservation.md) — reserve cashback atomically at checkout; payment confirms it and unpaid orders release it.
 - [Stripe 3DS checkout recovery](stripe-3ds-checkout-recovery.md) — redirected card returns have an empty cart; restore by token and retain the server-applied cashback snapshot.
 - [Vercel root API discovery](vercel-api-directory-discovery.md) — reserve root api/ for deployable functions; tests there are pre-discovered and can cause post-build ENOENT.
-- [GitHub workflow permission](github-workflow-permission.md) — repo write access may not permit editing .github/workflows; the separate workflow scope is required.
-- [Vercel canceled Git deployments](vercel-canceled-git-deployments.md) — use the exact source SHA with forceNew; unverified-signature cancellation needs explicit approval before any manual bypass.
+- [GitHub access and uploads](github-workflow-permission.md) — workflow scope, blob transport, and Git CLI auth differ from repository API access ([blobs](github-api-blob-uploads.md), [CLI](github-cli-auth-bridge.md)).
+- [Vercel promotion safeguards](vercel-canceled-git-deployments.md) — promote the exact SHA, preserve GitHub signature checks, then smoke-test the published source ([signed flow](github-signed-vercel-promotion.md)).
 - [Temporary worktree package resolution](temporary-worktree-package-resolution.md) — keep pnpm workspace links in scratch worktrees resolving to that worktree, not the primary checkout.
 - [Mockup sandbox routing isolation](mockup-sandbox-routing-isolation.md) — direct wouter imports can trigger invalid hooks in isolated previews; use a local hash-navigation shim.
 - [Expo watcher pressure from sandbox builds](expo-watcher-pressure-from-sandbox-builds.md) — keep Metro roots narrow, use importer-scoped native shims, and verify complete iOS/Android bundles.
 - [Workspace-scoped package installs](package-management-workspace-scope.md) — if Replit's package tool hits ERR_PNPM_ADDING_TO_ROOT, scope pnpm add/remove to the target artifact.
 - [Manual table migration snapshots](manual-table-snapshot-sync.md) — preserve the published snapshot chain when merging branches; never replay DDL already applied by hand-written migrations.
 - [Clerk React/shared compatibility](clerk-react-shared-compat.md) — a newer React SDK can compile yet fail Vite linking against the shared override; upgrade the pair together.
-- [GitHub API blob uploads](github-api-blob-uploads.md) — encode raw workspace file content inside the authenticated API call; shell base64 output can corrupt large blobs
-- [GitHub CLI auth bridge](github-cli-auth-bridge.md) — a working GitHub API connector may not authorize Git pushes; verify the remote path before release work
-- [GitHub-signed Vercel promotion](github-signed-vercel-promotion.md) — keep the verified-commit gate; promote only unsigned sources with GitHub's API, then smoke-check the exact SHA
 - [Audit failure log hygiene](audit-failure-logging.md) — audit-write failures log only operational identifiers and error type; never snapshots or raw exception details
-- [PMS legacy projection](pms-legacy-projection.md) — keep legacy accommodations as the source and idempotently project new records before PMS reads
-- [PMS schema verification](pms-schema-verification.md) — after PMS column migrations, verify the live database separately; an apparently successful migrate can still leave schema drift
+- [PMS migration safety](pms-legacy-projection.md) — project legacy accommodation data idempotently and verify live schema after migrations ([verification](pms-schema-verification.md)).
 - [Scrollable Radix tabs](radix-tab-scroll-alignment.md) — mobile overflow rails inherit centered alignment; use start alignment so leading tabs remain reachable
 - [Vite build vs. serve environment](vite-build-serve-env.md) — validate PORT/BASE_PATH for dev servers, not static builds invoked without runtime environment
 - [Client trip visibility](client-trip-visibility.md) — authenticated clients may read only trips tied to their own reservations; the storefront remains the public catalog.
