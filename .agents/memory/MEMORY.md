@@ -139,6 +139,7 @@
 - [Completed-trip storefront availability](completed-trip-storefront.md) — hide completed trips in public storefront queries and reject stale-cart checkout, rechecking status under the reservation lock.
 - [InfinitePay hosted checkout](infinitepay-hosted-checkout.md) — treat redirects/webhooks as untrusted; confirm via payment_check; do not infer fees, settlement, refunds, or signature support.
 - [Store variant pricing](store-variant-checkout-pricing.md) — recalculate variant prices from the tenant's product options on the server; client unit prices are display-only.
+- [Checkout stock hold semantics](checkout-stock-holds.md) — preserve checkout-time stock holds when comments describe a different payment-time lifecycle; trust the current runtime paths.
 - [CRM settings route scope](crm-settings-route-scope.md) — keep `/configuracoes` focused on general agency and tourism-operation setup; specialized settings remain elsewhere.
 - [Club benefit edit versions](club-benefit-edit-versions.md) — every benefit mutation must strictly advance `updatedAt`, which the editor uses as its optimistic concurrency token.
 - [Playwright WebKit on Nix](playwright-webkit-nix-runtime.md) — Linux WebKit may fail on Nix with Ubuntu ABI gaps; require a real passing run instead of adding one-off browser libraries.
