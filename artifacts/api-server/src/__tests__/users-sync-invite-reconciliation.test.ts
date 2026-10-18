@@ -163,9 +163,13 @@ function buildApp() {
 // Helpers / fixtures
 // ---------------------------------------------------------------------------
 
-function stubClerkUser(email: string) {
+function stubClerkUser(email: string, verificationStatus = "verified") {
   mockGetUser.mockResolvedValue({
-    emailAddresses: [{ id: "ea_1", emailAddress: email }],
+    emailAddresses: [{
+      id: "ea_1",
+      emailAddress: email,
+      verification: { status: verificationStatus },
+    }],
     primaryEmailAddressId: "ea_1",
     publicMetadata: {},
   });
@@ -226,6 +230,48 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("POST /api/users/me/sync — reconciling a tenant-less existing account", () => {
+  it("does not provision an invite-linked user until Clerk verifies the primary email", async () => {
+    stubClerkUser("vendedor.novo@example.com", "unverified");
+    const unlinkedUser = makeExistingUser({ tenantId: null });
+
+    mockLimit
+      .mockResolvedValueOnce([]) // no local user yet
+      .mockResolvedValueOnce([unlinkedUser]); // fetch the newly provisioned user
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenantId).toBeNull();
+    expect(res.body.role).toBe(ROLES.AGENCY_ADMIN);
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: null,
+      role: ROLES.AGENCY_ADMIN,
+    }));
+    expect(mockUpdate).not.toHaveBeenCalledWith({ __name: "invites" });
+    expect(mockFrom).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not attach an invite until Clerk verifies the primary email", async () => {
+    stubClerkUser("vendedor.novo@example.com", "unverified");
+    const existingUser = makeExistingUser({ tenantId: null });
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser]) // usersTable lookup
+      .mockResolvedValueOnce([existingUser]); // usersTable re-fetch; invite was not queried
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenantId).toBeNull();
+    expect(res.body.role).toBe(ROLES.AGENCY_ADMIN);
+    expect(mockFrom).toHaveBeenCalledTimes(2);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockUpdate).not.toHaveBeenCalledWith({ __name: "invites" });
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(
+      expect.objectContaining({ accepted: true }),
+    );
+  });
+
   it("reconciles a tenant-less account against a matching pending invite", async () => {
     stubClerkUser("vendedor.novo@example.com");
     const existingUser = makeExistingUser({ tenantId: null });
