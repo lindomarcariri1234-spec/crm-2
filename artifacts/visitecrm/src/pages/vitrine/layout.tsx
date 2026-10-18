@@ -25,6 +25,7 @@ import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { applyStorefrontMetadata } from "@/lib/storefrontMetadata";
 import { getSafeSocialUrl } from "@/lib/safe-social-url";
 import { publicStoreApi } from "@/lib/storeApi";
+import { trackStorefrontPageView, trackStorefrontSearch } from "@/lib/analytics";
 import {
   captureStorefrontAttribution,
   getStorefrontReferralCookie,
@@ -57,6 +58,17 @@ function clearTrackingSession(key: string): void {
   }
 }
 
+function getStorefrontPageType(location: string, slug: string): "home" | "catalog" | "product" | "checkout" | "other" {
+  const path = location.split(/[?#]/, 1)[0]?.replace(/\/+$/, "") ?? "";
+  const storePath = `/loja/${slug}`;
+  const pagePath = path === storePath ? "" : path.startsWith(`${storePath}/`) ? path.slice(storePath.length) : path;
+  if (!pagePath) return "home";
+  if (pagePath === "/produtos") return "catalog";
+  if (pagePath.startsWith("/produtos/")) return "product";
+  if (pagePath === "/checkout") return "checkout";
+  return "other";
+}
+
 export default function VitrineLayout({
   children,
   slug,
@@ -78,8 +90,18 @@ export default function VitrineLayout({
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const profileDropdownRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const lastPageViewKeyRef = useRef<string | null>(null);
 
   useEffect(() => applyStorefrontMetadata(store, location), [store, location]);
+
+  useEffect(() => {
+    if (isSignedIn && (!me || me.role !== ROLES.CLIENT)) return;
+    const pagePath = location.split(/[?#]/, 1)[0]?.replace(/\/+$/, "") ?? "";
+    const pageViewKey = `${slug}:${pagePath}`;
+    if (lastPageViewKeyRef.current === pageViewKey) return;
+    lastPageViewKeyRef.current = pageViewKey;
+    trackStorefrontPageView(slug, getStorefrontPageType(location, slug));
+  }, [isSignedIn, location, me, slug]);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,6 +175,7 @@ export default function VitrineLayout({
     e.preventDefault();
     if (!searchQuery.trim()) return;
     setSearchOpen(false);
+    trackStorefrontSearch(slug, "header_search");
     navigate(`/loja/${slug}/produtos?search=${encodeURIComponent(searchQuery.trim())}`);
     setSearchQuery("");
   }

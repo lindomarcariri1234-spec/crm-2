@@ -576,3 +576,27 @@ export const priceAlertSubscriptionsRelations = relations(priceAlertSubscription
   store: one(storesTable, { fields: [priceAlertSubscriptionsTable.storeId], references: [storesTable.id] }),
   product: one(storeProductsTable, { fields: [priceAlertSubscriptionsTable.productId], references: [storeProductsTable.id] }),
 }));
+
+export const storefrontDailyMetricsTable = pgTable("storefront_daily_metrics", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
+  storeId: text("store_id").notNull().references(() => storesTable.id, { onDelete: "cascade" }),
+  metricDate: date("metric_date").notNull(),
+  eventType: text("event_type").notNull(),
+  pageType: text("page_type").notNull().default("none"),
+  groupDimension: text("group_dimension").notNull().default("none"),
+  sourceDimension: text("source_dimension").notNull().default("none"),
+  count: integer("count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+}, (table) => [
+  uniqueIndex("storefront_daily_metrics_dimensions_uq").on(
+    table.storeId,
+    table.metricDate,
+    table.eventType,
+    table.pageType,
+    table.groupDimension,
+    table.sourceDimension,
+  ),
+  index("storefront_daily_metrics_tenant_date_idx").on(table.tenantId, table.metricDate),
+]);

@@ -265,6 +265,7 @@ const AGENCY_NAVIGATION: NavItem[] = [
     icon: BarChart2,
     children: [
       { name: "Visão geral", href: "/analytics", icon: BarChart2 },
+      { name: "Comportamento da vitrine", href: "/analytics/vitrine", icon: BarChart2 },
       { name: "Vendedores", href: "/analytics/vendedores", icon: UserCheck },
       { name: "Insights", href: "/insights", icon: BrainCircuit },
       { name: "Gêmeo Digital", href: "/gemeo", icon: Activity, roles: [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN] },

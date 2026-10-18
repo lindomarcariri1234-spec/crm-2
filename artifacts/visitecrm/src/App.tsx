@@ -37,6 +37,7 @@ const Loyalty = lazy(() => import("@/pages/loyalty"));
 const Nps = lazy(() => import("@/pages/nps"));
 const Registrations = lazy(() => import("@/pages/registrations"));
 const Analytics = lazy(() => import("@/pages/analytics"));
+const StorefrontAnalytics = lazy(() => import("@/pages/storefront-analytics"));
 const Insights = lazy(() => import("@/pages/insights"));
 const GemeoDigital = lazy(() => import("@/pages/gemeo"));
 const Commissions = lazy(() => import("@/pages/commissions"));
@@ -472,6 +473,7 @@ function Router() {
 
       {/* Analytics */}
       <Route path="/analytics" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Analytics} />} />
+      <Route path="/analytics/vitrine" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={StorefrontAnalytics} />} />
       <Route path="/analytics/revenue" component={() => <RoleGate allowedRoles={FINANCE_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Revenue} />} />
       <Route path="/analytics/historico-comparativo" component={() => <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">Carregando...</div>}><RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={HistoricoComparativo} /></Suspense>} />
       <Route path="/analytics/vendedores" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Vendedores} />} />

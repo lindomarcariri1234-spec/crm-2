@@ -301,7 +301,7 @@ export default function VitrineHome({
   }
 
   function navigateToProductGroup(group: "travel" | "other") {
-    trackStoreGroupSelection(group, "home_link");
+    trackStoreGroupSelection(group, "home_link", slug);
     navigate(`/loja/${slug}/produtos?group=${group}`);
   }
 

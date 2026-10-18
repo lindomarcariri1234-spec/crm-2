@@ -384,7 +384,7 @@ export default function VitrineProduct({
     const group = product.tripId
       ? "travel"
       : product.storefrontGroup ?? "unknown";
-    trackStoreProductOpened(group);
+    trackStoreProductOpened(group, slug);
   }, [product]);
 
   useEffect(() => {

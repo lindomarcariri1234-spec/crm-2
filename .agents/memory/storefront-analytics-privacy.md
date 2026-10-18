@@ -1,10 +1,10 @@
 ---
 name: Storefront analytics privacy
-description: Privacy limits for storefront preference and conversion events.
+description: First-party tenant-scoped storefront aggregates and privacy limits.
 ---
 
-Storefront analytics events must use only controlled group/source dimensions. Do not send store slugs, product or record IDs, personal data, or free-form content.
+Storefront reporting uses first-party tenant/store daily counters. Client event bodies use controlled page/group/source dimensions only; never include visitor identity, product IDs, search text, or free-form content. A public store slug may be used only in the routing path to resolve the store. Existing product `viewsCount` rankings are lifetime totals and must be labeled that way.
 
-**Why:** The preference funnel should compare interest in travel versus other store items without identifying visitors.
+**Why:** Agencies need page and product interest reporting without identifying visitors; product rankings reuse the existing all-time view counter rather than implying a period-specific measure.
 
-**How to apply:** Use the shared safe event wrapper and keep future storefront funnel instrumentation within these dimensions.
+**How to apply:** Aggregate validated events by tenant/store and São Paulo calendar day. Keep event payloads bounded, avoid visitor-level claims, and label all-time product views separately from period metrics.

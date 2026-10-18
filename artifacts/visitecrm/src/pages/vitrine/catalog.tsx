@@ -22,7 +22,7 @@ import { Search, MapPin, SlidersHorizontal, X, ArrowUpDown } from "lucide-react"
 import { ProductQuickView } from "@/components/vitrine/ProductQuickView";
 import { PremiumProductCard } from "@/components/vitrine/PremiumProductCard";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
-import { trackStoreGroupSelection } from "@/lib/analytics";
+import { trackStoreGroupSelection, trackStorefrontSearch } from "@/lib/analytics";
 import { getStoredValue, removeStoredValue } from "./utils/storage";
 
 type ProductGroup = "all" | "travel" | "other";
@@ -456,7 +456,7 @@ export default function VitrineCatalog({
   }
 
   function changeGroup(group: ProductGroup) {
-    trackStoreGroupSelection(group, "catalog_tab");
+    trackStoreGroupSelection(group, "catalog_tab", slug);
     applyFilters({ ...filters, group, type: "all" });
   }
 
@@ -567,6 +567,11 @@ export default function VitrineCatalog({
             }
             value={filters.search}
             onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                trackStorefrontSearch(slug, "catalog_search");
+              }
+            }}
           />
         </div>
 

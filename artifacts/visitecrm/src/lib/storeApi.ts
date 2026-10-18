@@ -66,7 +66,50 @@ async function req<T = void>(
   return JSON.parse(text) as T;
 }
 
+export type StorefrontPageType = "home" | "catalog" | "product" | "checkout" | "other";
+export type StorefrontAnalyticsGroup = "travel" | "other" | "all" | "unknown";
+
+export type StorefrontMetricEvent =
+  | { event: "page_view"; pageType: StorefrontPageType; group?: StorefrontAnalyticsGroup }
+  | { event: "group_selected"; group: "all" | "travel" | "other"; source: "catalog_tab" | "home_link" }
+  | { event: "product_opened"; group: "travel" | "other" | "unknown" }
+  | { event: "search_submitted"; group: "travel" | "other" | "unknown"; source: "header_search" | "catalog_search" }
+  | { event: "checkout_started"; group: "travel" | "other" | "unknown" };
+
+export interface StorefrontAnalyticsSummary {
+  periodDays: 7 | 30 | 90;
+  pageViews: {
+    total: number;
+    previousTotal: number;
+    byDay: Array<{
+      date: string;
+      home: number;
+      catalog: number;
+      product: number;
+      checkout: number;
+      other: number;
+    }>;
+    byType: Array<{ pageType: StorefrontPageType; count: number }>;
+  };
+  topProducts: Array<{ name: string; views: number; group: "travel" | "other" | "unknown" }>;
+  groups: Array<{
+    group: StorefrontAnalyticsGroup;
+    selections: number;
+    productOpens: number;
+    searches: number;
+    checkoutStarts: number;
+  }>;
+  totals: { productOpens: number; searches: number; checkoutStarts: number };
+}
+
 export const storeApi = {
+  getStorefrontAnalytics: (periodDays: 7 | 30 | 90) =>
+    req<StorefrontAnalyticsSummary>(
+      "GET",
+      `/store/analytics/storefront?periodDays=${periodDays}`,
+      undefined,
+      { cache: "no-store" },
+    ),
   getSettings: () => req<StoreSettings>("GET", "/store/settings", undefined, { cache: "no-store" }),
   updateSettings: (data: Partial<StoreSettings>) =>
     req<StoreSettings>("PUT", "/store/settings", data),
@@ -174,7 +217,7 @@ async function publicReq<T>(
   method: string,
   path: string,
   body?: unknown,
-  options?: Pick<RequestInit, "cache">,
+  options?: Pick<RequestInit, "cache" | "keepalive">,
 ): Promise<T> {
   const res = await fetch(`${BASE}/api${path}`, {
     method,
@@ -191,6 +234,9 @@ async function publicReq<T>(
       err.code,
       typeof err.requestId === "string" ? err.requestId : undefined,
     );
+  }
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as unknown as T;
   }
   return res.json();
 }
@@ -353,6 +399,13 @@ export const publicStoreApi = {
     utmCampaign?: string;
   }) =>
     publicReq<{ cookieId: string; tracked: boolean }>("POST", `/public/store/${slug}/referral/track`, data),
+  trackAnalyticsEvent: (slug: string, data: StorefrontMetricEvent) =>
+    publicReq<void>(
+      "POST",
+      `/public/store/${encodeURIComponent(slug)}/analytics`,
+      data,
+      { keepalive: true },
+    ),
 };
 
 export interface StoreSettings {

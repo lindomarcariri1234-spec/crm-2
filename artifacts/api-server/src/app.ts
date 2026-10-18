@@ -380,11 +380,20 @@ const referralTrackLimiter = rateLimit({
   handler: rateLimitHandler,
 });
 
+const storefrontAnalyticsLimiter = rateLimit({
+  windowMs: 60_000,
+  max: parseRateLimitEnv("RATE_LIMIT_STOREFRONT_ANALYTICS_MAX", 60),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+});
+
 app.use("/api/public", publicGeneralLimiter);
 app.post("/api/public/store/:slug/orders", publicOrderLimiter);
 app.get("/api/public/store/:slug/orders/:orderNumber", orderLookupLimiter);
 app.post("/api/public/store/:slug/referral/validate", referralValidateLimiter);
 app.post("/api/public/store/:slug/referral/track", referralTrackLimiter);
+app.post("/api/public/store/:slug/analytics", storefrontAnalyticsLimiter);
 app.get("/api/public/store/:slug/referral/info", referralInfoLimiter);
 app.post("/api/public/store/:slug/price-alerts", priceAlertSubscribeLimiter);
 

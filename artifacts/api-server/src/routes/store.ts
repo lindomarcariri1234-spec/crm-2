@@ -38,7 +38,7 @@ import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-ite
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { deleteOrphanedFile, deleteOrphanedImages } from "../lib/uploadthing";
 import { ADMIN_ROLES } from '../lib/tenant';
-import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
+import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, ROLES, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
 import { decryptOrPassthrough, encryptCredential } from "../lib/crypto";
 import { sendPriceDropAlertEmail } from "../queues/email-helpers";
@@ -59,6 +59,7 @@ import { syncStoreOrderFromOrderPayment } from "../services/reservation-order-pa
 import { syncReservationPaymentStatus } from "../lib/reservation-payments";
 import { roundMoney } from "../lib/pricing";
 import { scheduleCalendarSyncTrip } from "../lib/google-calendar/schedule-sync";
+import { getStorefrontAnalyticsSummary } from "../services/storefront-analytics";
 
 // Storefront public base for links inside price-drop alert e-mails. Product
 // links point at the Vitrine; the unsubscribe link points at the public API,
@@ -650,6 +651,36 @@ router.delete("/store/categories/:id", async (req, res, next: NextFunction): Pro
     await db.delete(storeCategoriesTable)
       .where(and(eq(storeCategoriesTable.id, req.params.id), eq(storeCategoriesTable.storeId, store.id)));
     res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/store/analytics/storefront", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const allowedRoles = [ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER, ROLES.SUPPORT, ROLES.SUPER_ADMIN];
+    if (!allowedRoles.includes(me.role as typeof allowedRoles[number])) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+    const store = await getStoreForTenant(me.tenantId);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    const periodResult = z.coerce.number().int().refine(
+      (value) => value === 7 || value === 30 || value === 90,
+      "Period must be 7, 30, or 90 days",
+    ).safeParse(req.query.periodDays ?? 30);
+    if (!periodResult.success) {
+      next(new ValidationError("Invalid analytics period", "VALIDATION_ERROR"));
+      return;
+    }
+    const summary = await getStorefrontAnalyticsSummary(
+      store.id,
+      me.tenantId,
+      periodResult.data as 7 | 30 | 90,
+    );
+    res.json(summary);
   } catch (err) {
     next(err);
   }

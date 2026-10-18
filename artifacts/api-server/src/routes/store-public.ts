@@ -238,8 +238,10 @@ import
  from "../lib/client-notifications"
 ;
 import { recordReferralVisit } from "../services/referral-tracking";
-
-
+import {
+  recordStorefrontMetric,
+  storefrontMetricEventSchema,
+} from "../services/storefront-analytics";
 
 const router = Router()
 ;
@@ -599,6 +601,22 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
 ;
 
 
+router.post("/public/store/:slug/analytics", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const store = await getActiveStore(req.params.slug);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    const parsed = storefrontMetricEventSchema.safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError("Invalid storefront analytics event", "INVALID_ANALYTICS_EVENT"));
+      return;
+    }
+    await recordStorefrontMetric(store, parsed.data);
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/public/store/:slug/categories", async (req, res, next: NextFunction): Promise<void> => 
 {
 
@@ -942,7 +960,7 @@ router.get("/public/store/:slug/products/:productSlug", async (req, res, next: N
       )).limit(1);
     if (!row) { next(new NotFoundError("Product not found", "NOT_FOUND")); return; }
     await db.update(storeProductsTable)
-      .set({ viewsCount: row.viewsCount + 1 })
+      .set({ viewsCount: sql`${storeProductsTable.viewsCount} + 1` })
       .where(eq(storeProductsTable.id, row.id));
     const reviews = await db.select({
       id: storeReviewsTable.id,

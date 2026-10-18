@@ -500,7 +500,7 @@ export default function VitrineCheckout({
       return;
     }
     checkoutStartTrackedRef.current = true;
-    trackStoreCheckoutStarted();
+    trackStoreCheckoutStarted(slug);
   }, [items.length, stripeReturnRecovery, failedStripeReturn]);
 
   async function refreshRecoveredReferralCreditBalance(
