@@ -15,6 +15,13 @@ import type { LayoutSeatMap, Step } from "./constants";
 import { CLICKABLE_SEAT_TYPES, isPaymentMethodAvailable, STEP_ORDER } from "./constants";
 import type { FinancialSummary } from "@/lib/linked-data";
 import { isUnpaidStripeFailure } from "./stripe-payment-status";
+import {
+  getLapChildCount,
+  getPaidSeatQuantity,
+  getSeatedChildCount,
+  hasCompleteChildPassengerData,
+  type CoPassenger,
+} from "./child-passenger-rules";
 
 export type WizardForm = {
   customerName: string;
@@ -37,7 +44,7 @@ export type WizardForm = {
   partnerTransferDestination: string;
 };
 
-export type CoPassenger = { name: string; cpf: string; phone: string };
+export type { CoPassenger } from "./child-passenger-rules";
 
 export type CompletedOrder = {
   orderNumber: string;
@@ -63,6 +70,21 @@ export type CompletedOrder = {
   reservations?: StoreOrderReservation[];
   financialSummary: FinancialSummary;
 };
+
+function coPassengersFromReservations(
+  reservations: StoreOrderReservation[] | null | undefined,
+): CoPassenger[] {
+  return (reservations ?? [])
+    .flatMap((reservation) => reservation.passengers ?? [])
+    .filter((passenger) => !passenger.isPrimary)
+    .map((passenger) => ({
+      name: passenger.name,
+      cpf: "",
+      phone: passenger.phone ?? "",
+      isChildUnder7: passenger.isChildUnder7 ?? passenger.ageCategory === "baby",
+      occupiesSeat: Boolean(passenger.seatNumber),
+    }));
+}
 
 export type StripeCardPaymentState = {
   clientSecret: string;
@@ -253,11 +275,14 @@ export function useWizardState({
     partnerTransferOrigin: "",
     partnerTransferDestination: "",
   });
-  const [qty, setQty] = useState(1);
   const [coPassengers, setCoPassengers] = useState<CoPassenger[]>([]);
+  const qty = getPaidSeatQuantity(coPassengers);
+  const seatedChildCount = getSeatedChildCount(coPassengers);
+  const lapChildCount = getLapChildCount(coPassengers);
   const [selectedVariant, setSelectedVariant] = useState<WizardSelectedVariant | null>(null);
   const [couponResult, setCouponResult] = useState<CouponValidation | null>(null);
   const [validatingCoupon, setValidatingCoupon] = useState(false);
+  const couponValidationKeyRef = useRef<string | null>(null);
   const [partnerInfo, setPartnerInfo] = useState<PartnerProductInfo | null>(null);
   const [selectedSeats, setSelectedSeats] = useState<number[]>([]);
   const [layoutSeats, setLayoutSeats] = useState<string[]>([]);
@@ -478,6 +503,10 @@ export function useWizardState({
   }, []);
 
   function set(field: keyof WizardForm, value: string) {
+    if (field === "couponCode" && value !== form.couponCode) {
+      setCouponResult(null);
+      couponValidationKeyRef.current = null;
+    }
     setFormState((p) => ({ ...p, [field]: value }));
   }
 
@@ -527,13 +556,9 @@ export function useWizardState({
     return Array.from({ length: Math.max(0, taken) }, (_, i) => i + 1);
   })();
 
-  const passengerOptions = Array.from(
-    { length: Math.max(1, Math.min(maxSeats, 10)) },
-    (_, i) => i + 1,
-  );
-
   async function validateCoupon() {
     if (!form.couponCode || !product) return;
+    couponValidationKeyRef.current = `${form.couponCode.trim().toUpperCase()}|${subtotal}`;
     setValidatingCoupon(true);
     try {
       const res = await publicStoreApi.validateCoupon(slug, form.couponCode, subtotal);
@@ -547,8 +572,37 @@ export function useWizardState({
 
   function removeCoupon() {
     setCouponResult(null);
+    couponValidationKeyRef.current = null;
     set("couponCode", "");
   }
+
+  useEffect(() => {
+    if (!couponResult?.valid || !form.couponCode.trim() || !product) return;
+    const normalizedCode = form.couponCode.trim().toUpperCase();
+    const previouslyValidatedCode = couponValidationKeyRef.current?.split("|", 1)[0];
+    if (previouslyValidatedCode !== normalizedCode) return;
+    const validationKey = `${normalizedCode}|${subtotal}`;
+    if (couponValidationKeyRef.current === validationKey) return;
+
+    couponValidationKeyRef.current = validationKey;
+    let cancelled = false;
+    setValidatingCoupon(true);
+    publicStoreApi
+      .validateCoupon(slug, form.couponCode, subtotal)
+      .then((result) => {
+        if (!cancelled) setCouponResult(result);
+      })
+      .catch(() => {
+        if (!cancelled) setCouponResult({ valid: false, error: "Cupom inválido" });
+      })
+      .finally(() => {
+        if (!cancelled) setValidatingCoupon(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [couponResult?.valid, form.couponCode, product, slug, subtotal]);
 
   async function applyReferral() {
     if (!referralCode.trim()) return;
@@ -591,49 +645,64 @@ export function useWizardState({
     );
   }
 
-  function setCoPassenger(index: number, field: keyof CoPassenger, value: string) {
+  function setCoPassenger<K extends keyof CoPassenger>(
+    index: number,
+    field: K,
+    value: CoPassenger[K],
+  ) {
     setCoPassengers((prev) => {
       const next = [...prev];
       for (let i = 0; i <= index; i += 1) {
-        if (!next[i]) next[i] = { name: "", cpf: "", phone: "" };
+        if (!next[i]) {
+          next[i] = {
+            name: "",
+            cpf: "",
+            phone: "",
+            isChildUnder7: false,
+            occupiesSeat: true,
+          };
+        }
       }
-      next[index] = { ...next[index], [field]: value };
+      const current = next[index]!;
+      const updated = { ...current, [field]: value } as CoPassenger;
+      if (field === "isChildUnder7" && value === false) {
+        updated.occupiesSeat = true;
+      }
+      if (field === "occupiesSeat" && value === false && !current.isChildUnder7) {
+        updated.occupiesSeat = true;
+      }
+      next[index] = updated;
       return next;
     });
+    if (field === "isChildUnder7" || field === "occupiesSeat") {
+      setSelectedSeats([]);
+      setLayoutSeats([]);
+    }
   }
 
-  function changeQty(newQty: number) {
-    setQty(newQty);
+  function addChild() {
+    setCoPassengers((prev) => [
+      ...prev,
+      {
+        name: "",
+        cpf: "",
+        phone: "",
+        isChildUnder7: false,
+        occupiesSeat: true,
+      },
+    ]);
     setSelectedSeats([]);
     setLayoutSeats([]);
-    // Trim co-passengers array to (newQty - 1) entries (slot 0 = buyer)
-    setCoPassengers((prev) => prev.slice(0, Math.max(0, newQty - 1)));
   }
 
-  function incrementQty() {
-    setQty((q) => {
-      const next = Math.min(maxSeats, q + 1);
-      setCoPassengers((prev) => prev.slice(0, Math.max(0, next - 1)));
-      return next;
-    });
-    setSelectedSeats([]);
-    setLayoutSeats([]);
-  }
-
-  function decrementQty() {
-    setQty((q) => {
-      const next = Math.max(1, q - 1);
-      setCoPassengers((prev) => prev.slice(0, Math.max(0, next - 1)));
-      return next;
-    });
+  function removeChild(index: number) {
+    setCoPassengers((prev) => prev.filter((_, childIndex) => childIndex !== index));
     setSelectedSeats([]);
     setLayoutSeats([]);
   }
 
   function hasCompleteCoPassengers() {
-    const requiredCount = Math.max(0, qty - 1);
-    return Array.from({ length: requiredCount }, (_, index) => coPassengers[index])
-      .every((passenger) => !!passenger?.name.trim());
+    return hasCompleteChildPassengerData(coPassengers);
   }
 
   function canProceedFromDados() {
@@ -642,7 +711,8 @@ export function useWizardState({
       !!form.customerEmail.trim() &&
       validatePhone(form.customerPhone) &&
       validateCpf(form.customerCpf) &&
-      hasCompleteCoPassengers()
+      hasCompleteCoPassengers() &&
+      qty <= maxSeats
     );
   }
 
@@ -650,8 +720,8 @@ export function useWizardState({
     if (isSoldOut) return false;
     if (!hasCompleteCoPassengers()) return false;
     if (product?.hasVariants && !selectedVariant) return false;
+    if (qty > maxSeats) return false;
     if (showSeatGrid && product?.totalCapacity && qty > product.totalCapacity) return false;
-    if (qty < 1) return false;
     if (partnerInfo?.hasPartner) {
       if (partnerInfo.type === "passeio" || partnerInfo.type === "experiencia") {
         if (!form.partnerSelectedDate) return false;
@@ -728,7 +798,12 @@ export function useWizardState({
     if (!product) return;
     if (!hasCompleteCoPassengers()) {
       setStep("dados");
-      setSubmitError("Informe o nome de cada acompanhante antes de continuar.");
+      setSubmitError("Informe o nome de cada criança e selecione como ela viajará.");
+      return;
+    }
+    if (qty > maxSeats) {
+      setStep("dados");
+      setSubmitError("Há mais passageiros com assento do que vagas disponíveis.");
       return;
     }
     setSubmitError(null);
@@ -762,15 +837,14 @@ export function useWizardState({
         .filter(Boolean)
         .join(" ");
 
-      // The passenger step does not allow proceeding with an empty companion.
-      // Keep the payload positional: index 0 is the second passenger, index 1
-      // is the third passenger, and so on. The API validates the same invariant.
-      const filledCoPassengers = coPassengers
-        .slice(0, qty - 1)
-        .map((cp) => ({
+      // Every added child is persisted; only seat-occupying children contribute
+      // to item quantity, trip capacity and the fare.
+      const filledCoPassengers = coPassengers.map((cp) => ({
           name: cp.name.trim(),
           ...(cp.cpf.trim() ? { cpf: cp.cpf.trim() } : {}),
           ...(cp.phone.trim() ? { phone: cp.phone.trim() } : {}),
+          isChildUnder7: cp.isChildUnder7,
+          occupiesSeat: cp.occupiesSeat,
         }));
 
       const order = await publicStoreApi.createOrder(slug, {
@@ -1112,19 +1186,8 @@ export function useWizardState({
 
         paymentTokenRef.current = pending.paymentToken;
         const reservations = order.reservations ?? [];
-        const passengers = reservations.flatMap((reservation) => reservation.passengers ?? []);
-        const companionPassengers = passengers
-          .filter((passenger) => !passenger.isPrimary)
-          .map((passenger) => ({
-            name: passenger.name,
-            cpf: "",
-            phone: passenger.phone ?? "",
-          }));
+        const companionPassengers = coPassengersFromReservations(reservations);
         const savedSeats = reservations.flatMap((reservation) => reservation.seats ?? []).map(String);
-        const itemPassengerCount = (order.items ?? []).reduce(
-          (sum, item) => sum + Math.max(0, Number(item.quantity) || 0),
-          0,
-        );
         const failedWithoutReceipt = isUnpaidStripeFailure(
           order.paymentStatus,
           order.paidAmount ?? order.financialSummary?.paidAmount,
@@ -1143,7 +1206,6 @@ export function useWizardState({
           customerPhone: order.customerPhone ?? "",
           paymentMethod: order.paymentMethod ?? "credit_card",
         }));
-        setQty(Math.max(1, itemPassengerCount || passengers.length));
         setCoPassengers(companionPassengers);
         setLayoutSeats(savedSeats);
         setSelectedSeats(
@@ -1257,6 +1319,14 @@ export function useWizardState({
         const order = await publicStoreApi.getOrder(slug, orderNumber, pending!.paymentToken!);
         if (cancelled) return;
         paymentTokenRef.current = pending!.paymentToken!;
+        setCoPassengers(coPassengersFromReservations(order.reservations));
+        const recoveredSeats = order.reservations
+          ?.flatMap((reservation) => reservation.seats ?? [])
+          .map(String) ?? [];
+        setLayoutSeats(recoveredSeats);
+        setSelectedSeats(
+          recoveredSeats.filter((seat) => /^\d+$/.test(seat)).map(Number),
+        );
         setCompletedOrder({
           orderNumber: order.orderNumber,
           totalAmount: String(order.totalAmount),
@@ -1401,9 +1471,6 @@ export function useWizardState({
     form,
     set,
     qty,
-    changeQty,
-    incrementQty,
-    decrementQty,
     selectedVariant,
     setSelectedVariant,
     couponResult,
@@ -1445,7 +1512,6 @@ export function useWizardState({
     maxSeats,
     isSoldOut,
     occupiedSeats,
-    passengerOptions,
     canProceedFromDados,
     canProceedFromRevisao,
     canProceedFromAssento,
@@ -1461,6 +1527,10 @@ export function useWizardState({
     setSelectedBoardingPointId,
     coPassengers,
     setCoPassenger,
+    addChild,
+    removeChild,
+    seatedChildCount,
+    lapChildCount,
   };
 }
 

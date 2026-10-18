@@ -112,6 +112,7 @@ export function StepConfirmation({
     handleStripePaymentSubmitted,
     qty,
     coPassengers,
+    lapChildCount,
     effectiveSeats,
     form,
     navigate,
@@ -144,6 +145,19 @@ export function StepConfirmation({
   }, [completedOrder]);
 
   if (!product || !completedOrder) return null;
+  const orderPassengers = completedOrder.reservations?.flatMap(
+    (reservation) => reservation.passengers ?? [],
+  );
+  const confirmationCompanions = orderPassengers?.length
+    ? orderPassengers.filter((passenger) => !passenger.isPrimary)
+    : coPassengers.map((passenger, index) => ({
+        id: `local-${index}`,
+        name: passenger.name,
+        ageCategory: passenger.isChildUnder7 ? (passenger.occupiesSeat ? "child" : "baby") : "child",
+        isChildUnder7: passenger.isChildUnder7,
+        seatNumber: passenger.occupiesSeat ? "selected" : null,
+      }));
+  const confirmationPassengerCount = orderPassengers?.length || 1 + coPassengers.length;
   const summary = completedOrder.financialSummary;
   const totalAmt = summary.totalAmount;
   const depositAmt = summary.depositRequested > 0 ? summary.depositRequested : null;
@@ -387,7 +401,11 @@ export function StepConfirmation({
               <div>
                 <p className="text-muted-foreground text-xs">Passageiros</p>
                 <p className="font-semibold" data-testid="confirmation-passenger-count">
-                  {qty} passageiro{qty !== 1 ? "s" : ""}
+                  {confirmationPassengerCount} pessoa{confirmationPassengerCount !== 1 ? "s" : ""}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {qty} {qty === 1 ? "passagem com poltrona" : "passagens com poltrona"}
+                  {lapChildCount > 0 && ` · ${lapChildCount} criança(s) no colo, sem cobrança`}
                 </p>
               </div>
               {confirmationSeats.length > 0 && (
@@ -447,15 +465,26 @@ export function StepConfirmation({
                 <p className="text-muted-foreground text-xs">Telefone</p>
                 <p className="font-semibold">{customerPhone || "—"}</p>
               </div>
-              {coPassengers.slice(0, Math.max(0, qty - 1)).length > 0 && (
+              {confirmationCompanions.length > 0 && (
                 <div>
-                  <p className="text-muted-foreground text-xs">Acompanhantes</p>
+                  <p className="text-muted-foreground text-xs">Passageiros adicionais</p>
                   <ul className="mt-1 space-y-1">
-                    {coPassengers.slice(0, Math.max(0, qty - 1)).map((passenger, index) => (
-                      <li key={index} className="font-semibold">
-                        Passageiro {index + 2}: {passenger.name}
-                      </li>
-                    ))}
+                    {confirmationCompanions.map((passenger, index) => {
+                      const isLapChild = passenger.ageCategory === "baby" && !passenger.seatNumber;
+                      const isChild =
+                        passenger.ageCategory === "child" ||
+                        passenger.ageCategory === "baby" ||
+                        passenger.isChildUnder7 === true;
+                      return (
+                        <li key={index} className="font-semibold">
+                          {isChild ? "Criança" : `Passageiro ${index + 2}`}: {passenger.name} — {isLapChild
+                            ? "no colo, sem cobrança"
+                            : isChild
+                              ? "poltrona e passagem"
+                              : "com poltrona"}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}

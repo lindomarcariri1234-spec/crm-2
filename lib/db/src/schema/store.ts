@@ -308,10 +308,16 @@ export const storeOrdersTable = pgTable("store_orders", {
   boardingLocationId: text("boarding_location_id"),
   seats: json("seats").$type<string[]>(),
 
-  // Co-passenger names/data collected in the vitrine wizard when qty > 1.
-  // Index 0 = 2nd passenger, index 1 = 3rd passenger, etc. (buyer is always primary).
-  // Stored as JSON so no seat/passenger schema change is required at checkout time.
-  coPassengers: json("co_passengers").$type<Array<{ name: string; cpf?: string; phone?: string }>>(),
+  // Additional child passenger data collected in the vitrine reservation wizard.
+  // The buyer remains the primary passenger; lap children are stored here without
+  // increasing the paid item quantity or trip capacity.
+  coPassengers: json("co_passengers").$type<Array<{
+    name: string;
+    cpf?: string;
+    phone?: string;
+    isChildUnder7?: boolean;
+    occupiesSeat?: boolean;
+  }>>(),
 
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),

@@ -189,6 +189,10 @@ import
  from "../services/checkout/persist-order"
 ;
 import { isReferralCreditSpendable } from "../lib/referral-wallet";
+import {
+  countSeatBearingCoPassengers,
+  getStorefrontPassengerPolicyError,
+} from "../services/checkout/storefront-passenger-rules.js";
 
 import 
 {
@@ -1384,6 +1388,8 @@ const CreateOrderBody = z.object({
     name: z.string().trim().min(1),
     cpf: z.string().trim().optional(),
     phone: z.string().trim().optional(),
+    isChildUnder7: z.boolean().optional(),
+    occupiesSeat: z.boolean().optional(),
   })).optional(),
   depositAmount: z.number().nonnegative().optional(),
   // Client-generated key, one per checkout attempt. Lets a browser retry /
@@ -1404,6 +1410,10 @@ function validateCheckoutPassengerData(
   const totalTripQuantity = tripQuantities.reduce((sum, item) => sum + item.totalQty, 0);
   const coPassengers = data.coPassengers ?? [];
   const submittedSeats = (data.seats ?? []).map((seat) => seat.trim()).filter(Boolean);
+  const passengerPolicyError = getStorefrontPassengerPolicyError(coPassengers);
+  if (passengerPolicyError) {
+    throw new ValidationError(passengerPolicyError.message, passengerPolicyError.code);
+  }
 
   if (tripLinkedProducts.size === 0) {
     if (coPassengers.length > 0 || submittedSeats.length > 0) {
@@ -1445,9 +1455,12 @@ function validateCheckoutPassengerData(
     );
   }
 
-  if (tripLinkedProducts.size === 1 && coPassengers.length !== totalTripQuantity - 1) {
+  if (
+    tripLinkedProducts.size === 1
+    && countSeatBearingCoPassengers(coPassengers) !== totalTripQuantity - 1
+  ) {
     throw new ValidationError(
-      `Informe o nome dos ${Math.max(0, totalTripQuantity - 1)} acompanhante(s) desta reserva`,
+      `Informe os dados de ${Math.max(0, totalTripQuantity - 1)} criança(s) com poltrona`,
       "PASSENGER_QUANTITY_MISMATCH",
     );
   }
@@ -2655,6 +2668,7 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
         birthDate: passengersTable.birthDate,
         ageCategory: passengersTable.ageCategory,
         seatNumber: passengersTable.seatNumber,
+        isChildUnder7: passengersTable.isChildUnder7,
         isPrimary: passengersTable.isPrimary,
         boardingLocationId: passengersTable.boardingLocationId,
         phone: passengersTable.phone,

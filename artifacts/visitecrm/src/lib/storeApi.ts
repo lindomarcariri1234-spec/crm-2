@@ -629,6 +629,7 @@ export interface StoreOrderPassenger {
   ageCategory?: string | null;
   seatNumber?: string | null;
   isPrimary?: boolean;
+  isChildUnder7?: boolean;
   boardingLocationId?: string | null;
   phone?: string | null;
 }
@@ -898,7 +899,13 @@ export interface CreateOrderInput {
 
   boardingLocationId?: string;
 
-  coPassengers?: Array<{ name: string; cpf?: string; phone?: string }>;
+  coPassengers?: Array<{
+    name: string;
+    cpf?: string;
+    phone?: string;
+    isChildUnder7?: boolean;
+    occupiesSeat?: boolean;
+  }>;
   depositAmount?: number;
   /**
    * Client-generated key, one per checkout attempt (see checkout.tsx). Lets a

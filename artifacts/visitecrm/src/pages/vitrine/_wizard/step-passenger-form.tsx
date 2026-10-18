@@ -1,12 +1,24 @@
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { User, Users, Info, AlertTriangle } from "lucide-react";
+import { User, Users, Info, AlertTriangle, Plus, Trash2 } from "lucide-react";
 import type { WizardState } from "./use-wizard-state";
 import { validateCpf, validatePhone } from "@/lib/utils";
 
 export function StepPassengerForm({ state }: { state: WizardState }) {
-  const { form, set, qty, changeQty, isSoldOut, maxSeats, passengerOptions, product, coPassengers, setCoPassenger } = state;
+  const {
+    form,
+    set,
+    qty,
+    isSoldOut,
+    maxSeats,
+    product,
+    coPassengers,
+    setCoPassenger,
+    addChild,
+    removeChild,
+    lapChildCount,
+  } = state;
   return (
     <div className="space-y-5">
       <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -95,65 +107,93 @@ export function StepPassengerForm({ state }: { state: WizardState }) {
           </div>
         </div>
 
-        <div className="border-t pt-4">
-          <Label className="flex items-center gap-1.5 mb-2">
-            <Users className="w-4 h-4 text-muted-foreground" />
-            Quantidade de Passageiros <span className="text-red-500">*</span>
-          </Label>
-          <select
-            value={qty}
-            onChange={(e) => changeQty(Number(e.target.value))}
-            disabled={isSoldOut}
-            className="w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring bg-white"
-          >
-            {passengerOptions.map((n) => (
-              <option key={n} value={n}>
-                {n} {n === 1 ? "passageiro" : "passageiros"}
-              </option>
-            ))}
-          </select>
-          {product?.availableSeats != null && (
-            <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
-              <Info className="w-3.5 h-3.5" />
-              {maxSeats} vaga{maxSeats !== 1 ? "s" : ""} disponível{maxSeats !== 1 ? "is" : ""}
+        <div className="border-t pt-4 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <Label className="flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-muted-foreground" />
+                Crianças adicionais
+              </Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Você já está incluído como passageiro principal.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={addChild}
+              disabled={isSoldOut}
+              className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4" />
+              Incluir criança
+            </button>
+          </div>
+
+          <div className="rounded-xl border bg-muted/20 p-3 text-sm">
+            <p className="font-medium">
+              {qty} poltrona{qty === 1 ? "" : "s"} com passagem
+              {lapChildCount > 0 && (
+                <span className="font-normal text-muted-foreground">
+                  {" "}· {lapChildCount} criança{lapChildCount === 1 ? "" : "s"} no colo, sem cobrança
+                </span>
+              )}
+            </p>
+            {product?.availableSeats != null && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                <Info className="h-3.5 w-3.5" />
+                {maxSeats} vaga{maxSeats !== 1 ? "s" : ""} disponível{maxSeats !== 1 ? "is" : ""}
+              </p>
+            )}
+          </div>
+
+          {qty > maxSeats && (
+            <p role="alert" className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              Há mais passageiros com assento do que vagas disponíveis. Crianças menores de 7 anos podem viajar no colo.
             </p>
           )}
           {isSoldOut && (
-            <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1">
-              <AlertTriangle className="w-3.5 h-3.5" />
+            <p className="flex items-center gap-1.5 text-xs text-red-600">
+              <AlertTriangle className="h-3.5 w-3.5" />
               Produto esgotado
             </p>
           )}
-        </div>
 
-        {qty > 1 && (
-          <div className="border-t pt-4 space-y-4">
-            <p className="text-sm font-medium flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-primary" />
-              Dados dos demais passageiros
+          {coPassengers.length === 0 ? (
+            <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
+              Nenhuma criança adicionada.
             </p>
-            <p className="text-xs text-muted-foreground -mt-2">
-              Informe o nome de cada acompanhante. CPF e telefone são opcionais mas agilizam o embarque.
-            </p>
-            {Array.from({ length: qty - 1 }, (_, i) => {
-              const co = coPassengers[i] ?? { name: "", cpf: "", phone: "" };
-              return (
-                <div key={i} className="border rounded-xl p-4 space-y-3 bg-muted/30">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    Passageiro {i + 2}
-                  </p>
+          ) : (
+            <div className="space-y-3">
+              {coPassengers.map((co, i) => (
+                <div key={i} className="space-y-4 rounded-xl border bg-muted/20 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Criança {i + 1}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => removeChild(i)}
+                      aria-label={`Remover criança ${i + 1}`}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Remover
+                    </button>
+                  </div>
                   <div className="space-y-1">
                     <Label htmlFor={`co-name-${i}`}>
-                      Nome Completo <span className="text-red-500">*</span>
+                      Nome completo <span className="text-red-500">*</span>
                     </Label>
                     <Input
                       id={`co-name-${i}`}
                       value={co.name}
                       onChange={(e) => setCoPassenger(i, "name", e.target.value)}
-                      placeholder="Nome do passageiro"
+                      placeholder="Nome da criança"
+                      autoComplete="off"
                     />
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1">
                       <Label htmlFor={`co-cpf-${i}`} className="text-muted-foreground">
                         CPF <span className="text-xs font-normal">(opcional)</span>
@@ -189,11 +229,59 @@ export function StepPassengerForm({ state }: { state: WizardState }) {
                       />
                     </div>
                   </div>
+
+                  <div className="border-t pt-3">
+                    <label className="flex cursor-pointer items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={co.isChildUnder7}
+                        onChange={(e) => setCoPassenger(i, "isChildUnder7", e.target.checked)}
+                        className="mt-0.5 h-4 w-4 accent-primary"
+                      />
+                      <span>
+                        Criança menor de 7 anos
+                        <span className="mt-0.5 block text-xs text-muted-foreground">
+                          A partir dos 7 anos, a poltrona e a passagem são obrigatórias.
+                        </span>
+                      </span>
+                    </label>
+                    {co.isChildUnder7 ? (
+                      <fieldset className="mt-3 space-y-2 pl-6">
+                        <legend className="text-xs font-medium text-muted-foreground">
+                          Como a criança vai viajar?
+                        </legend>
+                        <label className="flex cursor-pointer items-center gap-2 text-sm">
+                          <input
+                            type="radio"
+                            name={`child-seat-${i}`}
+                            checked={co.occupiesSeat}
+                            onChange={() => setCoPassenger(i, "occupiesSeat", true)}
+                            className="h-4 w-4 accent-primary"
+                          />
+                          Ocupa poltrona — passagem paga
+                        </label>
+                        <label className="flex cursor-pointer items-center gap-2 text-sm">
+                          <input
+                            type="radio"
+                            name={`child-seat-${i}`}
+                            checked={!co.occupiesSeat}
+                            onChange={() => setCoPassenger(i, "occupiesSeat", false)}
+                            className="h-4 w-4 accent-primary"
+                          />
+                          Vai no colo — gratuito, sem poltrona
+                        </label>
+                      </fieldset>
+                    ) : (
+                      <p className="mt-3 rounded-lg bg-blue-50 p-3 text-xs text-blue-800">
+                        Poltrona obrigatória. A passagem será incluída no total.
+                      </p>
+                    )}
+                  </div>
                 </div>
-              );
-            })}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="border-t pt-4 space-y-1">
           <Label htmlFor="notes">Observações</Label>

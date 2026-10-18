@@ -66,7 +66,13 @@ export interface PersistOrderArgs {
     userAgent?: string;
     seats?: string[];
     boardingLocationId?: string;
-    coPassengers?: Array<{ name: string; cpf?: string; phone?: string }>;
+    coPassengers?: Array<{
+      name: string;
+      cpf?: string;
+      phone?: string;
+      isChildUnder7?: boolean;
+      occupiesSeat?: boolean;
+    }>;
     depositAmount?: number;
   };
   orderId: string;
@@ -330,8 +336,8 @@ async function writeOrderAndItems(tx: Tx, args: PersistOrderArgs, reservationCli
     // boardingLocationId blank on the resulting CRM reservation.
     ...(data.boardingLocationId && { boardingLocationId: data.boardingLocationId }),
     ...(data.seats && data.seats.length > 0 && { seats: data.seats }),
-    // Co-passenger data collected when qty > 1. createReservationsForOrder
-    // reads this to create one passengersTable row per seat.
+    // Child passenger data collected by the vitrine reservation wizard.
+    // Lap children are persisted even though they do not increase item quantity.
     ...(data.coPassengers && data.coPassengers.length > 0 && { coPassengers: data.coPassengers }),
   });
 

@@ -139,6 +139,7 @@ export function StepPaymentSummary({
   const {
     product,
     qty,
+    lapChildCount,
     unitPrice,
     subtotal,
     referralDiscount,
@@ -169,9 +170,15 @@ export function StepPaymentSummary({
             <span className="font-medium">R$ {unitPrice.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Quantidade</span>
+            <span className="text-muted-foreground">Passagens cobradas</span>
             <span className="font-medium">× {qty}</span>
           </div>
+          {lapChildCount > 0 && (
+            <div className="flex justify-between text-muted-foreground">
+              <span>Crianças no colo (gratuito)</span>
+              <span>{lapChildCount}</span>
+            </div>
+          )}
           <div className="border-t pt-2 flex justify-between">
             <span className="text-muted-foreground">Subtotal</span>
             <span className="font-medium">R$ {subtotal.toFixed(2)}</span>
@@ -232,9 +239,15 @@ export function StepPaymentSummary({
           )}
         </div>
         <div className="flex justify-between">
-          <span className="text-muted-foreground">Passageiros</span>
+          <span className="text-muted-foreground">Passagens cobradas</span>
           <span className="font-medium">{qty}</span>
         </div>
+        {lapChildCount > 0 && (
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>Crianças no colo (gratuito)</span>
+            <span>{lapChildCount}</span>
+          </div>
+        )}
         {effectiveSeats.length > 0 && (
           <div>
             <p className="text-xs text-muted-foreground mb-1">Assentos</p>
