@@ -501,6 +501,8 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
       favicon: store.favicon,
       bannerHome: store.bannerHome,
       bannerMobile: store.bannerMobile,
+      customDomain: store.domainVerified ? store.customDomain : null,
+      domainVerified: store.domainVerified === true,
       primaryColor: store.primaryColor,
       secondaryColor: store.secondaryColor,
       accentColor: store.accentColor,

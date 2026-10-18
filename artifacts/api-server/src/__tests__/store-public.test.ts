@@ -305,6 +305,7 @@ const FAKE_STORE = {
   metaTitle: "Título SEO salvo por último",
   metaDescription: "Descrição SEO salva por último.",
   metaKeywords: "último, salvo, SEO",
+  domainVerified: false,
   contactWhatsapp: null,
   contactPhone: null,
   contactEmail: null,
@@ -2325,6 +2326,38 @@ describe("GET /api/public/store/:slug — seatMapEnabled in response", () => {
     expect(res.body.metaTitle).toBe("Título SEO salvo por último");
     expect(res.body.metaDescription).toBe("Descrição SEO salva por último.");
     expect(res.body.metaKeywords).toBe("último, salvo, SEO");
+  });
+
+  it("exposes a custom domain publicly only after verification", async () => {
+    mockLimit
+      .mockResolvedValueOnce([{
+        ...FAKE_STORE,
+        customDomain: "agencia.example.com",
+        domainVerified: true,
+      }])
+      .mockResolvedValueOnce([{ settings: {} }]);
+
+    const res = await request(buildApp()).get("/api/public/store/minha-loja");
+
+    expect(res.status).toBe(200);
+    expect(res.body.customDomain).toBe("agencia.example.com");
+    expect(res.body.domainVerified).toBe(true);
+  });
+
+  it("does not expose an unverified custom domain", async () => {
+    mockLimit
+      .mockResolvedValueOnce([{
+        ...FAKE_STORE,
+        customDomain: "pending.example.com",
+        domainVerified: false,
+      }])
+      .mockResolvedValueOnce([{ settings: {} }]);
+
+    const res = await request(buildApp()).get("/api/public/store/minha-loja");
+
+    expect(res.status).toBe(200);
+    expect(res.body.customDomain).toBeNull();
+    expect(res.body.domainVerified).toBe(false);
   });
 
   it("returns seatMapEnabled: true when tenantSettings.seatMapEnabled is explicitly true", async () => {
