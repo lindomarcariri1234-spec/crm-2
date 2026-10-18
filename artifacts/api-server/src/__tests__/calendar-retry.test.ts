@@ -254,6 +254,24 @@ describe("GoogleCalendarService.createEvent", () => {
     await expect(svc.createEvent({ summary: "Test", startDateTime: new Date() })).resolves.toEqual({ id: "evt-123" });
   });
 
+  it("passes sendUpdates through for guest invitations", async () => {
+    mockEventsInsert.mockResolvedValue({ data: { id: "evt-guest" } });
+    const svc = makeService();
+
+    await svc.createEvent({
+      summary: "Reservation",
+      startDateTime: new Date("2028-03-15T12:00:00Z"),
+      attendees: ["guest@example.com"],
+    }, {}, "all");
+
+    expect(mockEventsInsert).toHaveBeenCalledWith(expect.objectContaining({
+      requestBody: expect.objectContaining({
+        attendees: [{ email: "guest@example.com" }],
+      }),
+      sendUpdates: "all",
+    }));
+  });
+
   it("sends the stable Google event ID in the insert request", async () => {
     mockEventsInsert.mockResolvedValue({ data: { id: "stable-event-id" } });
     const svc = makeService();
@@ -324,6 +342,21 @@ describe("GoogleCalendarService.updateEvent", () => {
     await expect(svc.updateEvent("evt-123", { summary: "Updated" })).resolves.toBe(true);
   });
 
+  it("passes sendUpdates through when updating guest invitations", async () => {
+    mockEventsPatch.mockResolvedValue({});
+    const svc = makeService();
+
+    await svc.updateEvent("evt-guest", {
+      attendees: ["new-guest@example.com"],
+    }, {}, "all");
+
+    expect(mockEventsPatch).toHaveBeenCalledWith(expect.objectContaining({
+      eventId: "evt-guest",
+      requestBody: { attendees: [{ email: "new-guest@example.com" }] },
+      sendUpdates: "all",
+    }));
+  });
+
   it("re-throws transient 429 error", async () => {
     mockEventsPatch.mockRejectedValue(transientError(429));
     const svc = makeService();
@@ -379,6 +412,19 @@ describe("GoogleCalendarService.deleteEvent", () => {
     mockEventsDelete.mockResolvedValue({});
     const svc = makeService();
     await expect(svc.deleteEvent("evt-123")).resolves.toBe(true);
+  });
+
+  it("passes sendUpdates through when cancelling guest invitations", async () => {
+    mockEventsDelete.mockResolvedValue({});
+    const svc = makeService();
+
+    await svc.deleteEvent("evt-guest", {}, "all");
+
+    expect(mockEventsDelete).toHaveBeenCalledWith({
+      calendarId: "primary",
+      eventId: "evt-guest",
+      sendUpdates: "all",
+    });
   });
 
   it("re-throws transient 429 error", async () => {

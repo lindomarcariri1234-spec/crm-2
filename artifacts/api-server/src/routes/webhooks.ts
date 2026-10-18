@@ -35,6 +35,7 @@ import { processEvolutionDeliveryStatus } from "../services/whatsapp-attendance"
 import { processEvolutionConnectionUpdate } from "../services/whatsapp-attendance";
 import { moveDealToStage } from "../services/pipeline-automation";
 import { updateOutboundDeliveryFromWebhook } from "../services/outbound-delivery";
+import { scheduleCalendarSyncTrip } from "../lib/google-calendar/schedule-sync";
 
 const router = Router();
 
@@ -583,25 +584,35 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
       }
       return;
     }
-    await db.transaction(async (tx) => {
-      await markOrderRefunded(tx as unknown as DbExecutor, store, paymentIntentId, "stripe");
-    });
+    const cancelledTripIds = await db.transaction(async (tx) =>
+      markOrderRefunded(tx as unknown as DbExecutor, store, paymentIntentId, "stripe")
+    );
+    for (const tripId of cancelledTripIds) {
+      scheduleCalendarSyncTrip(tripId).catch((err) =>
+        logger.warn({ err, tripId }, "[webhooks] Failed to schedule calendar sync after refund"),
+      );
+    }
     return;
   }
 
   if (event.type === "charge.dispute.created") {
     const paymentIntentId = String(obj["payment_intent"] ?? "");
     if (!paymentIntentId) return;
-    await db.transaction(async (tx) => {
-      await markOrderRefunded(
+    const cancelledTripIds = await db.transaction(async (tx) =>
+      markOrderRefunded(
         tx as unknown as DbExecutor,
         store,
         paymentIntentId,
         "stripe",
         "order_charged_back",
         "Contestação de pagamento registrada",
+      )
+    );
+    for (const tripId of cancelledTripIds) {
+      scheduleCalendarSyncTrip(tripId).catch((err) =>
+        logger.warn({ err, tripId }, "[webhooks] Failed to schedule calendar sync after chargeback"),
       );
-    });
+    }
   }
 }
 
@@ -807,12 +818,17 @@ async function handleMpPayment(store: StoreScope, paymentId: string, payment: Mp
       await markOrderFailed(tx2, store, paymentId, "mercadopago");
     });
   } else if (payment.status === PAYMENT_STATUS.CANCELLED || payment.status === PAYMENT_STATUS.REFUNDED || payment.status === PAYMENT_STATUS.CHARGED_BACK) {
-    await db.transaction(async (tx) => {
+    const cancelledTripIds = await db.transaction(async (tx) => {
       const tx2 = tx as unknown as DbExecutor;
       const orderId = await resolveOrderForMp(tx2, store, paymentId, externalRef);
-      if (!orderId) return;
-      await markOrderRefunded(tx2, store, paymentId, "mercadopago");
+      if (!orderId) return [];
+      return markOrderRefunded(tx2, store, paymentId, "mercadopago");
     });
+    for (const tripId of cancelledTripIds) {
+      scheduleCalendarSyncTrip(tripId).catch((err) =>
+        logger.warn({ err, tripId }, "[webhooks] Failed to schedule calendar sync after MercadoPago refund"),
+      );
+    }
   }
 }
 
@@ -1406,7 +1422,7 @@ async function markOrderRefunded(
   gateway: string,
   eventType: "order_refunded" | "order_charged_back" = "order_refunded",
   reason = "Pedido reembolsado",
-): Promise<void> {
+): Promise<string[]> {
   const [order] = await tx
     .select({
       id: storeOrdersTable.id,
@@ -1427,11 +1443,11 @@ async function markOrderRefunded(
     )
     .for("update")
     .limit(1);
-  if (!order) return;
+  if (!order) return [];
   if (
     order.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
     || order.status === STORE_ORDER_STATUS.CANCELLED
-  ) return;
+  ) return [];
 
   const now = new Date();
   const wasPaid = order.paymentStatus === STORE_PAYMENT_STATUS.PAID;
@@ -1572,6 +1588,7 @@ async function markOrderRefunded(
     { orderId: order.id, gateway, reservationsCancelled: cancellableIds.length },
     "[webhooks] Order refunded, reservations cancelled and resynced",
   );
+  return [...new Set(reservations.map((reservation) => reservation.tripId).filter((id): id is string => !!id))];
 }
 
 export default router;

@@ -17,6 +17,7 @@
 - [Referral conversion and reservation links](referral-tier-upgrade-pattern.md) — preserve tier-upgrade effects and set reservationId only when a trip reservation exists ([ID invariant](referral-reservation-id.md)).
 - [Calendar dedup not-found pattern](calendar-dedup.md) — updateEvent returns boolean|"not-found"; "not-found"=404 means event deleted externally; upsertCalendarEvent deletes stale DB record and recreates. isEventNotFoundError exported from calendar-service.ts.
 - [Calendar trip-event concurrency](calendar-trip-concurrency.md) — serialize trip event lookup, Google call, and persistence by tenant+trip+user; leave other event types unchanged.
+- [Customer Google Calendar invitations](calendar-customer-invitations.md) — invite each confirmed published reservation separately; keep attendees off the agency’s shared trip event and do not add customer OAuth.
 - [Migration journal timestamps](migration-journal-timestamps.md) — reconcile live-only columns with additive DDL above both watermarks; never replay historical backfills over populated data.
 - [Host-header token links](host-header-token-links.md) — public/anonymous email links carrying secret tokens must use trusted `STORE_PUBLIC_BASE`, never req Host header (phishing/token-capture).
 - [Brazil date handling](brazil-tz-patterns.md) — timezone-safe server/client date formatting; see [storefront local day](vitrine-local-date.md) for storefront-specific rules.

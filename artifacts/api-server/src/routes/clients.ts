@@ -17,7 +17,7 @@ import {
   CreateClientNoteBody,
 } from "@workspace/api-zod";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
-import { scheduleCalendarSyncBirthday } from "../lib/google-calendar/schedule-sync";
+import { scheduleCalendarSyncBirthday, scheduleCalendarSyncForClient } from "../lib/google-calendar/schedule-sync";
 import { logger } from "../lib/logger";
 import { ADMIN_ROLES, MANAGEMENT_ROLES } from '../lib/tenant';
 import { ACTIONS, hasPermission, RESOURCES, ROLES } from "@workspace/permissions";
@@ -687,6 +687,8 @@ router.patch("/clients/:id", async (req, res, next: NextFunction): Promise<void>
     const updates: Partial<typeof clientsTable.$inferInsert> = {};
     if (parsed.data.name != null) updates.name = parsed.data.name;
     if (parsed.data.email != null) updates.email = parsed.data.email;
+    const emailChanged = parsed.data.email != null
+      && parsed.data.email.trim().toLowerCase() !== (existing.email ?? "").trim().toLowerCase();
     if (parsed.data.whatsapp != null) updates.whatsapp = parsed.data.whatsapp;
     if (parsed.data.phone !== undefined) updates.phone = parsed.data.phone ?? null;
     if (parsed.data.cpf != null) {
@@ -765,6 +767,11 @@ router.patch("/clients/:id", async (req, res, next: NextFunction): Promise<void>
 
     if (parsed.data.birthDate !== undefined) {
       scheduleCalendarSyncBirthday(client.id).catch((err) => logger.warn({ err }, "[clients] calendar birthday sync (update) failed"));
+    }
+    if (emailChanged) {
+      scheduleCalendarSyncForClient(client.id, me.tenantId).catch((err) =>
+        logger.warn({ err, clientId: client.id }, "[clients] reservation invite sync after email update failed"),
+      );
     }
   } catch (err) {
     next(err);

@@ -543,6 +543,7 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
     await db.update(reservationsTable).set({
       tripId: DESTINATION_TRIP_ID,
       sellerId: SELLER_ID,
+      clientId: null,
       status: RESERVATION_STATUS.CONFIRMED,
     }).where(eq(reservationsTable.id, RES_ID));
 
@@ -625,6 +626,7 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
     await db.update(reservationsTable).set({
       tripId: DESTINATION_TRIP_ID,
       sellerId: SELLER_ID,
+      clientId: null,
       status: RESERVATION_STATUS.CONFIRMED,
     }).where(eq(reservationsTable.id, RES_ID));
     await db.insert(calendarEventsTable).values({
@@ -696,6 +698,7 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
     await db.update(reservationsTable).set({
       tripId: TRIP_ID,
       sellerId: SELLER_ID,
+      clientId: null,
       status: RESERVATION_STATUS.CONFIRMED,
     }).where(eq(reservationsTable.id, RES_ID));
 
@@ -753,6 +756,7 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
     await db.update(reservationsTable).set({
       tripId: TRIP_ID,
       sellerId: SELLER_ID,
+      clientId: null,
       status: RESERVATION_STATUS.CONFIRMED,
     }).where(eq(reservationsTable.id, RES_ID));
 
@@ -779,6 +783,100 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
       eventType: "trip",
       googleEventId: externalGoogleEventId,
     }]);
+  });
+
+  it("creates one invitation per confirmed reservation, updates recipient changes, and cancels it", async () => {
+    const { CalendarSyncService: realCalendarSyncService } =
+      await vi.importActual<typeof import("../lib/google-calendar/sync-service.js")>(
+        "../lib/google-calendar/sync-service.js",
+      );
+    const firstEmail = `invite-${RUN}@test.com`;
+    const nextEmail = `invite-updated-${RUN}@test.com`;
+
+    mockEventsInsert.mockReset().mockResolvedValue({ data: { id: `reservation-invite-${RUN}` } });
+    mockEventsPatch.mockReset().mockResolvedValue({});
+    mockEventsDelete.mockReset().mockResolvedValue({});
+
+    await db.delete(calendarEventsTable).where(eq(calendarEventsTable.tenantId, TENANT_ID));
+    await db.update(tripsTable).set({ status: TRIP_STATUS.PUBLISHED })
+      .where(eq(tripsTable.id, TRIP_ID));
+    await db.update(usersTable).set({
+      googleCalendarEnabled: true,
+      googleAccessToken: `calendar-token-${RUN}`,
+    }).where(eq(usersTable.id, USER_ID));
+    await db.update(clientsTable).set({ email: firstEmail }).where(eq(clientsTable.id, CLIENT_ID));
+    await db.update(reservationsTable).set({
+      tripId: TRIP_ID,
+      clientId: CLIENT_ID,
+      status: RESERVATION_STATUS.CONFIRMED,
+    }).where(eq(reservationsTable.id, RES_ID));
+
+    await realCalendarSyncService.syncReservationCalendarInvite(RES_ID);
+    await realCalendarSyncService.syncReservationCalendarInvite(RES_ID);
+
+    expect(mockEventsInsert).toHaveBeenCalledTimes(1);
+    expect(mockEventsInsert).toHaveBeenCalledWith(expect.objectContaining({
+      requestBody: expect.objectContaining({
+        summary: "🚌 Sua viagem: PDS Test Trip",
+        attendees: [{ email: firstEmail }],
+      }),
+      sendUpdates: "all",
+    }));
+    expect(mockEventsPatch).not.toHaveBeenCalled();
+
+    const [createdInvite] = await db.select({
+      reservationId: calendarEventsTable.reservationId,
+      tripId: calendarEventsTable.tripId,
+      clientId: calendarEventsTable.clientId,
+      attendeeEmail: calendarEventsTable.attendeeEmail,
+      userId: calendarEventsTable.userId,
+    }).from(calendarEventsTable).where(and(
+      eq(calendarEventsTable.tenantId, TENANT_ID),
+      eq(calendarEventsTable.reservationId, RES_ID),
+      eq(calendarEventsTable.eventType, "reservation"),
+    ));
+    expect(createdInvite).toEqual({
+      reservationId: RES_ID,
+      tripId: TRIP_ID,
+      clientId: CLIENT_ID,
+      attendeeEmail: firstEmail,
+      userId: USER_ID,
+    });
+
+    await db.update(clientsTable).set({ email: nextEmail }).where(eq(clientsTable.id, CLIENT_ID));
+    await realCalendarSyncService.syncReservationCalendarInvite(RES_ID);
+
+    expect(mockEventsPatch).toHaveBeenCalledTimes(1);
+    expect(mockEventsPatch).toHaveBeenCalledWith(expect.objectContaining({
+      requestBody: expect.objectContaining({
+        attendees: [{ email: nextEmail }],
+      }),
+      sendUpdates: "all",
+    }));
+    const [updatedInvite] = await db.select({
+      attendeeEmail: calendarEventsTable.attendeeEmail,
+    }).from(calendarEventsTable).where(and(
+      eq(calendarEventsTable.tenantId, TENANT_ID),
+      eq(calendarEventsTable.reservationId, RES_ID),
+      eq(calendarEventsTable.eventType, "reservation"),
+    ));
+    expect(updatedInvite?.attendeeEmail).toBe(nextEmail);
+
+    await db.update(reservationsTable).set({ status: RESERVATION_STATUS.CANCELLED })
+      .where(eq(reservationsTable.id, RES_ID));
+    await realCalendarSyncService.syncReservationCalendarInvite(RES_ID);
+
+    expect(mockEventsDelete).toHaveBeenCalledWith(expect.objectContaining({
+      eventId: `reservation-invite-${RUN}`,
+      sendUpdates: "all",
+    }));
+    const remainingInvites = await db.select({ id: calendarEventsTable.id })
+      .from(calendarEventsTable).where(and(
+        eq(calendarEventsTable.tenantId, TENANT_ID),
+        eq(calendarEventsTable.reservationId, RES_ID),
+        eq(calendarEventsTable.eventType, "reservation"),
+      ));
+    expect(remainingInvites).toHaveLength(0);
   });
 
   it("10 — scopes list, stats, details and passengers to reservations assigned to the seller", async () => {

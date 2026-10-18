@@ -11,6 +11,7 @@ import { writeClientActivity } from "../lib/activities";
 import { loyaltyAwardPoints, loyaltyAwardPointsForReservation, loyaltyReverseEarnedPoints } from "../lib/loyalty-helpers";
 import { roundMoney } from "../lib/pricing";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
+import { scheduleCalendarSyncReservation } from "../lib/google-calendar/schedule-sync";
 import { ALL_STAFF_ROLES } from '../lib/tenant';
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { sumReceivedReservationPayments, syncReservationPaymentStatus } from "../lib/reservation-payments";
@@ -1110,6 +1111,9 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
     }
     if (parsed.data.reservationId) {
       await syncReservationPaymentStatus(parsed.data.reservationId, me.tenantId);
+      scheduleCalendarSyncReservation(parsed.data.reservationId, me.tenantId).catch((err) =>
+        req.log.warn({ err, reservationId: parsed.data.reservationId }, "Failed to schedule reservation calendar sync"),
+      );
       if (payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
         for (const event of createdPaymentEvents) {
           await syncStoreOrderFromReservationPayment(parsed.data.reservationId, me.tenantId, {
@@ -1569,6 +1573,11 @@ router.post("/payments/:id/partial-refunds", async (req, res, next: NextFunction
       recalculateClientFinancials(createdRefund.clientId, me.tenantId)
         .catch((err) => req.log.error({ err }, "Error recalculating client financials after partial refund"));
     }
+    if (createdRefund.reservationId) {
+      scheduleCalendarSyncReservation(createdRefund.reservationId, me.tenantId).catch((err) =>
+        req.log.warn({ err, reservationId: createdRefund.reservationId }, "Failed to schedule reservation calendar sync"),
+      );
+    }
     res.status(201).json(formatPayment(createdRefund.refund));
     CalendarSyncService.syncPayment(createdRefund.refund.id)
       .catch((err) => req.log.warn({ err, context: "payment.partial_refund", paymentId: createdRefund.refund.id }, "Calendar sync failed"));
@@ -1824,6 +1833,9 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
     }
     if (payment.reservationId) {
       await syncReservationPaymentStatus(payment.reservationId, me.tenantId);
+      scheduleCalendarSyncReservation(payment.reservationId, me.tenantId).catch((err) =>
+        req.log.warn({ err, reservationId: payment.reservationId }, "Failed to schedule reservation calendar sync"),
+      );
       await syncStoreOrderFromReservationPayment(
         payment.reservationId,
         me.tenantId,
@@ -2042,6 +2054,9 @@ router.delete("/payments/:id", async (req, res, next: NextFunction): Promise<voi
     if (payment.reservationId) {
       // Step 3: Sync reservation paidValue/status and commission after deletion
       await syncReservationPaymentStatus(payment.reservationId, me.tenantId);
+      scheduleCalendarSyncReservation(payment.reservationId, me.tenantId).catch((err) =>
+        req.log.warn({ err, reservationId: payment.reservationId }, "Failed to schedule reservation calendar sync"),
+      );
       const paymentReversalEvent = wasReferralEligiblePayment ? {
         reversed: {
           gateway: payment.gateway ?? "manual-reservation",
