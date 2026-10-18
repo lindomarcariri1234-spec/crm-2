@@ -181,6 +181,10 @@ import
 }
  from "../services/checkout/items"
 ;
+import {
+  applyStorefrontChildPricing,
+  countSeatBearingStorefrontChildren,
+} from "../services/checkout/storefront-child-pricing.js";
 
 import 
 {
@@ -777,6 +781,7 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
       shortDescription: storeProductsTable.shortDescription,
       categoryId: storeProductsTable.categoryId,
       tripId: storeProductsTable.tripId,
+      priceChild: tripsTable.priceChild,
       accommodationId: storeProductsTable.accommodationId,
       includes: storeProductsTable.includes,
       price: storeProductsTable.price,
@@ -866,6 +871,7 @@ router.get("/public/store/:slug/products/:productSlug", async (req, res, next: N
       description: storeProductsTable.description,
       categoryId: storeProductsTable.categoryId,
       tripId: storeProductsTable.tripId,
+      priceChild: tripsTable.priceChild,
       includes: storeProductsTable.includes,
       price: storeProductsTable.price,
       comparePrice: storeProductsTable.comparePrice,
@@ -1768,17 +1774,52 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     }
 
     checkoutFailureStage = "prepare_items";
-    const 
-{
- subtotal, orderItemsData, fetchedProducts, quantityByProductId, tripLinkedProducts 
-}
- =
-      await prepareCheckoutItems(
-{
- storeId: store.id, tenantId: store.tenantId, items: data.items 
-}
-)
-;
+    let {
+      subtotal,
+      orderItemsData,
+      fetchedProducts,
+      quantityByProductId,
+      tripLinkedProducts,
+    } = await prepareCheckoutItems({
+      storeId: store.id,
+      tenantId: store.tenantId,
+      items: data.items,
+    });
+
+    // Validate passenger quantity and age/seat rules before calculating child
+    // fares. The API remains authoritative for all amounts charged.
+    try {
+      validateCheckoutPassengerData(data, tripLinkedProducts);
+    } catch (validationErr) {
+      if (validationErr instanceof ValidationError) {
+        next(validationErr);
+        return;
+      }
+      throw validationErr;
+    }
+
+    const childSeatCount = countSeatBearingStorefrontChildren(data.coPassengers ?? []);
+    if (childSeatCount > 0) {
+      const tripIds = [...tripLinkedProducts.keys()];
+      const tripPrices = await db.select({
+        id: tripsTable.id,
+        priceChild: tripsTable.priceChild,
+      }).from(tripsTable).where(and(
+        eq(tripsTable.tenantId, store.tenantId),
+        inArray(tripsTable.id, tripIds),
+      ));
+      const repriced = applyStorefrontChildPricing({
+        subtotal,
+        orderItemsData,
+        fetchedProducts,
+        tripLinkedProducts,
+        childSeatCount,
+        priceChildByTrip: new Map(tripPrices.map((trip) => [trip.id, trip.priceChild])),
+      });
+      subtotal = repriced.subtotal;
+      orderItemsData = repriced.orderItemsData;
+      tripLinkedProducts = repriced.tripLinkedProducts;
+    }
 
     checkoutFailureStage = "resolve_discounts";
     const discounts = await resolveCheckoutDiscounts(
@@ -1966,16 +2007,6 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
           return;
         }
       }
-    }
-
-    try {
-      validateCheckoutPassengerData(data, tripLinkedProducts);
-    } catch (validationErr) {
-      if (validationErr instanceof ValidationError) {
-        next(validationErr);
-        return;
-      }
-      throw validationErr;
     }
 
     checkoutFailureStage = "persist_order";

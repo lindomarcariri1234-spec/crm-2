@@ -25,6 +25,7 @@ export function PublicLayoutSeatPicker({
   selected,
   onToggle,
   pricePerPerson,
+  seatPrices,
   numberingType,
 }: {
   seats: PublicSeatEntry[];
@@ -36,6 +37,7 @@ export function PublicLayoutSeatPicker({
   onToggle: (n: string) => void;
   accentColor?: string;
   pricePerPerson?: number;
+  seatPrices?: number[];
   numberingType?: string;
 }) {
   const isBrazilian = numberingType?.includes("brazilian_standard") ?? false;
@@ -349,7 +351,8 @@ export function PublicLayoutSeatPicker({
             <div className="space-y-2">
               {selectedSeatObjects.map((seat, idx) => {
                 const isVip = seat.type === "vip";
-                const price = pricePerPerson != null ? pricePerPerson * (isVip ? 1.1 : 1) : null;
+                const passengerPrice = seatPrices?.[idx] ?? pricePerPerson;
+                const price = passengerPrice != null ? passengerPrice * (isVip ? 1.1 : 1) : null;
                 const seatNum = parseInt(seat.number, 10);
                 const isWindowSeat = isBrazilian ? (seatNum % 2 !== 0) : null;
                 const positionLabel = isWindowSeat === true ? "🪟 Janela" : isWindowSeat === false ? "🚶 Corredor" : null;
@@ -367,6 +370,9 @@ export function PublicLayoutSeatPicker({
                       </div>
                       <div>
                         <p className="font-semibold text-sm text-gray-900">Assento {seat.number}</p>
+                        <p className="text-xs text-gray-500">
+                          {idx === 0 ? "Passageiro principal" : "Criança com poltrona"}
+                        </p>
                         <p className="text-xs text-gray-500 flex items-center gap-1 flex-wrap">
                           {floors > 1
                             ? seat.floor === 2
@@ -396,7 +402,8 @@ export function PublicLayoutSeatPicker({
                 <span className="text-xl font-bold text-green-600">
                   {formatCurrency(
                     selectedSeatObjects.reduce(
-                      (sum, s) => sum + pricePerPerson * (s.type === "vip" ? 1.1 : 1),
+                      (sum, s, idx) =>
+                        sum + (seatPrices?.[idx] ?? pricePerPerson) * (s.type === "vip" ? 1.1 : 1),
                       0,
                     ),
                   )}

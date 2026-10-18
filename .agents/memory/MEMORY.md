@@ -136,6 +136,7 @@
 - [Instagram integrations](instagram-direct-scope.md) — agency-owned accounts, customer-initiated 24-hour replies, and parallel Meta/Zernio validation before any explicit cutover; see [rollout](instagram-provider-rollout.md).
 - [Staged messaging migration](staged-messaging-migration.md) — unify sends and delivery records first; keep legacy history until shared reads are verified, then consolidate screens and retire duplicate paths.
 - [Storefront card installments](storefront-card-installments.md) — do not advertise Brazilian card installments until the configured Stripe account's support is verified and the chosen schedule reaches the PaymentIntent.
+- [Storefront child fares](storefront-child-fares.md) — seated children use the trip's configured child fare; lap children remain free and consume no seat.
 - [Completed-trip storefront availability](completed-trip-storefront.md) — hide completed trips in public storefront queries and reject stale-cart checkout, rechecking status under the reservation lock.
 - [InfinitePay hosted checkout](infinitepay-hosted-checkout.md) — treat redirects/webhooks as untrusted; confirm via payment_check; do not infer fees, settlement, refunds, or signature support.
 - [Store variant pricing](store-variant-checkout-pricing.md) — recalculate variant prices from the tenant's product options on the server; client unit prices are display-only.

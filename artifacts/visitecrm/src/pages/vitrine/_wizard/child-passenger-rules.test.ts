@@ -3,6 +3,8 @@ import {
   getLapChildCount,
   getPaidSeatQuantity,
   getSeatedChildCount,
+  getChildTicketPrice,
+  calculateChildAwareSubtotal,
   hasCompleteChildPassengerData,
   type CoPassenger,
 } from "./child-passenger-rules";
@@ -41,5 +43,15 @@ describe("child passenger checkout rules", () => {
       child({ isChildUnder7: true, occupiesSeat: false }),
       child({ name: "Criança sentada", isChildUnder7: true, occupiesSeat: true }),
     ])).toBe(true);
+  });
+
+  it("uses the configured child fare for seated children and falls back only when it is absent", () => {
+    expect(getChildTicketPrice(599, "300")).toBe(300);
+    expect(getChildTicketPrice(599, null)).toBe(599);
+    expect(getChildTicketPrice(599, 0)).toBe(0);
+  });
+
+  it("calculates subtotal with the adult buyer fare and each seated child's fare", () => {
+    expect(calculateChildAwareSubtotal(599, 300, 2)).toBe(1199);
   });
 });

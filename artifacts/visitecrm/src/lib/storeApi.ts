@@ -540,6 +540,7 @@ export interface StoreProduct {
   shortDescription?: string | null;
   description?: string | null;
   price: string;
+  priceChild?: string | number | null;
   comparePrice?: string | null;
   costPrice?: string | null;
   onSale: boolean;

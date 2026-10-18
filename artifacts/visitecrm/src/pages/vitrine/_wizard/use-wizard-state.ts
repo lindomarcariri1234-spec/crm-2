@@ -16,7 +16,9 @@ import { CLICKABLE_SEAT_TYPES, isPaymentMethodAvailable, STEP_ORDER } from "./co
 import type { FinancialSummary } from "@/lib/linked-data";
 import { isUnpaidStripeFailure } from "./stripe-payment-status";
 import {
+  calculateChildAwareSubtotal,
   getLapChildCount,
+  getChildTicketPrice,
   getPaidSeatQuantity,
   getSeatedChildCount,
   hasCompleteChildPassengerData,
@@ -519,7 +521,8 @@ export function useWizardState({
 
   const basePrice = product ? parseFloat(product.salePrice ?? product.price) : 0;
   const unitPrice = selectedVariant ? selectedVariant.price : basePrice;
-  const subtotal = unitPrice * qty;
+  const childUnitPrice = getChildTicketPrice(unitPrice, product?.priceChild);
+  const subtotal = calculateChildAwareSubtotal(unitPrice, childUnitPrice, seatedChildCount);
   const couponDiscount = couponResult?.valid ? Number(couponResult.discountAmount ?? 0) : 0;
   const referralDiscount = referralApplied
     ? (referralDiscountType === "fixed"
@@ -1494,6 +1497,7 @@ export function useWizardState({
     removeReferral,
     basePrice,
     unitPrice,
+    childUnitPrice,
     subtotal,
     couponDiscount,
     referralDiscount,
