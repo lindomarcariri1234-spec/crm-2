@@ -80,6 +80,26 @@ function productEffectivePrice(p: { price: unknown; onSale: unknown; salePrice: 
   return isFinite(base) ? base : 0;
 }
 
+function isStoreProductTripUniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const pgError = error as { code?: unknown; constraint?: unknown };
+  return pgError.code === "23505"
+    && typeof pgError.constraint === "string"
+    && pgError.constraint.includes("store_products_trip_id");
+}
+
+async function assertTripNotLinkedToAnotherStoreProduct(tripId: string, excludedProductId?: string): Promise<void> {
+  const conditions = [eq(storeProductsTable.tripId, tripId)];
+  if (excludedProductId) conditions.push(ne(storeProductsTable.id, excludedProductId));
+  const [linkedProduct] = await db.select({ id: storeProductsTable.id })
+    .from(storeProductsTable)
+    .where(and(...conditions))
+    .limit(1);
+  if (linkedProduct) {
+    throw new ConflictError("Esta viagem já está vinculada a outro produto da loja.", "STORE_TRIP_ALREADY_LINKED");
+  }
+}
+
 // Best-effort, fail-safe notifier for confirmed price-drop subscribers. Never
 // throws — any DB/email failure is logged and swallowed so a product update is
 // never blocked. Each e-mail rotates the recipient's unsubscribe token (kept
@@ -306,7 +326,7 @@ const ProductBody = z.object({
   metaTitle: z.string().optional(),
   metaDescription: z.string().optional(),
   metaKeywords: z.string().optional(),
-  tripId: z.string().optional(),
+  tripId: z.string().nullable().optional(),
   accommodationId: z.string().nullable().optional(),
   isFeatured: z.boolean().optional(),
   order: z.number().int().optional(),
@@ -661,12 +681,13 @@ router.post("/store/products", async (req, res, next: NextFunction): Promise<voi
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
     const id = generateId();
     const data = parsed.data;
-    if (data.tripId !== undefined) {
+    if (data.tripId !== undefined && data.tripId !== null) {
       const [trip] = await db.select({ id: tripsTable.id })
         .from(tripsTable)
         .where(and(eq(tripsTable.id, data.tripId), eq(tripsTable.tenantId, me.tenantId)))
         .limit(1);
       if (!trip) { next(new ValidationError("Excursão não encontrada", "VALIDATION_ERROR")); return; }
+      await assertTripNotLinkedToAnotherStoreProduct(data.tripId);
     }
     if (data.categoryId !== undefined) {
       const [category] = await db.select({ id: storeCategoriesTable.id })
@@ -744,6 +765,10 @@ router.post("/store/products", async (req, res, next: NextFunction): Promise<voi
       .where(eq(storeProductsTable.id, id)).limit(1);
     res.status(201).json(product);
   } catch (err) {
+    if (isStoreProductTripUniqueViolation(err)) {
+      next(new ConflictError("Esta viagem já está vinculada a outro produto da loja.", "STORE_TRIP_ALREADY_LINKED"));
+      return;
+    }
     next(err);
   }
 });
@@ -760,12 +785,15 @@ router.put("/store/products/:id", async (req, res, next: NextFunction): Promise<
     const [existingProduct] = await db.select().from(storeProductsTable)
       .where(and(eq(storeProductsTable.id, req.params.id), eq(storeProductsTable.storeId, store.id))).limit(1);
     if (!existingProduct) { next(new NotFoundError("Product not found", "NOT_FOUND")); return; }
-    if (parsed.data.tripId !== undefined) {
+    if (parsed.data.tripId !== undefined && parsed.data.tripId !== null) {
       const [trip] = await db.select({ id: tripsTable.id })
         .from(tripsTable)
         .where(and(eq(tripsTable.id, parsed.data.tripId), eq(tripsTable.tenantId, me.tenantId)))
         .limit(1);
       if (!trip) { next(new ValidationError("Excursão não encontrada", "VALIDATION_ERROR")); return; }
+      if (parsed.data.tripId !== existingProduct.tripId) {
+        await assertTripNotLinkedToAnotherStoreProduct(parsed.data.tripId, existingProduct.id);
+      }
     }
     if (parsed.data.categoryId !== undefined) {
       const [category] = await db.select({ id: storeCategoriesTable.id })
@@ -835,6 +863,10 @@ router.put("/store/products/:id", async (req, res, next: NextFunction): Promise<
 
     res.json(product);
   } catch (err) {
+    if (isStoreProductTripUniqueViolation(err)) {
+      next(new ConflictError("Esta viagem já está vinculada a outro produto da loja.", "STORE_TRIP_ALREADY_LINKED"));
+      return;
+    }
     next(err);
   }
 });

@@ -768,7 +768,7 @@ export interface ProductInput {
   slug?: string;
   type?: string;
   categoryId?: string;
-  tripId?: string;
+  tripId?: string | null;
   accommodationId?: string | null;
   shortDescription?: string;
   description?: string;
