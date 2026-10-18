@@ -471,7 +471,44 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
     expect(mockSyncClientDeal).not.toHaveBeenCalled();
   });
 
-  it("3 — keeps the responsible seller when a reservation total is synchronized to the pipeline", async () => {
+  it("3 — persists travelType without changing the operational tripType", async () => {
+    const app = buildApp();
+    const [before] = await db.select({ tripType: reservationsTable.tripType })
+      .from(reservationsTable)
+      .where(eq(reservationsTable.id, RES_ID));
+
+    const res = await request(app)
+      .patch(`/api/reservations/${RES_ID}`)
+      .send({ travelType: "Corporativo" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.travelType).toBe("Corporativo");
+    expect(res.body.tripType).toBe(before?.tripType ?? null);
+
+    const [persisted] = await db.select({
+      travelType: reservationsTable.travelType,
+      tripType: reservationsTable.tripType,
+    })
+      .from(reservationsTable)
+      .where(eq(reservationsTable.id, RES_ID));
+    expect(persisted).toEqual({
+      travelType: "Corporativo",
+      tripType: before?.tripType ?? null,
+    });
+
+    const cleared = await request(app)
+      .patch(`/api/reservations/${RES_ID}`)
+      .send({ travelType: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.travelType).toBeNull();
+
+    const [clearedValue] = await db.select({ travelType: reservationsTable.travelType })
+      .from(reservationsTable)
+      .where(eq(reservationsTable.id, RES_ID));
+    expect(clearedValue?.travelType).toBeNull();
+  });
+
+  it("4 — keeps the responsible seller when a reservation total is synchronized to the pipeline", async () => {
     const app = buildApp();
 
     const res = await request(app)

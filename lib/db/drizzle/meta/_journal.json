@@ -862,6 +862,13 @@
       "when": 1809960023000,
       "tag": "0123_reservation_calendar_invites",
       "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1809960024000,
+      "tag": "0124_reservation_travel_type",
+      "breakpoints": true
     }
   ]
 }

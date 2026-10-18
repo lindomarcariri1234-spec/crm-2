@@ -544,12 +544,21 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const selectedAccommodation = accommodations.find(a => a.id === form.accommodationId);
   const boardingPoints = (selectedTrip?.boardingPoints ?? []) as Array<{ id: string; name: string }>;
 
+  const previousTripIdRef = useRef(form.tripId);
+  useEffect(() => {
+    if (previousTripIdRef.current === form.tripId) return;
+    previousTripIdRef.current = form.tripId;
+    setForm(prev => ({ ...prev, travelType: "none" }));
+  }, [form.tripId]);
+
   useEffect(() => {
     if (!existingReservation) return;
-    setForm(prev => prev.boardingPoint === "none"
-      ? { ...prev, boardingPoint: existingReservation.boardingLocationId ?? "none" }
-      : prev);
-  }, [existingReservation?.id, existingReservation?.boardingLocationId]);
+    setForm(prev => ({
+      ...prev,
+      boardingPoint: existingReservation.boardingLocationId ?? "none",
+      travelType: existingReservation.travelType ?? "none",
+    }));
+  }, [existingReservation?.id]);
 
   useEffect(() => {
     if (!existingReservationId || !existingRoomAssignments) return;
@@ -669,19 +678,20 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
         const hasTrip = form.tripId !== "none";
         const commission = parseFloat(form.commission) || 0;
         const consultantId = form.consultantId !== "none" ? form.consultantId : null;
-        if (hasTrip && (ticketPrice > 0 || form.isGratuidade || form.isOnLap)) {
+        if (hasTrip && (ticketPrice > 0 || form.isGratuidade || form.isOnLap || !!existingReservation?.id)) {
           if (existingReservation?.id) {
             try {
               await updateReservation.mutateAsync({
                 id: existingReservation.id,
                 data: {
                   boardingLocationId: form.boardingPoint !== "none" ? form.boardingPoint : null,
+                  travelType: form.travelType !== "none" ? form.travelType : null,
                 },
               });
             } catch {
-              const message = "Os dados do cliente foram salvos, mas o local de embarque não foi atualizado. Tente novamente.";
+              const message = "Os dados do cliente foram salvos, mas o tipo de viagem e o local de embarque não foram atualizados. Tente novamente.";
               toast({
-                title: "Local de embarque não atualizado",
+                title: "Dados da reserva não atualizados",
                 description: message,
                 variant: "destructive",
               });
@@ -718,6 +728,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                   isChildUnder7: (form.hasMinorChild && !form.isOnLap) || undefined,
                   roomId: selectedRoomId,
                   boardingLocationId: form.boardingPoint !== "none" ? form.boardingPoint : null,
+                  travelType: form.travelType !== "none" ? form.travelType : null,
                 },
               });
             }
@@ -785,6 +796,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                   isChildUnder7: (form.hasMinorChild && !form.isOnLap) || undefined,
                   roomId: selectedRoomId,
                   boardingLocationId: form.boardingPoint !== "none" ? form.boardingPoint : null,
+                  travelType: form.travelType !== "none" ? form.travelType : null,
                 },
               });
               createdReservationId = resResult.id;
@@ -1183,7 +1195,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                 </div>
               ))}
               <div className="space-y-2">
-                <Label>Tipo de Viagem</Label>
+                <Label>Tipo de viagem desta reserva</Label>
                 <Select value={form.travelType} onValueChange={set("travelType")}>
                   <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
                   <SelectContent>
@@ -1191,6 +1203,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                     {TRAVEL_TYPE_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">Esse campo pertence à reserva e não altera a preferência geral do cliente.</p>
               </div>
               <div className="space-y-2">
                 <Label>Hospedagem da viagem</Label>

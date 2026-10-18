@@ -9,11 +9,17 @@ describe("store product tenant association guards", () => {
     const tripTenantGuard = /eq\(tripsTable\.tenantId, me\.tenantId\)/g;
     expect(storeRoutes.match(tripTenantGuard)).toHaveLength(2);
     expect(storeRoutes).toContain(
-      'if (data.tripId !== undefined) {',
+      'if (data.tripId !== undefined && data.tripId !== null) {',
     );
     expect(storeRoutes).toContain(
-      'if (parsed.data.tripId !== undefined) {',
+      'if (parsed.data.tripId !== undefined && parsed.data.tripId !== null) {',
     );
+    expect(storeRoutes).toContain("tripId: z.string().nullable().optional()");
+    expect(storeRoutes).toContain("await assertTripNotLinkedToAnotherStoreProduct(data.tripId)");
+    expect(storeRoutes).toContain(
+      "await assertTripNotLinkedToAnotherStoreProduct(parsed.data.tripId, existingProduct.id)",
+    );
+    expect(storeRoutes).toContain("STORE_TRIP_ALREADY_LINKED");
   });
 
   it("checks category ownership on both product write paths", () => {

@@ -22,6 +22,7 @@ export const reservationsTable = pgTable("reservations", {
   capacityUnits: integer("capacity_units").notNull().default(0),
   boardingLocationId: text("boarding_location_id"),
   tripType: text("trip_type"),
+  travelType: text("travel_type"),
   packageType: text("package_type"),
   hasInsurance: boolean("has_insurance").notNull().default(false),
   isGratuidade: boolean("is_gratuidade").notNull().default(false),

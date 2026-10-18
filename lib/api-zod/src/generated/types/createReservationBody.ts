@@ -13,6 +13,8 @@ export interface CreateReservationBody {
   /** @nullable */
   tripType?: string | null;
   /** @nullable */
+  travelType?: string | null;
+  /** @nullable */
   packageType?: string | null;
   /**
    * ID of the accommodation room assigned to the primary passenger

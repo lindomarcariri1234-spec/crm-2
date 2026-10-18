@@ -291,6 +291,7 @@ function buildReservationView(r: typeof reservationsTable.$inferSelect, rel: Res
     clientId: r.clientId,
     seats: r.seats ?? [],
     tripType: r.tripType,
+    travelType: r.travelType,
     packageType: r.packageType,
     hasInsurance: r.hasInsurance,
     isGratuidade: r.isGratuidade,
@@ -1486,6 +1487,7 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         clientId: parsed.data.clientId,
         seats: parsed.data.seats,
         tripType: parsed.data.tripType ?? null,
+        travelType: parsed.data.travelType ?? null,
         packageType: parsed.data.packageType ?? selectedRoomName,
         hasInsurance: parsed.data.hasInsurance ?? false,
         isGratuidade: parsed.data.isGratuidade ?? false,
@@ -1932,6 +1934,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     if (parsed.data.status != null) updates.status = parseReservationStatus(parsed.data.status);
     if (parsed.data.paymentMethod != null) updates.paymentMethod = parsed.data.paymentMethod;
     if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
+    if (parsed.data.travelType !== undefined) updates.travelType = parsed.data.travelType ?? null;
     if (parsed.data.seats != null) updates.seats = parsed.data.seats;
     if (parsed.data.installments != null) updates.installments = parsed.data.installments;
     if (parsed.data.boardingLocationId !== undefined) updates.boardingLocationId = parsed.data.boardingLocationId ?? null;

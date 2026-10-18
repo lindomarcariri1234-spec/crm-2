@@ -8948,6 +8948,8 @@ components:
             type: string
         tripType:
           type: ["string", "null"]
+        travelType:
+          type: ["string", "null"]
         packageType:
           type: ["string", "null"]
         hasInsurance:
@@ -9200,6 +9202,8 @@ components:
             type: string
         tripType:
           type: ["string", "null"]
+        travelType:
+          type: ["string", "null"]
         packageType:
           type: ["string", "null"]
         roomId:
@@ -9409,6 +9413,8 @@ components:
         paymentMethod:
           type: ["string", "null"]
         notes:
+          type: ["string", "null"]
+        travelType:
           type: ["string", "null"]
         seats:
           type: ["array", "null"]

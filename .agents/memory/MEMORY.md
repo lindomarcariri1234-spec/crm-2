@@ -146,3 +146,4 @@
 - [Production Redis probes](redis-production-probe.md) — private queue Redis DNS may resolve only inside production; local `ENOTFOUND` is not proof that production credentials or service are invalid.
 - [Cross-source timeline cursor ordering](timeline-cursor-ordering.md) — keep database sort, merge comparison, and cursor predicates identical, especially for timestamp ties across sources.
 - [Evolution API contracts and session separation](evolution-webhook-session.md) — match versioned webhook/send payloads; 404 means instance missing, not a closed WhatsApp session.
+- [Reservation travel type](reservation-travel-type.md) — store the CRM’s travel classification per reservation, separately from code-generating tripType and client travelPreference.

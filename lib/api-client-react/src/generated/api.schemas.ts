@@ -1876,6 +1876,8 @@ export interface Reservation {
   /** @nullable */
   tripType?: string | null;
   /** @nullable */
+  travelType?: string | null;
+  /** @nullable */
   packageType?: string | null;
   hasInsurance: boolean;
   isGratuidade: boolean;
@@ -1954,6 +1956,8 @@ export interface CreateReservationBody {
   seats: string[];
   /** @nullable */
   tripType?: string | null;
+  /** @nullable */
+  travelType?: string | null;
   /** @nullable */
   packageType?: string | null;
   /**
@@ -2184,6 +2188,8 @@ export interface UpdateReservationBody {
   paymentMethod?: string | null;
   /** @nullable */
   notes?: string | null;
+  /** @nullable */
+  travelType?: string | null;
   /** @nullable */
   seats?: string[] | null;
   /** @nullable */
