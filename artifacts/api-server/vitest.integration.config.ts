@@ -11,6 +11,7 @@ export default defineConfig({
       "src/__tests__/loyalty-points-booking.test.ts",
       "src/__tests__/reservation-patch-deal-sync.test.ts",
       "src/__tests__/checkout-race-condition-db-integration.test.ts",
+      "src/__tests__/checkout-manual-capacity-race.integration.test.ts",
       "src/__tests__/client-email-link-lock-db-integration.test.ts",
       "src/__tests__/insights-sales-cycle-integration.test.ts",
       "src/__tests__/loyalty-clawback-integration.test.ts",
