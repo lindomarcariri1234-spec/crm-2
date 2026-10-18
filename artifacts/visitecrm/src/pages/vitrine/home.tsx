@@ -44,6 +44,18 @@ interface DestinationGroup {
   sales: number;
 }
 
+const TRAVEL_PRODUCT_TYPES = new Set([
+  "trip",
+  "package",
+  "tour",
+  "transfer",
+  "cruise",
+]);
+
+function isTravelProduct(product: StoreProduct): boolean {
+  return Boolean(product.tripId) || TRAVEL_PRODUCT_TYPES.has(product.type);
+}
+
 function ReferralWelcomeBanner({
   slug,
   primaryColor,
@@ -160,7 +172,6 @@ export default function VitrineHome({
 }) {
   const [, navigate] = useLocation();
   const { colors } = useVitrineTheme();
-  const [featured, setFeatured] = useState<StoreProduct[]>([]);
   const [categories, setCategories] = useState<StoreCategory[]>([]);
   const [reviews, setReviews] = useState<StoreReview[]>([]);
   const [allProducts, setAllProducts] = useState<StoreProduct[]>([]);
@@ -175,19 +186,32 @@ export default function VitrineHome({
 
   useEffect(() => {
     Promise.allSettled([
-      publicStoreApi.getProducts(slug, { featured: true, limit: 6 }),
       publicStoreApi.getCategories(slug),
       publicStoreApi.getReviews(slug, { limit: 6 }),
       publicStoreApi.getProducts(slug, { limit: 200 }),
     ])
-      .then(([p, c, r, all]) => {
-        if (p.status === "fulfilled") setFeatured(p.value.data);
+      .then(([c, r, all]) => {
         if (c.status === "fulfilled") setCategories(c.value);
         if (r.status === "fulfilled") setReviews(r.value);
         if (all.status === "fulfilled") setAllProducts(all.value.data);
       })
       .finally(() => setLoading(false));
   }, [slug]);
+
+  const featuredTrips = useMemo(
+    () =>
+      allProducts
+        .filter((product) => product.isFeatured && isTravelProduct(product))
+        .slice(0, 6),
+    [allProducts],
+  );
+  const featuredStoreItems = useMemo(
+    () =>
+      allProducts
+        .filter((product) => product.isFeatured && !isTravelProduct(product))
+        .slice(0, 6),
+    [allProducts],
+  );
 
   const avgRating =
     reviews.length > 0
@@ -199,6 +223,7 @@ export default function VitrineHome({
       Array.from(
         new Set(
           allProducts
+            .filter(isTravelProduct)
             .map((p) => p.destination)
             .filter((d): d is string => !!d && d.trim().length > 0),
         ),
@@ -223,9 +248,19 @@ export default function VitrineHome({
       );
   }, [allProducts]);
 
+  const travelFlashSales = useMemo(
+    () => flashSales.filter(isTravelProduct),
+    [flashSales],
+  );
+  const storeItemFlashSales = useMemo(
+    () => flashSales.filter((product) => !isTravelProduct(product)),
+    [flashSales],
+  );
+
   const destinationGroups = useMemo<DestinationGroup[]>(() => {
     const map = new Map<string, DestinationGroup>();
     for (const p of allProducts) {
+      if (!isTravelProduct(p)) continue;
       const dest = p.destination?.trim();
       if (!dest) continue;
       const priceNum = parseFloat(p.salePrice ?? p.price);
@@ -255,11 +290,10 @@ export default function VitrineHome({
       .slice(0, 8);
   }, [allProducts]);
 
-  const soonestSaleEnd = flashSales[0]?.saleEndsAt ?? null;
-
   function submitSmartSearch(e: React.FormEvent) {
     e.preventDefault();
     const qs = new URLSearchParams();
+    qs.set("group", "travel");
     const destinoTrim = destino.trim();
     if (destinoTrim) {
       if (hasDestinations) qs.set("destination", destinoTrim);
@@ -271,6 +305,59 @@ export default function VitrineHome({
     if (orcamento) qs.set("maxPrice", orcamento);
     const str = qs.toString();
     navigate(`/loja/${slug}/produtos${str ? `?${str}` : ""}`);
+  }
+
+  function renderFlashSaleSection(
+    products: StoreProduct[],
+    group: "travel" | "other",
+  ) {
+    if (products.length === 0) return null;
+
+    const groupLabel = group === "travel" ? "viagens" : "outros itens";
+    const groupTitle =
+      group === "travel" ? "Ofertas de viagens" : "Ofertas de outros itens";
+    const saleEnd = products[0]?.saleEndsAt ?? null;
+
+    return (
+      <section key={group} data-testid={`section-flash-sales-${group}`}>
+        <SectionHeader
+          eyebrow={group === "travel" ? "Viagens" : "Na loja"}
+          title={groupTitle}
+          subtitle={`Promoções por tempo limitado em ${groupLabel} — aproveite antes que terminem.`}
+          action={
+            <Button
+              data-testid={`button-view-all-sales-${group}`}
+              variant="ghost"
+              onClick={() =>
+                navigate(`/loja/${slug}/produtos?group=${group}`)
+              }
+              className="gap-1 rounded-full"
+              style={{ color: colors.primary }}
+            >
+              {group === "travel" ? "Ver viagens" : "Ver outros itens"}
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          }
+        />
+        {saleEnd && (
+          <FlashSaleCountdown
+            endsAt={saleEnd}
+            variant="banner"
+            className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 text-orange-900"
+          />
+        )}
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {products.slice(0, 6).map((product) => (
+            <PremiumProductCard
+              key={product.id}
+              product={product}
+              slug={slug}
+              whatsapp={store.contactWhatsapp}
+            />
+          ))}
+        </div>
+      </section>
+    );
   }
 
   return (
@@ -544,44 +631,8 @@ export default function VitrineHome({
       </section>
 
       <div data-testid="content-storefront" className="mx-auto max-w-6xl space-y-20 px-5 py-16 lg:px-8 lg:py-20">
-        {flashSales.length > 0 && (
-          <section data-testid="section-flash-sales">
-            <SectionHeader
-              eyebrow="Ofertas"
-              title="Ofertas Relâmpago"
-              subtitle="Promoções por tempo limitado — aproveite antes que terminem."
-              action={
-                <Button
-                  data-testid="button-view-all-sales"
-                  variant="ghost"
-                  onClick={() => navigate(`/loja/${slug}/produtos`)}
-                  className="gap-1 rounded-full"
-                  style={{ color: colors.primary }}
-                >
-                  Ver todos
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              }
-            />
-            {soonestSaleEnd && (
-              <FlashSaleCountdown
-                endsAt={soonestSaleEnd}
-                variant="banner"
-                className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 text-orange-900"
-              />
-            )}
-            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-              {flashSales.slice(0, 6).map((product) => (
-                <PremiumProductCard
-                  key={product.id}
-                  product={product}
-                  slug={slug}
-                  whatsapp={store.contactWhatsapp}
-                />
-              ))}
-            </div>
-          </section>
-        )}
+        {renderFlashSaleSection(travelFlashSales, "travel")}
+        {renderFlashSaleSection(storeItemFlashSales, "other")}
 
         {categories.length > 0 && (
           <section data-testid="section-categories">
@@ -626,21 +677,23 @@ export default function VitrineHome({
           </section>
         )}
 
-        {(loading || featured.length > 0) && (
-          <section data-testid="section-featured-products">
+        {(loading || featuredTrips.length > 0) && (
+          <section data-testid="section-featured-trips">
             <SectionHeader
               eyebrow="Imperdível"
-              title="Pacotes em Destaque"
-              subtitle="As experiências mais procuradas, escolhidas para você."
+              title="Viagens em destaque"
+              subtitle="Pacotes, passeios e experiências selecionados para você."
               action={
                 <Button
                   data-testid="button-view-all-featured"
                   variant="ghost"
-                  onClick={() => navigate(`/loja/${slug}/produtos`)}
+                  onClick={() =>
+                    navigate(`/loja/${slug}/produtos?group=travel`)
+                  }
                   className="gap-1 rounded-full"
                   style={{ color: colors.primary }}
                 >
-                  Ver todos
+                  Ver todas as viagens
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               }
@@ -656,7 +709,50 @@ export default function VitrineHome({
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                {featured.map((product) => (
+                {featuredTrips.map((product) => (
+                  <PremiumProductCard
+                    key={product.id}
+                    product={product}
+                    slug={slug}
+                    whatsapp={store.contactWhatsapp}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {(loading || featuredStoreItems.length > 0) && (
+          <section data-testid="section-featured-store-items">
+            <SectionHeader
+              eyebrow="Na loja"
+              title="Outros itens da loja"
+              subtitle="Serviços, hospedagens e produtos disponíveis para você."
+              action={
+                <Button
+                  data-testid="button-view-all-store-items"
+                  variant="ghost"
+                  onClick={() => navigate(`/loja/${slug}/produtos?group=other`)}
+                  className="gap-1 rounded-full"
+                  style={{ color: colors.primary }}
+                >
+                  Ver todos os itens
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              }
+            />
+            {loading ? (
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-80 animate-pulse rounded-2xl border bg-muted"
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {featuredStoreItems.map((product) => (
                   <PremiumProductCard
                     key={product.id}
                     product={product}

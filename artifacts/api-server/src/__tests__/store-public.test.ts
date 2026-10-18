@@ -10,6 +10,7 @@ import pino from "pino";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
+import { inArray, isNotNull, not } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // vi.hoisted: shared mock factories must exist before any vi.mock factory runs
@@ -129,6 +130,7 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn((...a) => a),
   or: vi.fn((...a) => a),
   inArray: vi.fn(() => "inArray"),
+  not: vi.fn((value) => ["not", value]),
   desc: vi.fn(() => "desc"),
   asc: vi.fn(() => "asc"),
   ilike: vi.fn(() => "ilike"),
@@ -2041,6 +2043,40 @@ describe("GET /api/public/store/:slug/products/:productSlug — completed trips"
     expect(response.status).toBe(200);
     expect(response.body.data).toEqual([]);
     expect(ne).toHaveBeenCalledWith(undefined, "completed");
+  });
+
+  it("filters the travel group by linked trips and travel product types", async () => {
+    mockLimit.mockResolvedValueOnce([FAKE_STORE]);
+
+    const response = await request(buildApp())
+      .get("/api/public/store/minha-loja/products?group=travel");
+
+    expect(response.status).toBe(200);
+    expect(isNotNull).toHaveBeenCalledWith(undefined);
+    expect(inArray).toHaveBeenCalledWith(undefined, [
+      "trip",
+      "package",
+      "tour",
+      "transfer",
+      "cruise",
+    ]);
+  });
+
+  it("filters other store items to products without a trip link or travel type", async () => {
+    mockLimit.mockResolvedValueOnce([FAKE_STORE]);
+
+    const response = await request(buildApp())
+      .get("/api/public/store/minha-loja/products?group=other");
+
+    expect(response.status).toBe(200);
+    expect(inArray).toHaveBeenCalledWith(undefined, [
+      "trip",
+      "package",
+      "tour",
+      "transfer",
+      "cruise",
+    ]);
+    expect(not).toHaveBeenCalledWith("inArray");
   });
 });
 

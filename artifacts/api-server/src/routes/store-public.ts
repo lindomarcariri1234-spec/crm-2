@@ -107,7 +107,7 @@ import
 
 import 
 {
- eq, and, desc, asc, ilike, or, sql, inArray, ne, isNull
+ eq, and, desc, asc, ilike, or, sql, inArray, ne, isNull, isNotNull, not
 }
  from "drizzle-orm"
 ;
@@ -674,7 +674,7 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
 {
 
       category, categoryId, type, featured, search, sort = "newest",
-      destination, minPrice, maxPrice, departureFrom, minSeats,
+      destination, minPrice, maxPrice, departureFrom, minSeats, group,
       page: pageStr, limit: limitStr,
     
 }
@@ -696,6 +696,19 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
 
     if (type) conditions.push(eq(storeProductsTable.type, type as string))
 ;
+
+    const travelProductTypes = ["trip", "package", "tour", "transfer", "cruise"];
+    if (group === "travel") {
+      conditions.push(or(
+        isNotNull(storeProductsTable.tripId),
+        inArray(storeProductsTable.type, travelProductTypes),
+      )!);
+    } else if (group === "other") {
+      conditions.push(and(
+        isNull(storeProductsTable.tripId),
+        not(inArray(storeProductsTable.type, travelProductTypes)),
+      )!);
+    }
 
     if (featured === "true") conditions.push(eq(storeProductsTable.isFeatured, true))
 ;
