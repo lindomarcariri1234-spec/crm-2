@@ -6,6 +6,7 @@ import { calculateTripDuration } from "@/lib/tripDuration";
 import { getTripVideoEmbedUrl } from "@/lib/tripVideoEmbed";
 import { formatCurrency } from "@/lib/utils";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
+import { trackStoreProductOpened } from "@/lib/analytics";
 import { SectionHeader } from "@/components/vitrine/SectionHeader";
 import { PremiumProductCard } from "@/components/vitrine/PremiumProductCard";
 import { InstallmentSimulator } from "@/components/vitrine/InstallmentSimulator";
@@ -325,6 +326,7 @@ export default function VitrineProduct({
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [imgIndex, setImgIndex] = useState(0);
+  const trackedProductIdRef = useRef<string | null>(null);
   const heroTouchStartX = useRef<number | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<{ variantName: string; label: string; price: number } | null>(null);
   const [activeTab, setActiveTab] = useState<"descricao" | "requisitos" | "destaques">("descricao");
@@ -375,6 +377,15 @@ export default function VitrineProduct({
   useEffect(() => {
     if (product) applyStorefrontMetadata(store, window.location.pathname, product);
   }, [product, store]);
+
+  useEffect(() => {
+    if (!product || trackedProductIdRef.current === product.id) return;
+    trackedProductIdRef.current = product.id;
+    const group = product.tripId
+      ? "travel"
+      : product.storefrontGroup ?? "unknown";
+    trackStoreProductOpened(group);
+  }, [product]);
 
   useEffect(() => {
     if (!product) return;

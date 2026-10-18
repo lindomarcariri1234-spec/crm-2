@@ -150,3 +150,4 @@
 - [Evolution API contracts and session separation](evolution-webhook-session.md) — match versioned webhook/send payloads; 404 means instance missing, not a closed WhatsApp session.
 - [Reservation travel type](reservation-travel-type.md) — store the CRM’s travel classification per reservation, separately from code-generating tripType and client travelPreference.
 - [Storefront product grouping](storefront-product-grouping.md) — keep public “travel/other” merchandising independent from commercial product type, categories, and operational trip links.
+- [Storefront analytics privacy](storefront-analytics-privacy.md) — preference and conversion events use only controlled group/source dimensions, never store slugs, IDs, or personal data.

@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   trackEvent,
   trackReferralCreditReduction,
+  trackStoreCheckoutStarted,
   trackStoreGroupSelection,
+  trackStoreProductOpened,
 } from "../lib/analytics.js";
 
 afterEach(() => {
   delete window.umami;
+  window.sessionStorage.clear();
 });
 
 describe("analytics tracking", () => {
@@ -16,6 +19,8 @@ describe("analytics tracking", () => {
     expect(() => trackEvent("checkout_started")).not.toThrow();
     expect(() => trackReferralCreditReduction("cart_checkout", 100, 40)).not.toThrow();
     expect(() => trackStoreGroupSelection("travel", "catalog_tab")).not.toThrow();
+    expect(() => trackStoreProductOpened("unknown")).not.toThrow();
+    expect(() => trackStoreCheckoutStarted()).not.toThrow();
   });
 
   it("does not let tracker errors affect the checkout", () => {
@@ -28,6 +33,8 @@ describe("analytics tracking", () => {
     expect(() => trackEvent("checkout_started")).not.toThrow();
     expect(() => trackReferralCreditReduction("reservation_wizard", 100, 40)).not.toThrow();
     expect(() => trackStoreGroupSelection("other", "home_link")).not.toThrow();
+    expect(() => trackStoreProductOpened("travel")).not.toThrow();
+    expect(() => trackStoreCheckoutStarted()).not.toThrow();
   });
 
   it("records only confirmed cashback reductions with rounded BRL values", () => {
@@ -62,6 +69,47 @@ describe("analytics tracking", () => {
     expect(trackSpy).toHaveBeenNthCalledWith(2, "store_group_selected", {
       group: "other",
       source: "home_link",
+    });
+  });
+
+  it("carries only the group dimension from selection to product and checkout events", () => {
+    const trackSpy = vi.fn();
+    window.umami = { track: trackSpy };
+
+    trackStoreGroupSelection("travel", "catalog_tab");
+    trackStoreProductOpened("unknown");
+    trackStoreCheckoutStarted();
+
+    expect(trackSpy).toHaveBeenNthCalledWith(1, "store_group_selected", {
+      group: "travel",
+      source: "catalog_tab",
+    });
+    expect(trackSpy).toHaveBeenNthCalledWith(2, "store_product_opened", {
+      group: "travel",
+    });
+    expect(trackSpy).toHaveBeenNthCalledWith(3, "store_checkout_started", {
+      group: "travel",
+    });
+  });
+
+  it("uses the product's explicit group and clears an unclassified all-items selection", () => {
+    const trackSpy = vi.fn();
+    window.umami = { track: trackSpy };
+
+    trackStoreGroupSelection("other", "home_link");
+    trackStoreProductOpened("travel");
+    trackStoreCheckoutStarted();
+    trackStoreGroupSelection("all", "catalog_tab");
+    trackStoreProductOpened("unknown");
+
+    expect(trackSpy).toHaveBeenNthCalledWith(2, "store_product_opened", {
+      group: "travel",
+    });
+    expect(trackSpy).toHaveBeenNthCalledWith(3, "store_checkout_started", {
+      group: "travel",
+    });
+    expect(trackSpy).toHaveBeenNthCalledWith(5, "store_product_opened", {
+      group: "unknown",
     });
   });
 });
