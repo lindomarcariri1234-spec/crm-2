@@ -1909,6 +1909,89 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
       expect(mockRunPostPaymentSideEffects).toHaveBeenCalledTimes(1);
       expect(mockRunDeferredOrderAccounting).toHaveBeenCalledTimes(1);
     });
+
+    it("rejects a client-supplied payment ID before it can be attached to an order", async () => {
+      const paymentToken = "order-a-payment-token";
+      const paymentIntentId = "pi_order_b_payment";
+      mockLimit
+        .mockResolvedValueOnce([FAKE_STORE])
+        .mockResolvedValueOnce([{
+          id: "order-a",
+          existingPaymentIntentId: null,
+          storedPaymentToken: paymentToken,
+        }])
+        .mockResolvedValueOnce([{ id: "order-b" }]);
+
+      const response = await request(buildApp())
+        .post(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}/payment-intent`)
+        .send({ paymentIntentId, paymentToken });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("PAYMENT_ID_NOT_CREATED");
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it("accepts a repeat confirmation only for the payment ID already stored on that order", async () => {
+      const paymentToken = "order-a-payment-token";
+      const paymentIntentId = "pi_order_a_payment";
+      mockLimit
+        .mockResolvedValueOnce([FAKE_STORE])
+        .mockResolvedValueOnce([{
+          id: "order-a",
+          existingPaymentIntentId: paymentIntentId,
+          storedPaymentToken: paymentToken,
+        }])
+        .mockResolvedValueOnce([]);
+
+      const response = await request(buildApp())
+        .post(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}/payment-intent`)
+        .send({ paymentIntentId, paymentToken });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ ok: true });
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it("does not accept a client-supplied charge ID", async () => {
+      const paymentToken = "order-a-payment-token";
+      const paymentIntentId = "pi_order_a_payment";
+      mockLimit
+        .mockResolvedValueOnce([FAKE_STORE])
+        .mockResolvedValueOnce([{
+          id: "order-a",
+          existingPaymentIntentId: paymentIntentId,
+          storedPaymentToken: paymentToken,
+        }]);
+
+      const response = await request(buildApp())
+        .post(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}/payment-intent`)
+        .send({ paymentIntentId, paymentChargeId: "ch_foreign_charge", paymentToken });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("UNVERIFIED_PAYMENT_CHARGE");
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it("rejects an already-bound payment ID when legacy data contains a duplicate", async () => {
+      const paymentToken = "order-a-payment-token";
+      const paymentIntentId = "pi_order_b_payment";
+      mockLimit
+        .mockResolvedValueOnce([FAKE_STORE])
+        .mockResolvedValueOnce([{
+          id: "order-a",
+          existingPaymentIntentId: paymentIntentId,
+          storedPaymentToken: paymentToken,
+        }])
+        .mockResolvedValueOnce([{ id: "order-b" }]);
+
+      const response = await request(buildApp())
+        .post(`/api/public/store/minha-loja/orders/${encodeURIComponent(FAKE_ORDER.orderNumber)}/payment-intent`)
+        .send({ paymentIntentId, paymentToken });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("PAYMENT_ID_ALREADY_BOUND");
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
   });
 });
 

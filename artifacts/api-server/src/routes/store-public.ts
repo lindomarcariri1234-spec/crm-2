@@ -2429,8 +2429,8 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
   }
 });
 
-// Attach a gateway payment id (Stripe paymentIntentId / MP payment id) to
-// an order. Gated by the one-shot paymentToken returned at order creation.
+// Legacy confirmation endpoint. Payment identifiers are assigned by the
+// provider-specific server checkout routes; this endpoint is idempotent-only.
 router.post("/public/store/:slug/orders/:orderNumber/payment-intent", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const store = await getActiveStore(req.params.slug);
@@ -2475,18 +2475,45 @@ router.post("/public/store/:slug/orders/:orderNumber/payment-intent", async (req
       return;
     }
 
+    if (!order.existingPaymentIntentId) {
+      next(new ValidationError(
+        "Payment IDs must be created by the configured checkout provider",
+        "PAYMENT_ID_NOT_CREATED",
+      ));
+      return;
+    }
+
     if (order.existingPaymentIntentId && order.existingPaymentIntentId !== paymentIntentId) {
       next(new ValidationError("Order already has a different paymentIntentId", "ALREADY_SET"));
       return;
     }
 
-    await db
-      .update(storeOrdersTable)
-      .set({
-        paymentIntentId,
-        ...(paymentChargeId ? { paymentChargeId } : {}),
-      })
-      .where(eq(storeOrdersTable.id, order.id));
+    if (paymentChargeId) {
+      next(new ValidationError(
+        "Payment charge IDs are confirmed by the payment provider",
+        "UNVERIFIED_PAYMENT_CHARGE",
+      ));
+      return;
+    }
+
+    const [paymentOwner] = await db
+      .select({ id: storeOrdersTable.id })
+      .from(storeOrdersTable)
+      .where(and(
+        eq(storeOrdersTable.tenantId, store.tenantId),
+        eq(storeOrdersTable.storeId, store.id),
+        eq(storeOrdersTable.paymentIntentId, paymentIntentId),
+        ne(storeOrdersTable.id, order.id),
+      ))
+      .limit(1);
+
+    if (paymentOwner) {
+      next(new ValidationError(
+        "Payment ID is already linked to another order",
+        "PAYMENT_ID_ALREADY_BOUND",
+      ));
+      return;
+    }
 
     res.json({ ok: true });
   } catch (err) {

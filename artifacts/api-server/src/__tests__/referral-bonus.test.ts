@@ -260,6 +260,7 @@ function buildApp() {
 const FAKE_ADMIN  = { id: "user-001", tenantId: "tenant-001", role: ROLES.AGENCY_ADMIN, name: "Admin", email: "admin@ag.com" };
 const FAKE_MANAGER = { id: "user-manager", tenantId: "tenant-001", role: ROLES.AGENCY_MANAGER, name: "Manager", email: "manager@ag.com" };
 const FAKE_VIEWER = { id: "user-002", tenantId: "tenant-001", role: "viewer",            name: "Viewer", email: "viewer@ag.com" };
+const FAKE_SUPPORT = { id: "user-support", tenantId: "tenant-001", role: ROLES.SUPPORT, name: "Support", email: "support@ag.com" };
 
 function makeReferral(overrides: Record<string, unknown> = {}) {
   return {
@@ -534,6 +535,54 @@ describe("GET /api/referrals/validate/:code", () => {
       valid: false,
       bonusAmount: 0,
     });
+  });
+});
+
+describe("referral permission matrix enforcement", () => {
+  it.each([
+    "/api/referrals",
+    "/api/referrals/stats",
+    "/api/referrals/ref-001/expiry-email-status",
+    "/api/referrals/ref-001/bonus-release-email-status",
+    "/api/referrals/ref-001/share",
+    "/api/referrals/analytics",
+    "/api/referrals/active-campaign",
+  ])("denies support from GET %s before reading referral data", async (path) => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_SUPPORT);
+
+    const res = await request(buildApp()).get(path);
+
+    expect(res.status).toBe(403);
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
+  it("requires COMMISSIONS.CREATE to create a referral", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_MANAGER);
+
+    const res = await request(buildApp()).post("/api/referrals").send({
+      referrerId: "client-001",
+      code: "MARIA2026",
+    });
+
+    expect(res.status).toBe(403);
+    expect(db.select).not.toHaveBeenCalled();
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it("allows an administrator with COMMISSIONS.CREATE to create a referral", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ id: "client-001" }]))
+      .mockImplementationOnce(() => makeChain([]))
+      .mockImplementationOnce(() => makeChain([makeReferral({ id: "gen-id", code: "MARIA2026" })]));
+
+    const res = await request(buildApp()).post("/api/referrals").send({
+      referrerId: "client-001",
+      code: "MARIA2026",
+    });
+
+    expect(res.status).toBe(201);
+    expect(db.insert).toHaveBeenCalled();
   });
 });
 
