@@ -9,11 +9,11 @@ import {
   calendarEventsTable,
   calendarReconciliationsTable,
 } from "@workspace/db";
-import { eq, and, sql, type SQL } from "drizzle-orm";
+import { eq, and, inArray, sql, type SQL } from "drizzle-orm";
 import { createHash } from "crypto";
 import { format, addHours } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { GoogleCalendarService, refreshTokenIfNeeded, withCalendarRetry } from "./calendar-service";
+import { GoogleCalendarService, refreshTokenIfNeeded, withCalendarRetry, type CalendarSendUpdates } from "./calendar-service";
 import { generateId } from "../id";
 import { logger } from "../logger";
 import { RESERVATION_STATUS, PAYMENT_STATUS, TRIP_STATUS } from "@workspace/permissions";
@@ -24,6 +24,26 @@ async function getCalendarService(userId: string): Promise<GoogleCalendarService
   const token = await refreshTokenIfNeeded(userId);
   if (!token) return null;
   return new GoogleCalendarService(token, userId);
+}
+
+async function deleteTrackedReservationInvite(event: {
+  id: string;
+  tenantId: string;
+  userId: string | null;
+  googleEventId: string;
+  reservationId: string | null;
+}): Promise<boolean> {
+  if (!event.userId) return false;
+  const service = await getCalendarService(event.userId);
+  if (!service) return false;
+  const deleted = await withCalendarRetry(() => service.deleteEvent(
+    event.googleEventId,
+    { tenantId: event.tenantId, userId: event.userId, reservationId: event.reservationId },
+    "all",
+  ));
+  if (deleted !== true && deleted !== "not-found") return false;
+  await db.delete(calendarEventsTable).where(eq(calendarEventsTable.id, event.id));
+  return true;
 }
 
 function fmtTripDate(d: Date | null | undefined, time?: string | null): string {
@@ -54,9 +74,10 @@ function stableGoogleEventId(record: {
   clientId?: string;
   tripId?: string;
   paymentId?: string;
+  reservationId?: string;
   eventType: string;
 }): string {
-  const resourceId = record.tripId ?? record.paymentId ?? record.clientId ?? "unknown";
+  const resourceId = record.reservationId ?? record.tripId ?? record.paymentId ?? record.clientId ?? "unknown";
   return createHash("sha256")
     .update(`visitecrm-calendar:${record.tenantId}:${record.userId ?? "unknown"}:${record.eventType}:${resourceId}`)
     .digest("hex");
@@ -171,11 +192,13 @@ function recordResourceId(record: {
   tripId?: string;
   paymentId?: string;
   clientId?: string;
+  reservationId?: string;
   eventType: string;
 }): string | undefined {
   if (record.eventType === "trip") return record.tripId;
   if (record.eventType === "payment") return record.paymentId;
   if (record.eventType === "birthday") return record.clientId;
+  if (record.eventType === "reservation") return record.reservationId;
   return undefined;
 }
 
@@ -190,8 +213,11 @@ async function upsertCalendarEventWithExecutor(
     clientId?: string;
     tripId?: string;
     paymentId?: string;
+    reservationId?: string;
+    attendeeEmail?: string;
     eventType: string;
-  }
+  },
+  sendUpdates: CalendarSendUpdates = "none",
 ): Promise<void> {
   const [existing] = await executor.select().from(calendarEventsTable)
     .where(and(...filter)).limit(1);
@@ -200,6 +226,7 @@ async function upsertCalendarEventWithExecutor(
     userId: record.userId,
     tripId: record.tripId,
     paymentId: record.paymentId,
+    reservationId: record.reservationId,
     clientId: record.clientId,
     eventType: record.eventType,
     tenantId: record.tenantId,
@@ -232,7 +259,25 @@ async function upsertCalendarEventWithExecutor(
   }
 
   if (existing) {
-    const updated = await withCalendarRetry(() => service.updateEvent(existing.googleEventId, eventData, logCtx));
+    const unchangedReservationInvite =
+      record.eventType === "reservation"
+      && existing.title === eventData.summary
+      && (existing.description ?? null) === (eventData.description ?? null)
+      && (existing.location ?? null) === (eventData.location ?? null)
+      && existing.startDate.getTime() === eventData.startDateTime.getTime()
+      && (existing.endDate?.getTime() ?? null) === (eventData.endDateTime?.getTime() ?? eventData.startDateTime.getTime())
+      && (existing.attendeeEmail ?? null) === (record.attendeeEmail ?? null);
+    if (unchangedReservationInvite) {
+      await executor.update(calendarEventsTable).set({
+        clientId: record.clientId ?? null,
+        tripId: record.tripId ?? null,
+        syncedAt: new Date(),
+      }).where(eq(calendarEventsTable.id, existing.id));
+      return;
+    }
+    const updated = await withCalendarRetry(() =>
+      service.updateEvent(existing.googleEventId, eventData, logCtx, sendUpdates)
+    );
     if (updated === true) {
       await executor.update(calendarEventsTable).set({
         title: eventData.summary,
@@ -240,13 +285,19 @@ async function upsertCalendarEventWithExecutor(
         startDate: eventData.startDateTime,
         endDate: eventData.endDateTime,
         location: eventData.location,
+        ...(record.eventType === "reservation" ? {
+          clientId: record.clientId ?? null,
+          tripId: record.tripId ?? null,
+          reservationId: record.reservationId ?? null,
+          attendeeEmail: record.attendeeEmail ?? null,
+        } : {}),
         syncedAt: new Date(),
       }).where(eq(calendarEventsTable.id, existing.id));
     } else if (updated === "not-found") {
       // Event was deleted externally in Google — remove stale DB record and recreate.
       logger.info({ ...logCtx, googleEventId: existing.googleEventId }, "calendar-sync: stale DB record found; deleting and recreating event");
       await executor.delete(calendarEventsTable).where(eq(calendarEventsTable.id, existing.id));
-      const googleEvent = await withCalendarRetry(() => service.createEvent(createEventData, logCtx));
+      const googleEvent = await withCalendarRetry(() => service.createEvent(createEventData, logCtx, sendUpdates));
       if (!googleEvent) {
         logger.warn(logCtx, "calendar-sync: createEvent after external deletion failed; no DB record persisted");
         return;
@@ -258,6 +309,8 @@ async function upsertCalendarEventWithExecutor(
         clientId: record.clientId,
         tripId: record.tripId,
         paymentId: record.paymentId,
+        reservationId: record.reservationId,
+        attendeeEmail: record.attendeeEmail,
         googleEventId: googleEvent.id,
         calendarId: "primary",
         eventType: record.eventType,
@@ -272,7 +325,7 @@ async function upsertCalendarEventWithExecutor(
       logger.warn({ ...logCtx, googleEventId: existing.googleEventId }, "calendar-sync: updateEvent permanently failed (auth or data issue); DB record not updated");
     }
   } else {
-    const googleEvent = await withCalendarRetry(() => service.createEvent(createEventData, logCtx));
+    const googleEvent = await withCalendarRetry(() => service.createEvent(createEventData, logCtx, sendUpdates));
     if (!googleEvent) {
       logger.warn(logCtx, "calendar-sync: createEvent failed; no DB record persisted");
       return;
@@ -284,6 +337,8 @@ async function upsertCalendarEventWithExecutor(
       clientId: record.clientId,
       tripId: record.tripId,
       paymentId: record.paymentId,
+      reservationId: record.reservationId,
+      attendeeEmail: record.attendeeEmail,
       googleEventId: googleEvent.id,
       calendarId: "primary",
       eventType: record.eventType,
@@ -315,8 +370,11 @@ async function upsertCalendarEvent(
     clientId?: string;
     tripId?: string;
     paymentId?: string;
+    reservationId?: string;
+    attendeeEmail?: string;
     eventType: string;
-  }
+  },
+  sendUpdates: CalendarSendUpdates = "none",
 ): Promise<void> {
   if (record.eventType === "trip" && record.tripId && record.userId) {
     await db.transaction(async (tx) => {
@@ -325,12 +383,24 @@ async function upsertCalendarEvent(
           hashtextextended(${record.tenantId} || ':' || ${record.tripId} || ':' || ${record.userId}, 0)
         )
       `);
-      await upsertCalendarEventWithExecutor(tx, service, filter, eventData, record);
+      await upsertCalendarEventWithExecutor(tx, service, filter, eventData, record, sendUpdates);
     });
     return;
   }
 
-  await upsertCalendarEventWithExecutor(db, service, filter, eventData, record);
+  if (record.eventType === "reservation" && record.reservationId) {
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${record.tenantId} || ':reservation:' || ${record.reservationId}, 0)
+        )
+      `);
+      await upsertCalendarEventWithExecutor(tx, service, filter, eventData, record, sendUpdates);
+    });
+    return;
+  }
+
+  await upsertCalendarEventWithExecutor(db, service, filter, eventData, record, sendUpdates);
 }
 
 /** Trip statuses that should have active calendar events. */
@@ -746,9 +816,187 @@ export class CalendarSyncService {
           );
         }
       }
+
+      await CalendarSyncService.syncReservationInvitesForTrip(tripId, trip.tenantId);
     } catch (err) {
       logger.error({ err }, "calendar-sync: syncTrip failed");
     }
+  }
+
+  /**
+   * Keep one individual guest invitation per confirmed reservation. The local
+   * reservation ID is the idempotency key; attendees are never combined into
+   * the agency's shared trip event.
+   */
+  static async syncReservationCalendarInvite(reservationId: string): Promise<void> {
+    try {
+      const [reservation] = await db.select({
+        id: reservationsTable.id,
+        tenantId: reservationsTable.tenantId,
+        tripId: reservationsTable.tripId,
+        clientId: reservationsTable.clientId,
+        status: reservationsTable.status,
+        reservationNumber: reservationsTable.reservationNumber,
+        voucherCode: reservationsTable.voucherCode,
+        tripStatus: tripsTable.status,
+        tripName: tripsTable.name,
+        originCity: tripsTable.originCity,
+        destination: tripsTable.destination,
+        departureDate: tripsTable.departureDate,
+        departureTime: tripsTable.departureTime,
+        returnDate: tripsTable.returnDate,
+        returnTime: tripsTable.returnTime,
+        clientEmail: clientsTable.email,
+      }).from(reservationsTable)
+        .innerJoin(tripsTable, eq(reservationsTable.tripId, tripsTable.id))
+        .leftJoin(clientsTable, and(
+          eq(reservationsTable.clientId, clientsTable.id),
+          eq(reservationsTable.tenantId, clientsTable.tenantId),
+        ))
+        .where(eq(reservationsTable.id, reservationId))
+        .limit(1);
+
+      const [existing] = await db.select().from(calendarEventsTable).where(and(
+        eq(calendarEventsTable.reservationId, reservationId),
+        eq(calendarEventsTable.eventType, "reservation"),
+      )).limit(1);
+
+      if (
+        !reservation
+        || reservation.status !== RESERVATION_STATUS.CONFIRMED
+        || reservation.tripStatus !== TRIP_STATUS.PUBLISHED
+        || !reservation.clientEmail?.trim()
+      ) {
+        if (existing) {
+          await deleteTrackedReservationInvite(existing);
+        }
+        return;
+      }
+
+      let organizerId = existing?.userId ?? null;
+      if (!organizerId) {
+        const connectedStaff = await db.select({
+          id: usersTable.id,
+          role: usersTable.role,
+        }).from(usersTable).where(and(
+          eq(usersTable.tenantId, reservation.tenantId),
+          eq(usersTable.googleCalendarEnabled, true),
+          inArray(usersTable.role, [ROLES.AGENCY_ADMIN, ROLES.SALES]),
+        ));
+        connectedStaff.sort((left, right) => {
+          const leftPriority = left.role === ROLES.AGENCY_ADMIN ? 0 : 1;
+          const rightPriority = right.role === ROLES.AGENCY_ADMIN ? 0 : 1;
+          return leftPriority - rightPriority || left.id.localeCompare(right.id);
+        });
+        organizerId = connectedStaff[0]?.id ?? null;
+      }
+      if (!organizerId) return;
+
+      const service = await getCalendarService(organizerId);
+      if (!service) return;
+
+      const startDateTime = calendarTripInstant(reservation.departureDate, reservation.departureTime);
+      const endDateTime = reservation.returnDate
+        ? calendarTripInstant(reservation.returnDate, reservation.returnTime)
+        : addHours(startDateTime, 12);
+      const description = [
+        "Sua reserva de viagem está confirmada.",
+        reservation.reservationNumber ? `Reserva: ${reservation.reservationNumber}` : null,
+        reservation.voucherCode ? `Voucher: ${reservation.voucherCode}` : null,
+        "",
+        `📍 ${reservation.originCity ? `${reservation.originCity} → ` : ""}${reservation.destination}`,
+        `📅 Saída: ${fmtTripDate(reservation.departureDate, reservation.departureTime)}`,
+        reservation.returnDate
+          ? `🔙 Retorno: ${fmtTripDate(reservation.returnDate, reservation.returnTime)}`
+          : null,
+      ].filter((line): line is string => line !== null).join("\n");
+      const attendeeEmail = reservation.clientEmail.trim();
+
+      await upsertCalendarEvent(
+        service,
+        [
+          eq(calendarEventsTable.tenantId, reservation.tenantId),
+          eq(calendarEventsTable.reservationId, reservation.id),
+          eq(calendarEventsTable.eventType, "reservation"),
+        ],
+        {
+          summary: `🚌 Sua viagem: ${reservation.tripName}`,
+          description,
+          location: reservation.originCity
+            ? `${reservation.originCity} → ${reservation.destination}`
+            : reservation.destination,
+          startDateTime,
+          endDateTime,
+          attendees: [attendeeEmail],
+        },
+        {
+          tenantId: reservation.tenantId,
+          userId: organizerId,
+          clientId: reservation.clientId ?? undefined,
+          tripId: reservation.tripId,
+          reservationId: reservation.id,
+          attendeeEmail,
+          eventType: "reservation",
+        },
+        "all",
+      );
+    } catch (err) {
+      logger.error({ err, reservationId }, "calendar-sync: reservation invite sync failed");
+    }
+  }
+
+  static async syncReservationInvitesForTrip(tripId: string, tenantId: string): Promise<void> {
+    try {
+      const [activeReservations, trackedEvents] = await Promise.all([
+        db.select({ id: reservationsTable.id }).from(reservationsTable).where(and(
+          eq(reservationsTable.tripId, tripId),
+          eq(reservationsTable.tenantId, tenantId),
+          eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
+        )),
+        db.select({ reservationId: calendarEventsTable.reservationId }).from(calendarEventsTable).where(and(
+          eq(calendarEventsTable.tripId, tripId),
+          eq(calendarEventsTable.tenantId, tenantId),
+          eq(calendarEventsTable.eventType, "reservation"),
+        )),
+      ]);
+      const reservationIds = new Set([
+        ...activeReservations.map((reservation) => reservation.id),
+        ...trackedEvents.map((event) => event.reservationId).filter((id): id is string => id != null),
+      ]);
+      for (const reservationId of reservationIds) {
+        await CalendarSyncService.syncReservationCalendarInvite(reservationId);
+      }
+    } catch (err) {
+      logger.error({ err, tripId, tenantId }, "calendar-sync: reservation invites for trip failed");
+    }
+  }
+
+  static async cancelReservationInvitesForUser(userId: string): Promise<boolean> {
+    const events = await db.select({
+      id: calendarEventsTable.id,
+      tenantId: calendarEventsTable.tenantId,
+      userId: calendarEventsTable.userId,
+      googleEventId: calendarEventsTable.googleEventId,
+      reservationId: calendarEventsTable.reservationId,
+    }).from(calendarEventsTable).where(and(
+      eq(calendarEventsTable.userId, userId),
+      eq(calendarEventsTable.eventType, "reservation"),
+    ));
+
+    let allCancelled = true;
+    for (const event of events) {
+      try {
+        const cancelled = await deleteTrackedReservationInvite(event);
+        if (!cancelled) allCancelled = false;
+      } catch (err) {
+        allCancelled = false;
+        logger.error(
+          { err, userId, reservationId: event.reservationId },
+          "calendar-sync: failed to cancel client invite before disconnect",
+        );
+      }
+    }
+    return allCancelled;
   }
 
   /**
@@ -878,6 +1126,7 @@ export class CalendarSyncService {
         },
         { tenantId: trip.tenantId, userId: actorUserId, tripId, eventType: "trip" }
       );
+      await CalendarSyncService.syncReservationInvitesForTrip(tripId, trip.tenantId);
     } catch (err) {
       logger.error({ err }, "calendar-sync: syncTripForUser failed");
     }
@@ -889,12 +1138,24 @@ export class CalendarSyncService {
         id: calendarEventsTable.id,
         userId: calendarEventsTable.userId,
         googleEventId: calendarEventsTable.googleEventId,
+        eventType: calendarEventsTable.eventType,
+        tenantId: calendarEventsTable.tenantId,
+        reservationId: calendarEventsTable.reservationId,
       }).from(calendarEventsTable).where(eq(calendarEventsTable.tripId, tripId));
 
       for (const ev of events) {
         if (ev.userId) {
           const svc = await getCalendarService(ev.userId);
-          if (svc) await withCalendarRetry(() => svc.deleteEvent(ev.googleEventId));
+          if (svc) {
+            const deleted = await withCalendarRetry(() => svc.deleteEvent(
+              ev.googleEventId,
+              { tenantId: ev.tenantId, userId: ev.userId, tripId, reservationId: ev.reservationId },
+              ev.eventType === "reservation" ? "all" : "none",
+            ));
+            if (ev.eventType === "reservation" && deleted === false) continue;
+          } else if (ev.eventType === "reservation") {
+            continue;
+          }
         }
         await db.delete(calendarEventsTable).where(eq(calendarEventsTable.id, ev.id));
       }

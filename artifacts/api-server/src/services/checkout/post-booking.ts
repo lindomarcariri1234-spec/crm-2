@@ -10,6 +10,7 @@ import { generateAndAssignReferralCode } from "../../lib/referral-code";
 import { generateReferralCode } from "../../lib/id";
 import { applyDeferredOrderCredits } from "./deferred-referral-effects";
 import { scheduleReservationConfirmedWhatsApp } from "./reservation-confirmation-outbox";
+import { scheduleCalendarSyncTrip } from "../../lib/google-calendar/schedule-sync";
 import {
   dispatchReferralConvertedEmail,
   dispatchReferralTierUpgradeEmail,
@@ -151,6 +152,18 @@ export async function runPostPaymentSideEffects(
         eq(reservationsTable.storeOrderId, order.orderNumber),
       ),
     );
+
+  const confirmedTripIds = new Set(
+    reservationRows
+      .filter((reservation) => reservation.status === RESERVATION_STATUS.CONFIRMED)
+      .map((reservation) => reservation.tripId)
+      .filter((tripId): tripId is string => typeof tripId === "string" && tripId.length > 0),
+  );
+  for (const tripId of confirmedTripIds) {
+    scheduleCalendarSyncTrip(tripId).catch((err) =>
+      logger.warn({ err, orderId: order.id, tripId }, "[checkout/post-payment] Failed to schedule calendar sync"),
+    );
+  }
 
   // A deposit can confirm a reservation while the overall order still has a
   // balance. Send the confirmation at the reservation transition, not only

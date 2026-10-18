@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { pgTable, text, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
@@ -15,6 +15,8 @@ export const calendarEventsTable = pgTable("calendar_events", {
   clientId: text("client_id").references(() => clientsTable.id, { onDelete: "cascade" }),
   tripId: text("trip_id").references(() => tripsTable.id, { onDelete: "cascade" }),
   paymentId: text("payment_id").references(() => paymentsTable.id, { onDelete: "cascade" }),
+  reservationId: text("reservation_id"),
+  attendeeEmail: text("attendee_email"),
   googleEventId: text("google_event_id").notNull(),
   calendarId: text("calendar_id").notNull().default("primary"),
   eventType: text("event_type").notNull(),
@@ -32,6 +34,9 @@ export const calendarEventsTable = pgTable("calendar_events", {
   index("calendar_events_google_event_idx").on(table.googleEventId),
   index("calendar_events_trip_idx").on(table.tripId),
   index("calendar_events_payment_idx").on(table.paymentId),
+  uniqueIndex("calendar_events_tenant_reservation_unique")
+    .on(table.tenantId, table.reservationId)
+    .where(sql`${table.reservationId} IS NOT NULL`),
 ]);
 
 export const insertCalendarEventSchema = createInsertSchema(calendarEventsTable).omit({ createdAt: true, updatedAt: true });

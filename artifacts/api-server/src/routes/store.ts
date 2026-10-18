@@ -58,6 +58,7 @@ import { syncPaidProductOrderDeal } from "../services/pipeline-deal-sync";
 import { syncStoreOrderFromOrderPayment } from "../services/reservation-order-payment-sync";
 import { syncReservationPaymentStatus } from "../lib/reservation-payments";
 import { roundMoney } from "../lib/pricing";
+import { scheduleCalendarSyncTrip } from "../lib/google-calendar/schedule-sync";
 
 // Storefront public base for links inside price-drop alert e-mails. Product
 // links point at the Vitrine; the unsubscribe link points at the public API,
@@ -1518,6 +1519,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     let didTransitionToCancelled = false;
     let order: typeof storeOrdersTable.$inferSelect | undefined;
     let cancelledTripIds: string[] = [];
+    let cancelledCalendarTripIds: string[] = [];
     let manualCreateResult: Awaited<ReturnType<typeof createReservationsForOrder>> | null = null;
     if (isTransitioningToPaid) {
       await db.transaction(async (tx) => {
@@ -1667,6 +1669,11 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
             && reservation.status !== RESERVATION_STATUS.COMPLETED,
         );
         const cancellableIds = cancellableReservations.map((reservation) => reservation.id);
+        cancelledCalendarTripIds = [...new Set(
+          cancellableReservations
+            .map((reservation) => reservation.tripId)
+            .filter((tripId): tripId is string => typeof tripId === "string" && tripId.length > 0),
+        )];
 
         const ref = lockedOrder.pendingReferral;
         if (lockedOrder.referralEffectsAppliedAt != null && ref?.code) {
@@ -1803,6 +1810,11 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
       for (const tripId of cancelledTripIds) {
         broadcastSeatUpdate(tripId, currentOrder.tenantId).catch((err) => {
           req.log.warn({ err, tripId }, "[store/orders] Failed to broadcast seat update on cancellation");
+        });
+      }
+      for (const tripId of cancelledCalendarTripIds) {
+        scheduleCalendarSyncTrip(tripId).catch((err) => {
+          req.log.warn({ err, tripId }, "[store/orders] Failed to schedule calendar sync on cancellation");
         });
       }
     }
