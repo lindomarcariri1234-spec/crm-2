@@ -16,6 +16,7 @@ import {
   reservationsTable,
   referralsTable,
   partnerProductsTable,
+  accommodationsTable,
   priceAlertSubscriptionsTable,
   tripsTable,
 } from "@workspace/db";
@@ -680,6 +681,16 @@ router.post("/store/products", async (req, res, next: NextFunction): Promise<voi
         .limit(1);
       if (!pp) { next(new ValidationError(String("Produto de parceiro não encontrado" ), "VALIDATION_ERROR")); return; }
     }
+    if (data.accommodationId) {
+      const [accommodation] = await db.select({ id: accommodationsTable.id })
+        .from(accommodationsTable)
+        .where(and(
+          eq(accommodationsTable.id, data.accommodationId),
+          eq(accommodationsTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      if (!accommodation) { next(new ValidationError("Hospedagem não encontrada", "VALIDATION_ERROR")); return; }
+    }
     await db.insert(storeProductsTable).values({
       id,
       storeId: store.id,
@@ -768,6 +779,16 @@ router.put("/store/products/:id", async (req, res, next: NextFunction): Promise<
         .where(and(eq(partnerProductsTable.id, parsed.data.partnerProductId), eq(partnerProductsTable.tenantId, me.tenantId)))
         .limit(1);
       if (!pp) { next(new ValidationError(String("Produto de parceiro não encontrado" ), "VALIDATION_ERROR")); return; }
+    }
+    if (parsed.data.accommodationId) {
+      const [accommodation] = await db.select({ id: accommodationsTable.id })
+        .from(accommodationsTable)
+        .where(and(
+          eq(accommodationsTable.id, parsed.data.accommodationId),
+          eq(accommodationsTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      if (!accommodation) { next(new ValidationError("Hospedagem não encontrada", "VALIDATION_ERROR")); return; }
     }
     const updates: Record<string, unknown> = { ...parsed.data };
     if (parsed.data.status === "active" && existingProduct.status !== "active") {

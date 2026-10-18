@@ -27,6 +27,14 @@ describe("store product tenant association guards", () => {
     );
   });
 
+  it("checks accommodation ownership on both product write paths", () => {
+    expect(storeRoutes).toContain('if (data.accommodationId) {');
+    expect(storeRoutes).toContain('if (parsed.data.accommodationId) {');
+    const accommodationTenantGuard =
+      /eq\(accommodationsTable\.id, (?:data|parsed\.data)\.accommodationId\),\s*eq\(accommodationsTable\.tenantId, me\.tenantId\)/g;
+    expect(storeRoutes.match(accommodationTenantGuard)).toHaveLength(2);
+  });
+
   it("scopes public product departure metadata to the store tenant", () => {
     expect(appSource).toContain("tenantId: storesTable.tenantId");
     expect(appSource).toContain("eq(tripsTable.tenantId, store.tenantId)");

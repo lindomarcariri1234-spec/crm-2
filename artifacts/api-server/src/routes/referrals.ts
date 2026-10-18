@@ -5,7 +5,7 @@ import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { ADMIN_ROLES, ALL_STAFF_ROLES } from '../lib/tenant';
+import { ADMIN_ROLES } from '../lib/tenant';
 import { ACTIONS, hasPermission, REFERRAL_STATUS, RESOURCES } from "@workspace/permissions";
 import { enqueueReferralBonusPaidEmail, dispatchReferralExpiringSoonEmail, dispatchReferralBonusReleasedEmail } from "../queues/email-helpers";
 import { dispatchWhatsAppReferralBonusPaid } from "../queues/whatsapp-helpers";
@@ -170,7 +170,7 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const status = req.query.status as string | undefined;
     const search = req.query.search as string | undefined;
@@ -346,7 +346,7 @@ router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const page = Math.max(1, parseInt((req.query.page as string) ?? "1", 10));
     const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "20", 10)));
@@ -572,7 +572,7 @@ router.post("/referrals", async (req, res, next: NextFunction): Promise<void> =>
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.CREATE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateReferralBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
     const ids = [parsed.data.referrerId, ...(parsed.data.referredId ? [parsed.data.referredId] : [])];
@@ -1111,7 +1111,7 @@ router.get("/referrals/:id/expiry-email-status", async (req, res, next: NextFunc
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db.select({
       id: referralsTable.id,
@@ -1159,7 +1159,7 @@ router.get("/referrals/:id/bonus-release-email-status", async (req, res, next: N
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db.select({
       code: referralsTable.code,
@@ -1215,7 +1215,7 @@ router.get("/referrals/:id/share", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db
       .select({
@@ -1250,7 +1250,7 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const period = parseInt((req.query.period as string) || "90", 10);
     if (![30, 90, 180].includes(period)) {
@@ -2574,7 +2574,7 @@ router.get("/referrals/active-campaign", async (req, res, next: NextFunction): P
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const now = new Date();
     const [campaign] = await db.select().from(referralCampaignsTable)
