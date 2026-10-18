@@ -22,6 +22,7 @@ import { Search, MapPin, SlidersHorizontal, X, ArrowUpDown } from "lucide-react"
 import { ProductQuickView } from "@/components/vitrine/ProductQuickView";
 import { PremiumProductCard } from "@/components/vitrine/PremiumProductCard";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
+import { trackStoreGroupSelection } from "@/lib/analytics";
 import { getStoredValue, removeStoredValue } from "./utils/storage";
 
 type ProductGroup = "all" | "travel" | "other";
@@ -455,6 +456,7 @@ export default function VitrineCatalog({
   }
 
   function changeGroup(group: ProductGroup) {
+    trackStoreGroupSelection(group, "catalog_tab");
     applyFilters({ ...filters, group, type: "all" });
   }
 

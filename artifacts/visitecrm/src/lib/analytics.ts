@@ -18,6 +18,13 @@ export function trackEvent(name: string, data?: AnalyticsData): void {
   }
 }
 
+export function trackStoreGroupSelection(
+  group: "all" | "travel" | "other",
+  source: "catalog_tab" | "home_link",
+): void {
+  trackEvent("store_group_selected", { group, source });
+}
+
 type ReferralCreditSource = "cart_checkout" | "reservation_wizard";
 
 function roundCurrency(value: number): number {

@@ -9,6 +9,7 @@ import {
   StoreReview,
 } from "@/lib/storeApi";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
+import { trackStoreGroupSelection } from "@/lib/analytics";
 import { formatCurrency } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -299,6 +300,11 @@ export default function VitrineHome({
     navigate(`/loja/${slug}/produtos${str ? `?${str}` : ""}`);
   }
 
+  function navigateToProductGroup(group: "travel" | "other") {
+    trackStoreGroupSelection(group, "home_link");
+    navigate(`/loja/${slug}/produtos?group=${group}`);
+  }
+
   function renderFlashSaleSection(
     products: StoreProduct[],
     group: "travel" | "other",
@@ -320,9 +326,7 @@ export default function VitrineHome({
             <Button
               data-testid={`button-view-all-sales-${group}`}
               variant="ghost"
-              onClick={() =>
-                navigate(`/loja/${slug}/produtos?group=${group}`)
-              }
+              onClick={() => navigateToProductGroup(group)}
               className="gap-1 rounded-full"
               style={{ color: colors.primary }}
             >
@@ -679,9 +683,7 @@ export default function VitrineHome({
                 <Button
                   data-testid="button-view-all-featured"
                   variant="ghost"
-                  onClick={() =>
-                    navigate(`/loja/${slug}/produtos?group=travel`)
-                  }
+                  onClick={() => navigateToProductGroup("travel")}
                   className="gap-1 rounded-full"
                   style={{ color: colors.primary }}
                 >
@@ -724,7 +726,7 @@ export default function VitrineHome({
                 <Button
                   data-testid="button-view-all-store-items"
                   variant="ghost"
-                  onClick={() => navigate(`/loja/${slug}/produtos?group=other`)}
+                  onClick={() => navigateToProductGroup("other")}
                   className="gap-1 rounded-full"
                   style={{ color: colors.primary }}
                 >
