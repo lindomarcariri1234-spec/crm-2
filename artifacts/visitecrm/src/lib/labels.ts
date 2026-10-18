@@ -16,7 +16,7 @@ export const TRIP_TYPE_LABELS: Record<string, string> = {
   bate_volta: "Bate-Volta",
   trilha: "Trilha",
   rota: "Rota",
-  transfer: "Transfer",
+  transfer: "Operação de transfer",
   pacote_fechado: "Pacote Fechado",
   personalizada: "Viagem Personalizada",
   excursion: "Excursão",

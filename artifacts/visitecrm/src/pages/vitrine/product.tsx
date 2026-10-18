@@ -480,6 +480,8 @@ export default function VitrineProduct({
         ? "Serviço"
         : product.type === "tour"
           ? "Passeio"
+          : product.type === "transfer"
+            ? "Serviço de transfer"
           : product.type === "excursion"
             ? "Excursão"
             : "Produto";

@@ -48,7 +48,6 @@ const TRAVEL_PRODUCT_TYPES = new Set([
   "trip",
   "package",
   "tour",
-  "transfer",
   "cruise",
 ]);
 

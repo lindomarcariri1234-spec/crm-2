@@ -66,7 +66,7 @@ const PRODUCT_TYPES = [
   { value: "tour", label: "Passeio / Tour" },
   { value: "service", label: "Serviço" },
   { value: "hotel", label: "Hospedagem" },
-  { value: "transfer", label: "Transfer" },
+  { value: "transfer", label: "Serviço de transfer" },
   { value: "insurance", label: "Seguro" },
   { value: "product", label: "Produto" },
 ];

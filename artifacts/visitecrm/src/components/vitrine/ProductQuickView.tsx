@@ -81,7 +81,10 @@ export function ProductQuickView({
   const features = product.features ?? [];
   const requirements = product.requirements ?? [];
   const startDate = product.departureDate ?? product.startDate;
-  const typeLabel = TYPE_LABELS[product.type] ?? product.type;
+  const typeLabel =
+    product.type === "transfer"
+      ? "Serviço de transfer"
+      : TYPE_LABELS[product.type] ?? product.type;
 
   function prevImg() {
     setImgIndex((i) => (i - 1 + images.length) % images.length);

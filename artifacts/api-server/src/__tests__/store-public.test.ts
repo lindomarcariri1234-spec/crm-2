@@ -2045,7 +2045,7 @@ describe("GET /api/public/store/:slug/products/:productSlug — completed trips"
     expect(ne).toHaveBeenCalledWith(undefined, "completed");
   });
 
-  it("filters the travel group by linked trips and travel product types", async () => {
+  it("filters travel by linked trips and standalone travel product types, not transfer type alone", async () => {
     mockLimit.mockResolvedValueOnce([FAKE_STORE]);
 
     const response = await request(buildApp())
@@ -2057,12 +2057,11 @@ describe("GET /api/public/store/:slug/products/:productSlug — completed trips"
       "trip",
       "package",
       "tour",
-      "transfer",
       "cruise",
     ]);
   });
 
-  it("filters other store items to products without a trip link or travel type", async () => {
+  it("includes standalone transfers in other store items", async () => {
     mockLimit.mockResolvedValueOnce([FAKE_STORE]);
 
     const response = await request(buildApp())
@@ -2073,7 +2072,6 @@ describe("GET /api/public/store/:slug/products/:productSlug — completed trips"
       "trip",
       "package",
       "tour",
-      "transfer",
       "cruise",
     ]);
     expect(not).toHaveBeenCalledWith("inArray");

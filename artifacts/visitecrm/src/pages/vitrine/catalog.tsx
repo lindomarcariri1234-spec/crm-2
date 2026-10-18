@@ -68,7 +68,7 @@ const PRODUCT_TYPE_OPTIONS = [
   { value: "trip", label: "Viagens" },
   { value: "package", label: "Pacotes" },
   { value: "tour", label: "Passeios" },
-  { value: "transfer", label: "Transfers" },
+  { value: "transfer", label: "Serviços de transfer" },
   { value: "cruise", label: "Cruzeiros" },
   { value: "hotel", label: "Hospedagens" },
   { value: "service", label: "Serviços" },

@@ -697,7 +697,7 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
     if (type) conditions.push(eq(storeProductsTable.type, type as string))
 ;
 
-    const travelProductTypes = ["trip", "package", "tour", "transfer", "cruise"];
+    const travelProductTypes = ["trip", "package", "tour", "cruise"];
     if (group === "travel") {
       conditions.push(or(
         isNotNull(storeProductsTable.tripId),
