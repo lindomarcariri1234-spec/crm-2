@@ -48,6 +48,8 @@ const USER_ID = `test-race-user-${generateId()}`;
 const STORE_ID = `test-race-store-${generateId()}`;
 const TRIP_ID = `test-race-trip-${generateId()}`;
 const CLIENT_ID = `test-race-client-${generateId()}`;
+const LAP_CHILD_CLIENT_ID = `test-lap-child-client-${generateId()}`;
+const SEATED_CHILD_CLIENT_ID = `test-seated-child-client-${generateId()}`;
 const PRODUCT_ID = `test-race-product-${generateId()}`;
 
 // Accumulators for cleanup — order matters (children before parents)
@@ -66,21 +68,45 @@ function makeOrderNumber() {
   return `ORD-RACE-${generateId()}`;
 }
 
-async function insertOrder(orderId: string, orderNumber: string) {
+type OrderFixtureOptions = {
+  clientId?: string;
+  customerName?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  quantity?: number;
+  seats?: string[];
+  coPassengers?: Array<{
+    name: string;
+    cpf?: string;
+    phone?: string;
+    isChildUnder7?: boolean;
+    occupiesSeat?: boolean;
+  }>;
+};
+
+async function insertOrder(
+  orderId: string,
+  orderNumber: string,
+  options: OrderFixtureOptions = {},
+) {
+  const quantity = options.quantity ?? 1;
+  const total = (150 * quantity).toFixed(2);
   await db.insert(storeOrdersTable).values({
     id: orderId,
     storeId: STORE_ID,
     tenantId: TENANT_ID,
     orderNumber,
-    clientId: CLIENT_ID,
-    customerName: "Maria Race",
-    customerEmail: "maria.race@example.com",
-    customerPhone: "11999999999",
-    subtotal: "150.00",
+    clientId: options.clientId ?? CLIENT_ID,
+    customerName: options.customerName ?? "Maria Race",
+    customerEmail: options.customerEmail ?? "maria.race@example.com",
+    customerPhone: options.customerPhone ?? "11999999999",
+    seats: options.seats ?? null,
+    coPassengers: options.coPassengers ?? null,
+    subtotal: total,
     discountAmount: "0.00",
     taxAmount: "0.00",
     shippingAmount: "0.00",
-    totalAmount: "150.00",
+    totalAmount: total,
     paymentMethod: "pix",
     paymentProvider: "mercadopago",
     paymentStatus: "pending",
@@ -92,10 +118,10 @@ async function insertOrder(orderId: string, orderNumber: string) {
     productName: "Excursão Race Test",
     productType: "trip",
     price: "150.00",
-    quantity: 1,
-    subtotal: "150.00",
+    quantity,
+    subtotal: total,
     discount: "0.00",
-    total: "150.00",
+    total,
   });
 }
 
@@ -152,6 +178,12 @@ beforeAll(async () => {
     departureDate: new Date("2027-01-15"),
     totalCapacity: 50,
     availableSeats: 50,
+    showSeatMap: true,
+    seatMap: {
+      "1": { status: "available" },
+      "2": { status: "available" },
+      "3": { status: "available" },
+    },
     priceAdult: "150.00",
     createdById: USER_ID,
   });
@@ -170,6 +202,24 @@ beforeAll(async () => {
     whatsapp: "11999999999",
     createdById: USER_ID,
   });
+  await db.insert(clientsTable).values([
+    {
+      id: LAP_CHILD_CLIENT_ID,
+      tenantId: TENANT_ID,
+      name: "Ana Lap Test",
+      email: `lap-child-${generateId()}@example.com`,
+      whatsapp: "11999990001",
+      createdById: USER_ID,
+    },
+    {
+      id: SEATED_CHILD_CLIENT_ID,
+      tenantId: TENANT_ID,
+      name: "Bruno Seated Test",
+      email: `seated-child-${generateId()}@example.com`,
+      whatsapp: "11999990002",
+      createdById: USER_ID,
+    },
+  ]);
 
   // Store product linked to the trip
   await db.insert(storeProductsTable).values({
@@ -285,5 +335,136 @@ describe("createReservationsForOrder — real DB unique-constraint guard", () =>
       );
 
     expect(activeRows).toHaveLength(1);
+  });
+
+  it("keeps a lap child in the passenger manifest without consuming a seat or trip vacancy", async () => {
+    const orderId = makeOrderId();
+    orderIds.push(orderId);
+    await insertOrder(orderId, makeOrderNumber(), {
+      clientId: LAP_CHILD_CLIENT_ID,
+      customerName: "Ana Lap Test",
+      customerEmail: "ana.lap@example.com",
+      seats: ["1"],
+      coPassengers: [
+        { name: "Lia Lap Test", isChildUnder7: true, occupiesSeat: false },
+      ],
+    });
+
+    const [beforeTrip] = await db
+      .select({
+        availableSeats: tripsTable.availableSeats,
+        reservedSeats: tripsTable.reservedSeats,
+      })
+      .from(tripsTable)
+      .where(eq(tripsTable.id, TRIP_ID));
+
+    const result = await createReservationsForOrder(orderId);
+    reservationIds.push(...result.reservationIds);
+
+    const [reservation] = await db
+      .select({
+        seats: reservationsTable.seats,
+        capacityUnits: reservationsTable.capacityUnits,
+      })
+      .from(reservationsTable)
+      .where(eq(reservationsTable.id, result.reservationIds[0]!));
+    const passengerRows = await db
+      .select({
+        name: passengersTable.name,
+        ageCategory: passengersTable.ageCategory,
+        isPrimary: passengersTable.isPrimary,
+        seatNumber: passengersTable.seatNumber,
+      })
+      .from(passengersTable)
+      .where(eq(passengersTable.reservationId, result.reservationIds[0]!));
+    const [afterTrip] = await db
+      .select({
+        availableSeats: tripsTable.availableSeats,
+        reservedSeats: tripsTable.reservedSeats,
+      })
+      .from(tripsTable)
+      .where(eq(tripsTable.id, TRIP_ID));
+
+    expect(result.reservationIds).toHaveLength(1);
+    expect(reservation).toMatchObject({ seats: ["1"], capacityUnits: 1 });
+    expect(passengerRows).toHaveLength(2);
+    expect(passengerRows.find((passenger) => passenger.isPrimary)).toMatchObject({
+      name: "Ana Lap Test",
+      ageCategory: "adult",
+      seatNumber: "1",
+    });
+    expect(passengerRows.find((passenger) => passenger.name === "Lia Lap Test")).toMatchObject({
+      ageCategory: "baby",
+      isPrimary: false,
+      seatNumber: null,
+    });
+    expect(afterTrip?.availableSeats).toBe(beforeTrip!.availableSeats - 1);
+    expect(afterTrip?.reservedSeats).toBe(beforeTrip!.reservedSeats + 1);
+  });
+
+  it("reserves two trip vacancies and assigns a seat to a seated child", async () => {
+    const orderId = makeOrderId();
+    orderIds.push(orderId);
+    await insertOrder(orderId, makeOrderNumber(), {
+      clientId: SEATED_CHILD_CLIENT_ID,
+      customerName: "Bruno Seated Test",
+      customerEmail: "bruno.seated@example.com",
+      quantity: 2,
+      seats: ["2", "3"],
+      coPassengers: [
+        { name: "Caio Seated Test", isChildUnder7: true, occupiesSeat: true },
+      ],
+    });
+
+    const [beforeTrip] = await db
+      .select({
+        availableSeats: tripsTable.availableSeats,
+        reservedSeats: tripsTable.reservedSeats,
+      })
+      .from(tripsTable)
+      .where(eq(tripsTable.id, TRIP_ID));
+
+    const result = await createReservationsForOrder(orderId);
+    reservationIds.push(...result.reservationIds);
+
+    const [reservation] = await db
+      .select({
+        seats: reservationsTable.seats,
+        capacityUnits: reservationsTable.capacityUnits,
+      })
+      .from(reservationsTable)
+      .where(eq(reservationsTable.id, result.reservationIds[0]!));
+    const passengerRows = await db
+      .select({
+        name: passengersTable.name,
+        ageCategory: passengersTable.ageCategory,
+        isPrimary: passengersTable.isPrimary,
+        seatNumber: passengersTable.seatNumber,
+      })
+      .from(passengersTable)
+      .where(eq(passengersTable.reservationId, result.reservationIds[0]!));
+    const [afterTrip] = await db
+      .select({
+        availableSeats: tripsTable.availableSeats,
+        reservedSeats: tripsTable.reservedSeats,
+      })
+      .from(tripsTable)
+      .where(eq(tripsTable.id, TRIP_ID));
+
+    expect(result.reservationIds).toHaveLength(1);
+    expect(reservation).toMatchObject({ seats: ["2", "3"], capacityUnits: 2 });
+    expect(passengerRows).toHaveLength(2);
+    expect(passengerRows.find((passenger) => passenger.isPrimary)).toMatchObject({
+      name: "Bruno Seated Test",
+      ageCategory: "adult",
+      seatNumber: "2",
+    });
+    expect(passengerRows.find((passenger) => passenger.name === "Caio Seated Test")).toMatchObject({
+      ageCategory: "child",
+      isPrimary: false,
+      seatNumber: "3",
+    });
+    expect(afterTrip?.availableSeats).toBe(beforeTrip!.availableSeats - 2);
+    expect(afterTrip?.reservedSeats).toBe(beforeTrip!.reservedSeats + 2);
   });
 });
