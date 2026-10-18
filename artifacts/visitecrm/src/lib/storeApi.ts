@@ -12,6 +12,29 @@ export interface VariantItem {
   options: VariantOption[];
 }
 
+type ApiStoreCategory = Omit<StoreCategory, "imageUrl" | "position"> & {
+  image?: string | null;
+  order?: number;
+};
+
+function fromApiStoreCategory(category: ApiStoreCategory): StoreCategory {
+  const { image, order, ...rest } = category;
+  return {
+    ...rest,
+    imageUrl: image ?? null,
+    position: order ?? 0,
+  };
+}
+
+function toApiCategoryInput(data: Partial<CategoryInput>): Record<string, unknown> {
+  const { imageUrl, position, ...rest } = data;
+  return {
+    ...rest,
+    ...(imageUrl !== undefined ? { image: imageUrl } : {}),
+    ...(position !== undefined ? { order: position } : {}),
+  };
+}
+
 async function authHeaders(): Promise<HeadersInit> {
   return { "Content-Type": "application/json" };
 }
@@ -52,11 +75,16 @@ export const storeApi = {
   initStore: (data: InitStoreInput) =>
     req<StoreSettings>("POST", "/store/init", data),
 
-  getCategories: () => req<StoreCategory[]>("GET", "/store/categories"),
-  createCategory: (data: CategoryInput) =>
-    req<StoreCategory>("POST", "/store/categories", data),
-  updateCategory: (id: string, data: Partial<CategoryInput>) =>
-    req<StoreCategory>("PUT", `/store/categories/${id}`, data),
+  getCategories: async () =>
+    (await req<ApiStoreCategory[]>("GET", "/store/categories")).map(fromApiStoreCategory),
+  createCategory: async (data: CategoryInput) =>
+    fromApiStoreCategory(
+      await req<ApiStoreCategory>("POST", "/store/categories", toApiCategoryInput(data)),
+    ),
+  updateCategory: async (id: string, data: Partial<CategoryInput>) =>
+    fromApiStoreCategory(
+      await req<ApiStoreCategory>("PUT", `/store/categories/${id}`, toApiCategoryInput(data)),
+    ),
   deleteCategory: (id: string) =>
     req<void>("DELETE", `/store/categories/${id}`),
 
@@ -189,8 +217,9 @@ export const publicStoreApi = {
       paymentMethods: Array.isArray(raw.paymentMethods) ? raw.paymentMethods as string[] : [],
     } as PublicStore;
   },
-  getCategories: (slug: string) =>
-    publicReq<StoreCategory[]>("GET", `/public/store/${slug}/categories`),
+  getCategories: async (slug: string) =>
+    (await publicReq<ApiStoreCategory[]>("GET", `/public/store/${slug}/categories`))
+      .map(fromApiStoreCategory),
   getProducts: (
     slug: string,
     params?: Record<string, string | number | boolean>
