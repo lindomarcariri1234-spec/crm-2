@@ -268,6 +268,7 @@ function ProductForm({
     name: product?.name ?? "",
     slug: product?.slug ?? "",
     type: product?.type ?? "package",
+    storefrontGroup: product?.tripId ? "travel" : product?.storefrontGroup ?? "other",
     categoryId: product?.categoryId ?? undefined,
     tripId: product?.tripId ?? null,
     accommodationId: product?.accommodationId ?? undefined,
@@ -302,6 +303,12 @@ function ProductForm({
         ...p,
         name: value as string,
         slug: !p.slug ? slugify(value as string) : p.slug,
+      }));
+    } else if (field === "tripId") {
+      setForm((p) => ({
+        ...p,
+        tripId: value as string | null,
+        ...(value ? { storefrontGroup: "travel" as const } : {}),
       }));
     } else {
       setForm((p) => ({ ...p, [field]: value }));
@@ -435,6 +442,25 @@ function ProductForm({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Grupo na vitrine</Label>
+              <Select
+                value={form.tripId ? "travel" : form.storefrontGroup ?? "other"}
+                onValueChange={(value) => set("storefrontGroup", value)}
+                disabled={Boolean(form.tripId)}
+              >
+                <SelectTrigger data-testid="select-storefront-group">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="travel">Viagens e experiências</SelectItem>
+                  <SelectItem value="other">Outros itens</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Define em qual grupo público o produto aparece, independentemente do tipo comercial. Produtos vinculados a uma viagem ficam em Viagens.
+              </p>
             </div>
             <div className="space-y-2 col-span-2">
               <Label>Viagem operacional vinculada (opcional)</Label>
@@ -1021,6 +1047,7 @@ export default function LojaProdutos() {
               <TableRow>
                 <TableHead>Produto</TableHead>
                 <TableHead>Tipo</TableHead>
+                <TableHead>Grupo na vitrine</TableHead>
                 <TableHead>Categoria</TableHead>
                 <TableHead>Preço</TableHead>
                 <TableHead>Status</TableHead>
@@ -1059,6 +1086,13 @@ export default function LojaProdutos() {
                   <TableCell>
                     <Badge variant="outline" className="text-xs">
                       {getTypeLabel(product.type)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="secondary" className="text-xs">
+                      {product.tripId || product.storefrontGroup === "travel"
+                        ? "Viagens e experiências"
+                        : "Outros itens"}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">

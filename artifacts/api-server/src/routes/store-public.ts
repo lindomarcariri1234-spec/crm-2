@@ -697,16 +697,15 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
     if (type) conditions.push(eq(storeProductsTable.type, type as string))
 ;
 
-    const travelProductTypes = ["trip", "package", "tour", "cruise"];
     if (group === "travel") {
       conditions.push(or(
         isNotNull(storeProductsTable.tripId),
-        inArray(storeProductsTable.type, travelProductTypes),
+        eq(storeProductsTable.storefrontGroup, "travel"),
       )!);
     } else if (group === "other") {
       conditions.push(and(
         isNull(storeProductsTable.tripId),
-        not(inArray(storeProductsTable.type, travelProductTypes)),
+        eq(storeProductsTable.storefrontGroup, "other"),
       )!);
     }
 
@@ -768,6 +767,7 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
     const selectFields = {
       id: storeProductsTable.id,
       type: storeProductsTable.type,
+      storefrontGroup: storeProductsTable.storefrontGroup,
       name: storeProductsTable.name,
       slug: storeProductsTable.slug,
       shortDescription: storeProductsTable.shortDescription,
@@ -855,6 +855,7 @@ router.get("/public/store/:slug/products/:productSlug", async (req, res, next: N
     const [row] = await db.select({
       id: storeProductsTable.id,
       type: storeProductsTable.type,
+      storefrontGroup: storeProductsTable.storefrontGroup,
       name: storeProductsTable.name,
       slug: storeProductsTable.slug,
       shortDescription: storeProductsTable.shortDescription,
@@ -1129,6 +1130,7 @@ router.get("/public/store/:slug/products/:productSlug/recommendations", async (r
     const cardFields = {
       id: storeProductsTable.id,
       type: storeProductsTable.type,
+      storefrontGroup: storeProductsTable.storefrontGroup,
       name: storeProductsTable.name,
       slug: storeProductsTable.slug,
       shortDescription: storeProductsTable.shortDescription,

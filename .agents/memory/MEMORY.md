@@ -147,3 +147,4 @@
 - [Cross-source timeline cursor ordering](timeline-cursor-ordering.md) — keep database sort, merge comparison, and cursor predicates identical, especially for timestamp ties across sources.
 - [Evolution API contracts and session separation](evolution-webhook-session.md) — match versioned webhook/send payloads; 404 means instance missing, not a closed WhatsApp session.
 - [Reservation travel type](reservation-travel-type.md) — store the CRM’s travel classification per reservation, separately from code-generating tripType and client travelPreference.
+- [Storefront product grouping](storefront-product-grouping.md) — keep public “travel/other” merchandising independent from commercial product type, categories, and operational trip links.

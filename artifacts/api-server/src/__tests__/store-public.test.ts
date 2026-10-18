@@ -10,7 +10,7 @@ import pino from "pino";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
-import { inArray, isNotNull, not } from "drizzle-orm";
+import { eq, inArray, isNull, isNotNull } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // vi.hoisted: shared mock factories must exist before any vi.mock factory runs
@@ -2045,7 +2045,7 @@ describe("GET /api/public/store/:slug/products/:productSlug — completed trips"
     expect(ne).toHaveBeenCalledWith(undefined, "completed");
   });
 
-  it("filters travel by linked trips and standalone travel product types, not transfer type alone", async () => {
+  it("filters travel by linked trips and the explicit storefront group", async () => {
     mockLimit.mockResolvedValueOnce([FAKE_STORE]);
 
     const response = await request(buildApp())
@@ -2053,28 +2053,20 @@ describe("GET /api/public/store/:slug/products/:productSlug — completed trips"
 
     expect(response.status).toBe(200);
     expect(isNotNull).toHaveBeenCalledWith(undefined);
-    expect(inArray).toHaveBeenCalledWith(undefined, [
-      "trip",
-      "package",
-      "tour",
-      "cruise",
-    ]);
+    expect(eq).toHaveBeenCalledWith(undefined, "travel");
+    expect(inArray).not.toHaveBeenCalled();
   });
 
-  it("includes standalone transfers in other store items", async () => {
+  it("filters other items by the explicit group and excludes trip-linked products", async () => {
     mockLimit.mockResolvedValueOnce([FAKE_STORE]);
 
     const response = await request(buildApp())
       .get("/api/public/store/minha-loja/products?group=other");
 
     expect(response.status).toBe(200);
-    expect(inArray).toHaveBeenCalledWith(undefined, [
-      "trip",
-      "package",
-      "tour",
-      "cruise",
-    ]);
-    expect(not).toHaveBeenCalledWith("inArray");
+    expect(isNull).toHaveBeenCalledWith(undefined);
+    expect(eq).toHaveBeenCalledWith(undefined, "other");
+    expect(inArray).not.toHaveBeenCalled();
   });
 });
 

@@ -481,6 +481,8 @@ export interface StoreCategory {
   updatedAt: string;
 }
 
+export type StorefrontGroup = "travel" | "other";
+
 export interface StoreProduct {
   id: string;
   storeId?: string;
@@ -503,6 +505,7 @@ export interface StoreProduct {
   boardingPoints?: Array<{ id: string; name: string; time?: string | null; address?: string | null }> | null;
   tripVideos?: string[] | null;
   type: string;
+  storefrontGroup?: StorefrontGroup;
   name: string;
   slug: string;
   shortDescription?: string | null;
@@ -767,6 +770,7 @@ export interface ProductInput {
   name: string;
   slug?: string;
   type?: string;
+  storefrontGroup?: StorefrontGroup;
   categoryId?: string;
   tripId?: string | null;
   accommodationId?: string | null;

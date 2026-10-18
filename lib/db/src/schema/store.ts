@@ -136,6 +136,7 @@ export const storeProductsTable = pgTable("store_products", {
   storeId: text("store_id").notNull().references(() => storesTable.id, { onDelete: "cascade" }),
 
   type: text("type").notNull(),
+  storefrontGroup: text("storefront_group").notNull().default("other"),
 
   name: text("name").notNull(),
   slug: text("slug").notNull(),

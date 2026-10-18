@@ -290,6 +290,7 @@ const CategoryBody = z.object({
 
 const ProductBody = z.object({
   type: z.string().min(1),
+  storefrontGroup: z.enum(["travel", "other"]).optional(),
   name: z.string().min(1),
   slug: z.string().min(1),
   description: z.string().optional(),
@@ -753,6 +754,7 @@ router.post("/store/products", async (req, res, next: NextFunction): Promise<voi
       ...(data.metaTitle && { metaTitle: data.metaTitle }),
       ...(data.metaDescription && { metaDescription: data.metaDescription }),
       ...(data.metaKeywords && { metaKeywords: data.metaKeywords }),
+      storefrontGroup: data.tripId ? "travel" : (data.storefrontGroup ?? "other"),
       ...(data.tripId && { tripId: data.tripId }),
       ...(data.accommodationId !== undefined && { accommodationId: data.accommodationId ?? null }),
       ...(data.isFeatured != null && { isFeatured: data.isFeatured }),
@@ -820,6 +822,10 @@ router.put("/store/products/:id", async (req, res, next: NextFunction): Promise<
       if (!accommodation) { next(new ValidationError("Hospedagem não encontrada", "VALIDATION_ERROR")); return; }
     }
     const updates: Record<string, unknown> = { ...parsed.data };
+    const effectiveTripId = parsed.data.tripId !== undefined
+      ? parsed.data.tripId
+      : existingProduct.tripId;
+    if (effectiveTripId) updates.storefrontGroup = "travel";
     if (parsed.data.status === "active" && existingProduct.status !== "active") {
       updates.publishedAt = new Date();
     }

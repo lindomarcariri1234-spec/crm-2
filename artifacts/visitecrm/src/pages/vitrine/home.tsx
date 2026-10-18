@@ -44,15 +44,8 @@ interface DestinationGroup {
   sales: number;
 }
 
-const TRAVEL_PRODUCT_TYPES = new Set([
-  "trip",
-  "package",
-  "tour",
-  "cruise",
-]);
-
 function isTravelProduct(product: StoreProduct): boolean {
-  return Boolean(product.tripId) || TRAVEL_PRODUCT_TYPES.has(product.type);
+  return Boolean(product.tripId) || product.storefrontGroup === "travel";
 }
 
 function ReferralWelcomeBanner({
