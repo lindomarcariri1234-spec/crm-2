@@ -48,6 +48,7 @@ import {
   deleteReservationAndReleaseCapacity,
   lockReservationForCancellation,
   moveLockedReservationCapacity,
+  findTripSeatConflicts,
   type LockedReservationCapacityRow,
 } from "../services/reservation-capacity";
 
@@ -1411,6 +1412,20 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
       const availableSeats = Number(tripRow.available_seats);
       if (availableSeats < seatsCount) {
         return { error: "Não há vagas suficientes nesta viagem", status: 409, code: "RESERVATION_CONFLICT" };
+      }
+
+      const conflictingSeats = await findTripSeatConflicts(
+        tx,
+        me.tenantId,
+        parsed.data.tripId,
+        parsed.data.seats,
+      );
+      if (conflictingSeats.length > 0) {
+        return {
+          error: "Uma ou mais poltronas selecionadas já estão ocupadas",
+          status: 409,
+          code: "SEAT_CONFLICT",
+        };
       }
 
       let selectedRoomName: string | null = null;

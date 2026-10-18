@@ -17,7 +17,11 @@ import {
   tripsTable,
   usersTable,
 } from "@workspace/db";
-import { RESERVATION_STATUS, ROLES } from "@workspace/permissions";
+import {
+  ACTIVE_RESERVATION_STATUSES,
+  RESERVATION_STATUS,
+  ROLES,
+} from "@workspace/permissions";
 
 const { mockRequireAuth } = vi.hoisted(() => ({
   mockRequireAuth: vi.fn(),
@@ -111,6 +115,14 @@ const PRODUCT_ID = `manual-checkout-race-product-${RUN}`;
 const ORDER_ID = `manual-checkout-race-order-${RUN}`;
 const ORDER_NUMBER = `ORD-MANUAL-CHECKOUT-RACE-${RUN}`;
 const EXISTING_RESERVATION_ID = `manual-checkout-race-existing-res-${RUN}`;
+const SEAT_RACE_TRIP_ID = `manual-checkout-seat-race-trip-${RUN}`;
+const SEAT_RACE_EXISTING_CLIENT_ID = `manual-checkout-seat-race-existing-client-${RUN}`;
+const SEAT_RACE_MANUAL_CLIENT_ID = `manual-checkout-seat-race-manual-client-${RUN}`;
+const SEAT_RACE_CHECKOUT_CLIENT_ID = `manual-checkout-seat-race-checkout-client-${RUN}`;
+const SEAT_RACE_EXISTING_RESERVATION_ID = `manual-checkout-seat-race-existing-res-${RUN}`;
+const SEAT_RACE_PRODUCT_ID = `manual-checkout-seat-race-product-${RUN}`;
+const SEAT_RACE_ORDER_ID = `manual-checkout-seat-race-order-${RUN}`;
+const SEAT_RACE_ORDER_NUMBER = `ORD-MANUAL-CHECKOUT-SEAT-RACE-${RUN}`;
 
 type ManualResponse = {
   status: number;
@@ -231,6 +243,71 @@ async function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = 
   }
 }
 
+async function runCheckoutFirstRace(
+  tripId: string,
+  manualClientId: string,
+  checkoutOrderId: string,
+  seat: string,
+): Promise<[ManualResponse, CheckoutOutcome]> {
+  const blocker = await pool.connect();
+  let transactionOpen = false;
+  const pendingOperations: Promise<unknown>[] = [];
+
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query(
+      "SELECT id FROM trips WHERE id = $1 AND tenant_id = $2 FOR UPDATE",
+      [tripId, TENANT_ID],
+    );
+    const { rows } = await blocker.query<{ pid: number }>(
+      "SELECT pg_backend_pid() AS pid",
+    );
+    const blockingPid = Number(rows[0]?.pid);
+
+    const checkoutOperation: Promise<CheckoutOutcome> =
+      createReservationsForOrder(checkoutOrderId).then(
+        (value) => ({ kind: "fulfilled", value }),
+        (reason: unknown) => ({ kind: "rejected", reason }),
+      );
+    pendingOperations.push(checkoutOperation);
+    await waitForBlockedSessions(blockingPid, 1);
+
+    const manualOperation: Promise<ManualResponse> = request(app)
+      .post("/api/reservations")
+      .send({
+        tripId,
+        clientId: manualClientId,
+        seats: [seat],
+        totalValue: 150,
+        paidValue: 0,
+      })
+      .then((response) => ({
+        status: response.status,
+        body: response.body as ManualResponse["body"],
+      }));
+    pendingOperations.push(manualOperation);
+    await waitForBlockedSessions(blockingPid, 2);
+
+    await blocker.query("COMMIT");
+    transactionOpen = false;
+    return await withTimeout(
+      Promise.all([manualOperation, checkoutOperation]),
+      "Manual reservation and checkout did not complete after releasing the trip lock",
+    );
+  } finally {
+    if (transactionOpen) {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+    }
+    blocker.release();
+    if (pendingOperations.length > 0) {
+      await Promise.race([
+        Promise.allSettled(pendingOperations),
+        new Promise((resolve) => setTimeout(resolve, 2_000)),
+      ]);
+    }
+  }
+}
+
 async function seedFixtures() {
   await db.insert(tenantsTable).values({
     id: TENANT_ID,
@@ -270,6 +347,30 @@ async function seedFixtures() {
       name: "Store checkout client",
       email: `checkout-${RUN}@example.test`,
       whatsapp: "11999990003",
+      createdById: USER_ID,
+    },
+    {
+      id: SEAT_RACE_EXISTING_CLIENT_ID,
+      tenantId: TENANT_ID,
+      name: "Existing seat-race passenger",
+      email: `seat-race-existing-${RUN}@example.test`,
+      whatsapp: "11999990004",
+      createdById: USER_ID,
+    },
+    {
+      id: SEAT_RACE_MANUAL_CLIENT_ID,
+      tenantId: TENANT_ID,
+      name: "Seat-race manual client",
+      email: `seat-race-manual-${RUN}@example.test`,
+      whatsapp: "11999990005",
+      createdById: USER_ID,
+    },
+    {
+      id: SEAT_RACE_CHECKOUT_CLIENT_ID,
+      tenantId: TENANT_ID,
+      name: "Seat-race checkout client",
+      email: `seat-race-checkout-${RUN}@example.test`,
+      whatsapp: "11999990006",
       createdById: USER_ID,
     },
   ]);
@@ -371,6 +472,99 @@ async function seedFixtures() {
     discount: "0.00",
     total: "150.00",
   });
+
+  await db.insert(tripsTable).values({
+    id: SEAT_RACE_TRIP_ID,
+    tenantId: TENANT_ID,
+    name: "Manual/checkout seat race trip",
+    slug: `manual-checkout-seat-trip-${RUN}`,
+    destination: "Salvador, BA",
+    destinationCity: "Salvador",
+    destinationState: "BA",
+    type: "excursao",
+    category: "nacional",
+    departureDate: new Date("2027-01-16T12:00:00.000Z"),
+    totalCapacity: 3,
+    availableSeats: 2,
+    reservedSeats: 1,
+    showSeatMap: true,
+    seatMap: {
+      "1": { status: "occupied" },
+      "2": { status: "available" },
+      "3": { status: "available" },
+    },
+    priceAdult: "150.00",
+    createdById: USER_ID,
+  });
+  await db.insert(reservationsTable).values({
+    id: SEAT_RACE_EXISTING_RESERVATION_ID,
+    tenantId: TENANT_ID,
+    tripId: SEAT_RACE_TRIP_ID,
+    clientId: SEAT_RACE_EXISTING_CLIENT_ID,
+    createdById: USER_ID,
+    status: RESERVATION_STATUS.PENDING,
+    totalValue: "150.00",
+    gratuityAmount: "0.00",
+    paidValue: "0.00",
+    balance: "150.00",
+    isGratuidade: false,
+    seats: ["1"],
+    capacityUnits: 1,
+    tripType: "excursao",
+    voucherCode: `MCR-S-${RUN}`,
+    reservationNumber: `RSV-MCR-S-${RUN}`,
+    qrCode: `QR-MCR-S-${RUN}`,
+  });
+  await db.insert(passengersTable).values({
+    id: `manual-checkout-seat-race-passenger-${RUN}`,
+    reservationId: SEAT_RACE_EXISTING_RESERVATION_ID,
+    name: "Existing seat-race passenger",
+    ageCategory: "adult",
+    isChildUnder7: false,
+    seatNumber: "1",
+    isPrimary: true,
+  });
+  await db.insert(storeProductsTable).values({
+    id: SEAT_RACE_PRODUCT_ID,
+    storeId: STORE_ID,
+    type: "trip",
+    name: "Manual/checkout seat race trip",
+    slug: `manual-checkout-seat-product-${RUN}`,
+    price: "150.00",
+    tripId: SEAT_RACE_TRIP_ID,
+    status: "published",
+  });
+  await db.insert(storeOrdersTable).values({
+    id: SEAT_RACE_ORDER_ID,
+    storeId: STORE_ID,
+    tenantId: TENANT_ID,
+    orderNumber: SEAT_RACE_ORDER_NUMBER,
+    clientId: SEAT_RACE_CHECKOUT_CLIENT_ID,
+    customerName: "Seat-race checkout client",
+    customerEmail: `seat-race-checkout-${RUN}@example.test`,
+    customerPhone: "11999990006",
+    seats: ["2"],
+    subtotal: "150.00",
+    discountAmount: "0.00",
+    taxAmount: "0.00",
+    shippingAmount: "0.00",
+    totalAmount: "150.00",
+    paymentMethod: "pix",
+    paymentProvider: "mercadopago",
+    paymentStatus: "pending",
+  });
+  await db.insert(storeOrderItemsTable).values({
+    id: `manual-checkout-seat-race-item-${RUN}`,
+    orderId: SEAT_RACE_ORDER_ID,
+    productId: SEAT_RACE_PRODUCT_ID,
+    productName: "Manual/checkout seat race trip",
+    productType: "trip",
+    price: "150.00",
+    quantity: 1,
+    subtotal: "150.00",
+    discount: "0.00",
+    total: "150.00",
+  });
 }
 
 beforeAll(async () => {
@@ -397,7 +591,10 @@ afterAll(async () => {
       .where(inArray(reservationsTable.id, reservationIds));
   }
   await db.delete(storeOrdersTable).where(eq(storeOrdersTable.tenantId, TENANT_ID));
-  await db.delete(storeProductsTable).where(eq(storeProductsTable.id, PRODUCT_ID));
+  await db.delete(storeProductsTable).where(inArray(storeProductsTable.id, [
+    PRODUCT_ID,
+    SEAT_RACE_PRODUCT_ID,
+  ]));
   await db.delete(tenantsTable).where(eq(tenantsTable.id, TENANT_ID));
 });
 
@@ -517,5 +714,50 @@ describe("manual reservation racing storefront checkout capacity (PostgreSQL)", 
         ]);
       }
     }
+  }, 15_000);
+
+  it("rejects a manual reservation for a seat already claimed by checkout while other capacity remains", async () => {
+    const [beforeTrip] = await db.select({
+      availableSeats: tripsTable.availableSeats,
+      reservedSeats: tripsTable.reservedSeats,
+    }).from(tripsTable).where(eq(tripsTable.id, SEAT_RACE_TRIP_ID));
+    expect(beforeTrip).toMatchObject({ availableSeats: 2, reservedSeats: 1 });
+
+    const [manual, checkout] = await runCheckoutFirstRace(
+      SEAT_RACE_TRIP_ID,
+      SEAT_RACE_MANUAL_CLIENT_ID,
+      SEAT_RACE_ORDER_ID,
+      "2",
+    );
+
+    expect(checkout.kind).toBe("fulfilled");
+    expect(manual.status).toBe(409);
+    expect(manual.body.code).toBe("SEAT_CONFLICT");
+
+    const activeRows = await db.select({
+      id: reservationsTable.id,
+      clientId: reservationsTable.clientId,
+      storeOrderId: reservationsTable.storeOrderId,
+      seats: reservationsTable.seats,
+    }).from(reservationsTable).where(and(
+      eq(reservationsTable.tenantId, TENANT_ID),
+      eq(reservationsTable.tripId, SEAT_RACE_TRIP_ID),
+      inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+    ));
+    const duplicateSeatRows = activeRows.filter((row) =>
+      row.seats.map((seat) => seat.trim()).includes("2"),
+    );
+    expect(activeRows).toHaveLength(2);
+    expect(duplicateSeatRows).toHaveLength(1);
+    expect(duplicateSeatRows[0]?.clientId).toBe(SEAT_RACE_CHECKOUT_CLIENT_ID);
+    expect(duplicateSeatRows[0]?.storeOrderId).toBe(SEAT_RACE_ORDER_NUMBER);
+    expect(checkout.kind === "fulfilled" ? checkout.value.reservationIds : [])
+      .toContain(duplicateSeatRows[0]?.id);
+
+    const [afterTrip] = await db.select({
+      availableSeats: tripsTable.availableSeats,
+      reservedSeats: tripsTable.reservedSeats,
+    }).from(tripsTable).where(eq(tripsTable.id, SEAT_RACE_TRIP_ID));
+    expect(afterTrip).toMatchObject({ availableSeats: 1, reservedSeats: 2 });
   }, 15_000);
 });
