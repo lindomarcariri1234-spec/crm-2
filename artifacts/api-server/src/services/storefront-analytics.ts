@@ -265,7 +265,6 @@ export async function getStorefrontAnalyticsSummary(
       tripId: storeProductsTable.tripId,
     }).from(storeProductsTable).where(and(
       eq(storeProductsTable.storeId, storeId),
-      eq(storeProductsTable.tenantId, tenantId),
       eq(storeProductsTable.status, "active"),
     )).orderBy(desc(storeProductsTable.viewsCount), asc(storeProductsTable.name)).limit(10),
   ]);
