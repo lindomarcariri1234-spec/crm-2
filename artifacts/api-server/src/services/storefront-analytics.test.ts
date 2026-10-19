@@ -54,6 +54,27 @@ describe("storefront analytics events", () => {
       metric({ metricDate: "2026-10-17", pageType: "product", count: 3 }),
       metric({ metricDate: "2026-09-18", pageType: "catalog", count: 9 }),
       metric({
+        metricDate: "2026-09-18",
+        eventType: "product_opened",
+        pageType: "none",
+        groupDimension: "travel",
+        count: 7,
+      }),
+      metric({
+        metricDate: "2026-09-18",
+        eventType: "search_submitted",
+        pageType: "none",
+        groupDimension: "other",
+        count: 3,
+      }),
+      metric({
+        metricDate: "2026-09-18",
+        eventType: "checkout_started",
+        pageType: "none",
+        groupDimension: "travel",
+        count: 2,
+      }),
+      metric({
         metricDate: "2026-10-18",
         eventType: "group_selected",
         pageType: "none",
@@ -95,6 +116,7 @@ describe("storefront analytics events", () => {
 
     expect(summary.pageViews.total).toBe(5);
     expect(summary.pageViews.previousTotal).toBe(9);
+    expect(summary.previousTotals).toEqual({ productOpens: 7, searches: 3, checkoutStarts: 2 });
     expect(summary.pageViews.byType).toContainEqual({ pageType: "home", count: 2 });
     expect(summary.pageViews.byType).toContainEqual({ pageType: "product", count: 3 });
     expect(summary.groups.find((group) => group.group === "travel")).toMatchObject({

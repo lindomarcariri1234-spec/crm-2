@@ -82,6 +82,11 @@ export interface StorefrontAnalyticsSummary {
     searches: number;
     checkoutStarts: number;
   };
+  previousTotals: {
+    productOpens: number;
+    searches: number;
+    checkoutStarts: number;
+  };
 }
 
 type MetricRow = typeof storefrontDailyMetricsTable.$inferSelect;
@@ -178,6 +183,7 @@ export function buildStorefrontAnalyticsSummary(
   let pageViewsTotal = 0;
   let previousPageViewsTotal = 0;
   const totals = { productOpens: 0, searches: 0, checkoutStarts: 0 };
+  const previousTotals = { productOpens: 0, searches: 0, checkoutStarts: 0 };
 
   for (const row of rows) {
     const isCurrent = row.metricDate >= currentStart && row.metricDate <= endDate;
@@ -194,22 +200,35 @@ export function buildStorefrontAnalyticsSummary(
       continue;
     }
 
-    if (!isCurrent) continue;
-    const group: StorefrontGroup = isStorefrontGroup(row.groupDimension)
-      ? row.groupDimension
-      : "unknown";
-    const groupTotals = groups.get(group)!;
-    if (row.eventType === "group_selected") {
-      groupTotals.selections += row.count;
-    } else if (row.eventType === "product_opened") {
-      groupTotals.productOpens += row.count;
+    if (row.eventType === "product_opened") {
+      if (isPrevious) previousTotals.productOpens += row.count;
+      if (!isCurrent) continue;
+      const group: StorefrontGroup = isStorefrontGroup(row.groupDimension)
+        ? row.groupDimension
+        : "unknown";
+      groups.get(group)!.productOpens += row.count;
       totals.productOpens += row.count;
     } else if (row.eventType === "search_submitted") {
-      groupTotals.searches += row.count;
+      if (isPrevious) previousTotals.searches += row.count;
+      if (!isCurrent) continue;
+      const group: StorefrontGroup = isStorefrontGroup(row.groupDimension)
+        ? row.groupDimension
+        : "unknown";
+      groups.get(group)!.searches += row.count;
       totals.searches += row.count;
     } else if (row.eventType === "checkout_started") {
-      groupTotals.checkoutStarts += row.count;
+      if (isPrevious) previousTotals.checkoutStarts += row.count;
+      if (!isCurrent) continue;
+      const group: StorefrontGroup = isStorefrontGroup(row.groupDimension)
+        ? row.groupDimension
+        : "unknown";
+      groups.get(group)!.checkoutStarts += row.count;
       totals.checkoutStarts += row.count;
+    } else if (row.eventType === "group_selected" && isCurrent) {
+      const group: StorefrontGroup = isStorefrontGroup(row.groupDimension)
+        ? row.groupDimension
+        : "unknown";
+      groups.get(group)!.selections += row.count;
     }
   }
 
@@ -240,6 +259,7 @@ export function buildStorefrontAnalyticsSummary(
     topProducts,
     groups: storefrontGroups.map((group) => groups.get(group)!),
     totals,
+    previousTotals,
   };
 }
 

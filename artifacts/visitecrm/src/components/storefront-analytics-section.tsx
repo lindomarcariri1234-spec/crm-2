@@ -14,8 +14,11 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Compass,
+  CalendarDays,
   Eye,
+  Gauge,
   Layers3,
+  Lightbulb,
   PackageOpen,
   Search,
   ShoppingBag,
@@ -48,6 +51,7 @@ export type StorefrontAnalyticsSummary = {
     checkoutStarts: number;
   }>;
   totals: { productOpens: number; searches: number; checkoutStarts: number };
+  previousTotals: { productOpens: number; searches: number; checkoutStarts: number };
 };
 
 export interface StorefrontAnalyticsSectionProps {
@@ -113,16 +117,37 @@ function percentChange(current: number, previous: number) {
   return ((current - previous) / previous) * 100;
 }
 
+function PeriodComparison({ current, previous }: { current: number; previous: number }) {
+  const change = percentChange(current, previous);
+  if (change === null) {
+    return <p className="mt-2 text-xs text-muted-foreground">Sem base comparável no período anterior</p>;
+  }
+  if (change === 0) {
+    return <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">Sem alteração vs. período anterior</p>;
+  }
+  const increased = change > 0;
+  return (
+    <p className={`mt-2 flex items-center gap-1 text-xs ${increased ? "text-[#367b70]" : "text-[#a86242]"}`}>
+      {increased
+        ? <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+        : <ArrowDownRight className="h-3.5 w-3.5" aria-hidden="true" />}
+      {Math.abs(change).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% {increased ? "a mais" : "a menos"} que no período anterior
+    </p>
+  );
+}
+
 function MetricCard({
   icon: Icon,
   label,
   value,
+  previousValue,
   detail,
   accent,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: number;
+  previousValue: number;
   detail: string;
   accent: string;
 }) {
@@ -141,6 +166,7 @@ function MetricCard({
           </span>
         </div>
         <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{detail}</p>
+        <PeriodComparison current={value} previous={previousValue} />
       </CardContent>
     </Card>
   );
@@ -271,22 +297,29 @@ export function StorefrontAnalyticsSection({
 
   const pageViews = data.pageViews ?? { total: 0, previousTotal: 0, byDay: [], byType: [] };
   const totals = data.totals ?? { productOpens: 0, searches: 0, checkoutStarts: 0 };
+  const previousTotals = data.previousTotals ?? { productOpens: 0, searches: 0, checkoutStarts: 0 };
   const byDay = pageViews.byDay ?? [];
   const pageTypes = pageViews.byType ?? [];
   const products = data.topProducts ?? [];
   const allZero = pageViews.total === 0 && pageViews.previousTotal === 0 && totals.productOpens === 0 && totals.searches === 0 && totals.checkoutStarts === 0 &&
+    previousTotals.productOpens === 0 && previousTotals.searches === 0 && previousTotals.checkoutStarts === 0 &&
     byDay.every((day) => day.home + day.catalog + day.product + day.checkout + day.other === 0) &&
     products.every((product) => product.views === 0) &&
     pageTypes.every((item) => item.count === 0) &&
     (data.groups ?? []).every((group) => group.selections === 0 && group.productOpens === 0 && group.searches === 0 && group.checkoutStarts === 0);
   if (allZero) return <EmptyState />;
 
-  const change = percentChange(pageViews.total, pageViews.previousTotal);
   const periodLabel = `últimos ${periodDays} dias`;
   const chartData = byDay.map((day) => ({
     ...day,
     label: shortDate(day.date),
+    total: day.home + day.catalog + day.product + day.checkout + day.other,
   }));
+  const averageViewsPerDay = pageViews.total / periodDays;
+  const peakDay = chartData.reduce<(typeof chartData)[number] | undefined>(
+    (peak, day) => day.total > (peak?.total ?? 0) ? day : peak,
+    undefined,
+  );
   const totalByType = pageTypes.reduce((sum, item) => sum + item.count, 0);
   const sortedPageTypes = [...pageTypes].sort((a, b) => b.count - a.count);
   const topPageType = sortedPageTypes[0];
@@ -317,22 +350,81 @@ export function StorefrontAnalyticsSection({
                 <Eye className="h-[18px] w-[18px]" aria-hidden="true" />
               </span>
             </div>
-            <p className="mt-2 flex items-center gap-1 text-xs text-[#50756d]">
-              {change === null ? (
-                <>Sem base no período anterior</>
-              ) : (
-                <>
-                  {change >= 0 ? <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" /> : <ArrowDownRight className="h-3.5 w-3.5" aria-hidden="true" />}
-                  {Math.abs(change).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% vs. período anterior
-                </>
-              )}
-            </p>
+            <PeriodComparison current={pageViews.total} previous={pageViews.previousTotal} />
           </CardContent>
         </Card>
-        <MetricCard icon={PackageOpen} label="Aberturas de produto" value={totals.productOpens} detail={`Eventos no período de ${periodDays} dias`} accent="bg-[#f6edd9] text-[#9a7125]" />
-        <MetricCard icon={Search} label="Buscas realizadas" value={totals.searches} detail="Volume agregado; termos de busca não são exibidos" accent="bg-[#e4efed] text-[#367b70]" />
-        <MetricCard icon={ShoppingBag} label="Inícios de checkout" value={totals.checkoutStarts} detail="Inícios registrados, não compras concluídas" accent="bg-[#f4e7df] text-[#a86242]" />
+        <MetricCard icon={PackageOpen} label="Aberturas de produto" value={totals.productOpens} previousValue={previousTotals.productOpens} detail="Eventos registrados no período" accent="bg-[#f6edd9] text-[#9a7125]" />
+        <MetricCard icon={Search} label="Buscas realizadas" value={totals.searches} previousValue={previousTotals.searches} detail="Termos de busca não são exibidos" accent="bg-[#e4efed] text-[#367b70]" />
+        <MetricCard icon={ShoppingBag} label="Inícios de checkout" value={totals.checkoutStarts} previousValue={previousTotals.checkoutStarts} detail="Inícios registrados, não compras concluídas" accent="bg-[#f4e7df] text-[#a86242]" />
       </div>
+
+      <Card className="border-[#d5e2dc] bg-[#fbfdfb] shadow-sm">
+        <CardHeader className="pb-3">
+          <div className="flex items-start gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#e6f0ec] text-[#367b70]">
+              <Lightbulb className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <div>
+              <CardTitle className="text-base">Insights do período</CardTitle>
+              <CardDescription className="mt-1">Sinais calculados a partir dos eventos agregados · {periodLabel}</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-3 pt-0 md:grid-cols-[0.8fr_0.9fr_1.6fr]">
+          <div className="rounded-xl border border-border/60 bg-white p-4">
+            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <Gauge className="h-4 w-4 text-[#508b7e]" aria-hidden="true" />
+              Média diária
+            </div>
+            <p className="mt-2 font-mono text-xl font-semibold tabular-nums">
+              {averageViewsPerDay.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}
+              <span className="ml-1 text-xs font-medium text-muted-foreground">visualizações</span>
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">por dia no período selecionado</p>
+          </div>
+          <div className="rounded-xl border border-border/60 bg-white p-4">
+            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <CalendarDays className="h-4 w-4 text-[#508b7e]" aria-hidden="true" />
+              Dia de maior movimento
+            </div>
+            {peakDay?.total ? (
+              <>
+                <p className="mt-2 font-mono text-xl font-semibold tabular-nums">{peakDay.label}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{safeCount(peakDay.total)} visualizações de página</p>
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-muted-foreground">Sem visualizações para destacar.</p>
+            )}
+          </div>
+          <div className="rounded-xl border border-border/60 bg-white p-4">
+            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <Activity className="h-4 w-4 text-[#508b7e]" aria-hidden="true" />
+              Eventos por 100 visualizações
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {[
+                { label: "Aberturas", count: totals.productOpens },
+                { label: "Buscas", count: totals.searches },
+                { label: "Checkouts", count: totals.checkoutStarts },
+              ].map((item) => (
+                <div key={item.label} className="min-w-0 rounded-lg bg-[#f4f7f5] px-2.5 py-2">
+                  <p className="font-mono text-base font-semibold tabular-nums">
+                    {pageViews.total > 0
+                      ? ((item.count / pageViews.total) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })
+                      : "—"}
+                  </p>
+                  <p className="truncate text-[11px] font-medium text-muted-foreground">{item.label}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+              {pageViews.total > 0
+                ? "Relação entre eventos e visualizações; ações podem se repetir e não representam conversão."
+                : "Sem visualizações para calcular a relação neste período."}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(310px,0.9fr)]">
         <Card className="min-w-0 border-border/70 shadow-sm">

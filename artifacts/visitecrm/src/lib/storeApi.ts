@@ -100,6 +100,7 @@ export interface StorefrontAnalyticsSummary {
     checkoutStarts: number;
   }>;
   totals: { productOpens: number; searches: number; checkoutStarts: number };
+  previousTotals: { productOpens: number; searches: number; checkoutStarts: number };
 }
 
 export const storeApi = {
