@@ -19,3 +19,17 @@ mtime_ms = 1789577620104
 storage_uri = "gcs://replit-rams-assets-reed/rams/assets/repl:ab84617d-cd68-4929-8822-9cf171f4e47b/a6ca4445-32d8-4f6c-b42e-2fa46a1f2c80/940dbf8f-1872-4730-88a7-3ad6466990da"
 storage_version_token = "1789577627175627"
 content_type = "text/markdown"
+
+[[outputs]]
+id = "XfVHE6CmE237B6gl-hQfq"
+uri = "file://research/notes.md"
+type = "text"
+title = "Caderno de pesquisa — plataforma de distribuição turística"
+description = "Escopo, perguntas e lacunas da comparação open source que sustentará o diagnóstico da Fase 0."
+logical_id = "254052ba-3104-4760-a6d4-5abfca6b0e52"
+content_hash = "sha256:e25dae8aeb08a0e4a82ddd61d19b0eaa1c3b0f5bf4381d378a2921f1b5d3ef70"
+size = 2157
+mtime_ms = 1792388713787
+storage_uri = "gcs://replit-rams-assets-reed/rams/assets/repl:ab84617d-cd68-4929-8822-9cf171f4e47b/254052ba-3104-4760-a6d4-5abfca6b0e52/21af9191-cf0c-4890-a8c0-6862e2db7ea1"
+storage_version_token = "1792388719716758"
+content_type = "text/markdown"

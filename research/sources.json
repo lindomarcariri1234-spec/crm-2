@@ -1,0 +1,232 @@
+[
+  {
+    "id": "medusa-repository",
+    "title": "medusajs/medusa repository",
+    "url": "https://github.com/medusajs/medusa",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/medusa-01-repository.md",
+    "note": "Official repository; latest visible commit 2026-10-16 and release v2.21.2 dated 2026-09-28."
+  },
+  {
+    "id": "medusa-license",
+    "title": "Medusa repository license",
+    "url": "https://github.com/medusajs/medusa/blob/develop/LICENSE",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 1,
+    "saved_evidence": "research/sources/medusa-02-license.md",
+    "note": "Primary license text for repository materials; explicitly excludes Enterprise Edition materials."
+  },
+  {
+    "id": "medusa-marketplace-recipe",
+    "title": "Marketplace Recipe — Medusa Documentation",
+    "url": "https://docs.medusajs.com/resources/recipes/marketplace",
+    "publication_date": "2025-05-20",
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/medusa-03-docs.md",
+    "note": "Vendor-maintained implementation recipe; documents custom vendor models, APIs, and order splitting."
+  },
+  {
+    "id": "tourapp-repository",
+    "title": "tourapp/tourapp repository",
+    "url": "https://github.com/tourapp/tourapp",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/tourapp-01-repository.md",
+    "note": "Official repository description and metadata."
+  },
+  {
+    "id": "tourapp-source-tree",
+    "title": "tourapp/tourapp source tree",
+    "url": "https://github.com/tourapp/tourapp/tree/master",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/tourapp-02-code.md",
+    "note": "Official source tree; Java/Maven metadata."
+  },
+  {
+    "id": "tourapp-commit-history",
+    "title": "tourapp/tourapp commit history",
+    "url": "https://github.com/tourapp/tourapp/commits/master",
+    "publication_date": "2013-06-14",
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/tourapp-03-activity.md",
+    "note": "Latest visible commit in the fetched branch."
+  },
+  {
+    "id": "tourapp-license-file",
+    "title": "tourapp/tourapp LICENSE file lookup",
+    "url": "https://github.com/tourapp/tourapp/blob/master/LICENSE",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/tourapp-04-license.md",
+    "note": "Official file view returned not found; this does not rule out separate terms."
+  },
+  {
+    "id": "qloapps-repository",
+    "title": "QloApps official repository",
+    "url": "https://github.com/Qloapps/QloApps",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/qloapps-02-license.md",
+    "note": "The saved page is the repository's official README, used for declared product scope, stack, and license categories."
+  },
+  {
+    "id": "qloapps-commit-history",
+    "title": "QloApps latest commit API",
+    "url": "https://api.github.com/repos/Qloapps/QloApps/commits?per_page=1",
+    "publication_date": "2026-10-17",
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/qloapps-01-repository.md",
+    "note": "Latest visible commit date, not a release or support commitment."
+  },
+  {
+    "id": "qloapps-releases",
+    "title": "QloApps releases API",
+    "url": "https://api.github.com/repos/Qloapps/QloApps/releases",
+    "publication_date": "2025-07-04",
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/qloapps-03-releases.md",
+    "note": "Latest visible release v1.7.0."
+  },
+  {
+    "id": "osl-3-license",
+    "title": "Open Software License 3.0",
+    "url": "https://opensource.org/licenses/OSL-3.0",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 1,
+    "saved_evidence": "research/sources/qloapps-04-osl-license.md",
+    "note": "OSI license text; external deployment is treated as distribution by the license."
+  },
+  {
+    "id": "qloapps-nvd-cve",
+    "title": "NVD — CVE-2025-10759",
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2025-10759",
+    "publication_date": "2025-09-21",
+    "observed_on": "2026-10-19",
+    "tier": 1,
+    "saved_evidence": "research/sources/qloapps-05-nvd-cve-2025-10759.md",
+    "note": "NVD record attributes the CNA details to VulDB and does not provide a separate NIST analysis."
+  },
+  {
+    "id": "magepeople-repository",
+    "title": "magepeopleteam/tour-booking-manager repository",
+    "url": "https://github.com/magepeopleteam/tour-booking-manager",
+    "publication_date": "2026-10-19",
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/tbm-01-repository.md",
+    "note": "Official repository metadata identifies GPL-2.0; latest visible commit was observed on 2026-10-19."
+  },
+  {
+    "id": "gpl-2-license",
+    "title": "GNU General Public License v2.0",
+    "url": "https://www.gnu.org/licenses/old-licenses/gpl-2.0.html",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 1,
+    "saved_evidence": "research/sources/tbm-02-license.md",
+    "note": "Authoritative license text; does not determine terms for separate premium add-ons."
+  },
+  {
+    "id": "magepeople-wordpress-listing",
+    "title": "Travelly — Tour & Travel Booking Manager for WooCommerce",
+    "url": "https://wordpress.org/plugins/tour-booking-manager/",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/tbm-03-plugin-directory.md",
+    "note": "Official WordPress.org listing for the plugin matching the repository."
+  },
+  {
+    "id": "magepeople-nvd-cve",
+    "title": "NVD — CVE-2026-62063",
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-62063",
+    "publication_date": "2026-10-01",
+    "observed_on": "2026-10-19",
+    "tier": 1,
+    "saved_evidence": "research/sources/tbm-04-nvd-cve-2026-62063.md",
+    "note": "NVD record attributes the finding to Patchstack; lists versions through 2.3.1 as affected."
+  },
+  {
+    "id": "magepeople-changelog",
+    "title": "Tour Booking Manager official changelog",
+    "url": "https://github.com/magepeopleteam/tour-booking-manager/blob/main/readme.txt",
+    "publication_date": "2026-10-12",
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/tbm-05-current-changelog.md",
+    "note": "Latest visible release is 2.3.6; changelog does not state which release fixed CVE-2026-62063."
+  },
+  {
+    "id": "opentripplanner-repository",
+    "title": "OpenTripPlanner repository",
+    "url": "https://github.com/opentripplanner/OpenTripPlanner",
+    "publication_date": "2026-10-18",
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/otp-01-repository.md",
+    "note": "Official repository describes multimodal routing and Java/Maven implementation."
+  },
+  {
+    "id": "opentripplanner-license",
+    "title": "OpenTripPlanner LICENSE on dev-2.x",
+    "url": "https://raw.githubusercontent.com/opentripplanner/OpenTripPlanner/dev-2.x/LICENSE",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 1,
+    "saved_evidence": "research/sources/otp-02-license.md",
+    "note": "License file states LGPL-3.0-or-later with identified incorporated portions under other licenses."
+  },
+  {
+    "id": "opentripplanner-docs",
+    "title": "OpenTripPlanner 2 documentation",
+    "url": "https://docs.opentripplanner.org/en/dev-2.x/",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/otp-04-api-docs.md",
+    "note": "Official docs for the project scope and API family; not endpoint-level contract evidence."
+  },
+  {
+    "id": "opentripplanner-changelog",
+    "title": "OpenTripPlanner 2.10 changelog",
+    "url": "https://docs.opentripplanner.org/en/v2.10.0/Changelog",
+    "publication_date": "2026-09-09",
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/otp-05-v2-10-changelog.md",
+    "note": "Latest tagged release observed: 2.10.0."
+  },
+  {
+    "id": "opentravel-official-site",
+    "title": "Open Travel Alliance official site",
+    "url": "https://opentravel.org/",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/ota-03-standards.md",
+    "note": "Organization self-description for its travel interchange standards and tools."
+  },
+  {
+    "id": "opentravel-github-org",
+    "title": "OpenTravel GitHub organization",
+    "url": "https://github.com/OpenTravel/",
+    "publication_date": null,
+    "observed_on": "2026-10-19",
+    "tier": 3,
+    "saved_evidence": "research/sources/ota-04-github-org.md",
+    "note": "Official repository listing; Apache-2.0 shown for one repository only, not the full standards suite."
+  }
+]
