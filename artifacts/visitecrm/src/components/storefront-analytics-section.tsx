@@ -87,6 +87,11 @@ const groupLabels: Record<StorefrontAnalyticsSummary["groups"][number]["group"],
   all: "Todos os grupos",
   unknown: "Não identificado",
 };
+const productGroupLabels: Record<StorefrontAnalyticsSummary["topProducts"][number]["group"], string> = {
+  travel: "Viagens",
+  other: "Outros produtos",
+  unknown: "Não identificado",
+};
 
 function pageTypeLabel(pageType: string) {
   return pageLabels[pageType] ?? "Outras páginas";
@@ -210,7 +215,13 @@ function GroupFunnel({ groups }: { groups: StorefrontAnalyticsSummary["groups"] 
     { key: "checkoutStarts" as const, label: "Inícios de checkout", color: "#bd7658" },
   ];
 
-  if (!displayGroups.length) {
+  const hasActivity = displayGroups.some((group) =>
+    group.selections > 0
+    || group.productOpens > 0
+    || group.searches > 0
+    || group.checkoutStarts > 0,
+  );
+  if (!hasActivity) {
     return <div className="flex h-44 items-center justify-center text-center text-sm text-muted-foreground">Sem atividade de grupos neste período.</div>;
   }
 
@@ -445,7 +456,7 @@ export function StorefrontAnalyticsSection({
                     <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#f2f4f1] font-mono text-xs font-semibold text-[#6b8076] tabular-nums">{String(index + 1).padStart(2, "0")}</span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium" title={product.name}>{product.name}</p>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">{product.group === "travel" ? "Viagens" : "Outros produtos"}</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">{productGroupLabels[product.group]}</p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="font-mono text-sm font-semibold tabular-nums">{safeCount(product.views)}</p>
