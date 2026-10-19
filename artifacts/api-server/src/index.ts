@@ -38,6 +38,7 @@ import { runExpiredReservationsCron } from "./lib/expired-reservations";
 import { runPipelineTripDepartureCron, runPipelineTripEndedCron } from "./services/pipeline-automation";
 import { calculateScoresForAllTenants } from "./lib/client-scores";
 import { runCampaignAutomationCron } from "./lib/campaign-automation";
+import { runScheduledManualCampaignsCron } from "./lib/manual-campaign-dispatch";
 import { runGemeoAlertsCron, runGemeoOpportunitiesCron } from "./lib/gemeo-cron";
 import { runFavoriteLowAvailabilityAlertCron } from "./lib/favorite-alerts";
 import { runAbandonedOrderReferralCleanup } from "./lib/abandoned-order-referrals";
@@ -378,6 +379,10 @@ void runApiStartup(process.env, {
       scheduleDistributedCron("campaign-automation", "0 * * * *", async () => {
         logger.info("[campaign-automation] Daily automation cron triggered");
         await runCampaignAutomationCron();
+      }, { timezone: "America/Sao_Paulo" });
+
+      scheduleDistributedCron("campaign-scheduled-dispatch", "* * * * *", async () => {
+        await runScheduledManualCampaignsCron();
       }, { timezone: "America/Sao_Paulo" });
 
       void runScheduledJob("whatsapp-outbox-startup", retryPendingReservationConfirmedWhatsApps);

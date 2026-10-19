@@ -9,6 +9,7 @@ import { z } from "zod";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { resolveSegment } from "../lib/campaign-segment";
+import { sendManualCampaignNow } from "../lib/manual-campaign-dispatch";
 import { getAIClientForTenant } from "../lib/ai-client";
 import { parseBrazilDateRange } from "../lib/brazil-calendar";
 
@@ -179,17 +180,23 @@ router.post("/campaigns", async (req, res, next: NextFunction): Promise<void> =>
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateCampaignBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    const scheduledAt = parsed.data.scheduledAt ? new Date(parsed.data.scheduledAt) : null;
+    if (scheduledAt && !Number.isFinite(scheduledAt.getTime())) {
+      next(new ValidationError("A data de agendamento é inválida.", "INVALID_CAMPAIGN_SCHEDULE"));
+      return;
+    }
     const id = generateId();
+    const isManual = !parsed.data.triggerType || parsed.data.triggerType === "manual";
     await db.insert(campaignsTable).values({
       id,
       tenantId: me.tenantId,
       name: parsed.data.name,
       type: parsed.data.type,
-      status: "draft",
+      status: isManual && scheduledAt ? "scheduled" : "draft",
       subject: parsed.data.subject ?? null,
       content: parsed.data.content,
       targetSegment: parsed.data.targetSegment ?? {},
-      scheduledAt: parsed.data.scheduledAt ? new Date(parsed.data.scheduledAt) : null,
+      scheduledAt,
       triggerType: parsed.data.triggerType ?? "manual",
       triggerConfig: parsed.data.triggerConfig ?? null,
       autoEnabled: parsed.data.autoEnabled ?? false,
@@ -212,6 +219,11 @@ router.patch("/campaigns/:id", async (req, res, next: NextFunction): Promise<voi
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = UpdateCampaignBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    if (parsed.data.status === "sending") {
+      const campaign = await sendManualCampaignNow(me.tenantId, req.params.id);
+      res.json(formatCampaign(campaign));
+      return;
+    }
     const updates: Partial<typeof campaignsTable.$inferInsert> = {};
     if (parsed.data.name != null) updates.name = parsed.data.name;
     if (parsed.data.status != null) updates.status = parsed.data.status;

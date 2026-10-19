@@ -73,6 +73,7 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   scheduled: { label: "Agendada", className: "bg-secondary text-secondary-foreground" },
   sending: { label: "Enviando", className: "bg-accent text-accent-foreground" },
   sent: { label: "Enviada", className: "bg-primary/10 text-primary" },
+  failed: { label: "Falhou", className: "bg-destructive/10 text-destructive" },
   cancelled: { label: "Cancelada", className: "bg-destructive/10 text-destructive" },
 };
 
@@ -381,6 +382,8 @@ function CampaignsTab() {
   const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
+    const scheduleInput = fd.get("scheduledAt") as string;
+    const scheduledAt = scheduleInput ? new Date(scheduleInput).toISOString() : undefined;
     await createCampaign.mutateAsync({
       data: {
         name: fd.get("name") as string,
@@ -397,7 +400,7 @@ function CampaignsTab() {
           },
         },
         targetSegment: segment,
-        scheduledAt: fd.get("scheduledAt") ? (fd.get("scheduledAt") as string) : undefined,
+        scheduledAt,
         triggerType: "manual",
       },
     });
@@ -615,7 +618,8 @@ function CampaignsTab() {
                 </TableRow>
               ) : (
                 manualCampaigns.map((c) => {
-                  const st = statusConfig[c.status] ?? { label: c.status, className: "" };
+                  const displayStatus = c.status === "draft" && c.scheduledAt ? "scheduled" : c.status;
+                  const st = statusConfig[displayStatus] ?? { label: displayStatus, className: "" };
                   return (
                     <TableRow key={c.id}>
                       <TableCell className="font-medium text-foreground">{c.name}</TableCell>
@@ -649,12 +653,26 @@ function CampaignsTab() {
                           <Button size="sm" variant="ghost" onClick={() => setAnalyticsId(analyticsId === c.id ? null : c.id)} title="Ver análise">
                             <BarChart2 className="w-4 h-4" />
                           </Button>
-                          {c.status === "draft" && (
-                            <Button size="sm" variant="ghost" onClick={() => handleSend(c.id)} title="Enviar agora">
+                          {(c.status === "draft" || c.status === "scheduled") && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleSend(c.id)}
+                              disabled={updateCampaign.isPending}
+                              title="Enviar agora"
+                              aria-label={`Enviar campanha ${c.name} agora`}
+                            >
                               <Send className="w-4 h-4 text-primary" />
                             </Button>
                           )}
-                          <Button size="sm" variant="ghost" onClick={() => handleDelete(c.id)} title="Excluir">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleDelete(c.id)}
+                            disabled={deleteCampaign.isPending || c.status === "sending"}
+                            title="Excluir"
+                            aria-label={`Excluir campanha ${c.name}`}
+                          >
                             <Trash2 className="w-4 h-4 text-muted-foreground hover:text-destructive" />
                           </Button>
                         </div>
