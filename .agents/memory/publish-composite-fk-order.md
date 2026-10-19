@@ -1,10 +1,12 @@
 ---
-name: Publish composite foreign-key order
-description: Replit's schema diff can omit standalone unique indexes and order composite foreign keys before newly added unique constraints.
+name: Publish schema vs. Drizzle migration ordering
+description: Replit Publish applies schema diffs independently of the app's Drizzle startup migration ledger.
 ---
 
-When adding a composite foreign key through Publish, the referenced column tuple must already have a unique constraint on the production target. A standalone unique index in development may not appear in the publish diff. Replacing it with a table-level `UNIQUE` constraint makes the addition visible, but the diff may still order that constraint after the foreign key, so a one-pass publish can fail. Also account for the API's journaled startup migrator: Publish may create a named constraint before the migration ledger catches up.
+Replit Publish applies development-to-production schema diffs independently of the app's `drizzle.__drizzle_migrations` ledger. A publish can create a table, index, or constraint while the ledger remains at the previous migration; API startup then replays the pending migration and can fail on the already-existing object. A zero-diff publish result confirms schema shape, not that the migration ledger caught up.
 
-**Why:** The project had the required unique indexes in development, but none in production; the publish diff emitted the foreign keys first and failed before any later unique-constraint statements. On a staged retry, Publish created the constraints while the API's pending migration still attempted to attach the same indexes, preventing API startup.
+For composite foreign keys, the referenced column tuple must already have a unique constraint on production. A standalone unique index in development may not appear in the publish diff. Replacing it with a table-level `UNIQUE` constraint makes the addition visible, but the diff may still order that constraint after the foreign key, so a one-pass publish can fail.
 
-**How to apply:** Inspect both catalogs and recompute the actual publish diff. If ordering is wrong, stage the supported Publish flow: publish only the unique constraints while retaining the existing simple foreign keys, then add the composite foreign keys in development and publish again. Ensure pending journal migrations skip already-present matching named constraints instead of adding them twice. Verify keys are unique and do not choose any table-truncation option.
+**Why:** Production inspection showed that Publish could leave newly-created objects in place while the Drizzle ledger stayed on the prior migration. The API then failed before serving, even though the next schema diff was empty. A prior composite-FK rollout also showed that Publish statement ordering can fail before later constraints are applied.
+
+**How to apply:** After a publish migration failure, inspect the production catalog and Drizzle ledger separately; do not assume a retry will record the migration. Keep one coherent owner for production schema application, and do not write production migration metadata through the read-only replica. For FK-order issues, publish required unique constraints first, then add dependent composite foreign keys in a later publish; verify keys are unique and avoid table-truncation options.
