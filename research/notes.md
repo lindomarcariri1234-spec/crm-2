@@ -1,6 +1,6 @@
 # Research Notes: Open-source components for a tourism distribution platform
 
-**Status:** cross-checking  
+**Status:** complete — 2026-10-19
 **Depth:** Standard
 
 ## Plan
@@ -15,7 +15,7 @@
 | # | Area | Status | Sources |
 |---|---|---|---|
 | 1 | Medusa commerce framework | done | 3 |
-| 2 | Tour-operator and booking systems | done | 8 |
+| 2 | Tour-operator and booking systems | done | 9 |
 | 3 | Lodging booking/PMS alternative | done | 5 |
 | 4 | Itinerary and routing component | done | 4 |
 | 5 | Standards and integration boundary | done | 2 |
@@ -37,7 +37,7 @@ _[@key] markers reference sources in `research/sources.json`._
 - Medusa is an extensible commerce framework; its marketplace recipe requires custom vendor models, vendor API/auth, and order-splitting workflows [@medusa-repository] [@medusa-marketplace-recipe].
 - TourApp advertises outbound operations but its visible activity ends in 2013 and the checked branch has no LICENSE file [@tourapp-repository] [@tourapp-commit-history] [@tourapp-license-file].
 - QloApps is hotel/PMS-oriented; the README states OSL-3.0 for core and PHP/MySQL requirements; latest release v1.7.0 (2025-07-04), latest commit 2026-10-17 [@qloapps-repository] [@qloapps-releases] [@osl-3-license].
-- MagePeople Tour Booking Manager is a WordPress/WooCommerce plugin under GPL-2.0 with recent releases; NVD lists versions through 2.3.1 as affected by CVE-2026-62063, but the changelog does not identify the fix [@magepeople-repository] [@gpl-2-license] [@magepeople-wordpress-listing] [@magepeople-nvd-cve] [@magepeople-changelog].
+- MagePeople's Travelly / Tour Booking Manager is a WordPress/WooCommerce plugin under GPL-2.0 with recent releases; NVD lists versions through 2.3.1 as affected by CVE-2026-62063, but the changelog does not identify the fix [@magepeople-repository] [@gpl-2-license] [@magepeople-wordpress-listing] [@magepeople-nvd-cve] [@magepeople-changelog].
 - OpenTripPlanner is a separate Java/JVM routing component, not a booking or supplier-distribution system; latest tagged release observed is 2.10.0 (2026-09-09) [@opentripplanner-repository] [@opentripplanner-license] [@opentripplanner-docs] [@opentripplanner-changelog].
 - OpenTravel is a standards organization and tooling ecosystem, not a ready-to-run marketplace; licenses for the specifications and DEx artifacts remain individually unverified [@opentravel-official-site] [@opentravel-github-org].
 - Existing VisiteCRM code already includes tenant-scoped store/catalog, trip and lodging paths, reservations, checkout, partner portal, commission snapshots and a financial ledger. These are code findings; see the report's project evidence map.
@@ -54,3 +54,13 @@ _[@key] markers reference sources in `research/sources.json`._
 
 - Candidate list is representative, not exhaustive; no market-share, customer-adoption, or production-support claims are inferred from GitHub activity.
 - No independent operational references were found for the candidate systems; their feature descriptions are vendor/project claims, not proof of suitability or readiness.
+- The separate approved base document was not found inside this workspace after a broader search; owner confirmation remains required.
+- Real supplier/payment integrations, commercial rules, and live operations remain unverified and must be validated before implementation or pilot.
+
+## Completion
+
+- Report: `docs/audits/2026-10-19-diagnostico-marketplace-turistico-visite-cariri.md` (version 1.0).
+- Source registry: `research/sources.json` contains 23 stable keys; every source has saved evidence and every source used in the report has a rendered, clickable citation.
+- The report covers current capabilities, the open-source comparison, architecture, entity relationships, permissions, risks, backlog, estimates, acceptance criteria, test plan, and deployment plan.
+- No functional code, schema/migrations, data, integrations, production environment, or `artifacts/mockup-sandbox` content was changed; no secrets were read.
+- Verification limits are recorded in the report: 96/97 focused API tests passed, the API workflow failed on the `_uploadthingPatched` build assertion, and the reported typechecks/schema-drift check passed.

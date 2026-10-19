@@ -71,13 +71,13 @@
   },
   {
     "id": "qloapps-repository",
-    "title": "QloApps official repository",
-    "url": "https://github.com/Qloapps/QloApps",
+    "title": "QloApps official README",
+    "url": "https://raw.githubusercontent.com/Qloapps/QloApps/develop/README.md",
     "publication_date": null,
     "observed_on": "2026-10-19",
     "tier": 3,
     "saved_evidence": "research/sources/qloapps-02-license.md",
-    "note": "The saved page is the repository's official README, used for declared product scope, stack, and license categories."
+    "note": "Official repository README; used for declared product scope, stack, and license categories."
   },
   {
     "id": "qloapps-commit-history",
@@ -121,7 +121,7 @@
   },
   {
     "id": "magepeople-repository",
-    "title": "magepeopleteam/tour-booking-manager repository",
+    "title": "MagePeople Tour Booking Manager repository",
     "url": "https://github.com/magepeopleteam/tour-booking-manager",
     "publication_date": "2026-10-19",
     "observed_on": "2026-10-19",
