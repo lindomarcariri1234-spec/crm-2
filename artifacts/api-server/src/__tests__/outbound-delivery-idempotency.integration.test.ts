@@ -45,6 +45,8 @@ vi.mock("../lib/whatsapp", async (importOriginal) => {
 
 import {
   db,
+  campaignSendsTable,
+  campaignsTable,
   outboundDeliveriesTable,
   outboundDeliveryAttemptsTable,
   outboundMessagesTable,
@@ -57,6 +59,7 @@ import {
   processOutboundDelivery,
   reconcileOutboundDelivery,
   recoverOutboundDeliveries,
+  updateOutboundDeliveryFromWebhook,
 } from "../services/outbound-delivery.js";
 
 const runId = randomUUID().replaceAll("-", "");
@@ -64,6 +67,10 @@ const tenantId = `outbound-idem-${runId}`;
 const tenantSlug = `outbound-idem-${runId}`;
 const secondTenantId = `outbound-idem-other-${runId}`;
 const secondTenantSlug = `outbound-idem-other-${runId}`;
+const callbackTenantId = `campaign-callback-${runId}`;
+const callbackTenantSlug = `campaign-callback-${runId}`;
+const callbackOtherTenantId = `campaign-callback-other-${runId}`;
+const callbackOtherTenantSlug = `campaign-callback-other-${runId}`;
 const phone = "5511999912345";
 const campaignId = randomUUID();
 const newCampaignId = randomUUID();
@@ -115,6 +122,48 @@ async function assertIsolatedDatabase(): Promise<void> {
   }
 }
 
+async function waitForBlockedSessions(blockingPid: number, expectedCount: number): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const { rows } = await pool.query<{ blocked_count: number }>(`
+      WITH RECURSIVE waiters AS (
+        SELECT activity.pid, pg_blocking_pids(activity.pid) AS blockers
+        FROM pg_stat_activity activity
+        WHERE activity.datname = current_database()
+          AND activity.pid <> pg_backend_pid()
+          AND activity.wait_event_type = 'Lock'
+      ),
+      reaches_fixture_blocker(pid, chain) AS (
+        SELECT waiter.pid, ARRAY[waiter.pid]::integer[]
+        FROM waiters waiter
+        WHERE $1 = ANY(waiter.blockers)
+        UNION ALL
+        SELECT waiter.pid, parent.chain || waiter.pid
+        FROM waiters waiter
+        JOIN reaches_fixture_blocker parent
+          ON parent.pid = ANY(waiter.blockers)
+        WHERE NOT waiter.pid = ANY(parent.chain)
+      )
+      SELECT COUNT(DISTINCT pid)::integer AS blocked_count
+      FROM reaches_fixture_blocker
+    `, [blockingPid]);
+    if ((rows[0]?.blocked_count ?? 0) >= expectedCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  const { rows } = await pool.query(`
+    SELECT pid, state, wait_event_type, wait_event,
+           pg_blocking_pids(pid) AS blockers, left(query, 240) AS query
+    FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND pid <> pg_backend_pid()
+      AND state <> 'idle'
+  `);
+  throw new Error(
+    `Timed out waiting for ${expectedCount} campaign callbacks behind lock ${blockingPid}: ${JSON.stringify(rows)}`,
+  );
+}
+
 beforeAll(async () => {
   await assertIsolatedDatabase();
   isolatedDatabaseVerified = true;
@@ -130,18 +179,209 @@ beforeAll(async () => {
     slug: secondTenantSlug,
     email: `${secondTenantSlug}@example.test`,
   });
+  await db.insert(tenantsTable).values({
+    id: callbackTenantId,
+    name: "Campaign callback concurrency test",
+    slug: callbackTenantSlug,
+    email: `${callbackTenantSlug}@example.test`,
+  });
+  await db.insert(tenantsTable).values({
+    id: callbackOtherTenantId,
+    name: "Campaign callback concurrency test (second tenant)",
+    slug: callbackOtherTenantSlug,
+    email: `${callbackOtherTenantSlug}@example.test`,
+  });
 });
 
 afterAll(async () => {
   if (!isolatedDatabaseVerified) return;
   await db.delete(outboundMessagesTable).where(eq(outboundMessagesTable.tenantId, tenantId));
   await db.delete(outboundMessagesTable).where(eq(outboundMessagesTable.tenantId, secondTenantId));
+  await db.delete(outboundMessagesTable).where(eq(outboundMessagesTable.tenantId, callbackTenantId));
+  await db.delete(outboundMessagesTable).where(eq(outboundMessagesTable.tenantId, callbackOtherTenantId));
+  await db.delete(campaignSendsTable).where(eq(campaignSendsTable.tenantId, tenantId));
+  await db.delete(campaignSendsTable).where(eq(campaignSendsTable.tenantId, secondTenantId));
+  await db.delete(campaignSendsTable).where(eq(campaignSendsTable.tenantId, callbackTenantId));
+  await db.delete(campaignSendsTable).where(eq(campaignSendsTable.tenantId, callbackOtherTenantId));
+  await db.delete(campaignsTable).where(eq(campaignsTable.tenantId, tenantId));
+  await db.delete(campaignsTable).where(eq(campaignsTable.tenantId, secondTenantId));
+  await db.delete(campaignsTable).where(eq(campaignsTable.tenantId, callbackTenantId));
+  await db.delete(campaignsTable).where(eq(campaignsTable.tenantId, callbackOtherTenantId));
   await db.delete(tenantsTable).where(eq(tenantsTable.id, tenantId));
   await db.delete(tenantsTable).where(eq(tenantsTable.id, secondTenantId));
+  await db.delete(tenantsTable).where(eq(tenantsTable.id, callbackTenantId));
+  await db.delete(tenantsTable).where(eq(tenantsTable.id, callbackOtherTenantId));
   await pool.end();
 });
 
 describe("outbound delivery database idempotency", () => {
+  it("counts concurrent email and WhatsApp callbacks once for a unified campaign recipient", async () => {
+    mockWhatsAppSend.mockClear();
+    const sharedClientId = `campaign-client-${runId}`;
+    const emailExternalId = `campaign-email-${runId}`;
+    const whatsappExternalId = `campaign-whatsapp-${runId}`;
+    const fixtures = [
+      { tenantId: callbackTenantId, campaignId: randomUUID(), campaignSendId: randomUUID() },
+      { tenantId: callbackOtherTenantId, campaignId: randomUUID(), campaignSendId: randomUUID() },
+    ];
+
+    for (const fixture of fixtures) {
+      await db.insert(campaignsTable).values({
+        id: fixture.campaignId,
+        tenantId: fixture.tenantId,
+        name: "Concurrent callback test",
+        type: "unified",
+        status: "sent",
+        content: "Integration test campaign",
+        createdById: "integration-test",
+      });
+      await db.insert(campaignSendsTable).values({
+        id: fixture.campaignSendId,
+        campaignId: fixture.campaignId,
+        clientId: sharedClientId,
+        tenantId: fixture.tenantId,
+        status: "sent",
+      });
+
+      for (const channel of [
+        { channel: "email" as const, provider: "resend", externalId: emailExternalId },
+        { channel: "whatsapp" as const, provider: "evolution", externalId: whatsappExternalId },
+      ]) {
+        const messageId = randomUUID();
+        await db.insert(outboundMessagesTable).values({
+          id: messageId,
+          tenantId: fixture.tenantId,
+          idempotencyKey: `campaign-callback:${fixture.tenantId}:${channel.channel}:${randomUUID()}`,
+          eventType: "campaign_message",
+          origin: "campaign",
+          recipientType: "client",
+          recipientId: sharedClientId,
+          status: "processing",
+          metadata: {
+            campaignId: fixture.campaignId,
+            campaignSendId: fixture.campaignSendId,
+            clientId: sharedClientId,
+          },
+        });
+        await db.insert(outboundDeliveriesTable).values({
+          id: randomUUID(),
+          tenantId: fixture.tenantId,
+          outboundMessageId: messageId,
+          channel: channel.channel,
+          content: "Integration test delivery",
+          status: "processing",
+          provider: channel.provider,
+          externalId: channel.externalId,
+        });
+      }
+    }
+
+    const tenantCampaign = fixtures[0]!;
+    const otherTenantCampaign = fixtures[1]!;
+    const emailCallback = {
+      tenantId: callbackTenantId,
+      provider: "resend",
+      externalId: emailExternalId,
+      status: "accepted" as const,
+      providerStatus: "email.delivered",
+      error: null,
+    };
+    const whatsappCallback = {
+      tenantId: callbackTenantId,
+      provider: "evolution",
+      externalId: whatsappExternalId,
+      status: "accepted" as const,
+      providerStatus: "3",
+      error: null,
+    };
+
+    const blocker = await pool.connect();
+    let blockerTransactionOpen = false;
+    let pendingCallbacks: Promise<unknown> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      blockerTransactionOpen = true;
+      const blockerSession = await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+      const blockerPid = blockerSession.rows[0]!.pid;
+      await blocker.query(
+        "SELECT id FROM campaign_sends WHERE id = $1 FOR UPDATE",
+        [tenantCampaign.campaignSendId],
+      );
+
+      pendingCallbacks = Promise.all([
+        updateOutboundDeliveryFromWebhook(emailCallback),
+        updateOutboundDeliveryFromWebhook(whatsappCallback),
+      ]);
+      await waitForBlockedSessions(blockerPid, 2);
+      await blocker.query("COMMIT");
+      blockerTransactionOpen = false;
+
+      const concurrentResults = await pendingCallbacks;
+      expect(concurrentResults).toEqual([
+        expect.objectContaining({ updated: true }),
+        expect.objectContaining({ updated: true }),
+      ]);
+
+      const [campaignAfterConcurrentCallbacks] = await db.select().from(campaignsTable)
+        .where(and(
+          eq(campaignsTable.id, tenantCampaign.campaignId),
+          eq(campaignsTable.tenantId, callbackTenantId),
+        ));
+      expect(campaignAfterConcurrentCallbacks).toMatchObject({
+        deliveredCount: 1,
+        emailDeliveredCount: 1,
+      });
+
+      const replayResults = await Promise.all([
+        updateOutboundDeliveryFromWebhook(emailCallback),
+        updateOutboundDeliveryFromWebhook(whatsappCallback),
+      ]);
+      expect(replayResults).toEqual([
+        expect.objectContaining({ updated: true }),
+        expect.objectContaining({ updated: true }),
+      ]);
+
+      const [campaignAfterReplays] = await db.select().from(campaignsTable)
+        .where(and(
+          eq(campaignsTable.id, tenantCampaign.campaignId),
+          eq(campaignsTable.tenantId, callbackTenantId),
+        ));
+      const [otherTenantCampaignAfterCallbacks] = await db.select().from(campaignsTable)
+        .where(and(
+          eq(campaignsTable.id, otherTenantCampaign.campaignId),
+          eq(campaignsTable.tenantId, callbackOtherTenantId),
+        ));
+      const [tenantSend] = await db.select().from(campaignSendsTable)
+        .where(and(
+          eq(campaignSendsTable.id, tenantCampaign.campaignSendId),
+          eq(campaignSendsTable.tenantId, callbackTenantId),
+        ));
+      const [otherTenantSend] = await db.select().from(campaignSendsTable)
+        .where(and(
+          eq(campaignSendsTable.id, otherTenantCampaign.campaignSendId),
+          eq(campaignSendsTable.tenantId, callbackOtherTenantId),
+        ));
+
+      expect(campaignAfterReplays).toMatchObject({
+        deliveredCount: 1,
+        emailDeliveredCount: 1,
+      });
+      expect(otherTenantCampaignAfterCallbacks).toMatchObject({
+        deliveredCount: 0,
+        emailDeliveredCount: 0,
+      });
+      expect(tenantSend?.deliveredAt).toBeInstanceOf(Date);
+      expect(tenantSend?.emailDeliveredAt).toBeInstanceOf(Date);
+      expect(otherTenantSend?.deliveredAt).toBeNull();
+      expect(otherTenantSend?.emailDeliveredAt).toBeNull();
+      expect(mockWhatsAppSend).not.toHaveBeenCalled();
+    } finally {
+      if (blockerTransactionOpen) await blocker.query("ROLLBACK");
+      if (pendingCallbacks) await pendingCallbacks.catch(() => undefined);
+      blocker.release();
+    }
+  });
+
   it("persists one WhatsApp delivery for concurrent campaign requests and accepts it once", async () => {
     mockWhatsAppSend.mockClear();
     const logicalCampaignKey = `trip:trip-test:${campaignId}:passenger:${phone}`;
