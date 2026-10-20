@@ -8040,6 +8040,18 @@ export const ListCampaignsResponseItem = zod.object({
     .number()
     .int()
     .describe("Email recipients whose messages bounced according to Resend."),
+  permanentBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is permanent.",
+    ),
+  temporaryBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is temporary.",
+    ),
   failedCount: zod
     .number()
     .int()
@@ -8055,7 +8067,7 @@ export const ListCampaignsResponseItem = zod.object({
   failureMetricsAvailable: zod
     .boolean()
     .describe(
-      "Whether bounce, failure, and complaint metrics are available for this campaign.",
+      "Whether bounce totals and classifications, failures, and complaints are available for this campaign.",
     ),
   triggerType: zod.string().nullish(),
   triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),
@@ -8097,6 +8109,18 @@ export const CreateCampaignResponse = zod.object({
     .number()
     .int()
     .describe("Email recipients whose messages bounced according to Resend."),
+  permanentBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is permanent.",
+    ),
+  temporaryBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is temporary.",
+    ),
   failedCount: zod
     .number()
     .int()
@@ -8112,7 +8136,7 @@ export const CreateCampaignResponse = zod.object({
   failureMetricsAvailable: zod
     .boolean()
     .describe(
-      "Whether bounce, failure, and complaint metrics are available for this campaign.",
+      "Whether bounce totals and classifications, failures, and complaints are available for this campaign.",
     ),
   triggerType: zod.string().nullish(),
   triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),
@@ -8155,6 +8179,18 @@ export const UpdateCampaignResponse = zod.object({
     .number()
     .int()
     .describe("Email recipients whose messages bounced according to Resend."),
+  permanentBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is permanent.",
+    ),
+  temporaryBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is temporary.",
+    ),
   failedCount: zod
     .number()
     .int()
@@ -8170,7 +8206,7 @@ export const UpdateCampaignResponse = zod.object({
   failureMetricsAvailable: zod
     .boolean()
     .describe(
-      "Whether bounce, failure, and complaint metrics are available for this campaign.",
+      "Whether bounce totals and classifications, failures, and complaints are available for this campaign.",
     ),
   triggerType: zod.string().nullish(),
   triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),

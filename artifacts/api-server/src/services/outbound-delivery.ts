@@ -879,11 +879,43 @@ async function recordCampaignMetricsFromWebhook(
       openedCount: 0,
       clickedCount: 0,
       bouncedCount: 0,
+      permanentBouncedCount: 0,
+      temporaryBouncedCount: 0,
       failedCount: 0,
       complainedCount: 0,
     };
 
     for (const timestamp of timestampsToRecord) {
+      if (timestamp === "bouncedAt") {
+        const [marked] = await tx.update(campaignSendsTable)
+          .set({ bouncedAt: now })
+          .where(and(
+            eq(campaignSendsTable.id, campaignSendId),
+            eq(campaignSendsTable.campaignId, campaignId),
+            eq(campaignSendsTable.tenantId, update.tenantId),
+            isNull(campaignSendsTable.bouncedAt),
+          ))
+          .returning({ id: campaignSendsTable.id });
+        if (marked) deltas.bouncedCount += 1;
+
+        if (update.bounceType) {
+          const [classified] = await tx.update(campaignSendsTable)
+            .set({ bounceType: update.bounceType })
+            .where(and(
+              eq(campaignSendsTable.id, campaignSendId),
+              eq(campaignSendsTable.campaignId, campaignId),
+              eq(campaignSendsTable.tenantId, update.tenantId),
+              isNull(campaignSendsTable.bounceType),
+            ))
+            .returning({ id: campaignSendsTable.id });
+          if (classified) {
+            if (update.bounceType === "permanent") deltas.permanentBouncedCount += 1;
+            if (update.bounceType === "temporary") deltas.temporaryBouncedCount += 1;
+          }
+        }
+        continue;
+      }
+
       const [marked] = await tx.update(campaignSendsTable)
         .set({ [timestamp]: now } as Partial<typeof campaignSendsTable.$inferInsert>)
         .where(and(
@@ -899,7 +931,6 @@ async function recordCampaignMetricsFromWebhook(
       if (timestamp === "emailDeliveredAt") deltas.emailDeliveredCount += 1;
       if (timestamp === "openedAt") deltas.openedCount += 1;
       if (timestamp === "clickedAt") deltas.clickedCount += 1;
-      if (timestamp === "bouncedAt") deltas.bouncedCount += 1;
       if (timestamp === "failedAt") deltas.failedCount += 1;
       if (timestamp === "complainedAt") deltas.complainedCount += 1;
     }
@@ -922,6 +953,12 @@ async function recordCampaignMetricsFromWebhook(
         : undefined,
       bouncedCount: deltas.bouncedCount
         ? sql<number>`${campaignsTable.bouncedCount} + ${deltas.bouncedCount}`
+        : undefined,
+      permanentBouncedCount: deltas.permanentBouncedCount
+        ? sql<number>`${campaignsTable.permanentBouncedCount} + ${deltas.permanentBouncedCount}`
+        : undefined,
+      temporaryBouncedCount: deltas.temporaryBouncedCount
+        ? sql<number>`${campaignsTable.temporaryBouncedCount} + ${deltas.temporaryBouncedCount}`
         : undefined,
       failedCount: deltas.failedCount
         ? sql<number>`${campaignsTable.failedCount} + ${deltas.failedCount}`

@@ -897,6 +897,13 @@
       "when": 1809960028000,
       "tag": "0128_campaign_failure_outcomes",
       "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1809960029000,
+      "tag": "0129_campaign_bounce_classification",
+      "breakpoints": true
     }
   ]
 }

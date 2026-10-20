@@ -3580,13 +3580,17 @@ export interface Campaign {
   clickedCount: number;
   /** Email recipients whose messages bounced according to Resend. */
   bouncedCount: number;
+  /** Email recipients whose Resend bounce classification is permanent. */
+  permanentBouncedCount: number;
+  /** Email recipients whose Resend bounce classification is temporary. */
+  temporaryBouncedCount: number;
   /** Email recipients whose messages failed according to Resend. */
   failedCount: number;
   /** Email recipients who reported messages as spam according to Resend. */
   complainedCount: number;
   deliveredCount?: number;
   engagementMetricsAvailable: boolean;
-  /** Whether bounce, failure, and complaint metrics are available for this campaign. */
+  /** Whether bounce totals and classifications, failures, and complaints are available for this campaign. */
   failureMetricsAvailable: boolean;
   /** @nullable */
   triggerType?: string | null;

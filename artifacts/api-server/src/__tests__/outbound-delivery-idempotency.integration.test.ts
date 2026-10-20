@@ -382,11 +382,12 @@ describe("outbound delivery database idempotency", () => {
     }
   });
 
-  it("counts Resend outcomes once when complaints arrive before delivery and keeps legacy and other-tenant metrics isolated", async () => {
+  it("counts both Resend bounce classifications once and keeps legacy and other-tenant metrics isolated", async () => {
     const failureEvents = [
-      { type: "email.bounced", timestamp: "bouncedAt", count: "bouncedCount" },
-      { type: "email.failed", timestamp: "failedAt", count: "failedCount" },
-      { type: "email.complained", timestamp: "complainedAt", count: "complainedCount" },
+      { key: "permanent-bounce", type: "email.bounced", timestamp: "bouncedAt", bounceType: "permanent" },
+      { key: "temporary-bounce", type: "email.bounced", timestamp: "bouncedAt", bounceType: "temporary" },
+      { key: "failed", type: "email.failed", timestamp: "failedAt", bounceType: null },
+      { key: "complaint", type: "email.complained", timestamp: "complainedAt", bounceType: null },
     ] as const;
     const trackingStartedAt = new Date();
     const fixtureByTenant = new Map<string, {
@@ -421,10 +422,10 @@ describe("outbound delivery database idempotency", () => {
         const campaignSendId = randomUUID();
         const messageId = randomUUID();
         const deliveryId = randomUUID();
-        const clientId = `failure-client-${failureEvent.type}-${runId}`;
-        const externalId = `resend-${failureEvent.type}-${runId}`;
-        fixture.sendIds[failureEvent.type] = campaignSendId;
-        fixture.deliveryIds[failureEvent.type] = deliveryId;
+        const clientId = `failure-client-${failureEvent.key}-${runId}`;
+        const externalId = `resend-${failureEvent.key}-${runId}`;
+        fixture.sendIds[failureEvent.key] = campaignSendId;
+        fixture.deliveryIds[failureEvent.key] = deliveryId;
 
         await db.insert(campaignSendsTable).values({
           id: campaignSendId,
@@ -436,7 +437,7 @@ describe("outbound delivery database idempotency", () => {
         await db.insert(outboundMessagesTable).values({
           id: messageId,
           tenantId: currentTenantId,
-          idempotencyKey: `campaign-failure:${currentTenantId}:${failureEvent.type}:${randomUUID()}`,
+          idempotencyKey: `campaign-failure:${currentTenantId}:${failureEvent.key}:${randomUUID()}`,
           eventType: "campaign_message",
           origin: "campaign",
           recipientType: "client",
@@ -463,10 +464,11 @@ describe("outbound delivery database idempotency", () => {
     const callbacks = nonComplaintEvents.map((failureEvent) => ({
       tenantId: callbackTenantId,
       provider: "resend",
-      externalId: `resend-${failureEvent.type}-${runId}`,
+      externalId: `resend-${failureEvent.key}-${runId}`,
       status: "failed" as const,
       providerStatus: failureEvent.type,
       error: failureEvent.type,
+      bounceType: failureEvent.bounceType ?? undefined,
     }));
     const initialResults = await Promise.all(callbacks.map((callback) =>
       updateOutboundDeliveryFromWebhook(callback),
@@ -474,14 +476,14 @@ describe("outbound delivery database idempotency", () => {
     expect(initialResults).toEqual(nonComplaintEvents.map((failureEvent) =>
       expect.objectContaining({
         updated: true,
-        deliveryId: trackedCampaign.deliveryIds[failureEvent.type],
+        deliveryId: trackedCampaign.deliveryIds[failureEvent.key],
       }),
     ));
 
     const complaintCallback = {
       tenantId: callbackTenantId,
       provider: "resend",
-      externalId: `resend-email.complained-${runId}`,
+      externalId: `resend-complaint-${runId}`,
       status: "accepted" as const,
       providerStatus: "email.complained",
       error: null,
@@ -489,7 +491,7 @@ describe("outbound delivery database idempotency", () => {
     const complaintResult = await updateOutboundDeliveryFromWebhook(complaintCallback);
     expect(complaintResult).toMatchObject({
       updated: true,
-      deliveryId: trackedCampaign.deliveryIds["email.complained"],
+      deliveryId: trackedCampaign.deliveryIds["complaint"],
     });
 
     const [campaignAfterComplaint] = await db.select().from(campaignsTable)
@@ -532,7 +534,9 @@ describe("outbound delivery database idempotency", () => {
         eq(campaignsTable.tenantId, callbackOtherTenantId),
       ));
     expect(trackedCampaignAfterCallbacks).toMatchObject({
-      bouncedCount: 1,
+      bouncedCount: 2,
+      permanentBouncedCount: 1,
+      temporaryBouncedCount: 1,
       failedCount: 1,
       complainedCount: 1,
       deliveredCount: 1,
@@ -540,6 +544,8 @@ describe("outbound delivery database idempotency", () => {
     });
     expect(otherTenantCampaignAfterCallbacks).toMatchObject({
       bouncedCount: 0,
+      permanentBouncedCount: 0,
+      temporaryBouncedCount: 0,
       failedCount: 0,
       complainedCount: 0,
       deliveredCount: 0,
@@ -547,8 +553,8 @@ describe("outbound delivery database idempotency", () => {
     });
 
     for (const failureEvent of failureEvents) {
-      const trackedSendId = trackedCampaign.sendIds[failureEvent.type]!;
-      const otherTenantSendId = otherTenantCampaign.sendIds[failureEvent.type]!;
+      const trackedSendId = trackedCampaign.sendIds[failureEvent.key]!;
+      const otherTenantSendId = otherTenantCampaign.sendIds[failureEvent.key]!;
       const [trackedSend] = await db.select().from(campaignSendsTable)
         .where(and(
           eq(campaignSendsTable.id, trackedSendId),
@@ -561,6 +567,8 @@ describe("outbound delivery database idempotency", () => {
         ));
       expect(trackedSend?.[failureEvent.timestamp]).toBeInstanceOf(Date);
       expect(otherTenantSend?.[failureEvent.timestamp]).toBeNull();
+      expect(trackedSend?.bounceType ?? null).toBe(failureEvent.bounceType);
+      expect(otherTenantSend?.bounceType ?? null).toBeNull();
       if (failureEvent.type === "email.complained") {
         expect(trackedSend?.deliveredAt).toBeInstanceOf(Date);
         expect(trackedSend?.emailDeliveredAt).toBeInstanceOf(Date);
@@ -637,6 +645,8 @@ describe("outbound delivery database idempotency", () => {
       ));
     expect(legacyCampaignAfterCallback).toMatchObject({
       complainedCount: 0,
+      permanentBouncedCount: 0,
+      temporaryBouncedCount: 0,
       deliveredCount: 1,
       emailDeliveredCount: 1,
       failureTrackingStartedAt: null,

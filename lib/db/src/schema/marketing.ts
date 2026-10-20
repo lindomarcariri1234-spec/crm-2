@@ -1,6 +1,7 @@
 import { pgTable, text, timestamp, numeric, integer, boolean, json, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import type { OutboundBounceType } from "./communication-deliveries";
 
 export const campaignsTable = pgTable("campaigns", {
   id: text("id").primaryKey(),
@@ -21,6 +22,8 @@ export const campaignsTable = pgTable("campaigns", {
   openedCount: integer("opened_count").notNull().default(0),
   clickedCount: integer("clicked_count").notNull().default(0),
   bouncedCount: integer("bounced_count").notNull().default(0),
+  permanentBouncedCount: integer("permanent_bounced_count").notNull().default(0),
+  temporaryBouncedCount: integer("temporary_bounced_count").notNull().default(0),
   failedCount: integer("failed_count").notNull().default(0),
   complainedCount: integer("complained_count").notNull().default(0),
   engagementTrackingStartedAt: timestamp("engagement_tracking_started_at", { withTimezone: true }),
@@ -50,6 +53,7 @@ export const campaignSendsTable = pgTable(
     openedAt: timestamp("opened_at", { withTimezone: true }),
     clickedAt: timestamp("clicked_at", { withTimezone: true }),
     bouncedAt: timestamp("bounced_at", { withTimezone: true }),
+    bounceType: text("bounce_type").$type<OutboundBounceType>(),
     failedAt: timestamp("failed_at", { withTimezone: true }),
     complainedAt: timestamp("complained_at", { withTimezone: true }),
     status: text("status").notNull().default("sent"),

@@ -11216,6 +11216,12 @@ components:
         bouncedCount:
           type: integer
           description: Email recipients whose messages bounced according to Resend.
+        permanentBouncedCount:
+          type: integer
+          description: Email recipients whose Resend bounce classification is permanent.
+        temporaryBouncedCount:
+          type: integer
+          description: Email recipients whose Resend bounce classification is temporary.
         failedCount:
           type: integer
           description: Email recipients whose messages failed according to Resend.
@@ -11228,7 +11234,7 @@ components:
           type: boolean
         failureMetricsAvailable:
           type: boolean
-          description: Whether bounce, failure, and complaint metrics are available for this campaign.
+          description: Whether bounce totals and classifications, failures, and complaints are available for this campaign.
         triggerType:
           type: ["string", "null"]
         triggerConfig:
@@ -11238,7 +11244,7 @@ components:
           type: boolean
         createdAt:
           type: string
-      required: [id, name, type, status, content, recipientsCount, sentCount, emailDeliveredCount, openedCount, clickedCount, bouncedCount, failedCount, complainedCount, engagementMetricsAvailable, failureMetricsAvailable, createdAt]
+      required: [id, name, type, status, content, recipientsCount, sentCount, emailDeliveredCount, openedCount, clickedCount, bouncedCount, permanentBouncedCount, temporaryBouncedCount, failedCount, complainedCount, engagementMetricsAvailable, failureMetricsAvailable, createdAt]
 
     CreateCampaignBody:
       type: object

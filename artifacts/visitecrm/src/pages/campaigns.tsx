@@ -591,6 +591,16 @@ function CampaignsTab() {
                   base: null,
                 },
                 {
+                  label: "Bounces permanentes (e-mail)",
+                  value: hasEmailFailureMetrics(analyticsTarget) ? analyticsTarget.permanentBouncedCount : null,
+                  base: null,
+                },
+                {
+                  label: "Bounces temporários (e-mail)",
+                  value: hasEmailFailureMetrics(analyticsTarget) ? analyticsTarget.temporaryBouncedCount : null,
+                  base: null,
+                },
+                {
                   label: "Falhas de envio (e-mail)",
                   value: hasEmailFailureMetrics(analyticsTarget) ? analyticsTarget.failedCount : null,
                   base: null,
@@ -618,7 +628,7 @@ function CampaignsTab() {
 
       <div className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm">
         <div className="overflow-x-auto">
-          <Table className="min-w-[1280px]">
+          <Table className="min-w-[1440px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Nome</TableHead>
@@ -630,6 +640,8 @@ function CampaignsTab() {
                 <TableHead className="text-right">Abertos (e-mail)</TableHead>
                 <TableHead className="text-right">Cliques (e-mail)</TableHead>
                 <TableHead className="text-right">Bounces (e-mail)</TableHead>
+                <TableHead className="text-right">Bounces permanentes</TableHead>
+                <TableHead className="text-right">Bounces temporários</TableHead>
                 <TableHead className="text-right">Falhas (e-mail)</TableHead>
                 <TableHead className="text-right">Reclamações (e-mail)</TableHead>
                 <TableHead>Data</TableHead>
@@ -640,20 +652,20 @@ function CampaignsTab() {
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 13 }).map((_, j) => (
+                    {Array.from({ length: 15 }).map((_, j) => (
                       <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
                     ))}
                   </TableRow>
                 ))
               ) : isError ? (
                 <ListLoadErrorRow
-                  colSpan={13}
+                  colSpan={15}
                   onRetry={refetch}
                   message="Não foi possível carregar as campanhas."
                 />
               ) : manualCampaigns.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={13} className="py-12 text-center text-muted-foreground">
+                  <TableCell colSpan={15} className="py-12 text-center text-muted-foreground">
                     <Megaphone className="mx-auto mb-3 h-10 w-10 opacity-30" />
                     <p className="font-medium text-foreground">Nenhuma campanha criada.</p>
                     <p className="mt-1 text-sm">Crie sua primeira campanha para engajar clientes.</p>
@@ -689,6 +701,8 @@ function CampaignsTab() {
                         )}
                       </TableCell>
                       <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.bouncedCount : "—"}</TableCell>
+                      <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.permanentBouncedCount : "—"}</TableCell>
+                      <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.temporaryBouncedCount : "—"}</TableCell>
                       <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.failedCount : "—"}</TableCell>
                       <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.complainedCount : "—"}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
