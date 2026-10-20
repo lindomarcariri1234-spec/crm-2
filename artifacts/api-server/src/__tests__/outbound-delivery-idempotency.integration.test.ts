@@ -382,7 +382,7 @@ describe("outbound delivery database idempotency", () => {
     }
   });
 
-  it("counts Resend bounce, failure, and complaint outcomes once and keeps older and other-tenant metrics isolated", async () => {
+  it("counts Resend outcomes once when complaints arrive before delivery and keeps legacy and other-tenant metrics isolated", async () => {
     const failureEvents = [
       { type: "email.bounced", timestamp: "bouncedAt", count: "bouncedCount" },
       { type: "email.failed", timestamp: "failedAt", count: "failedCount" },
@@ -459,28 +459,67 @@ describe("outbound delivery database idempotency", () => {
 
     const trackedCampaign = fixtureByTenant.get(callbackTenantId)!;
     const otherTenantCampaign = fixtureByTenant.get(callbackOtherTenantId)!;
-    const callbacks = failureEvents.map((failureEvent) => ({
+    const nonComplaintEvents = failureEvents.filter((failureEvent) => failureEvent.type !== "email.complained");
+    const callbacks = nonComplaintEvents.map((failureEvent) => ({
       tenantId: callbackTenantId,
       provider: "resend",
       externalId: `resend-${failureEvent.type}-${runId}`,
-      status: failureEvent.type === "email.complained" ? "accepted" as const : "failed" as const,
+      status: "failed" as const,
       providerStatus: failureEvent.type,
-      error: failureEvent.type === "email.complained" ? null : failureEvent.type,
+      error: failureEvent.type,
     }));
     const initialResults = await Promise.all(callbacks.map((callback) =>
       updateOutboundDeliveryFromWebhook(callback),
     ));
-    expect(initialResults).toEqual(failureEvents.map((failureEvent) =>
+    expect(initialResults).toEqual(nonComplaintEvents.map((failureEvent) =>
       expect.objectContaining({
         updated: true,
         deliveryId: trackedCampaign.deliveryIds[failureEvent.type],
       }),
     ));
 
+    const complaintCallback = {
+      tenantId: callbackTenantId,
+      provider: "resend",
+      externalId: `resend-email.complained-${runId}`,
+      status: "accepted" as const,
+      providerStatus: "email.complained",
+      error: null,
+    };
+    const complaintResult = await updateOutboundDeliveryFromWebhook(complaintCallback);
+    expect(complaintResult).toMatchObject({
+      updated: true,
+      deliveryId: trackedCampaign.deliveryIds["email.complained"],
+    });
+
+    const [campaignAfterComplaint] = await db.select().from(campaignsTable)
+      .where(and(
+        eq(campaignsTable.id, trackedCampaign.campaignId),
+        eq(campaignsTable.tenantId, callbackTenantId),
+      ));
+    expect(campaignAfterComplaint).toMatchObject({
+      complainedCount: 1,
+      deliveredCount: 1,
+      emailDeliveredCount: 1,
+    });
+
+    const deliveredCallback = {
+      ...complaintCallback,
+      providerStatus: "email.delivered",
+    };
+    const deliveredResult = await updateOutboundDeliveryFromWebhook(deliveredCallback);
+    expect(deliveredResult).toEqual(complaintResult);
+
     const replayResults = await Promise.all(callbacks.map((callback) =>
       updateOutboundDeliveryFromWebhook(callback),
     ));
     expect(replayResults).toEqual(initialResults);
+    const [complaintReplayResult, deliveredReplayResult] = await Promise.all([
+      updateOutboundDeliveryFromWebhook(complaintCallback),
+      updateOutboundDeliveryFromWebhook(deliveredCallback),
+    ]);
+    expect(complaintReplayResult).toEqual(complaintResult);
+    expect(deliveredReplayResult).toEqual(deliveredResult);
 
     const [trackedCampaignAfterCallbacks] = await db.select().from(campaignsTable)
       .where(and(
