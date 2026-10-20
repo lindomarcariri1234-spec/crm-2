@@ -4025,6 +4025,35 @@ paths:
               schema:
                 $ref: "#/components/schemas/Campaign"
 
+  /campaigns/{id}/permanent-bounces:
+    get:
+      operationId: listCampaignPermanentBounceRecipients
+      tags: [campaigns]
+      summary: List clients with permanent campaign email bounces
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 1
+      responses:
+        "200":
+          description: Permanent bounce recipients, or unavailable metrics for untracked campaigns
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignPermanentBounceRecipientsPage"
+        "404":
+          description: Campaign not found in the authenticated tenant
+
   /campaigns/{id}:
     patch:
       operationId: updateCampaign
@@ -11245,6 +11274,38 @@ components:
         createdAt:
           type: string
       required: [id, name, type, status, content, recipientsCount, sentCount, emailDeliveredCount, openedCount, clickedCount, bouncedCount, permanentBouncedCount, temporaryBouncedCount, failedCount, complainedCount, engagementMetricsAvailable, failureMetricsAvailable, createdAt]
+
+    CampaignPermanentBounceRecipient:
+      type: object
+      properties:
+        clientId:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        bouncedAt:
+          type: string
+          format: date-time
+      required: [clientId, name, email, bouncedAt]
+
+    CampaignPermanentBounceRecipientsPage:
+      type: object
+      properties:
+        available:
+          type: boolean
+          description: False when campaign email failure tracking was not available.
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/CampaignPermanentBounceRecipient"
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        hasMore:
+          type: boolean
+      required: [available, recipients, page, pageSize, hasMore]
 
     CreateCampaignBody:
       type: object

@@ -8145,6 +8145,42 @@ export const CreateCampaignResponse = zod.object({
 });
 
 /**
+ * @summary List clients with permanent campaign email bounces
+ */
+export const ListCampaignPermanentBounceRecipientsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const listCampaignPermanentBounceRecipientsQueryPageDefault = 1;
+export const listCampaignPermanentBounceRecipientsQueryPageMax = 1000;
+
+export const ListCampaignPermanentBounceRecipientsQueryParams = zod.object({
+  page: zod.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(listCampaignPermanentBounceRecipientsQueryPageMax)
+    .default(listCampaignPermanentBounceRecipientsQueryPageDefault),
+});
+
+export const ListCampaignPermanentBounceRecipientsResponse = zod.object({
+  available: zod
+    .boolean()
+    .describe("False when campaign email failure tracking was not available."),
+  recipients: zod.array(
+    zod.object({
+      clientId: zod.string(),
+      name: zod.string(),
+      email: zod.string(),
+      bouncedAt: zod.coerce.date(),
+    }),
+  ),
+  page: zod.number().int(),
+  pageSize: zod.number().int(),
+  hasMore: zod.boolean(),
+});
+
+/**
  * @summary Update a campaign
  */
 export const UpdateCampaignParams = zod.object({

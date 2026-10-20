@@ -3600,6 +3600,22 @@ export interface Campaign {
   createdAt: string;
 }
 
+export interface CampaignPermanentBounceRecipient {
+  clientId: string;
+  name: string;
+  email: string;
+  bouncedAt: string;
+}
+
+export interface CampaignPermanentBounceRecipientsPage {
+  /** False when campaign email failure tracking was not available. */
+  available: boolean;
+  recipients: CampaignPermanentBounceRecipient[];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
 export type CreateCampaignBodyTargetSegment = { [key: string]: unknown };
 
 /**
@@ -6618,6 +6634,14 @@ export type ListOrdersParams = {
   status?: string | null;
   page?: number;
   limit?: number;
+};
+
+export type ListCampaignPermanentBounceRecipientsParams = {
+  /**
+   * @minimum 1
+   * @maximum 1000
+   */
+  page?: number;
 };
 
 export type ListNpsResponsesParams = {

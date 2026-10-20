@@ -47,6 +47,7 @@ import {
   db,
   campaignSendsTable,
   campaignsTable,
+  clientsTable,
   outboundDeliveriesTable,
   outboundDeliveryAttemptsTable,
   outboundMessagesTable,
@@ -61,6 +62,7 @@ import {
   recoverOutboundDeliveries,
   updateOutboundDeliveryFromWebhook,
 } from "../services/outbound-delivery.js";
+import { listCampaignPermanentBounceRecipients } from "../services/campaign-bounce-recipients.js";
 
 const runId = randomUUID().replaceAll("-", "");
 const tenantId = `outbound-idem-${runId}`;
@@ -654,6 +656,147 @@ describe("outbound delivery database idempotency", () => {
     expect(legacySendAfterCallback?.complainedAt).toBeNull();
     expect(legacySendAfterCallback?.deliveredAt).toBeInstanceOf(Date);
     expect(legacySendAfterCallback?.emailDeliveredAt).toBeInstanceOf(Date);
+  });
+
+  it("lists only tenant-scoped permanent-bounce clients and keeps untracked campaigns unavailable", async () => {
+    const trackedCampaignId = randomUUID();
+    const sameTenantOtherCampaignId = randomUUID();
+    const otherTenantCampaignId = randomUUID();
+    const legacyCampaignId = randomUUID();
+    const trackingStartedAt = new Date();
+    const campaignDetails = {
+      name: "Permanent bounce recipient test",
+      type: "email",
+      status: "sent",
+      content: "Integration test campaign",
+      createdById: "integration-test",
+    } as const;
+
+    await db.insert(campaignsTable).values({
+      id: trackedCampaignId,
+      tenantId: callbackTenantId,
+      ...campaignDetails,
+      failureTrackingStartedAt: trackingStartedAt,
+    });
+    await db.insert(campaignsTable).values({
+      id: sameTenantOtherCampaignId,
+      tenantId: callbackTenantId,
+      ...campaignDetails,
+      failureTrackingStartedAt: trackingStartedAt,
+    });
+    await db.insert(campaignsTable).values({
+      id: otherTenantCampaignId,
+      tenantId: callbackOtherTenantId,
+      ...campaignDetails,
+      failureTrackingStartedAt: trackingStartedAt,
+    });
+    await db.insert(campaignsTable).values({
+      id: legacyCampaignId,
+      tenantId: callbackTenantId,
+      ...campaignDetails,
+    });
+
+    const recipientFixtures = [
+      { key: "permanent", tenantId: callbackTenantId, name: "Permanent bounce client", email: "permanent@example.test" },
+      { key: "temporary", tenantId: callbackTenantId, name: "Temporary bounce client", email: "temporary@example.test" },
+      { key: "other-campaign", tenantId: callbackTenantId, name: "Other campaign client", email: "other-campaign@example.test" },
+      { key: "other-tenant", tenantId: callbackOtherTenantId, name: "Other tenant client", email: "other-tenant@example.test" },
+      { key: "legacy", tenantId: callbackTenantId, name: "Legacy campaign client", email: "legacy@example.test" },
+    ] as const;
+    const clientIds = new Map<string, string>();
+    await db.insert(clientsTable).values(recipientFixtures.map((fixture, index) => {
+      const id = `bounce-recipient-${fixture.key}-${runId}`;
+      clientIds.set(fixture.key, id);
+      return {
+        id,
+        tenantId: fixture.tenantId,
+        name: fixture.name,
+        email: fixture.email,
+        whatsapp: `551199000${String(index).padStart(4, "0")}`,
+      };
+    }));
+
+    const sendRows = [
+      {
+        campaignId: trackedCampaignId,
+        clientId: clientIds.get("permanent")!,
+        tenantId: callbackTenantId,
+        bounceType: "permanent" as const,
+      },
+      {
+        campaignId: trackedCampaignId,
+        clientId: clientIds.get("temporary")!,
+        tenantId: callbackTenantId,
+        bounceType: "temporary" as const,
+      },
+      {
+        campaignId: sameTenantOtherCampaignId,
+        clientId: clientIds.get("other-campaign")!,
+        tenantId: callbackTenantId,
+        bounceType: "permanent" as const,
+      },
+      {
+        campaignId: otherTenantCampaignId,
+        clientId: clientIds.get("other-tenant")!,
+        tenantId: callbackOtherTenantId,
+        bounceType: "permanent" as const,
+      },
+      {
+        campaignId: legacyCampaignId,
+        clientId: clientIds.get("legacy")!,
+        tenantId: callbackTenantId,
+        bounceType: "permanent" as const,
+      },
+    ];
+    await db.insert(campaignSendsTable).values(sendRows.map((send) => ({
+      id: randomUUID(),
+      ...send,
+      bouncedAt: trackingStartedAt,
+      status: "sent",
+    })));
+
+    const trackedPage = await listCampaignPermanentBounceRecipients(
+      callbackTenantId,
+      trackedCampaignId,
+      1,
+    );
+    expect(trackedPage).toMatchObject({
+      available: true,
+      page: 1,
+      hasMore: false,
+      recipients: [{
+        clientId: clientIds.get("permanent"),
+        name: "Permanent bounce client",
+        email: "permanent@example.test",
+        bouncedAt: trackingStartedAt.toISOString(),
+      }],
+    });
+    expect(trackedPage?.recipients).toHaveLength(1);
+
+    expect(await listCampaignPermanentBounceRecipients(
+      callbackOtherTenantId,
+      trackedCampaignId,
+      1,
+    )).toBeNull();
+
+    const otherTenantPage = await listCampaignPermanentBounceRecipients(
+      callbackOtherTenantId,
+      otherTenantCampaignId,
+      1,
+    );
+    expect(otherTenantPage?.recipients.map((recipient) => recipient.clientId))
+      .toEqual([clientIds.get("other-tenant")]);
+
+    const legacyPage = await listCampaignPermanentBounceRecipients(
+      callbackTenantId,
+      legacyCampaignId,
+      1,
+    );
+    expect(legacyPage).toMatchObject({
+      available: false,
+      recipients: [],
+      hasMore: false,
+    });
   });
 
   it("persists one WhatsApp delivery for concurrent campaign requests and accepts it once", async () => {

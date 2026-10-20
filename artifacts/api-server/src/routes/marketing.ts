@@ -7,13 +7,20 @@ import { requireAuth, getTenantUser } from "../lib/tenant";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { z } from "zod";
 import { ADMIN_ROLES } from '../lib/tenant';
-import { STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
+import { ROLES, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { resolveSegment } from "../lib/campaign-segment";
 import { sendManualCampaignNow } from "../lib/manual-campaign-dispatch";
+import { listCampaignPermanentBounceRecipients } from "../services/campaign-bounce-recipients.js";
 import { getAIClientForTenant } from "../lib/ai-client";
 import { parseBrazilDateRange } from "../lib/brazil-calendar";
 
 const router = Router();
+const CAMPAIGN_RESULTS_ROLES = [
+  ROLES.SUPER_ADMIN,
+  ROLES.AGENCY_ADMIN,
+  ROLES.AGENCY_MANAGER,
+  ROLES.SUPPORT,
+] as const;
 
 function requireNpsDateRange(dateFrom?: string, dateTo?: string) {
   const range = parseBrazilDateRange(dateFrom, dateTo);
@@ -50,6 +57,10 @@ const UpdateCampaignBody = z.object({
   triggerType: z.string().optional(),
   triggerConfig: z.record(z.unknown()).optional().nullable(),
   autoEnabled: z.boolean().optional(),
+});
+
+const CampaignPermanentBounceRecipientsQuery = z.object({
+  page: z.coerce.number().int().min(1).max(1000).default(1),
 });
 
 const SegmentPreviewBody = z.object({
@@ -176,6 +187,34 @@ router.get("/campaigns", async (req, res, next: NextFunction): Promise<void> => 
       .where(eq(campaignsTable.tenantId, me.tenantId))
       .orderBy(desc(campaignsTable.createdAt));
     res.json(campaigns.map(formatCampaign));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/campaigns/:id/permanent-bounces", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!CAMPAIGN_RESULTS_ROLES.includes(me.role as (typeof CAMPAIGN_RESULTS_ROLES)[number])) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+    const parsed = CampaignPermanentBounceRecipientsQuery.safeParse(req.query);
+    if (!parsed.success) {
+      next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR"));
+      return;
+    }
+    const result = await listCampaignPermanentBounceRecipients(
+      me.tenantId,
+      req.params.id,
+      parsed.data.page,
+    );
+    if (!result) {
+      next(new NotFoundError("Campaign not found", "NOT_FOUND"));
+      return;
+    }
+    res.json(result);
   } catch (err) {
     next(err);
   }

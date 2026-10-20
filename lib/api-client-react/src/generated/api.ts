@@ -52,6 +52,7 @@ import type {
   CalendarSyncRequest,
   CalendarSyncResponse,
   Campaign,
+  CampaignPermanentBounceRecipientsPage,
   CancelPmsReservationBody,
   CartItem,
   ChartDataPoint,
@@ -161,6 +162,7 @@ import type {
   ListAdminUsersParams,
   ListAuditLogsParams,
   ListCalendarReconciliationsParams,
+  ListCampaignPermanentBounceRecipientsParams,
   ListChatbotMessagesParams,
   ListClientsParams,
   ListDealsParams,
@@ -22952,6 +22954,214 @@ export const useCreateCampaign = <
 > => {
   return useMutation(getCreateCampaignMutationOptions(options), queryClient);
 };
+
+export const getListCampaignPermanentBounceRecipientsUrl = (
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/campaigns/${id}/permanent-bounces?${stringifiedParams}`
+    : `/api/campaigns/${id}/permanent-bounces`;
+};
+
+/**
+ * @summary List clients with permanent campaign email bounces
+ */
+export const listCampaignPermanentBounceRecipients = async (
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<CampaignPermanentBounceRecipientsPage> => {
+  return customFetch<CampaignPermanentBounceRecipientsPage>(
+    getListCampaignPermanentBounceRecipientsUrl(id, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListCampaignPermanentBounceRecipientsQueryKey = (
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+) => {
+  return [
+    `/api/campaigns/${id}/permanent-bounces`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListCampaignPermanentBounceRecipientsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListCampaignPermanentBounceRecipientsQueryKey(id, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>
+  > = ({ signal }) =>
+    listCampaignPermanentBounceRecipients(id, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListCampaignPermanentBounceRecipientsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>
+>;
+export type ListCampaignPermanentBounceRecipientsQueryError = ErrorType<void>;
+
+export function useListCampaignPermanentBounceRecipients<
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params: undefined | ListCampaignPermanentBounceRecipientsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+          TError,
+          Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListCampaignPermanentBounceRecipients<
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+          TError,
+          Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListCampaignPermanentBounceRecipients<
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List clients with permanent campaign email bounces
+ */
+
+export function useListCampaignPermanentBounceRecipients<
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListCampaignPermanentBounceRecipientsQueryOptions(
+    id,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export const getUpdateCampaignUrl = (id: string) => {
   return `/api/campaigns/${id}`;

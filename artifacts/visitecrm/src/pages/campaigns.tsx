@@ -38,6 +38,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { ListLoadErrorRow } from "@/components/list-load-error";
+import { CampaignPermanentBounceDialog } from "@/components/campaign-permanent-bounce-dialog";
 import {
   Plus,
   Megaphone,
@@ -621,6 +622,12 @@ function CampaignsTab() {
                   )}
                 </div>
               ))}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <CampaignPermanentBounceDialog
+                campaignId={analyticsTarget.id}
+                campaignName={analyticsTarget.name}
+              />
             </div>
           </CardContent>
         </Card>
