@@ -526,7 +526,7 @@ describe("legacy email history synchronization", () => {
       .mockReturnValueOnce(makeSelectQuery([]));
     mockDbUpdate
       .mockReturnValueOnce(makeUpdateQuery([staleDelivery]))
-      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "attempt-1" }]))
       .mockReturnValueOnce(makeUpdateQuery());
 
     await expect(recoverOutboundDeliveries({ databaseFallback: true })).resolves.toEqual({
