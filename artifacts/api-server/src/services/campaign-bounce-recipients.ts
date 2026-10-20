@@ -1,7 +1,9 @@
 import { and, asc, desc, eq, exists, isNotNull } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db, campaignSendsTable, campaignsTable, clientsTable } from "@workspace/db";
 
 export const CAMPAIGN_BOUNCE_RECIPIENT_PAGE_SIZE = 50;
+const campaignBounceHistoryTable = alias(campaignSendsTable, "campaign_bounce_history");
 
 export interface CampaignPermanentBounceRecipient {
   clientId: string;
@@ -29,6 +31,17 @@ export function tenantHasPermanentEmailBounceExpression(
       eq(campaignSendsTable.clientId, clientId),
       eq(campaignSendsTable.bounceType, "permanent"),
       isNotNull(campaignSendsTable.bouncedAt),
+    )));
+}
+
+export function campaignSendHasPermanentEmailBounceExpression() {
+  return exists(db.select({ id: campaignBounceHistoryTable.id })
+    .from(campaignBounceHistoryTable)
+    .where(and(
+      eq(campaignBounceHistoryTable.tenantId, campaignSendsTable.tenantId),
+      eq(campaignBounceHistoryTable.clientId, campaignSendsTable.clientId),
+      eq(campaignBounceHistoryTable.bounceType, "permanent"),
+      isNotNull(campaignBounceHistoryTable.bouncedAt),
     )));
 }
 

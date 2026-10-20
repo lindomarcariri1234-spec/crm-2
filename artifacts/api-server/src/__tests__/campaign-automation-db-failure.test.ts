@@ -57,6 +57,10 @@ vi.mock("@workspace/db", () => ({
   tripsTable: {},
 }));
 
+vi.mock("../services/campaign-bounce-recipients.js", () => ({
+  campaignSendHasPermanentEmailBounceExpression: vi.fn(() => "hasPermanentEmailBounce"),
+}));
+
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn((_col: unknown, val: unknown) => `eq:${String(val)}`),
   ne: vi.fn((_col: unknown, val: unknown) => `ne:${String(val)}`),
@@ -133,6 +137,20 @@ function setupSelectCalls(campaign = CAMPAIGN) {
   mockSelect.mockImplementationOnce(() => ({
     from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
   }));
+}
+
+function setupStaleSendRows(rows: unknown[]) {
+  mockSelect.mockReturnValue({
+    from: vi.fn().mockReturnValue({
+      innerJoin: vi.fn().mockReturnValue({
+        innerJoin: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(rows),
+          }),
+        }),
+      }),
+    }),
+  });
 }
 
 describe("campaign-automation: DB write failure regression", () => {
@@ -389,6 +407,88 @@ describe("campaign-automation: DB write failure regression", () => {
         }),
         { jobId: "send-crashed-before-add" },
       );
+    });
+
+    it("marks a permanently bounced stale send skipped without inspecting or re-enqueueing the job", async () => {
+      const getJob = vi.fn();
+      const add = vi.fn();
+      mockGetCampaignEmailQueue.mockReturnValue({ getJob, add });
+      setupStaleSendRows([{
+        sendId: "send-permanent-bounce",
+        campaignId: CAMPAIGN.id,
+        clientId: CLIENT.id,
+        tenantId: CAMPAIGN.tenantId,
+        subject: CAMPAIGN.subject,
+        content: CAMPAIGN.content,
+        clientName: CLIENT.name,
+        clientEmail: CLIENT.email,
+        tenantName: TENANT.name,
+        hasPermanentEmailBounce: true,
+      }]);
+      const updateValues: Array<Record<string, unknown>> = [];
+      mockUpdate.mockImplementation(() => ({
+        set: vi.fn().mockImplementation((values: Record<string, unknown>) => {
+          updateValues.push(values);
+          return { where: vi.fn().mockResolvedValue([]) };
+        }),
+      }));
+
+      await reconcileStaleQueuedCampaignSends();
+
+      expect(updateValues).toContainEqual({
+        status: "skipped",
+        error: "permanent_email_bounce",
+      });
+      expect(getJob).not.toHaveBeenCalled();
+      expect(add).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        scenario: "a temporary bounce",
+        campaignId: CAMPAIGN.id,
+        clientId: "temporary-client",
+        tenantId: CAMPAIGN.tenantId,
+        clientEmail: "temporary@example.test",
+      },
+      {
+        scenario: "the same email in another tenant",
+        campaignId: "other-tenant-campaign",
+        clientId: "same-email-other-tenant-client",
+        tenantId: "tenant-002",
+        clientEmail: CLIENT.email,
+      },
+    ])("re-enqueues a stale send for $scenario when no tenant-scoped permanent bounce exists", async ({
+      campaignId,
+      clientId,
+      tenantId,
+      clientEmail,
+    }) => {
+      const getJob = vi.fn().mockResolvedValue(undefined);
+      const add = vi.fn().mockResolvedValue(undefined);
+      mockGetCampaignEmailQueue.mockReturnValue({ getJob, add });
+      setupStaleSendRows([{
+        sendId: `send-${clientId}`,
+        campaignId,
+        clientId,
+        tenantId,
+        subject: CAMPAIGN.subject,
+        content: CAMPAIGN.content,
+        clientName: CLIENT.name,
+        clientEmail,
+        tenantName: TENANT.name,
+        hasPermanentEmailBounce: false,
+      }]);
+
+      await reconcileStaleQueuedCampaignSends();
+
+      expect(getJob).toHaveBeenCalledWith(`send-${clientId}`);
+      expect(add).toHaveBeenCalledWith(
+        "campaign-email",
+        expect.objectContaining({ campaignId, clientId, tenantId, to: clientEmail }),
+        { jobId: `send-${clientId}` },
+      );
+      expect(mockUpdate).not.toHaveBeenCalled();
     });
 
     it.skip("reopens an errored send and replaces its exhausted retained job with a processable job using the same durable id", async () => {

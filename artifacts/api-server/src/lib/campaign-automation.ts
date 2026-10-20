@@ -7,6 +7,7 @@ import { generateId } from "./id";
 import { sendReminderHtmlEmail, type SendEmailResult } from "@workspace/email";
 import { getCampaignEmailQueue, type CampaignEmailJobData } from "../queues/index";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
+import { campaignSendHasPermanentEmailBounceExpression } from "../services/campaign-bounce-recipients.js";
 
 const TRIGGER_TYPES = [
   "birthday",
@@ -35,6 +36,7 @@ interface QueuedCampaignSendRow {
   clientName: string;
   clientEmail: string;
   tenantName: string | null;
+  hasPermanentEmailBounce: boolean;
 }
 
 async function prepareCampaignJobSlot(
@@ -101,6 +103,7 @@ export async function reconcileStaleQueuedCampaignSends(): Promise<void> {
       clientName: clientsTable.name,
       clientEmail: clientsTable.email,
       tenantName: tenantsTable.name,
+      hasPermanentEmailBounce: campaignSendHasPermanentEmailBounceExpression(),
     })
     .from(campaignSendsTable)
     .innerJoin(
@@ -133,6 +136,19 @@ export async function reconcileStaleQueuedCampaignSends(): Promise<void> {
     // rows created by the crash window.
     const jobId = send.sendId;
     try {
+      if (send.hasPermanentEmailBounce) {
+        await db.update(campaignSendsTable)
+          .set({ status: "skipped", error: "permanent_email_bounce" })
+          .where(and(
+            eq(campaignSendsTable.id, send.sendId),
+            eq(campaignSendsTable.campaignId, send.campaignId),
+            eq(campaignSendsTable.clientId, send.clientId),
+            eq(campaignSendsTable.tenantId, send.tenantId),
+            eq(campaignSendsTable.status, "queued"),
+          ));
+        continue;
+      }
+
       const jobData: CampaignEmailJobData = {
         to: send.clientEmail,
         toName: send.clientName,

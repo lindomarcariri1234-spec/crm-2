@@ -55,7 +55,7 @@ import {
   pool,
   tenantsTable,
 } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   createOutboundMessage,
   dispatchOutboundMessage,
@@ -64,7 +64,10 @@ import {
   recoverOutboundDeliveries,
   updateOutboundDeliveryFromWebhook,
 } from "../services/outbound-delivery.js";
-import { listCampaignPermanentBounceRecipients } from "../services/campaign-bounce-recipients.js";
+import {
+  campaignSendHasPermanentEmailBounceExpression,
+  listCampaignPermanentBounceRecipients,
+} from "../services/campaign-bounce-recipients.js";
 
 const runId = randomUUID().replaceAll("-", "");
 const tenantId = `outbound-idem-${runId}`;
@@ -1417,6 +1420,23 @@ describe("outbound delivery database idempotency", () => {
         status: "queued",
       },
     ]);
+
+    const staleSendBounceFlags = await db.select({
+      clientId: campaignSendsTable.clientId,
+      tenantId: campaignSendsTable.tenantId,
+      hasPermanentEmailBounce: campaignSendHasPermanentEmailBounceExpression(),
+    })
+      .from(campaignSendsTable)
+      .where(and(
+        eq(campaignSendsTable.status, "queued"),
+        inArray(campaignSendsTable.campaignId, [futureCampaignId, otherTenantFutureCampaignId]),
+      ));
+    const bounceFlagByTenantAndClient = new Map(
+      staleSendBounceFlags.map((row) => [`${row.tenantId}:${row.clientId}`, row.hasPermanentEmailBounce]),
+    );
+    expect(bounceFlagByTenantAndClient.get(`${callbackTenantId}:${permanentClientId}`)).toBe(true);
+    expect(bounceFlagByTenantAndClient.get(`${callbackTenantId}:${temporaryClientId}`)).toBe(false);
+    expect(bounceFlagByTenantAndClient.get(`${callbackOtherTenantId}:${sameEmailOtherTenantClientId}`)).toBe(false);
 
     const permanentResult = await dispatchOutboundMessage({
       tenantId: callbackTenantId,
