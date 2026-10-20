@@ -366,6 +366,16 @@ describe("outbound delivery database idempotency", () => {
       };
       await applyMigration();
 
+      const backfillIndex = await client.query<{ indexdef: string }>(`
+        SELECT indexdef
+        FROM pg_indexes
+        WHERE schemaname = $1
+          AND tablename = 'outbound_deliveries'
+          AND indexname = 'outbound_deliveries_bounce_backfill_idx'
+      `, [schemaName]);
+      expect(backfillIndex.rows).toHaveLength(1);
+      expect(backfillIndex.rows[0]?.indexdef).toContain("WHERE");
+
       const readCampaigns = () => client.query<{
         id: string;
         tenant_id: string;

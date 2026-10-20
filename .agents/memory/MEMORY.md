@@ -77,6 +77,7 @@
 - [Trip occupancy and cost reconciliation](trip-occupancy-projections.md) — keep six occupancy scenarios separate from confirmed-booking budgets; what-if edits stay local and never overwrite saved finance.
 - [Multichannel delivery history](multichannel-delivery-history.md) — preserve numeric delivery attempts and expose detailed provider attempts under a separate history field.
 - [Campaign engagement metrics](campaign-engagement-metrics.md) — count unique recipient outcomes through first-write timestamps; keep untracked metrics distinct from zero.
+- [Campaign bounce backfill performance](campaign-bounce-backfill-performance.md) — a partial delivery index roughly halved a 1M-row classification pass; keep its predicate aligned and avoid indexing the faster totals refresh.
 - [Outbound metadata type drift](outbound-metadata-type-drift.md) — production `outbound_messages.metadata` is JSON despite the JSONB schema; cast both sides of raw metadata merges.
 - [PostgreSQL parameter casts](postgres-parameter-casts.md) — raw SQL arithmetic needs explicit casts when interpolated values arrive as unknown parameters.
 - [Client deletion and trip history](client-deletion-trip-history.md) — anonymize reservation ownership on account removal while preserving passengers, seats, payments, and history

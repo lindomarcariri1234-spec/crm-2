@@ -7,6 +7,12 @@ ALTER TABLE "campaigns"
 ALTER TABLE "campaign_sends"
   ADD COLUMN IF NOT EXISTS "bounce_type" text;
 --> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "outbound_deliveries_bounce_backfill_idx"
+  ON "outbound_deliveries" USING btree ("tenant_id", "outbound_message_id", "bounce_type")
+  WHERE "provider" = 'resend'
+    AND "channel" = 'email'
+    AND "bounce_type" IN ('permanent', 'temporary');
+--> statement-breakpoint
 WITH classified_sends AS (
   SELECT
     od."tenant_id",
