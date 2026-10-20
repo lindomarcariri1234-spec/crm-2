@@ -10,7 +10,10 @@ import { ADMIN_ROLES } from '../lib/tenant';
 import { ROLES, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { resolveSegment } from "../lib/campaign-segment";
 import { sendManualCampaignNow } from "../lib/manual-campaign-dispatch";
-import { listCampaignPermanentBounceRecipients } from "../services/campaign-bounce-recipients.js";
+import {
+  listCampaignPermanentBounceRecipients,
+  listCampaignPermanentBounceSuppressionCounts,
+} from "../services/campaign-bounce-recipients.js";
 import { getAIClientForTenant } from "../lib/ai-client";
 import { parseBrazilDateRange } from "../lib/brazil-calendar";
 
@@ -131,7 +134,10 @@ const UpdateOrderBody = z.object({
   paymentStatus: z.string().optional(),
 });
 
-function formatCampaign(c: typeof campaignsTable.$inferSelect) {
+function formatCampaign(
+  c: typeof campaignsTable.$inferSelect,
+  permanentBounceSuppressedCount = 0,
+) {
   return {
     id: c.id, tenantId: c.tenantId, name: c.name, type: c.type,
     status: c.status, subject: c.subject, content: c.content,
@@ -148,6 +154,7 @@ function formatCampaign(c: typeof campaignsTable.$inferSelect) {
     failedCount: c.failedCount,
     complainedCount: c.complainedCount,
     failureMetricsAvailable: c.failureTrackingStartedAt !== null,
+    permanentBounceSuppressedCount,
     triggerType: c.triggerType ?? "manual",
     triggerConfig: c.triggerConfig ?? null,
     autoEnabled: c.autoEnabled ?? false,
@@ -186,7 +193,11 @@ router.get("/campaigns", async (req, res, next: NextFunction): Promise<void> => 
     const campaigns = await db.select().from(campaignsTable)
       .where(eq(campaignsTable.tenantId, me.tenantId))
       .orderBy(desc(campaignsTable.createdAt));
-    res.json(campaigns.map(formatCampaign));
+    const suppressionCounts = await listCampaignPermanentBounceSuppressionCounts(me.tenantId);
+    res.json(campaigns.map((campaign) => formatCampaign(
+      campaign,
+      suppressionCounts.get(campaign.id) ?? 0,
+    )));
   } catch (err) {
     next(err);
   }

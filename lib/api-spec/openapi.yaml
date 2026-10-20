@@ -4029,7 +4029,7 @@ paths:
     get:
       operationId: listCampaignPermanentBounceRecipients
       tags: [campaigns]
-      summary: List clients with permanent campaign email bounces
+       summary: List permanent campaign bounces and bounce-prevented email sends
       parameters:
         - name: id
           in: path
@@ -11248,6 +11248,9 @@ components:
         permanentBouncedCount:
           type: integer
           description: Email recipients whose Resend bounce classification is permanent.
+        permanentBounceSuppressedCount:
+          type: integer
+          description: Campaign email recipients skipped because an earlier permanent bounce was confirmed.
         temporaryBouncedCount:
           type: integer
           description: Email recipients whose Resend bounce classification is temporary.
@@ -11273,7 +11276,7 @@ components:
           type: boolean
         createdAt:
           type: string
-      required: [id, name, type, status, content, recipientsCount, sentCount, emailDeliveredCount, openedCount, clickedCount, bouncedCount, permanentBouncedCount, temporaryBouncedCount, failedCount, complainedCount, engagementMetricsAvailable, failureMetricsAvailable, createdAt]
+      required: [id, name, type, status, content, recipientsCount, sentCount, emailDeliveredCount, openedCount, clickedCount, bouncedCount, permanentBouncedCount, permanentBounceSuppressedCount, temporaryBouncedCount, failedCount, complainedCount, engagementMetricsAvailable, failureMetricsAvailable, createdAt]
 
     CampaignPermanentBounceRecipient:
       type: object
@@ -11288,6 +11291,38 @@ components:
           type: string
           format: date-time
       required: [clientId, name, email, bouncedAt]
+
+    CampaignPermanentBounceSuppressionRecipient:
+      type: object
+      properties:
+        clientId:
+          type: string
+        name:
+          type: string
+        email:
+          type: ["string", "null"]
+      required: [clientId, name, email]
+
+    CampaignPermanentBounceSuppressionsPage:
+      type: object
+      properties:
+        available:
+          type: boolean
+          description: False when the campaign does not send email.
+        count:
+          type: integer
+          description: Distinct clients whose email was skipped due to a confirmed permanent bounce.
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/CampaignPermanentBounceSuppressionRecipient"
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        hasMore:
+          type: boolean
+      required: [available, count, recipients, page, pageSize, hasMore]
 
     CampaignPermanentBounceRecipientsPage:
       type: object
@@ -11305,7 +11340,9 @@ components:
           type: integer
         hasMore:
           type: boolean
-      required: [available, recipients, page, pageSize, hasMore]
+        permanentBounceSuppressions:
+          $ref: "#/components/schemas/CampaignPermanentBounceSuppressionsPage"
+      required: [available, recipients, page, pageSize, hasMore, permanentBounceSuppressions]
 
     CreateCampaignBody:
       type: object

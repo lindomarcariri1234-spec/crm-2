@@ -59,6 +59,8 @@ export * from "./calendarSyncResponse";
 export * from "./campaign";
 export * from "./campaignPermanentBounceRecipient";
 export * from "./campaignPermanentBounceRecipientsPage";
+export * from "./campaignPermanentBounceSuppressionRecipient";
+export * from "./campaignPermanentBounceSuppressionsPage";
 export * from "./campaignTriggerConfig";
 export * from "./cancelPmsReservationBody";
 export * from "./cartItem";

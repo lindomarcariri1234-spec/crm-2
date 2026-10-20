@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { CampaignPermanentBounceRecipient } from "./campaignPermanentBounceRecipient";
+import type { CampaignPermanentBounceSuppressionsPage } from "./campaignPermanentBounceSuppressionsPage";
 
 export interface CampaignPermanentBounceRecipientsPage {
   /** False when campaign email failure tracking was not available. */
@@ -14,4 +15,5 @@ export interface CampaignPermanentBounceRecipientsPage {
   page: number;
   pageSize: number;
   hasMore: boolean;
+  permanentBounceSuppressions: CampaignPermanentBounceSuppressionsPage;
 }

@@ -8046,6 +8046,12 @@ export const ListCampaignsResponseItem = zod.object({
     .describe(
       "Email recipients whose Resend bounce classification is permanent.",
     ),
+  permanentBounceSuppressedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Campaign email recipients skipped because an earlier permanent bounce was confirmed.",
+    ),
   temporaryBouncedCount: zod
     .number()
     .int()
@@ -8115,6 +8121,12 @@ export const CreateCampaignResponse = zod.object({
     .describe(
       "Email recipients whose Resend bounce classification is permanent.",
     ),
+  permanentBounceSuppressedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Campaign email recipients skipped because an earlier permanent bounce was confirmed.",
+    ),
   temporaryBouncedCount: zod
     .number()
     .int()
@@ -8145,7 +8157,7 @@ export const CreateCampaignResponse = zod.object({
 });
 
 /**
- * @summary List clients with permanent campaign email bounces
+ * @summary List permanent campaign bounces and bounce-prevented email sends
  */
 export const ListCampaignPermanentBounceRecipientsParams = zod.object({
   id: zod.coerce.string(),
@@ -8178,6 +8190,20 @@ export const ListCampaignPermanentBounceRecipientsResponse = zod.object({
   page: zod.number().int(),
   pageSize: zod.number().int(),
   hasMore: zod.boolean(),
+  permanentBounceSuppressions: zod.object({
+    available: zod.boolean().describe("False when the campaign does not send email."),
+    count: zod.number().int().describe(
+      "Distinct clients whose email was skipped due to a confirmed permanent bounce.",
+    ),
+    recipients: zod.array(zod.object({
+      clientId: zod.string(),
+      name: zod.string(),
+      email: zod.string().nullable(),
+    })),
+    page: zod.number().int(),
+    pageSize: zod.number().int(),
+    hasMore: zod.boolean(),
+  }),
 });
 
 /**
@@ -8220,6 +8246,12 @@ export const UpdateCampaignResponse = zod.object({
     .int()
     .describe(
       "Email recipients whose Resend bounce classification is permanent.",
+    ),
+  permanentBounceSuppressedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Campaign email recipients skipped because an earlier permanent bounce was confirmed.",
     ),
   temporaryBouncedCount: zod
     .number()

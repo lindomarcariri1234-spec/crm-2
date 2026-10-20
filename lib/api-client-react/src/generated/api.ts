@@ -22975,7 +22975,7 @@ export const getListCampaignPermanentBounceRecipientsUrl = (
 };
 
 /**
- * @summary List clients with permanent campaign email bounces
+ * @summary List permanent campaign bounces and bounce-prevented email sends
  */
 export const listCampaignPermanentBounceRecipients = async (
   id: string,

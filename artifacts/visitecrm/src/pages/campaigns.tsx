@@ -39,6 +39,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { ListLoadErrorRow } from "@/components/list-load-error";
 import { CampaignPermanentBounceDialog } from "@/components/campaign-permanent-bounce-dialog";
+import { CampaignPermanentBounceSuppressionDialog } from "@/components/campaign-permanent-bounce-suppression-dialog";
 import {
   Plus,
   Megaphone,
@@ -445,10 +446,15 @@ function CampaignsTab() {
     : undefined;
 
   const getDelivered = (c: Campaign) => c.deliveredCount ?? 0;
+  const hasEmailChannel = (c: Campaign) => c.type === "email" || c.type === "unified";
   const hasEmailMetrics = (c: Campaign) => c.type !== "whatsapp" && c.engagementMetricsAvailable;
   const hasEmailFailureMetrics = (c: Campaign) => c.type !== "whatsapp" && c.failureMetricsAvailable;
   const totalRecipients = manualCampaigns.reduce((s, c) => s + c.recipientsCount, 0);
   const totalSent = manualCampaigns.reduce((s, c) => s + c.sentCount, 0);
+  const totalBounceSuppressed = manualCampaigns.reduce(
+    (s, c) => s + (hasEmailChannel(c) ? c.permanentBounceSuppressedCount : 0),
+    0,
+  );
   const trackedCampaigns = manualCampaigns.filter((c) => c.engagementMetricsAvailable);
   const emailTrackedCampaigns = trackedCampaigns.filter(hasEmailMetrics);
   const totalDelivered = trackedCampaigns.reduce((s, c) => s + getDelivered(c), 0);
@@ -538,15 +544,16 @@ function CampaignsTab() {
         </Dialog>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
         <StatCard icon={Megaphone} label="Campanhas" value={manualCampaigns.length} color="bg-primary/10 text-primary" />
         <StatCard icon={Users} label="Destinatários" value={totalRecipients.toLocaleString("pt-BR")} color="bg-secondary text-secondary-foreground" />
         <StatCard icon={Send} label="Enviados" value={totalSent.toLocaleString("pt-BR")} color="bg-accent/80 text-accent-foreground" />
+        <StatCard icon={Mail} label="E-mails suprimidos" value={totalBounceSuppressed.toLocaleString("pt-BR")} color="bg-secondary text-secondary-foreground" />
         <StatCard icon={PackageCheck} label="Entregues confirmados" value={trackedCampaigns.length ? totalDelivered.toLocaleString("pt-BR") : "—"} color="bg-primary/10 text-primary" />
         <StatCard icon={MailOpen} label="Abertura de e-mail" value={avgOpen === "—" ? "—" : `${avgOpen}%`} color="bg-accent text-accent-foreground" />
       </div>
       <p className="text-xs text-muted-foreground">
-        Entregas contam confirmações do Resend ou do WhatsApp Evolution. Aberturas, cliques, bounces, falhas e reclamações são medidos apenas para e-mail pelo Resend; “—” indica que o acompanhamento não está disponível.
+        E-mails suprimidos por bounce permanente são contados à parte dos bounces e falhas informados pelo Resend. Entregas contam confirmações do Resend ou do WhatsApp Evolution; “—” indica que o acompanhamento não está disponível.
       </p>
 
       {analyticsTarget && (
@@ -597,6 +604,11 @@ function CampaignsTab() {
                   base: null,
                 },
                 {
+                  label: "E-mails suprimidos por bounce permanente",
+                  value: hasEmailChannel(analyticsTarget) ? analyticsTarget.permanentBounceSuppressedCount : null,
+                  base: null,
+                },
+                {
                   label: "Bounces temporários (e-mail)",
                   value: hasEmailFailureMetrics(analyticsTarget) ? analyticsTarget.temporaryBouncedCount : null,
                   base: null,
@@ -623,11 +635,17 @@ function CampaignsTab() {
                 </div>
               ))}
             </div>
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
               <CampaignPermanentBounceDialog
                 campaignId={analyticsTarget.id}
                 campaignName={analyticsTarget.name}
               />
+              {hasEmailChannel(analyticsTarget) && (
+                <CampaignPermanentBounceSuppressionDialog
+                  campaignId={analyticsTarget.id}
+                  campaignName={analyticsTarget.name}
+                />
+              )}
             </div>
           </CardContent>
         </Card>
@@ -635,7 +653,7 @@ function CampaignsTab() {
 
       <div className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm">
         <div className="overflow-x-auto">
-          <Table className="min-w-[1440px]">
+          <Table className="min-w-[1560px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Nome</TableHead>
@@ -648,6 +666,7 @@ function CampaignsTab() {
                 <TableHead className="text-right">Cliques (e-mail)</TableHead>
                 <TableHead className="text-right">Bounces (e-mail)</TableHead>
                 <TableHead className="text-right">Bounces permanentes</TableHead>
+                <TableHead className="text-right">Suprimidos (bounce permanente)</TableHead>
                 <TableHead className="text-right">Bounces temporários</TableHead>
                 <TableHead className="text-right">Falhas (e-mail)</TableHead>
                 <TableHead className="text-right">Reclamações (e-mail)</TableHead>
@@ -659,20 +678,20 @@ function CampaignsTab() {
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 15 }).map((_, j) => (
+                    {Array.from({ length: 16 }).map((_, j) => (
                       <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
                     ))}
                   </TableRow>
                 ))
               ) : isError ? (
                 <ListLoadErrorRow
-                  colSpan={15}
+                  colSpan={16}
                   onRetry={refetch}
                   message="Não foi possível carregar as campanhas."
                 />
               ) : manualCampaigns.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={15} className="py-12 text-center text-muted-foreground">
+                  <TableCell colSpan={16} className="py-12 text-center text-muted-foreground">
                     <Megaphone className="mx-auto mb-3 h-10 w-10 opacity-30" />
                     <p className="font-medium text-foreground">Nenhuma campanha criada.</p>
                     <p className="mt-1 text-sm">Crie sua primeira campanha para engajar clientes.</p>
@@ -709,6 +728,7 @@ function CampaignsTab() {
                       </TableCell>
                       <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.bouncedCount : "—"}</TableCell>
                       <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.permanentBouncedCount : "—"}</TableCell>
+                      <TableCell className="text-right">{hasEmailChannel(c) ? c.permanentBounceSuppressedCount : "—"}</TableCell>
                       <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.temporaryBouncedCount : "—"}</TableCell>
                       <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.failedCount : "—"}</TableCell>
                       <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.complainedCount : "—"}</TableCell>

@@ -28,6 +28,8 @@ export interface Campaign {
   bouncedCount: number;
   /** Email recipients whose Resend bounce classification is permanent. */
   permanentBouncedCount: number;
+  /** Campaign email recipients skipped because an earlier permanent bounce was confirmed. */
+  permanentBounceSuppressedCount: number;
   /** Email recipients whose Resend bounce classification is temporary. */
   temporaryBouncedCount: number;
   /** Email recipients whose messages failed according to Resend. */

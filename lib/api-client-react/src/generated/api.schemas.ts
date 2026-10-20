@@ -3582,6 +3582,8 @@ export interface Campaign {
   bouncedCount: number;
   /** Email recipients whose Resend bounce classification is permanent. */
   permanentBouncedCount: number;
+  /** Campaign email recipients skipped because an earlier permanent bounce was confirmed. */
+  permanentBounceSuppressedCount: number;
   /** Email recipients whose Resend bounce classification is temporary. */
   temporaryBouncedCount: number;
   /** Email recipients whose messages failed according to Resend. */
@@ -3611,6 +3613,25 @@ export interface CampaignPermanentBounceRecipientsPage {
   /** False when campaign email failure tracking was not available. */
   available: boolean;
   recipients: CampaignPermanentBounceRecipient[];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  permanentBounceSuppressions: CampaignPermanentBounceSuppressionsPage;
+}
+
+export interface CampaignPermanentBounceSuppressionRecipient {
+  clientId: string;
+  name: string;
+  /** @nullable */
+  email: string | null;
+}
+
+export interface CampaignPermanentBounceSuppressionsPage {
+  /** False when the campaign does not send email. */
+  available: boolean;
+  /** Distinct clients whose email was skipped due to a confirmed permanent bounce. */
+  count: number;
+  recipients: CampaignPermanentBounceSuppressionRecipient[];
   page: number;
   pageSize: number;
   hasMore: boolean;

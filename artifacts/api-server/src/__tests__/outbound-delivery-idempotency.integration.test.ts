@@ -67,6 +67,7 @@ import {
 import {
   campaignSendHasPermanentEmailBounceExpression,
   listCampaignPermanentBounceRecipients,
+  listCampaignPermanentBounceSuppressionCounts,
 } from "../services/campaign-bounce-recipients.js";
 
 const runId = randomUUID().replaceAll("-", "");
@@ -1228,6 +1229,7 @@ describe("outbound delivery database idempotency", () => {
       { key: "other-campaign", tenantId: callbackTenantId, name: "Other campaign client", email: "other-campaign@example.test" },
       { key: "other-tenant", tenantId: callbackOtherTenantId, name: "Other tenant client", email: "other-tenant@example.test" },
       { key: "legacy", tenantId: callbackTenantId, name: "Legacy campaign client", email: "legacy@example.test" },
+      { key: "legacy-suppressed", tenantId: callbackTenantId, name: "Legacy suppressed client", email: "legacy-suppressed@example.test" },
     ] as const;
     const clientIds = new Map<string, string>();
     await db.insert(clientsTable).values(recipientFixtures.map((fixture, index) => {
@@ -1280,6 +1282,14 @@ describe("outbound delivery database idempotency", () => {
       bouncedAt: trackingStartedAt,
       status: "sent",
     })));
+    await db.insert(campaignSendsTable).values({
+      id: randomUUID(),
+      campaignId: legacyCampaignId,
+      clientId: clientIds.get("legacy-suppressed")!,
+      tenantId: callbackTenantId,
+      status: "skipped",
+      error: "permanent_email_bounce",
+    });
 
     const trackedPage = await listCampaignPermanentBounceRecipients(
       callbackTenantId,
@@ -1296,6 +1306,11 @@ describe("outbound delivery database idempotency", () => {
         email: "permanent@example.test",
         bouncedAt: trackingStartedAt.toISOString(),
       }],
+      permanentBounceSuppressions: {
+        available: true,
+        count: 0,
+        recipients: [],
+      },
     });
     expect(trackedPage?.recipients).toHaveLength(1);
 
@@ -1322,6 +1337,15 @@ describe("outbound delivery database idempotency", () => {
       available: false,
       recipients: [],
       hasMore: false,
+      permanentBounceSuppressions: {
+        available: true,
+        count: 1,
+        recipients: [{
+          clientId: clientIds.get("legacy-suppressed"),
+          name: "Legacy suppressed client",
+          email: "legacy-suppressed@example.test",
+        }],
+      },
     });
   });
 
@@ -1330,6 +1354,8 @@ describe("outbound delivery database idempotency", () => {
     const futureCampaignId = randomUUID();
     const futureUnifiedCampaignId = randomUUID();
     const otherTenantFutureCampaignId = randomUUID();
+    const futureCampaignSendId = randomUUID();
+    const futureUnifiedCampaignSendId = randomUUID();
     const permanentClientId = randomUUID();
     const temporaryClientId = randomUUID();
     const sameEmailOtherTenantClientId = randomUUID();
@@ -1392,7 +1418,7 @@ describe("outbound delivery database idempotency", () => {
         bouncedAt: trackingStartedAt,
       },
       {
-        id: randomUUID(),
+        id: futureCampaignSendId,
         campaignId: futureCampaignId,
         clientId: permanentClientId,
         tenantId: callbackTenantId,
@@ -1406,7 +1432,7 @@ describe("outbound delivery database idempotency", () => {
         status: "queued",
       },
       {
-        id: randomUUID(),
+        id: futureUnifiedCampaignSendId,
         campaignId: futureUnifiedCampaignId,
         clientId: permanentClientId,
         tenantId: callbackTenantId,
@@ -1446,7 +1472,11 @@ describe("outbound delivery database idempotency", () => {
       channels: ["email"],
       email: { subject: "Future campaign", html: "Hello" },
       origin: "campaign",
-      metadata: { campaignId: futureCampaignId, clientId: permanentClientId },
+      metadata: {
+        campaignId: futureCampaignId,
+        campaignSendId: futureCampaignSendId,
+        clientId: permanentClientId,
+      },
     });
     expect(permanentResult.deliveries).toMatchObject([
       {
@@ -1462,6 +1492,28 @@ describe("outbound delivery database idempotency", () => {
         eq(outboundDeliveryAttemptsTable.deliveryId, permanentResult.deliveries[0]!.id),
       ));
     expect(permanentDeliveryAttempt).toBeUndefined();
+    const suppressedPage = await listCampaignPermanentBounceRecipients(
+      callbackTenantId,
+      futureCampaignId,
+      1,
+    );
+    expect(suppressedPage).toMatchObject({
+      available: true,
+      recipients: [],
+      permanentBounceSuppressions: {
+        available: true,
+        count: 1,
+        recipients: [{
+          clientId: permanentClientId,
+          name: "Permanent bounce client",
+          email: `permanent-${runId}@example.test`,
+        }],
+      },
+    });
+    const suppressionCounts = await listCampaignPermanentBounceSuppressionCounts(callbackTenantId);
+    expect(suppressionCounts.get(futureCampaignId)).toBe(1);
+    expect((await listCampaignPermanentBounceSuppressionCounts(callbackOtherTenantId)).has(futureCampaignId))
+      .toBe(false);
 
     const unifiedResult = await createOutboundMessage({
       tenantId: callbackTenantId,
@@ -1472,7 +1524,11 @@ describe("outbound delivery database idempotency", () => {
       email: { subject: "Future campaign", html: "Hello" },
       whatsapp: { text: "Hello" },
       origin: "campaign",
-      metadata: { campaignId: futureUnifiedCampaignId, clientId: permanentClientId },
+      metadata: {
+        campaignId: futureUnifiedCampaignId,
+        campaignSendId: futureUnifiedCampaignSendId,
+        clientId: permanentClientId,
+      },
     });
     expect(unifiedResult.deliveries).toMatchObject([
       { channel: "email", status: "skipped", skippedReason: "permanent_email_bounce" },
