@@ -443,6 +443,127 @@ describe("outbound delivery database idempotency", () => {
     }
   });
 
+  it("preserves an existing bounce classification when a retry sees conflicting ledger evidence", async () => {
+    const client = await pool.connect();
+    const schemaName = `bounce_retry_conflict_${randomUUID().replaceAll("-", "")}`;
+    try {
+      await client.query(`CREATE SCHEMA "${schemaName}"`);
+      await client.query(`SET search_path TO "${schemaName}"`);
+      await client.query(`
+        CREATE TABLE campaigns (
+          id text PRIMARY KEY,
+          tenant_id text NOT NULL,
+          failure_tracking_started_at timestamptz
+        );
+        CREATE TABLE campaign_sends (
+          id text PRIMARY KEY,
+          campaign_id text NOT NULL,
+          tenant_id text NOT NULL,
+          bounced_at timestamptz,
+          bounce_type text
+        );
+        CREATE TABLE outbound_messages (
+          id text PRIMARY KEY,
+          tenant_id text NOT NULL,
+          metadata jsonb NOT NULL,
+          origin text NOT NULL
+        );
+        CREATE TABLE outbound_deliveries (
+          id text PRIMARY KEY,
+          tenant_id text NOT NULL,
+          outbound_message_id text NOT NULL,
+          provider text NOT NULL,
+          channel text NOT NULL,
+          bounce_type text
+        );
+      `);
+
+      const trackingStartedAt = new Date("2026-10-20T00:00:00.000Z");
+      await client.query(`
+        INSERT INTO campaigns (id, tenant_id, failure_tracking_started_at)
+        VALUES ('campaign-retry', 'tenant-retry', $1)
+      `, [trackingStartedAt]);
+      await client.query(`
+        INSERT INTO campaign_sends (id, campaign_id, tenant_id, bounced_at, bounce_type)
+        VALUES ('send-preclassified', 'campaign-retry', 'tenant-retry', $1, 'permanent')
+      `, [trackingStartedAt]);
+
+      const migrationSql = await readFile(
+        new URL("../../../../lib/db/drizzle/0129_campaign_bounce_classification.sql", import.meta.url),
+        "utf8",
+      );
+      const applyMigration = async () => {
+        for (const statement of migrationSql.split("--> statement-breakpoint")) {
+          const sql = statement.trim();
+          if (sql) await client.query(sql);
+        }
+      };
+      const readCampaign = () => client.query<{
+        permanent_bounced_count: number;
+        temporary_bounced_count: number;
+      }>(`
+        SELECT permanent_bounced_count, temporary_bounced_count
+        FROM campaigns
+        WHERE id = 'campaign-retry' AND tenant_id = 'tenant-retry'
+      `);
+      const readSend = () => client.query<{ bounce_type: string | null }>(`
+        SELECT bounce_type
+        FROM campaign_sends
+        WHERE id = 'send-preclassified'
+          AND campaign_id = 'campaign-retry'
+          AND tenant_id = 'tenant-retry'
+      `);
+
+      await applyMigration();
+      const campaignBeforeRetry = await readCampaign();
+      const sendBeforeRetry = await readSend();
+      expect(campaignBeforeRetry.rows).toEqual([{
+        permanent_bounced_count: 1,
+        temporary_bounced_count: 0,
+      }]);
+      expect(sendBeforeRetry.rows).toEqual([{ bounce_type: "permanent" }]);
+
+      await client.query(`
+        INSERT INTO outbound_messages (id, tenant_id, metadata, origin)
+        VALUES (
+          'message-late-conflicting-bounce',
+          'tenant-retry',
+          '{"campaignId":"campaign-retry","campaignSendId":"send-preclassified"}'::jsonb,
+          'campaign'
+        )
+      `);
+      await client.query(`
+        INSERT INTO outbound_deliveries (
+          id, tenant_id, outbound_message_id, provider, channel, bounce_type
+        )
+        VALUES (
+          'delivery-late-conflicting-bounce',
+          'tenant-retry',
+          'message-late-conflicting-bounce',
+          'resend',
+          'email',
+          'temporary'
+        )
+      `);
+
+      await applyMigration();
+      const campaignAfterRetry = await readCampaign();
+      const sendAfterRetry = await readSend();
+      expect(campaignAfterRetry.rows).toEqual(campaignBeforeRetry.rows);
+      expect(sendAfterRetry.rows).toEqual(sendBeforeRetry.rows);
+    } finally {
+      try {
+        await client.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
+      } finally {
+        try {
+          await client.query("RESET search_path");
+        } finally {
+          client.release();
+        }
+      }
+    }
+  });
+
   it("counts concurrent email and WhatsApp callbacks once for a unified campaign recipient", async () => {
     mockWhatsAppSend.mockClear();
     const sharedClientId = `campaign-client-${runId}`;
