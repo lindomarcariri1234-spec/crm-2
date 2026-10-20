@@ -8036,8 +8036,27 @@ export const ListCampaignsResponseItem = zod.object({
   emailDeliveredCount: zod.number().int(),
   openedCount: zod.number().int(),
   clickedCount: zod.number().int(),
+  bouncedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages bounced according to Resend."),
+  failedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages failed according to Resend."),
+  complainedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients who reported messages as spam according to Resend.",
+    ),
   deliveredCount: zod.number().int().optional(),
   engagementMetricsAvailable: zod.boolean(),
+  failureMetricsAvailable: zod
+    .boolean()
+    .describe(
+      "Whether bounce, failure, and complaint metrics are available for this campaign.",
+    ),
   triggerType: zod.string().nullish(),
   triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),
   autoEnabled: zod.boolean().optional(),
@@ -8074,8 +8093,27 @@ export const CreateCampaignResponse = zod.object({
   emailDeliveredCount: zod.number().int(),
   openedCount: zod.number().int(),
   clickedCount: zod.number().int(),
+  bouncedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages bounced according to Resend."),
+  failedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages failed according to Resend."),
+  complainedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients who reported messages as spam according to Resend.",
+    ),
   deliveredCount: zod.number().int().optional(),
   engagementMetricsAvailable: zod.boolean(),
+  failureMetricsAvailable: zod
+    .boolean()
+    .describe(
+      "Whether bounce, failure, and complaint metrics are available for this campaign.",
+    ),
   triggerType: zod.string().nullish(),
   triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),
   autoEnabled: zod.boolean().optional(),
@@ -8113,8 +8151,27 @@ export const UpdateCampaignResponse = zod.object({
   emailDeliveredCount: zod.number().int(),
   openedCount: zod.number().int(),
   clickedCount: zod.number().int(),
+  bouncedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages bounced according to Resend."),
+  failedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages failed according to Resend."),
+  complainedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients who reported messages as spam according to Resend.",
+    ),
   deliveredCount: zod.number().int().optional(),
   engagementMetricsAvailable: zod.boolean(),
+  failureMetricsAvailable: zod
+    .boolean()
+    .describe(
+      "Whether bounce, failure, and complaint metrics are available for this campaign.",
+    ),
   triggerType: zod.string().nullish(),
   triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),
   autoEnabled: zod.boolean().optional(),

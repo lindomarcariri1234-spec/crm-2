@@ -890,6 +890,13 @@
       "when": 1809960027000,
       "tag": "0127_campaign_engagement_metrics",
       "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1809960028000,
+      "tag": "0128_campaign_failure_outcomes",
+      "breakpoints": true
     }
   ]
 }

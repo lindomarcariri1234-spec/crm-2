@@ -1,4 +1,4 @@
-import { and, desc, eq, exists, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, exists, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import {
   db,
   auditLogsTable,
@@ -800,7 +800,14 @@ export function resolveWebhookDeliveryState(
   };
 }
 
-type CampaignMetricTimestamp = "deliveredAt" | "emailDeliveredAt" | "openedAt" | "clickedAt";
+type CampaignMetricTimestamp =
+  | "deliveredAt"
+  | "emailDeliveredAt"
+  | "openedAt"
+  | "clickedAt"
+  | "bouncedAt"
+  | "failedAt"
+  | "complainedAt";
 
 function campaignMetricTimestamps(
   update: OutboundDeliveryWebhookUpdate,
@@ -811,6 +818,11 @@ function campaignMetricTimestamps(
     if (providerStatus === "email.delivered") return ["deliveredAt", "emailDeliveredAt"];
     if (providerStatus === "email.opened") return ["openedAt"];
     if (providerStatus === "email.clicked") return ["clickedAt"];
+    if (providerStatus === "email.bounced") return ["bouncedAt"];
+    if (providerStatus === "email.failed") return ["failedAt"];
+    if (providerStatus === "email.complained") {
+      return ["deliveredAt", "emailDeliveredAt", "complainedAt"];
+    }
   }
 
   // Evolution's Baileys status 2 is only a server ACK; 3+ confirms delivery.
@@ -840,14 +852,38 @@ async function recordCampaignMetricsFromWebhook(
 
   const now = new Date();
   await db.transaction(async (tx) => {
+    let timestampsToRecord = timestamps;
+    const hasFailureMetric = timestampsToRecord.some((timestamp) =>
+      timestamp === "bouncedAt" || timestamp === "failedAt" || timestamp === "complainedAt",
+    );
+    if (hasFailureMetric) {
+      const [trackedCampaign] = await tx.select({ id: campaignsTable.id })
+        .from(campaignsTable)
+        .where(and(
+          eq(campaignsTable.id, campaignId),
+          eq(campaignsTable.tenantId, update.tenantId),
+          isNotNull(campaignsTable.failureTrackingStartedAt),
+        ))
+        .limit(1);
+      if (!trackedCampaign) {
+        timestampsToRecord = timestampsToRecord.filter((timestamp) =>
+          timestamp !== "bouncedAt" && timestamp !== "failedAt" && timestamp !== "complainedAt",
+        );
+      }
+    }
+    if (timestampsToRecord.length === 0) return;
+
     const deltas = {
       deliveredCount: 0,
       emailDeliveredCount: 0,
       openedCount: 0,
       clickedCount: 0,
+      bouncedCount: 0,
+      failedCount: 0,
+      complainedCount: 0,
     };
 
-    for (const timestamp of timestamps) {
+    for (const timestamp of timestampsToRecord) {
       const [marked] = await tx.update(campaignSendsTable)
         .set({ [timestamp]: now } as Partial<typeof campaignSendsTable.$inferInsert>)
         .where(and(
@@ -863,6 +899,9 @@ async function recordCampaignMetricsFromWebhook(
       if (timestamp === "emailDeliveredAt") deltas.emailDeliveredCount += 1;
       if (timestamp === "openedAt") deltas.openedCount += 1;
       if (timestamp === "clickedAt") deltas.clickedCount += 1;
+      if (timestamp === "bouncedAt") deltas.bouncedCount += 1;
+      if (timestamp === "failedAt") deltas.failedCount += 1;
+      if (timestamp === "complainedAt") deltas.complainedCount += 1;
     }
 
     if (Object.values(deltas).every((count) => count === 0)) return;
@@ -880,6 +919,15 @@ async function recordCampaignMetricsFromWebhook(
         : undefined,
       clickedCount: deltas.clickedCount
         ? sql<number>`${campaignsTable.clickedCount} + ${deltas.clickedCount}`
+        : undefined,
+      bouncedCount: deltas.bouncedCount
+        ? sql<number>`${campaignsTable.bouncedCount} + ${deltas.bouncedCount}`
+        : undefined,
+      failedCount: deltas.failedCount
+        ? sql<number>`${campaignsTable.failedCount} + ${deltas.failedCount}`
+        : undefined,
+      complainedCount: deltas.complainedCount
+        ? sql<number>`${campaignsTable.complainedCount} + ${deltas.complainedCount}`
         : undefined,
     };
 

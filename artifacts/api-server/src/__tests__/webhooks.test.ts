@@ -177,7 +177,7 @@ describe("Resend webhook route", () => {
     });
   });
 
-  it.each(["email.opened", "email.clicked"] as const)(
+  it.each(["email.opened", "email.clicked", "email.complained"] as const)(
     "forwards a signed %s event to the campaign delivery ledger",
     async (eventType) => {
       mockUpdateOutboundDeliveryFromWebhook.mockResolvedValue({
@@ -205,7 +205,7 @@ describe("Resend webhook route", () => {
     },
   );
 
-  it.each(["email.bounced", "email.failed", "email.complained"] as const)(
+  it.each(["email.bounced", "email.failed"] as const)(
     "forwards a valid Svix %s callback as a failed delivery",
     async (eventType) => {
       mockUpdateOutboundDeliveryFromWebhook.mockResolvedValue({

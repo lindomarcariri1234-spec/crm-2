@@ -53,6 +53,7 @@
 - [WhatsApp delivery and support](whatsapp-attendance-delivery.md) — persist replies before provider calls, honor opt-out, and keep support ticketing human-only ([scope](whatsapp-support-ticketing-scope.md)).
 - [Expo build port isolation](expo-build-port-isolation.md) — mobile static builds must use a configurable Metro port when the component sandbox also occupies 8081.
 - [Resend delivery](resend-production-verification.md) — verify sender DNS and isolate callbacks with each tenant’s signing secret ([webhooks](resend-webhook-tenant-secrets.md)).
+- [Resend complaint semantics](resend-complaint-delivery-semantics.md) — treat complaints as delivery evidence and a separate outcome; keep legacy complaint counts gated by tracking availability.
 - [GitHub Actions IPv4-mapped loopback](github-actions-ipv4-mapped-loopback.md) — GitHub runners may expose localhost as ::ffff:127.0.0.1; queue/audit payloads should use the canonical client-IP helper.
 - [Pipeline lifecycle scope](pipeline-lifecycle-scope.md) — reservation cards stay tenant+trip-scoped in the default pipeline; only trip-less leads may be adopted.
 - [Manual reservation payment propagation](manual-reservation-payment-propagation.md) — a fully paid reservation may promote its storefront order only after all sibling reservations are paid, under the order lock.

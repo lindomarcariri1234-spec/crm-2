@@ -7,6 +7,7 @@ const {
   mockResolveSegment,
   mockDispatchOutboundMessage,
   mockLoggerError,
+  mockSql,
 } = vi.hoisted(() => ({
   mockSelect: vi.fn(),
   mockInsert: vi.fn(),
@@ -14,6 +15,7 @@ const {
   mockResolveSegment: vi.fn(),
   mockDispatchOutboundMessage: vi.fn(),
   mockLoggerError: vi.fn(),
+  mockSql: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -30,6 +32,7 @@ vi.mock("@workspace/db", () => ({
     scheduledAt: "campaigns.scheduled_at",
     updatedAt: "campaigns.updated_at",
     targetSegment: "campaigns.target_segment",
+    failureTrackingStartedAt: "campaigns.failure_tracking_started_at",
   },
   campaignSendsTable: {
     id: "campaign_sends.id",
@@ -56,6 +59,7 @@ vi.mock("drizzle-orm", () => ({
   inArray: (_column: unknown, values: unknown) => values,
   isNotNull: (value: unknown) => value,
   lte: (_column: unknown, value: unknown) => value,
+  sql: (...args: unknown[]) => mockSql(...args),
 }));
 
 vi.mock("../lib/campaign-segment.js", () => ({
@@ -180,6 +184,7 @@ function setupRecipientDispatch({
 describe("manual campaign dispatch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSql.mockReturnValue("sql-expression");
   });
 
   it("dispatches a unified campaign through the tenant-scoped outbound ledger", async () => {
@@ -190,6 +195,13 @@ describe("manual campaign dispatch", () => {
     expect(result.status).toBe("sent");
     expect(result.recipientsCount).toBe(1);
     expect(result.sentCount).toBe(1);
+    const claimUpdate = mockUpdate.mock.results[0]?.value as {
+      set: ReturnType<typeof vi.fn>;
+    };
+    expect(claimUpdate.set).toHaveBeenCalledWith(expect.objectContaining({
+      engagementTrackingStartedAt: "sql-expression",
+      failureTrackingStartedAt: "sql-expression",
+    }));
     expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
       tenantId: "tenant-1",
       eventType: "campaign_message",

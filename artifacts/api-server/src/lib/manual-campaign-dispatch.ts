@@ -267,6 +267,9 @@ async function claimAndDispatch(
       status: "sending",
       updatedAt: new Date(),
       engagementTrackingStartedAt: sql`coalesce(${campaignsTable.engagementTrackingStartedAt}, ${new Date()})`,
+      ...(campaign.type === "whatsapp"
+        ? {}
+        : { failureTrackingStartedAt: sql`coalesce(${campaignsTable.failureTrackingStartedAt}, ${new Date()})` }),
     })
     .where(and(
       eq(campaignsTable.id, campaign.id),

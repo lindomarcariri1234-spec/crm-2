@@ -445,6 +445,7 @@ function CampaignsTab() {
 
   const getDelivered = (c: Campaign) => c.deliveredCount ?? 0;
   const hasEmailMetrics = (c: Campaign) => c.type !== "whatsapp" && c.engagementMetricsAvailable;
+  const hasEmailFailureMetrics = (c: Campaign) => c.type !== "whatsapp" && c.failureMetricsAvailable;
   const totalRecipients = manualCampaigns.reduce((s, c) => s + c.recipientsCount, 0);
   const totalSent = manualCampaigns.reduce((s, c) => s + c.sentCount, 0);
   const trackedCampaigns = manualCampaigns.filter((c) => c.engagementMetricsAvailable);
@@ -544,7 +545,7 @@ function CampaignsTab() {
         <StatCard icon={MailOpen} label="Abertura de e-mail" value={avgOpen === "—" ? "—" : `${avgOpen}%`} color="bg-accent text-accent-foreground" />
       </div>
       <p className="text-xs text-muted-foreground">
-        Entregas contam confirmações do Resend ou do WhatsApp Evolution. Aberturas e cliques são medidos apenas para e-mail pelo Resend; “—” indica que o acompanhamento não está disponível.
+        Entregas contam confirmações do Resend ou do WhatsApp Evolution. Aberturas, cliques, bounces, falhas e reclamações são medidos apenas para e-mail pelo Resend; “—” indica que o acompanhamento não está disponível.
       </p>
 
       {analyticsTarget && (
@@ -560,7 +561,7 @@ function CampaignsTab() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
               {[
                 { label: "Destinatários", value: analyticsTarget.recipientsCount, base: null },
                 { label: "Enviados", value: analyticsTarget.sentCount, base: analyticsTarget.recipientsCount },
@@ -584,6 +585,21 @@ function CampaignsTab() {
                   value: hasEmailMetrics(analyticsTarget) ? analyticsTarget.clickedCount : null,
                   base: analyticsTarget.openedCount,
                 },
+                {
+                  label: "Bounces (e-mail)",
+                  value: hasEmailFailureMetrics(analyticsTarget) ? analyticsTarget.bouncedCount : null,
+                  base: null,
+                },
+                {
+                  label: "Falhas de envio (e-mail)",
+                  value: hasEmailFailureMetrics(analyticsTarget) ? analyticsTarget.failedCount : null,
+                  base: null,
+                },
+                {
+                  label: "Reclamações (e-mail)",
+                  value: hasEmailFailureMetrics(analyticsTarget) ? analyticsTarget.complainedCount : null,
+                  base: null,
+                },
               ].map(({ label, value, base }) => (
                 <div key={label} className="rounded-lg border border-border/60 bg-card/80 px-2 py-3 text-center">
                   <p className="text-2xl font-semibold tabular-nums tracking-tight">{value ?? "—"}</p>
@@ -602,7 +618,7 @@ function CampaignsTab() {
 
       <div className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm">
         <div className="overflow-x-auto">
-          <Table className="min-w-[980px]">
+          <Table className="min-w-[1280px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Nome</TableHead>
@@ -613,6 +629,9 @@ function CampaignsTab() {
                 <TableHead className="text-right">Entregues</TableHead>
                 <TableHead className="text-right">Abertos (e-mail)</TableHead>
                 <TableHead className="text-right">Cliques (e-mail)</TableHead>
+                <TableHead className="text-right">Bounces (e-mail)</TableHead>
+                <TableHead className="text-right">Falhas (e-mail)</TableHead>
+                <TableHead className="text-right">Reclamações (e-mail)</TableHead>
                 <TableHead>Data</TableHead>
                 <TableHead></TableHead>
               </TableRow>
@@ -621,20 +640,20 @@ function CampaignsTab() {
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 10 }).map((_, j) => (
+                    {Array.from({ length: 13 }).map((_, j) => (
                       <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>
                     ))}
                   </TableRow>
                 ))
               ) : isError ? (
                 <ListLoadErrorRow
-                  colSpan={10}
+                  colSpan={13}
                   onRetry={refetch}
                   message="Não foi possível carregar as campanhas."
                 />
               ) : manualCampaigns.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="py-12 text-center text-muted-foreground">
+                  <TableCell colSpan={13} className="py-12 text-center text-muted-foreground">
                     <Megaphone className="mx-auto mb-3 h-10 w-10 opacity-30" />
                     <p className="font-medium text-foreground">Nenhuma campanha criada.</p>
                     <p className="mt-1 text-sm">Crie sua primeira campanha para engajar clientes.</p>
@@ -669,6 +688,9 @@ function CampaignsTab() {
                           <span className="text-xs text-muted-foreground ml-1">({((c.clickedCount / c.openedCount) * 100).toFixed(0)}%)</span>
                         )}
                       </TableCell>
+                      <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.bouncedCount : "—"}</TableCell>
+                      <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.failedCount : "—"}</TableCell>
+                      <TableCell className="text-right">{hasEmailFailureMetrics(c) ? c.complainedCount : "—"}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {c.sentAt ? new Date(c.sentAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : c.scheduledAt ? new Date(c.scheduledAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "—"}
                       </TableCell>

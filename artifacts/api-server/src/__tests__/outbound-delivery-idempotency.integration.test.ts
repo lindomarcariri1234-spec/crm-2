@@ -382,6 +382,231 @@ describe("outbound delivery database idempotency", () => {
     }
   });
 
+  it("counts Resend bounce, failure, and complaint outcomes once and keeps older and other-tenant metrics isolated", async () => {
+    const failureEvents = [
+      { type: "email.bounced", timestamp: "bouncedAt", count: "bouncedCount" },
+      { type: "email.failed", timestamp: "failedAt", count: "failedCount" },
+      { type: "email.complained", timestamp: "complainedAt", count: "complainedCount" },
+    ] as const;
+    const trackingStartedAt = new Date();
+    const fixtureByTenant = new Map<string, {
+      campaignId: string;
+      sendIds: Record<string, string>;
+      deliveryIds: Record<string, string>;
+    }>();
+
+    // Seed the other tenant first so an unscoped provider-ID lookup cannot pass by
+    // consistently finding this tenant's rows first.
+    for (const currentTenantId of [callbackOtherTenantId, callbackTenantId]) {
+      const campaignId = randomUUID();
+      const fixture = {
+        campaignId,
+        sendIds: {} as Record<string, string>,
+        deliveryIds: {} as Record<string, string>,
+      };
+      fixtureByTenant.set(currentTenantId, fixture);
+      await db.insert(campaignsTable).values({
+        id: campaignId,
+        tenantId: currentTenantId,
+        name: "Campaign failure metrics test",
+        type: "email",
+        status: "sent",
+        content: "Integration test campaign",
+        createdById: "integration-test",
+        engagementTrackingStartedAt: trackingStartedAt,
+        failureTrackingStartedAt: trackingStartedAt,
+      });
+
+      for (const failureEvent of failureEvents) {
+        const campaignSendId = randomUUID();
+        const messageId = randomUUID();
+        const deliveryId = randomUUID();
+        const clientId = `failure-client-${failureEvent.type}-${runId}`;
+        const externalId = `resend-${failureEvent.type}-${runId}`;
+        fixture.sendIds[failureEvent.type] = campaignSendId;
+        fixture.deliveryIds[failureEvent.type] = deliveryId;
+
+        await db.insert(campaignSendsTable).values({
+          id: campaignSendId,
+          campaignId,
+          clientId,
+          tenantId: currentTenantId,
+          status: "sent",
+        });
+        await db.insert(outboundMessagesTable).values({
+          id: messageId,
+          tenantId: currentTenantId,
+          idempotencyKey: `campaign-failure:${currentTenantId}:${failureEvent.type}:${randomUUID()}`,
+          eventType: "campaign_message",
+          origin: "campaign",
+          recipientType: "client",
+          recipientId: clientId,
+          status: "processing",
+          metadata: { campaignId, campaignSendId, clientId },
+        });
+        await db.insert(outboundDeliveriesTable).values({
+          id: deliveryId,
+          tenantId: currentTenantId,
+          outboundMessageId: messageId,
+          channel: "email",
+          content: "Integration test delivery",
+          status: "processing",
+          provider: "resend",
+          externalId,
+        });
+      }
+    }
+
+    const trackedCampaign = fixtureByTenant.get(callbackTenantId)!;
+    const otherTenantCampaign = fixtureByTenant.get(callbackOtherTenantId)!;
+    const callbacks = failureEvents.map((failureEvent) => ({
+      tenantId: callbackTenantId,
+      provider: "resend",
+      externalId: `resend-${failureEvent.type}-${runId}`,
+      status: failureEvent.type === "email.complained" ? "accepted" as const : "failed" as const,
+      providerStatus: failureEvent.type,
+      error: failureEvent.type === "email.complained" ? null : failureEvent.type,
+    }));
+    const initialResults = await Promise.all(callbacks.map((callback) =>
+      updateOutboundDeliveryFromWebhook(callback),
+    ));
+    expect(initialResults).toEqual(failureEvents.map((failureEvent) =>
+      expect.objectContaining({
+        updated: true,
+        deliveryId: trackedCampaign.deliveryIds[failureEvent.type],
+      }),
+    ));
+
+    const replayResults = await Promise.all(callbacks.map((callback) =>
+      updateOutboundDeliveryFromWebhook(callback),
+    ));
+    expect(replayResults).toEqual(initialResults);
+
+    const [trackedCampaignAfterCallbacks] = await db.select().from(campaignsTable)
+      .where(and(
+        eq(campaignsTable.id, trackedCampaign.campaignId),
+        eq(campaignsTable.tenantId, callbackTenantId),
+      ));
+    const [otherTenantCampaignAfterCallbacks] = await db.select().from(campaignsTable)
+      .where(and(
+        eq(campaignsTable.id, otherTenantCampaign.campaignId),
+        eq(campaignsTable.tenantId, callbackOtherTenantId),
+      ));
+    expect(trackedCampaignAfterCallbacks).toMatchObject({
+      bouncedCount: 1,
+      failedCount: 1,
+      complainedCount: 1,
+      deliveredCount: 1,
+      emailDeliveredCount: 1,
+    });
+    expect(otherTenantCampaignAfterCallbacks).toMatchObject({
+      bouncedCount: 0,
+      failedCount: 0,
+      complainedCount: 0,
+      deliveredCount: 0,
+      emailDeliveredCount: 0,
+    });
+
+    for (const failureEvent of failureEvents) {
+      const trackedSendId = trackedCampaign.sendIds[failureEvent.type]!;
+      const otherTenantSendId = otherTenantCampaign.sendIds[failureEvent.type]!;
+      const [trackedSend] = await db.select().from(campaignSendsTable)
+        .where(and(
+          eq(campaignSendsTable.id, trackedSendId),
+          eq(campaignSendsTable.tenantId, callbackTenantId),
+        ));
+      const [otherTenantSend] = await db.select().from(campaignSendsTable)
+        .where(and(
+          eq(campaignSendsTable.id, otherTenantSendId),
+          eq(campaignSendsTable.tenantId, callbackOtherTenantId),
+        ));
+      expect(trackedSend?.[failureEvent.timestamp]).toBeInstanceOf(Date);
+      expect(otherTenantSend?.[failureEvent.timestamp]).toBeNull();
+      if (failureEvent.type === "email.complained") {
+        expect(trackedSend?.deliveredAt).toBeInstanceOf(Date);
+        expect(trackedSend?.emailDeliveredAt).toBeInstanceOf(Date);
+        expect(otherTenantSend?.deliveredAt).toBeNull();
+        expect(otherTenantSend?.emailDeliveredAt).toBeNull();
+      }
+    }
+
+    const legacyCampaignId = randomUUID();
+    const legacyCampaignSendId = randomUUID();
+    const legacyMessageId = randomUUID();
+    const legacyDeliveryId = randomUUID();
+    const legacyClientId = `legacy-failure-client-${runId}`;
+    await db.insert(campaignsTable).values({
+      id: legacyCampaignId,
+      tenantId: callbackTenantId,
+      name: "Legacy campaign without failure metrics",
+      type: "email",
+      status: "sent",
+      content: "Older campaign",
+      createdById: "integration-test",
+      engagementTrackingStartedAt: trackingStartedAt,
+    });
+    await db.insert(campaignSendsTable).values({
+      id: legacyCampaignSendId,
+      campaignId: legacyCampaignId,
+      clientId: legacyClientId,
+      tenantId: callbackTenantId,
+      status: "sent",
+    });
+    await db.insert(outboundMessagesTable).values({
+      id: legacyMessageId,
+      tenantId: callbackTenantId,
+      idempotencyKey: `legacy-campaign-failure:${randomUUID()}`,
+      eventType: "campaign_message",
+      origin: "campaign",
+      recipientType: "client",
+      recipientId: legacyClientId,
+      status: "processing",
+      metadata: {
+        campaignId: legacyCampaignId,
+        campaignSendId: legacyCampaignSendId,
+        clientId: legacyClientId,
+      },
+    });
+    await db.insert(outboundDeliveriesTable).values({
+      id: legacyDeliveryId,
+      tenantId: callbackTenantId,
+      outboundMessageId: legacyMessageId,
+      channel: "email",
+      content: "Integration test legacy delivery",
+      status: "processing",
+      provider: "resend",
+      externalId: `legacy-resend-complained-${runId}`,
+    });
+    await expect(updateOutboundDeliveryFromWebhook({
+      tenantId: callbackTenantId,
+      provider: "resend",
+      externalId: `legacy-resend-complained-${runId}`,
+      status: "accepted",
+      providerStatus: "email.complained",
+      error: null,
+    })).resolves.toMatchObject({ updated: true, deliveryId: legacyDeliveryId });
+
+    const [legacyCampaignAfterCallback] = await db.select().from(campaignsTable)
+      .where(and(
+        eq(campaignsTable.id, legacyCampaignId),
+        eq(campaignsTable.tenantId, callbackTenantId),
+      ));
+    const [legacySendAfterCallback] = await db.select().from(campaignSendsTable)
+      .where(and(
+        eq(campaignSendsTable.id, legacyCampaignSendId),
+        eq(campaignSendsTable.tenantId, callbackTenantId),
+      ));
+    expect(legacyCampaignAfterCallback).toMatchObject({
+      complainedCount: 0,
+      deliveredCount: 1,
+      emailDeliveredCount: 1,
+      failureTrackingStartedAt: null,
+    });
+    expect(legacySendAfterCallback?.complainedAt).toBeNull();
+    expect(legacySendAfterCallback?.deliveredAt).toBeInstanceOf(Date);
+    expect(legacySendAfterCallback?.emailDeliveredAt).toBeInstanceOf(Date);
+  });
+
   it("persists one WhatsApp delivery for concurrent campaign requests and accepts it once", async () => {
     mockWhatsAppSend.mockClear();
     const logicalCampaignKey = `trip:trip-test:${campaignId}:passenger:${phone}`;

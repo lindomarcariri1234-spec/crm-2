@@ -131,6 +131,8 @@ function formatCampaign(c: typeof campaignsTable.$inferSelect) {
     deliveredCount: c.deliveredCount, emailDeliveredCount: c.emailDeliveredCount,
     openedCount: c.openedCount, clickedCount: c.clickedCount,
     engagementMetricsAvailable: c.engagementTrackingStartedAt !== null,
+    bouncedCount: c.bouncedCount, failedCount: c.failedCount, complainedCount: c.complainedCount,
+    failureMetricsAvailable: c.failureTrackingStartedAt !== null,
     triggerType: c.triggerType ?? "manual",
     triggerConfig: c.triggerConfig ?? null,
     autoEnabled: c.autoEnabled ?? false,

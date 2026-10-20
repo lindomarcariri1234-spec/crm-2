@@ -191,8 +191,8 @@ router.post("/webhooks/resend/:tenantId", async (req, res, next: NextFunction): 
         ? data["emailId"]
         : typeof data["id"] === "string" ? data["id"] : "";
 
-    const accepted = new Set(["email.delivered", "email.opened", "email.clicked"]);
-    const failed = new Set(["email.bounced", "email.failed", "email.complained"]);
+    const accepted = new Set(["email.delivered", "email.opened", "email.clicked", "email.complained"]);
+    const failed = new Set(["email.bounced", "email.failed"]);
     if (!externalId || (!accepted.has(eventType) && !failed.has(eventType))) {
       // Unknown Resend events are acknowledged so they are not retried forever.
       res.status(200).json({ received: true, outcome: "ignored" });
