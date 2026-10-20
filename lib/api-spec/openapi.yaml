@@ -11207,12 +11207,16 @@ components:
           type: integer
         sentCount:
           type: integer
+        emailDeliveredCount:
+          type: integer
         openedCount:
           type: integer
         clickedCount:
           type: integer
         deliveredCount:
           type: integer
+        engagementMetricsAvailable:
+          type: boolean
         triggerType:
           type: ["string", "null"]
         triggerConfig:
@@ -11222,7 +11226,7 @@ components:
           type: boolean
         createdAt:
           type: string
-      required: [id, name, type, status, content, recipientsCount, sentCount, openedCount, clickedCount, createdAt]
+      required: [id, name, type, status, content, recipientsCount, sentCount, emailDeliveredCount, openedCount, clickedCount, engagementMetricsAvailable, createdAt]
 
     CreateCampaignBody:
       type: object

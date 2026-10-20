@@ -3575,9 +3575,11 @@ export interface Campaign {
   sentAt?: string | null;
   recipientsCount: number;
   sentCount: number;
+  emailDeliveredCount: number;
   openedCount: number;
   clickedCount: number;
   deliveredCount?: number;
+  engagementMetricsAvailable: boolean;
   /** @nullable */
   triggerType?: string | null;
   /** @nullable */

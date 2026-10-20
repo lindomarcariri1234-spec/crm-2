@@ -177,6 +177,34 @@ describe("Resend webhook route", () => {
     });
   });
 
+  it.each(["email.opened", "email.clicked"] as const)(
+    "forwards a signed %s event to the campaign delivery ledger",
+    async (eventType) => {
+      mockUpdateOutboundDeliveryFromWebhook.mockResolvedValue({
+        updated: true,
+        deliveryId: "delivery-1",
+        messageId: "message-1",
+      });
+      const rawBody = JSON.stringify(makeEvent(eventType));
+
+      const response = await request(buildApp())
+        .post(`/api/webhooks/resend/${TENANT_A}`)
+        .set(makeSvixHeaders(rawBody))
+        .set("content-type", "application/json")
+        .send(rawBody);
+
+      expect(response.status).toBe(200);
+      expect(mockUpdateOutboundDeliveryFromWebhook).toHaveBeenCalledWith({
+        tenantId: TENANT_A,
+        provider: "resend",
+        externalId: "resend-message-1",
+        status: "accepted",
+        providerStatus: eventType,
+        error: null,
+      });
+    },
+  );
+
   it.each(["email.bounced", "email.failed", "email.complained"] as const)(
     "forwards a valid Svix %s callback as a failed delivery",
     async (eventType) => {

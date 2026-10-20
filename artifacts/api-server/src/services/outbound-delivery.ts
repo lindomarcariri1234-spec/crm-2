@@ -8,6 +8,8 @@ import {
   tenantsTable,
   usersTable,
   emailLogsTable,
+  campaignSendsTable,
+  campaignsTable,
   outboundDeliveriesTable,
   outboundDeliveryAttemptsTable,
   outboundMessagesTable,
@@ -798,6 +800,98 @@ export function resolveWebhookDeliveryState(
   };
 }
 
+type CampaignMetricTimestamp = "deliveredAt" | "emailDeliveredAt" | "openedAt" | "clickedAt";
+
+function campaignMetricTimestamps(
+  update: OutboundDeliveryWebhookUpdate,
+  channel: OutboundDeliveryChannel,
+): CampaignMetricTimestamp[] {
+  const providerStatus = update.providerStatus?.trim().toLowerCase();
+  if (update.provider === "resend" && channel === "email") {
+    if (providerStatus === "email.delivered") return ["deliveredAt", "emailDeliveredAt"];
+    if (providerStatus === "email.opened") return ["openedAt"];
+    if (providerStatus === "email.clicked") return ["clickedAt"];
+  }
+
+  // Evolution's Baileys status 2 is only a server ACK; 3+ confirms delivery.
+  if (
+    update.provider === "evolution"
+    && channel === "whatsapp"
+    && providerStatus
+    && /^(3|4|5|delivery_ack|delivered|read|played)$/.test(providerStatus)
+  ) {
+    return ["deliveredAt"];
+  }
+  return [];
+}
+
+async function recordCampaignMetricsFromWebhook(
+  update: OutboundDeliveryWebhookUpdate,
+  delivery: { channel: OutboundDeliveryChannel; origin: string | null; metadata: Record<string, unknown> | null },
+): Promise<void> {
+  if (delivery.origin !== "campaign") return;
+  const metadata = delivery.metadata ?? {};
+  const campaignId = typeof metadata["campaignId"] === "string" ? metadata["campaignId"] : null;
+  const campaignSendId = typeof metadata["campaignSendId"] === "string" ? metadata["campaignSendId"] : null;
+  if (!campaignId || !campaignSendId) return;
+
+  const timestamps = campaignMetricTimestamps(update, delivery.channel);
+  if (timestamps.length === 0) return;
+
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    const deltas = {
+      deliveredCount: 0,
+      emailDeliveredCount: 0,
+      openedCount: 0,
+      clickedCount: 0,
+    };
+
+    for (const timestamp of timestamps) {
+      const [marked] = await tx.update(campaignSendsTable)
+        .set({ [timestamp]: now } as Partial<typeof campaignSendsTable.$inferInsert>)
+        .where(and(
+          eq(campaignSendsTable.id, campaignSendId),
+          eq(campaignSendsTable.campaignId, campaignId),
+          eq(campaignSendsTable.tenantId, update.tenantId),
+          isNull(campaignSendsTable[timestamp]),
+        ))
+        .returning({ id: campaignSendsTable.id });
+      if (!marked) continue;
+
+      if (timestamp === "deliveredAt") deltas.deliveredCount += 1;
+      if (timestamp === "emailDeliveredAt") deltas.emailDeliveredCount += 1;
+      if (timestamp === "openedAt") deltas.openedCount += 1;
+      if (timestamp === "clickedAt") deltas.clickedCount += 1;
+    }
+
+    if (Object.values(deltas).every((count) => count === 0)) return;
+
+    const values = {
+      engagementTrackingStartedAt: sql<Date>`coalesce(${campaignsTable.engagementTrackingStartedAt}, ${now})`,
+      deliveredCount: deltas.deliveredCount
+        ? sql<number>`${campaignsTable.deliveredCount} + ${deltas.deliveredCount}`
+        : undefined,
+      emailDeliveredCount: deltas.emailDeliveredCount
+        ? sql<number>`${campaignsTable.emailDeliveredCount} + ${deltas.emailDeliveredCount}`
+        : undefined,
+      openedCount: deltas.openedCount
+        ? sql<number>`${campaignsTable.openedCount} + ${deltas.openedCount}`
+        : undefined,
+      clickedCount: deltas.clickedCount
+        ? sql<number>`${campaignsTable.clickedCount} + ${deltas.clickedCount}`
+        : undefined,
+    };
+
+    await tx.update(campaignsTable)
+      .set(values)
+      .where(and(
+        eq(campaignsTable.id, campaignId),
+        eq(campaignsTable.tenantId, update.tenantId),
+      ));
+  });
+}
+
 /**
  * Applies a provider callback to the existing delivery row. The tenant and
  * external ID are always part of the lookup: provider IDs must never update
@@ -879,6 +973,8 @@ export async function updateOutboundDeliveryFromWebhook(
     });
 
   if (!updated) return { updated: false };
+
+  await recordCampaignMetricsFromWebhook(update, delivery);
 
   // Keep the provider's lifecycle detail in the attempt history without
   // changing the numeric delivery.attempts retry counter.

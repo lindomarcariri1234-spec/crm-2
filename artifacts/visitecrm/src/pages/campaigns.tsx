@@ -444,11 +444,15 @@ function CampaignsTab() {
     : undefined;
 
   const getDelivered = (c: Campaign) => c.deliveredCount ?? 0;
+  const hasEmailMetrics = (c: Campaign) => c.type !== "whatsapp" && c.engagementMetricsAvailable;
   const totalRecipients = manualCampaigns.reduce((s, c) => s + c.recipientsCount, 0);
   const totalSent = manualCampaigns.reduce((s, c) => s + c.sentCount, 0);
-  const totalDelivered = manualCampaigns.reduce((s, c) => s + getDelivered(c), 0);
-  const totalOpened = manualCampaigns.reduce((s, c) => s + c.openedCount, 0);
-  const avgOpen = totalDelivered > 0 ? ((totalOpened / totalDelivered) * 100).toFixed(1) : "—";
+  const trackedCampaigns = manualCampaigns.filter((c) => c.engagementMetricsAvailable);
+  const emailTrackedCampaigns = trackedCampaigns.filter(hasEmailMetrics);
+  const totalDelivered = trackedCampaigns.reduce((s, c) => s + getDelivered(c), 0);
+  const totalEmailDelivered = emailTrackedCampaigns.reduce((s, c) => s + c.emailDeliveredCount, 0);
+  const totalOpened = emailTrackedCampaigns.reduce((s, c) => s + c.openedCount, 0);
+  const avgOpen = totalEmailDelivered > 0 ? ((totalOpened / totalEmailDelivered) * 100).toFixed(1) : "—";
 
   return (
     <div className="space-y-6">
@@ -536,9 +540,12 @@ function CampaignsTab() {
         <StatCard icon={Megaphone} label="Campanhas" value={manualCampaigns.length} color="bg-primary/10 text-primary" />
         <StatCard icon={Users} label="Destinatários" value={totalRecipients.toLocaleString("pt-BR")} color="bg-secondary text-secondary-foreground" />
         <StatCard icon={Send} label="Enviados" value={totalSent.toLocaleString("pt-BR")} color="bg-accent/80 text-accent-foreground" />
-        <StatCard icon={PackageCheck} label="Entregues" value={totalDelivered.toLocaleString("pt-BR")} color="bg-primary/10 text-primary" />
-        <StatCard icon={MailOpen} label="Taxa Abertura" value={avgOpen === "—" ? "—" : `${avgOpen}%`} color="bg-accent text-accent-foreground" />
+        <StatCard icon={PackageCheck} label="Entregues confirmados" value={trackedCampaigns.length ? totalDelivered.toLocaleString("pt-BR") : "—"} color="bg-primary/10 text-primary" />
+        <StatCard icon={MailOpen} label="Abertura de e-mail" value={avgOpen === "—" ? "—" : `${avgOpen}%`} color="bg-accent text-accent-foreground" />
       </div>
+      <p className="text-xs text-muted-foreground">
+        Entregas contam confirmações do Resend ou do WhatsApp Evolution. Aberturas e cliques são medidos apenas para e-mail pelo Resend; “—” indica que o acompanhamento não está disponível.
+      </p>
 
       {analyticsTarget && (
         <Card className="overflow-hidden rounded-xl border-primary/25 bg-primary/[0.035] shadow-sm">
@@ -557,14 +564,31 @@ function CampaignsTab() {
               {[
                 { label: "Destinatários", value: analyticsTarget.recipientsCount, base: null },
                 { label: "Enviados", value: analyticsTarget.sentCount, base: analyticsTarget.recipientsCount },
-                { label: "Entregues", value: getDelivered(analyticsTarget), base: analyticsTarget.sentCount },
-                { label: "Abertos", value: analyticsTarget.openedCount, base: getDelivered(analyticsTarget) },
-                { label: "Cliques", value: analyticsTarget.clickedCount, base: analyticsTarget.openedCount },
+                {
+                  label: "Entregues",
+                  value: analyticsTarget.engagementMetricsAvailable ? getDelivered(analyticsTarget) : null,
+                  base: analyticsTarget.sentCount,
+                },
+                {
+                  label: "Entregues por e-mail",
+                  value: hasEmailMetrics(analyticsTarget) ? analyticsTarget.emailDeliveredCount : null,
+                  base: analyticsTarget.sentCount,
+                },
+                {
+                  label: "Abertos por e-mail",
+                  value: hasEmailMetrics(analyticsTarget) ? analyticsTarget.openedCount : null,
+                  base: analyticsTarget.emailDeliveredCount,
+                },
+                {
+                  label: "Cliques por e-mail",
+                  value: hasEmailMetrics(analyticsTarget) ? analyticsTarget.clickedCount : null,
+                  base: analyticsTarget.openedCount,
+                },
               ].map(({ label, value, base }) => (
                 <div key={label} className="rounded-lg border border-border/60 bg-card/80 px-2 py-3 text-center">
-                  <p className="text-2xl font-semibold tabular-nums tracking-tight">{value}</p>
+                  <p className="text-2xl font-semibold tabular-nums tracking-tight">{value ?? "—"}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">{label}</p>
-                  {base !== null && base > 0 && (
+                  {value !== null && base !== null && base > 0 && (
                     <p className="text-xs text-primary font-medium">
                       {((value / base) * 100).toFixed(1)}%
                     </p>
@@ -587,8 +611,8 @@ function CampaignsTab() {
                 <TableHead className="text-right">Destinatários</TableHead>
                 <TableHead className="text-right">Enviados</TableHead>
                 <TableHead className="text-right">Entregues</TableHead>
-                <TableHead className="text-right">Abertos</TableHead>
-                <TableHead className="text-right">Cliques</TableHead>
+                <TableHead className="text-right">Abertos (e-mail)</TableHead>
+                <TableHead className="text-right">Cliques (e-mail)</TableHead>
                 <TableHead>Data</TableHead>
                 <TableHead></TableHead>
               </TableRow>
@@ -628,20 +652,20 @@ function CampaignsTab() {
                       <TableCell className="text-right">{c.recipientsCount}</TableCell>
                       <TableCell className="text-right">{c.sentCount}</TableCell>
                       <TableCell className="text-right">
-                        {getDelivered(c)}
-                        {c.sentCount > 0 && (
+                        {c.engagementMetricsAvailable ? getDelivered(c) : "—"}
+                        {c.engagementMetricsAvailable && c.sentCount > 0 && (
                           <span className="text-xs text-muted-foreground ml-1">({((getDelivered(c) / c.sentCount) * 100).toFixed(0)}%)</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right">
-                        {c.openedCount}
-                        {getDelivered(c) > 0 && (
-                          <span className="text-xs text-muted-foreground ml-1">({((c.openedCount / getDelivered(c)) * 100).toFixed(0)}%)</span>
+                        {hasEmailMetrics(c) ? c.openedCount : "—"}
+                        {hasEmailMetrics(c) && c.emailDeliveredCount > 0 && (
+                          <span className="text-xs text-muted-foreground ml-1">({((c.openedCount / c.emailDeliveredCount) * 100).toFixed(0)}%)</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right">
-                        {c.clickedCount}
-                        {c.openedCount > 0 && (
+                        {hasEmailMetrics(c) ? c.clickedCount : "—"}
+                        {hasEmailMetrics(c) && c.openedCount > 0 && (
                           <span className="text-xs text-muted-foreground ml-1">({((c.clickedCount / c.openedCount) * 100).toFixed(0)}%)</span>
                         )}
                       </TableCell>

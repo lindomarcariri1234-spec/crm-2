@@ -883,6 +883,13 @@
       "when": 1809960026000,
       "tag": "0126_storefront_analytics",
       "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1809960027000,
+      "tag": "0127_campaign_engagement_metrics",
+      "breakpoints": true
     }
   ]
 }

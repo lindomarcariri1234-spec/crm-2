@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, lte } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import {
   db,
   campaignSendsTable,
@@ -263,7 +263,11 @@ async function claimAndDispatch(
   campaignContent(campaign);
 
   const [claimed] = await db.update(campaignsTable)
-    .set({ status: "sending", updatedAt: new Date() })
+    .set({
+      status: "sending",
+      updatedAt: new Date(),
+      engagementTrackingStartedAt: sql`coalesce(${campaignsTable.engagementTrackingStartedAt}, ${new Date()})`,
+    })
     .where(and(
       eq(campaignsTable.id, campaign.id),
       eq(campaignsTable.tenantId, campaign.tenantId),

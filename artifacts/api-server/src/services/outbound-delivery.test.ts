@@ -52,6 +52,24 @@ vi.mock("@workspace/db", () => ({
     tenantId: "clients.tenant_id",
     whatsappOptIn: "clients.whatsapp_opt_in",
   },
+  campaignSendsTable: {
+    id: "campaign_sends.id",
+    campaignId: "campaign_sends.campaign_id",
+    tenantId: "campaign_sends.tenant_id",
+    deliveredAt: "campaign_sends.delivered_at",
+    emailDeliveredAt: "campaign_sends.email_delivered_at",
+    openedAt: "campaign_sends.opened_at",
+    clickedAt: "campaign_sends.clicked_at",
+  },
+  campaignsTable: {
+    id: "campaigns.id",
+    tenantId: "campaigns.tenant_id",
+    deliveredCount: "campaigns.delivered_count",
+    emailDeliveredCount: "campaigns.email_delivered_count",
+    openedCount: "campaigns.opened_count",
+    clickedCount: "campaigns.clicked_count",
+    engagementTrackingStartedAt: "campaigns.engagement_tracking_started_at",
+  },
   chatbotConversationsTable: {
     id: "chatbot_conversations.id",
     tenantId: "chatbot_conversations.tenant_id",
@@ -1130,6 +1148,126 @@ describe("legacy email history synchronization", () => {
       errorMessage: null,
     }));
     expect(mockUpdateSets[6]).toEqual(mockUpdateSets[2]);
+  });
+
+  it("counts repeated campaign delivery callbacks once per recipient and tenant", async () => {
+    const delivery = makeDelivery({
+      status: "processing",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      origin: "campaign",
+      metadata: { campaignId: "campaign-a", campaignSendId: "send-a" },
+    });
+    const acceptedDelivery = { ...delivery, status: "accepted" };
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]))
+      .mockReturnValueOnce(makeSelectQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "send-a" }]))
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "send-a" }]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeUpdateQuery([]))
+      .mockReturnValueOnce(makeUpdateQuery([]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
+
+    const callback = {
+      tenantId: "tenant-a",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      status: "accepted" as const,
+      providerStatus: "email.delivered",
+      error: null,
+    };
+
+    await expect(updateOutboundDeliveryFromWebhook(callback)).resolves.toMatchObject({ updated: true });
+    await expect(updateOutboundDeliveryFromWebhook(callback)).resolves.toMatchObject({ updated: true });
+
+    const campaignCounterUpdates = mockUpdateSets.filter((values) =>
+      values !== null && typeof values === "object"
+      && ("deliveredCount" in values || "emailDeliveredCount" in values),
+    );
+    expect(campaignCounterUpdates).toHaveLength(1);
+    expect(campaignCounterUpdates[0]).toEqual(expect.objectContaining({
+      deliveredCount: expect.anything(),
+      emailDeliveredCount: expect.anything(),
+    }));
+    expect(mockDbInsert).not.toHaveBeenCalled();
+    expect(mockEq).toHaveBeenCalledWith("campaign_sends.tenant_id", "tenant-a");
+    expect(mockEq).toHaveBeenCalledWith("campaigns.tenant_id", "tenant-a");
+  });
+
+  it.each([
+    ["email.opened", "openedCount"],
+    ["email.clicked", "clickedCount"],
+  ] as const)("counts repeated %s callbacks once for a campaign recipient", async (providerStatus, metricName) => {
+    const delivery = makeDelivery({
+      status: "processing",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      origin: "campaign",
+      metadata: { campaignId: "campaign-a", campaignSendId: "send-a" },
+    });
+    const acceptedDelivery = { ...delivery, status: "accepted" };
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]))
+      .mockReturnValueOnce(makeSelectQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "send-a" }]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeUpdateQuery([]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
+
+    const callback = {
+      tenantId: "tenant-a",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      status: "accepted" as const,
+      providerStatus,
+      error: null,
+    };
+
+    await expect(updateOutboundDeliveryFromWebhook(callback)).resolves.toMatchObject({ updated: true });
+    await expect(updateOutboundDeliveryFromWebhook(callback)).resolves.toMatchObject({ updated: true });
+
+    const campaignCounterUpdates = mockUpdateSets.filter((values) =>
+      values !== null && typeof values === "object" && metricName in values,
+    );
+    expect(campaignCounterUpdates).toHaveLength(1);
+    expect(mockDbInsert).not.toHaveBeenCalled();
+  });
+
+  it("does not find a delivery when the same provider ID belongs to another tenant", async () => {
+    mockDbSelect.mockReturnValueOnce(makeSelectQuery([]));
+
+    await expect(updateOutboundDeliveryFromWebhook({
+      tenantId: "tenant-b",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      status: "accepted",
+      providerStatus: "email.opened",
+    })).resolves.toEqual({ updated: false });
+
+    expect(mockDbUpdate).not.toHaveBeenCalled();
+    expect(mockEq).toHaveBeenCalledWith("outbound_deliveries.tenant_id", "tenant-b");
   });
 
   it("marks the legacy log and message failed when a provider bounce arrives", async () => {
