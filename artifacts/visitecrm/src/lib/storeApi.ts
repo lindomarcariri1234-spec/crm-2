@@ -304,7 +304,7 @@ export const publicStoreApi = {
     ),
   getReviews: (slug: string, params?: { limit?: number; featured?: boolean }) => {
     const qs = params ? "?" + new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString() : "";
-    return publicReq<StoreReview[]>("GET", `/public/store/${slug}/reviews${qs}`);
+    return publicReq<PublicStoreReview[]>("GET", `/public/store/${slug}/reviews${qs}`);
   },
   createOrder: (slug: string, data: CreateOrderInput) =>
     publicReq<StoreCheckoutOrder>("POST", `/public/store/${slug}/orders`, data),
@@ -829,6 +829,22 @@ export interface StoreReview {
   status: string;
   reply?: string | null;
   replyAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Public review payload returned by GET /public/store/:slug/reviews (approved-only). */
+export interface PublicStoreReview {
+  id: string;
+  reviewerName: string;
+  rating: number;
+  title?: string | null;
+  comment?: string | null;
+  images?: string[] | null;
+  verifiedPurchase: boolean;
+  isFeatured: boolean;
+  reply?: string | null;
+  repliedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

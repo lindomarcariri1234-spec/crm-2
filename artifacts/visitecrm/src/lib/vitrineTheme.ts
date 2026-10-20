@@ -12,7 +12,7 @@ import type { PublicStore } from "@/lib/storeApi";
  * `contexts/VitrineThemeContext.tsx` turns the result into CSS variables.
  */
 
-/** Visite Cariri reference palette (default fallback). */
+/** Legacy default storefront fallback. Keep unchanged for existing tenants. */
 export const CARIRI = {
   marrom: "#5D3E2A",
   azul: "#1E5B8C",
@@ -20,6 +20,15 @@ export const CARIRI = {
   dourado: "#D8A646",
   branco: "#FFFFFF",
   cinza: "#F5F7FA",
+} as const;
+
+/** Official palette reserved exclusively for the visite-cariri storefront. */
+export const VISITE_CARIRI_PALETTE = {
+  marrom: "#5D3E2A",
+  azul: "#47C7F4",
+  verde: "#78C752",
+  amarelo: "#F2B705",
+  laranja: "#E67E22",
 } as const;
 
 /** The literal defaults stored in the DB when a tenant never picks colors. */
@@ -178,7 +187,15 @@ export interface VitrineTheme {
   isFallback: boolean;
 }
 
-function resolveBrand(store: Pick<PublicStore, "primaryColor" | "secondaryColor" | "accentColor">) {
+function resolveBrand(store: Pick<PublicStore, "primaryColor" | "secondaryColor" | "accentColor"> & { slug?: string }) {
+  if (store.slug === "visite-cariri") {
+    return {
+      primary: VISITE_CARIRI_PALETTE.marrom,
+      secondary: VISITE_CARIRI_PALETTE.verde,
+      accent: VISITE_CARIRI_PALETTE.laranja,
+      isFallback: false,
+    };
+  }
   const p = normalizeHex(store?.primaryColor);
   const s = normalizeHex(store?.secondaryColor);
   const a = normalizeHex(store?.accentColor);
@@ -197,7 +214,7 @@ function resolveBrand(store: Pick<PublicStore, "primaryColor" | "secondaryColor"
 
 /** Build the full theme (colors + CSS vars) for a store. */
 export function buildVitrineTheme(
-  store: Pick<PublicStore, "primaryColor" | "secondaryColor" | "accentColor">,
+  store: Pick<PublicStore, "primaryColor" | "secondaryColor" | "accentColor"> & { slug?: string },
 ): VitrineTheme {
   const { primary, secondary, accent, isFallback } = resolveBrand(store);
 
@@ -216,7 +233,9 @@ export function buildVitrineTheme(
     primaryBorder: withAlpha(primary, 0.25),
     surface: CARIRI.branco,
     mutedSurface: CARIRI.cinza,
-    gradientHero: `linear-gradient(135deg, ${primary} 0%, ${darken(primary, 0.18)} 55%, ${mix(primary, secondary, 0.45)} 100%)`,
+    gradientHero: store.slug === "visite-cariri"
+      ? `linear-gradient(135deg, ${VISITE_CARIRI_PALETTE.marrom} 0%, #39251b 56%, ${VISITE_CARIRI_PALETTE.verde} 100%)`
+      : `linear-gradient(135deg, ${primary} 0%, ${darken(primary, 0.18)} 55%, ${mix(primary, secondary, 0.45)} 100%)`,
     gradientCta: `linear-gradient(135deg, ${primary} 0%, ${mix(primary, accent, 0.55)} 100%)`,
   };
 

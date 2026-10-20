@@ -21,6 +21,7 @@ import {
   Share2,
 } from "lucide-react";
 import { NotificationBell } from "@/components/vitrine/NotificationBell";
+import caririLogo from "@assets/0_Visite_Cariri_Icone_1792531437771.png";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { applyStorefrontMetadata } from "@/lib/storefrontMetadata";
 import { getSafeSocialUrl } from "@/lib/safe-social-url";
@@ -196,12 +197,12 @@ export default function VitrineLayout({
             onClick={() => navigate(`/loja/${slug}`)}
             className="group flex min-w-0 items-center gap-3 text-left"
           >
-            {store.logoUrl ? (
+            {slug === "visite-cariri" || store.logoUrl ? (
               <img
-                src={store.logoUrl}
+                src={slug === "visite-cariri" ? caririLogo : store.logoUrl!}
                 alt={store.name}
                 data-testid="img-store-logo-header"
-                className="h-11 w-11 rounded-2xl border border-white/20 bg-white/95 object-contain p-1.5 shadow-sm"
+                className={`h-11 w-11 border border-white/20 bg-white/95 object-contain p-1.5 shadow-sm ${slug === "visite-cariri" ? "rounded-full" : "rounded-2xl"}`}
               />
             ) : (
               <div data-testid="text-store-initial" className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/20 bg-white/15 text-lg font-bold text-white">
@@ -213,7 +214,7 @@ export default function VitrineLayout({
             </span>
           </button>
 
-          <nav data-testid="nav-desktop" className="hidden items-center gap-6 md:flex">
+          <nav data-testid="nav-desktop" className={`hidden items-center md:flex ${slug === "visite-cariri" ? "cariri-primary-nav gap-4" : "gap-6"}`}>
             <a
               href={`/loja/${slug}`}
               data-testid="link-home-desktop"
@@ -226,8 +227,23 @@ export default function VitrineLayout({
               data-testid="link-products-desktop"
               className="text-sm font-semibold text-white/80 transition-colors hover:text-white"
             >
-              Pacotes
+              {slug === "visite-cariri" ? "Experiências" : "Pacotes"}
             </a>
+            {slug === "visite-cariri" && <>
+              <a href={`/loja/${slug}/destinos`} data-testid="link-destinations-desktop" className="text-sm font-semibold text-white/80 transition-colors hover:text-white">Destinos</a>
+              <details className="cariri-nav-details">
+                <summary data-testid="button-regional-info-desktop">Informações</summary>
+                <div className="cariri-nav-popover">
+                  <a href={`/loja/${slug}/sobre`} data-testid="link-about-desktop">A Visite Cariri</a>
+                  <a href={`/loja/${slug}/como-reservar`} data-testid="link-how-to-book-desktop">Como reservar</a>
+                  <a href={`/loja/${slug}/duvidas`} data-testid="link-faq-desktop">Dúvidas frequentes</a>
+                  <a href={`/loja/${slug}/contato`} data-testid="link-contact-desktop">Contato</a>
+                  <a href={`/loja/${slug}/privacidade`} data-testid="link-privacy-desktop">Privacidade</a>
+                  <a href={`/loja/${slug}/termos`} data-testid="link-terms-desktop">Termos</a>
+                  <a href={`/loja/${slug}/cancelamento`} data-testid="link-cancellation-desktop">Cancelamento</a>
+                </div>
+              </details>
+            </>}
             <a
               href={`/loja/${slug}/calendario`}
               data-testid="link-calendar-desktop"
@@ -393,8 +409,18 @@ export default function VitrineLayout({
               className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
               onClick={() => setMobileMenuOpen(false)}
             >
-              Pacotes
+              {slug === "visite-cariri" ? "Experiências" : "Pacotes"}
             </a>
+            {slug === "visite-cariri" && <>
+              <a href={`/loja/${slug}/destinos`} data-testid="link-destinations-mobile" className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white" onClick={() => setMobileMenuOpen(false)}>Destinos</a>
+              <a href={`/loja/${slug}/sobre`} data-testid="link-about-mobile" className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white" onClick={() => setMobileMenuOpen(false)}>A Visite Cariri</a>
+              <a href={`/loja/${slug}/como-reservar`} data-testid="link-how-to-book-mobile" className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white" onClick={() => setMobileMenuOpen(false)}>Como reservar</a>
+              <a href={`/loja/${slug}/duvidas`} data-testid="link-faq-mobile" className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white" onClick={() => setMobileMenuOpen(false)}>Dúvidas frequentes</a>
+              <a href={`/loja/${slug}/contato`} data-testid="link-contact-mobile" className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white" onClick={() => setMobileMenuOpen(false)}>Contato</a>
+              <a href={`/loja/${slug}/privacidade`} data-testid="link-privacy-mobile" className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white" onClick={() => setMobileMenuOpen(false)}>Privacidade</a>
+              <a href={`/loja/${slug}/termos`} data-testid="link-terms-mobile" className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white" onClick={() => setMobileMenuOpen(false)}>Termos de uso</a>
+              <a href={`/loja/${slug}/cancelamento`} data-testid="link-cancellation-mobile" className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white" onClick={() => setMobileMenuOpen(false)}>Cancelamento</a>
+            </>}
             <a
               href={`/loja/${slug}/calendario`}
               data-testid="link-calendar-mobile"
@@ -446,7 +472,7 @@ export default function VitrineLayout({
                 </a>
                 )}
                 <button
-                  onClick={handleSignOut}
+                  onClick={() => { setMobileMenuOpen(false); handleSignOut(); }}
                   data-testid="button-signout-mobile"
                   className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-200 hover:bg-white/10 hover:text-white"
                 >
@@ -481,7 +507,7 @@ export default function VitrineLayout({
 
       <main className="flex-1">{children}</main>
 
-      <footer data-testid="vitrine-footer" className="border-t border-slate-800 bg-slate-950 text-slate-300">
+      <footer data-testid="vitrine-footer" className={`border-t ${slug === "visite-cariri" ? "cariri-footer" : "border-slate-800 bg-slate-950 text-slate-300"}`}>
         <div className="mx-auto grid max-w-6xl grid-cols-1 gap-10 px-5 py-12 md:grid-cols-3 lg:px-8">
           <div>
             <h3 data-testid="text-footer-store-name" className="mb-3 text-base font-bold text-white">{store.name}</h3>
@@ -534,9 +560,19 @@ export default function VitrineLayout({
               </div>
               <div>
                 <a data-testid="link-footer-products" href={`/loja/${slug}/produtos`} className="text-slate-400 transition-colors hover:text-white">
-                  Ver Pacotes
+                  {slug === "visite-cariri" ? "Ver experiências" : "Ver Pacotes"}
                 </a>
               </div>
+              {slug === "visite-cariri" && <>
+                <div><a data-testid="link-footer-destinations" href={`/loja/${slug}/destinos`} className="text-slate-400 transition-colors hover:text-white">Destinos do Cariri</a></div>
+                <div><a data-testid="link-footer-about" href={`/loja/${slug}/sobre`} className="text-slate-400 transition-colors hover:text-white">Sobre a agência</a></div>
+                <div><a data-testid="link-footer-how-to-book" href={`/loja/${slug}/como-reservar`} className="text-slate-400 transition-colors hover:text-white">Como reservar</a></div>
+                <div><a data-testid="link-footer-faq" href={`/loja/${slug}/duvidas`} className="text-slate-400 transition-colors hover:text-white">Dúvidas frequentes</a></div>
+                <div><a data-testid="link-footer-contact" href={`/loja/${slug}/contato`} className="text-slate-400 transition-colors hover:text-white">Contato</a></div>
+                <div><a data-testid="link-footer-privacy" href={`/loja/${slug}/privacidade`} className="text-slate-400 transition-colors hover:text-white">Privacidade</a></div>
+                <div><a data-testid="link-footer-terms" href={`/loja/${slug}/termos`} className="text-slate-400 transition-colors hover:text-white">Termos de uso</a></div>
+                <div><a data-testid="link-footer-cancellation" href={`/loja/${slug}/cancelamento`} className="text-slate-400 transition-colors hover:text-white">Cancelamento</a></div>
+              </>}
               <div>
                 <a data-testid="link-footer-calendar" href={`/loja/${slug}/calendario`} className="text-slate-400 transition-colors hover:text-white">
                   Calendário de Saídas

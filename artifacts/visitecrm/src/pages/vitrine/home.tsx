@@ -6,7 +6,7 @@ import {
   PublicStore,
   StoreProduct,
   StoreCategory,
-  StoreReview,
+  PublicStoreReview,
 } from "@/lib/storeApi";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { trackStoreGroupSelection } from "@/lib/analytics";
@@ -166,7 +166,7 @@ export default function VitrineHome({
   const [, navigate] = useLocation();
   const { colors } = useVitrineTheme();
   const [categories, setCategories] = useState<StoreCategory[]>([]);
-  const [reviews, setReviews] = useState<StoreReview[]>([]);
+  const [reviews, setReviews] = useState<PublicStoreReview[]>([]);
   const [allProducts, setAllProducts] = useState<StoreProduct[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -894,11 +894,11 @@ export default function VitrineHome({
                         color: colors.primaryForeground,
                       }}
                     >
-                      {(review.customerName ?? "?")[0].toUpperCase()}
+                        {(review.reviewerName ?? "?")[0].toUpperCase()}
                     </div>
                     <div>
                       <p className="text-sm font-medium">
-                        {review.customerName ?? "Cliente"}
+                         {review.reviewerName ?? "Cliente"}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {new Date(review.createdAt).toLocaleDateString("pt-BR", {

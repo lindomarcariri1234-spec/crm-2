@@ -1,0 +1,296 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Fraunces:opsz,wght,SOFT,WONK@9..144,400,20,1;9..144,500,20,1&display=swap");
+
+.cariri-portal {
+  --cc-earth: #5D3E2A;
+  --cc-sky: #47C7F4;
+  --cc-leaf: #78C752;
+  --cc-sun: #F2B705;
+  --cc-orange: #E67E22;
+  --cc-paper: #F7F4EC;
+  --cc-ink: #30251E;
+  --cc-muted: #776C61;
+  color: var(--cc-ink);
+  background: var(--cc-paper);
+  font-family: "DM Sans", sans-serif;
+}
+.cariri-footer { background: #30251E; color: #ded4ca; border-color: #55463a; }
+.cariri-footer h3 { color: #fff8e8; }
+.cariri-footer .text-slate-400 { color: #c0b3a6; }
+.cariri-footer .text-slate-500 { color: #a39485; }
+.cariri-footer .border-slate-800 { border-color: #55463a; }
+.cariri-footer a:hover { color: #F2B705; }
+.cariri-nav-details { position: relative; color: white; font-size: 13px; font-weight: 600; }
+.cariri-nav-details summary { cursor: pointer; list-style: none; padding: 8px 0; }
+.cariri-primary-nav { gap: 14px; }
+.cariri-primary-nav > a, .cariri-primary-nav summary { white-space: nowrap; font-size: 12px; }
+.cariri-nav-details summary::-webkit-details-marker { display: none; }
+.cariri-nav-details summary:after { content: "⌄"; margin-left: 6px; opacity: .75; }
+.cariri-nav-popover { position: absolute; z-index: 50; right: -18px; top: calc(100% + 8px); width: 205px; padding: 8px; background: #3c2c20; border: 1px solid rgba(255,255,255,.15); box-shadow: 0 14px 30px rgba(18,13,9,.24); }
+.cariri-nav-popover a { display: block; padding: 10px 11px; color: rgba(255,255,255,.82); text-decoration: none; font-size: 12px; }
+.cariri-nav-popover a:hover, .cariri-nav-popover a:focus-visible { background: rgba(255,255,255,.09); color: #F2B705; }
+.cariri-portal h1, .cariri-portal h2, .cariri-portal h3 {
+  font-family: "Fraunces", Georgia, serif;
+  font-weight: 500;
+}
+.cariri-portal em { color: var(--cc-orange); font-style: italic; }
+.cariri-hero { height: min(790px, calc(100svh - 70px)); min-height: 630px; position: relative; overflow: hidden; background: var(--cc-earth); color: #fff; }
+.cariri-hero-image, .cariri-hero-shade { position: absolute; inset: 0; width: 100%; height: 100%; }
+.cariri-hero-image { object-fit: cover; object-position: 50% 49%; animation: cariri-image-settle 1.2s ease both; }
+.cariri-hero-shade { background: linear-gradient(90deg, rgba(35,25,18,.82) 0%, rgba(42,31,23,.54) 46%, rgba(33,30,22,.08) 100%), linear-gradient(0deg, rgba(28,21,16,.52), transparent 45%); }
+.cariri-hero-content { position: relative; height: 100%; max-width: 1280px; padding: 32px 7.2% 42px; margin: auto; display: flex; flex-direction: column; }
+.cariri-kicker, .cariri-overline, .cariri-intro-label, .cariri-scroll-note, .cariri-cta-band span { font-family: "DM Sans", sans-serif; letter-spacing: .16em; font-size: 10px; font-weight: 700; }
+.cariri-kicker { display: flex; align-items: center; gap: 10px; color: rgba(255,255,255,.87); }
+.cariri-kicker span { display: block; width: 30px; height: 1px; background: var(--cc-sun); }
+.cariri-hero-copy { margin: auto 0; max-width: 680px; padding-bottom: 16px; animation: cariri-rise .7s .08s both; }
+.cariri-overline { color: var(--cc-sun); margin-bottom: 18px; }
+.cariri-hero h1 { font-size: clamp(64px, 9.4vw, 124px); line-height: .91; letter-spacing: -.055em; margin: 0; }
+.cariri-hero h1 em { color: #F5C34D; }
+.cariri-lede { max-width: 450px; font-size: 16px; line-height: 1.75; color: rgba(255,255,255,.87); margin: 25px 0 28px; }
+.cariri-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 24px; }
+.cariri-button { min-height: 51px; border: 0; border-radius: 2px; padding: 0 21px; display: inline-flex; align-items: center; gap: 16px; font-size: 13px; font-weight: 700; transition: transform .2s ease, background-color .2s ease; cursor: pointer; }
+.cariri-button:hover { transform: translateY(-2px); }
+.cariri-button:focus-visible, .cariri-inline-link:focus-visible, .cariri-portal button:focus-visible, .cariri-portal a:focus-visible { outline: 3px solid var(--cc-sky); outline-offset: 4px; }
+.cariri-button-yellow { background: var(--cc-sun); color: #362916; }
+.cariri-button-yellow:hover { background: #ffd13a; }
+.cariri-text-button { display: inline-flex; align-items: center; gap: 9px; border: 0; padding: 10px 0; background: transparent; color: #fff; font-size: 13px; cursor: pointer; }
+.cariri-text-button:hover { color: var(--cc-sun); }
+.cariri-hero-mark { position: absolute; right: 7.5%; bottom: 68px; display: flex; gap: 12px; align-items: center; color: rgba(255,255,255,.8); font: 600 10px/1.5 "DM Sans", sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+.cariri-hero-mark img { width: 56px; height: 56px; object-fit: contain; border-radius: 50%; }
+.cariri-scroll-note { position: absolute; left: 7.2%; bottom: 44px; display: flex; gap: 11px; align-items: center; color: rgba(255,255,255,.7); font-size: 9px; }
+.cariri-scroll-note span { width: 42px; height: 1px; background: rgba(255,255,255,.54); }
+.cariri-intro { padding: 104px max(7.2%, calc((100% - 1090px)/2)) 55px; }
+.cariri-intro-label { display: flex; align-items: center; gap: 13px; color: var(--cc-muted); font-size: 9px; }
+.cariri-intro-label span { color: var(--cc-orange); }
+.cariri-intro-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 9%; align-items: end; margin: 29px 0 75px; }
+.cariri-intro h2, .cariri-section-heading h2, .cariri-experience-aside h2, .cariri-story-panel h2 { font-size: clamp(42px, 5.5vw, 68px); line-height: 1.03; letter-spacing: -.045em; margin: 0; }
+.cariri-intro-grid p { max-width: 420px; color: #6f6255; font-size: 15px; line-height: 1.85; margin: 0 0 20px; }
+.cariri-inline-link { color: var(--cc-earth); display: inline-flex; align-items: center; gap: 11px; padding: 0; border: 0; background: none; text-decoration: none; font-size: 13px; font-weight: 700; cursor: pointer; }
+.cariri-inline-link:hover { color: var(--cc-orange); }
+.cariri-ribbon { min-height: 74px; border-top: 1px solid #ddd5c8; border-bottom: 1px solid #ddd5c8; display: flex; align-items: center; justify-content: space-between; gap: 15px; color: var(--cc-earth); font-size: 10px; font-weight: 700; letter-spacing: .11em; }
+.cariri-ribbon span { display: flex; align-items: center; gap: 11px; }
+.cariri-ribbon span:nth-of-type(2) svg { color: #659e43; }.cariri-ribbon span:nth-of-type(3) svg { color: var(--cc-orange); }
+.cariri-ribbon i { width: 4px; height: 4px; background: var(--cc-sun); border-radius: 50%; }
+.cariri-places { padding: 87px max(7.2%, calc((100% - 1090px)/2)) 102px; background: #fffdfa; }
+.cariri-section-heading { display: flex; justify-content: space-between; align-items: end; gap: 20px; margin-bottom: 34px; }
+.cariri-section-heading h2 { margin-top: 18px; }
+.cariri-place-grid { display: grid; grid-template-columns: 1.1fr .9fr 1fr 1fr; gap: 12px; }
+.cariri-place-card { position: relative; height: 370px; overflow: hidden; border: 0; padding: 0; color: white; text-align: left; background: var(--cc-earth); cursor: pointer; }
+.cariri-place-card:nth-child(even) { height: 325px; margin-top: 45px; }
+.cariri-place-card img { width: 100%; height: 100%; object-fit: cover; transition: transform .55s cubic-bezier(.2,.7,.2,1); }
+.cariri-place-card:hover img { transform: scale(1.055); }
+.cariri-place-card:after { content: ""; position: absolute; inset: 0; background: linear-gradient(0deg, rgba(24,18,13,.78), transparent 58%); }
+.cariri-place-number { position: absolute; z-index: 1; left: 17px; top: 17px; font: 500 11px "DM Sans", sans-serif; color: rgba(255,255,255,.82); }
+.cariri-place-info { position: absolute; z-index: 1; left: 18px; right: 44px; bottom: 22px; display: grid; gap: 8px; }
+.cariri-place-info small { font-size: 9px; text-transform: uppercase; letter-spacing: .11em; color: rgba(255,255,255,.76); }
+.cariri-place-info strong { font: 500 23px/1.12 "Fraunces", Georgia, serif; }
+.cariri-place-arrow { position: absolute; z-index: 1; bottom: 20px; right: 17px; width: 31px; height: 31px; border: 1px solid rgba(255,255,255,.6); display: grid; place-items: center; border-radius: 50%; transition: background .2s ease, color .2s ease; }
+.cariri-place-card:hover .cariri-place-arrow { background: var(--cc-sun); color: var(--cc-earth); }
+.cariri-categories { padding: 74px max(7.2%, calc((100% - 1090px)/2)); background: #efe9dc; }
+.cariri-categories .cariri-section-heading { margin-bottom: 25px; }
+.cariri-categories .cariri-section-heading h2 { margin-top: 16px; }
+.cariri-category-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); gap: 10px; }
+.cariri-category-card { min-height: 88px; padding: 12px 15px; display: flex; align-items: center; gap: 13px; border: 1px solid #ddd3c4; background: #fbf8f1; color: var(--cc-earth); text-align: left; cursor: pointer; }
+.cariri-category-card:hover { border-color: var(--cc-orange); transform: translateY(-2px); }
+.cariri-category-card img, .cariri-category-monogram { width: 55px; height: 55px; object-fit: cover; flex: 0 0 auto; }
+.cariri-category-monogram { display: grid; place-items: center; background: var(--cc-earth); color: var(--cc-sun); font: 500 26px "Fraunces", Georgia, serif; }
+.cariri-category-name { flex: 1; font-size: 13px; font-weight: 700; }
+.cariri-category-empty { border: 1px dashed #cbbda9; padding: 23px; color: var(--cc-muted); font-size: 13px; }
+.cariri-category-empty button { margin-left: 8px; border: 0; background: none; color: var(--cc-earth); text-decoration: underline; cursor: pointer; }
+.cariri-category-skeletons { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+.cariri-category-skeletons span { height: 88px; background: #e0d8ca; animation: cariri-shimmer 1.4s infinite alternate; }
+.cariri-reviews { padding: 82px max(7.2%, calc((100% - 1090px)/2)); background: #fffdfa; }
+.cariri-reviews .cariri-section-heading { margin-bottom: 27px; }
+.cariri-reviews .cariri-section-heading h2 { margin-top: 16px; }
+.cariri-review-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(245px,1fr)); gap: 13px; }
+.cariri-review-card { padding: 22px; border: 1px solid #e5ddd1; background: #fff; display: flex; flex-direction: column; min-height: 170px; }
+.cariri-review-stars { display: flex; gap: 3px; color: var(--cc-orange); }
+.cariri-review-card h3 { margin: 13px 0 0; font-size: 20px; }
+.cariri-review-card > p { margin: 11px 0 20px; color: #6b6055; font-size: 13px; line-height: 1.7; white-space: pre-line; }
+.cariri-review-byline { margin-top: auto; padding-top: 12px; border-top: 1px solid #eee8de; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; }
+.cariri-review-byline small { color: #5a8139; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.cariri-review-reply { margin-top: 13px; padding: 12px; background: #f5f1e8; color: #65584b; font-size: 11px; line-height: 1.6; }
+.cariri-review-reply p { margin: 4px 0 0; white-space: pre-line; }
+.cariri-experiences { background: var(--cc-earth); color: white; padding: 92px max(7.2%, calc((100% - 1090px)/2)); display: grid; grid-template-columns: .82fr 1.18fr; gap: 7%; }
+.cariri-experience-aside { position: relative; }
+.cariri-experience-aside .cariri-intro-label { color: #d1c4b7; }
+.cariri-experience-aside h2 { margin: 26px 0 19px; }
+.cariri-experience-aside h2 em { color: var(--cc-sun); }
+.cariri-experience-aside > p { max-width: 360px; color: #ded4ca; font-size: 14px; line-height: 1.8; margin-bottom: 25px; }
+.cariri-button-light { color: var(--cc-earth); background: #fff8e8; }
+.cariri-button-light:hover { background: white; }
+.cariri-stamp { position: absolute; bottom: -3px; right: 9px; width: 84px; height: 84px; border-radius: 50%; background: var(--cc-leaf); display: grid; place-content: center; justify-items: center; color: #25331e; transform: rotate(-12deg); font-size: 9px; font-weight: 800; line-height: 1.25; text-align: center; }
+.cariri-calendar-link { display: flex; align-items: center; gap: 9px; margin-top: 14px; border: 0; background: transparent; color: #f2c75a; font-size: 12px; font-weight: 700; cursor: pointer; }
+.cariri-upcoming { padding: 68px max(7.2%, calc((100% - 1090px)/2)); background: #f4f0e7; }
+.cariri-upcoming-heading { display: flex; align-items: end; justify-content: space-between; gap: 25px; margin-bottom: 24px; }
+.cariri-upcoming-heading h2 { margin: 14px 0 0; color: var(--cc-earth); font: 500 clamp(32px,4vw,46px)/1.05 "Fraunces", Georgia, serif; letter-spacing: -.035em; }
+.cariri-upcoming-heading h2 em { color: var(--cc-orange); font-weight: 400; }
+.cariri-upcoming-heading > p { max-width: 280px; margin: 0; color: var(--cc-muted); font-size: 12px; line-height: 1.7; }
+.cariri-upcoming-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(230px,1fr)); gap: 11px; }
+.cariri-upcoming-card { min-height: 148px; padding: 18px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; border: 1px solid #ded5c7; background: #fffdfa; color: var(--cc-earth); text-align: left; cursor: pointer; transition: transform .2s ease,border-color .2s ease; }
+.cariri-upcoming-card:hover { transform: translateY(-2px); border-color: var(--cc-orange); }
+.cariri-upcoming-date { color: #976228; font: 600 12px "Spline Sans Mono",monospace; }
+.cariri-upcoming-card strong { font-size: 16px; line-height: 1.35; }
+.cariri-upcoming-detail { display: inline-flex; align-items: center; gap: 6px; margin-top: auto; color: #765d43; font-size: 10px; font-weight: 700; }
+.cariri-upcoming-disclaimer { margin: 16px 0 0; color: var(--cc-muted); font-size: 10px; line-height: 1.6; }
+.cariri-experience-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 16px; align-content: center; }
+.cariri-experience-list [data-testid^="card-product"] { background: #fff; }
+.cariri-empty, .cariri-product-skeleton { min-height: 240px; padding: 35px; border: 1px solid rgba(255,255,255,.22); display: flex; flex-direction: column; gap: 12px; align-items: flex-start; justify-content: center; color: #fff; }
+.cariri-empty p { margin: 0; line-height: 1.6; }
+.cariri-empty button { border: 0; padding: 0; background: none; text-decoration: underline; color: var(--cc-sun); cursor: pointer; }
+.cariri-product-skeleton { background: linear-gradient(100deg, rgba(255,255,255,.06) 30%,rgba(255,255,255,.14) 50%,rgba(255,255,255,.06) 70%); background-size: 200% 100%; animation: cariri-shimmer 1.5s infinite; }
+.cariri-story { display: grid; grid-template-columns: 1.05fr .95fr; min-height: 565px; background: #e8e0d3; }
+.cariri-story > img { width: 100%; height: 100%; min-height: 565px; object-fit: cover; }
+.cariri-story-panel { padding: 85px 12% 60px; align-self: center; }
+.cariri-story-panel h2 { margin: 24px 0 22px; }
+.cariri-story-panel p { max-width: 390px; color: #6d6156; line-height: 1.8; font-size: 14px; margin: 0 0 22px; }
+.cariri-cta-band { padding: 44px max(7.2%, calc((100% - 1090px)/2)); display: flex; align-items: center; justify-content: space-between; gap: 20px; background: var(--cc-sun); }
+.cariri-cta-band span { color: #5d4820; font-size: 9px; }
+.cariri-cta-band h2 { margin: 7px 0 0; font-size: clamp(27px,4vw,39px); letter-spacing: -.03em; }
+.cariri-button-brown { background: var(--cc-earth); color: white; }
+.cariri-button-brown:hover { background: #382518; }
+
+.cariri-subpage { min-height: 70vh; }
+.cariri-page-hero { position: relative; min-height: 495px; padding: 86px max(7.2%, calc((100% - 1090px)/2)); overflow: hidden; background: var(--cc-earth); color: white; }
+.cariri-page-hero:after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, #302217 0%, rgba(48,34,23,.92) 36%, rgba(48,34,23,.1) 100%); }
+.cariri-page-hero > img { position: absolute; inset: 0 0 0 38%; width: 62%; height: 100%; object-fit: cover; }
+.cariri-page-hero > *:not(img) { position: relative; z-index: 1; }
+.cariri-page-hero h1 { margin: 25px 0 15px; font-size: clamp(56px,8vw,90px); line-height: .95; letter-spacing: -.05em; }
+.cariri-page-hero p { max-width: 440px; margin: 0 0 25px; color: rgba(255,255,255,.8); line-height: 1.7; }
+.cariri-destination-grid { max-width: 1160px; margin: auto; padding: 75px 28px 90px; display: grid; grid-template-columns: repeat(3,1fr); gap: 22px; }
+.cariri-destination-card { background: #fffdfa; border: 1px solid #e6ded2; }
+.cariri-destination-image { width: 100%; height: 230px; position: relative; overflow: hidden; padding: 0; border: 0; background: #e4ded2; text-align: left; cursor: pointer; }
+.cariri-destination-image img { width: 100%; height: 100%; object-fit: cover; transition: transform .5s ease; }
+.cariri-destination-card:hover img { transform: scale(1.04); }
+.cariri-destination-image span { position: absolute; left: 15px; bottom: 14px; background: var(--cc-sun); padding: 7px 10px; color: #392918; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; }
+.cariri-destination-copy { padding: 20px 20px 23px; }
+.cariri-destination-copy small { display: flex; align-items: center; gap: 5px; color: var(--cc-orange); font-size: 10px; font-weight: 700; }
+.cariri-destination-copy h2 { font-size: 25px; line-height: 1.1; margin: 11px 0 8px; }
+.cariri-destination-copy p { color: var(--cc-muted); font-size: 13px; line-height: 1.6; min-height: 42px; margin: 0 0 16px; }
+.cariri-note-band { max-width: 1100px; margin: 0 auto 65px; padding: 20px 24px; display: flex; align-items: center; gap: 16px; background: #e8eee0; color: #35512c; }
+.cariri-note-band p { flex: 1; margin: 0; font-size: 13px; line-height: 1.6; }
+.cariri-note-band button { border: 0; background: none; color: var(--cc-earth); font-weight: 700; display: flex; gap: 7px; align-items: center; cursor: pointer; }
+.cariri-contact-float { position: fixed; z-index: 20; right: 22px; bottom: 22px; border-radius: 30px; padding: 13px 17px; background: var(--cc-leaf); color: #1f3218; text-decoration: none; display: flex; align-items: center; gap: 8px; box-shadow: 0 8px 24px #35271d36; font-size: 12px; font-weight: 800; }
+.cariri-about-hero { min-height: 500px; display: grid; grid-template-columns: 1fr 1fr; background: #e8e0d3; }
+.cariri-about-hero > img { width: 100%; height: 100%; min-height: 500px; object-fit: cover; }
+.cariri-about-hero > div { align-self: center; padding: 60px 10%; }
+.cariri-about-hero h1 { font-size: clamp(54px,7vw,86px); line-height: .96; letter-spacing: -.05em; margin: 27px 0 19px; }
+.cariri-about-hero p { max-width: 460px; color: #6b5f52; line-height: 1.8; }
+.cariri-about-body { padding: 90px 24px; max-width: 900px; margin: auto; }
+.cariri-about-body h2 { font-size: clamp(43px,6vw,68px); line-height: 1.05; letter-spacing: -.04em; margin: 23px 0 18px; }
+.cariri-about-body > p { max-width: 650px; color: var(--cc-muted); font-size: 15px; line-height: 1.8; }
+.cariri-about-links { display: flex; gap: 25px; align-items: center; margin-top: 27px; }
+.cariri-policy-grid { background: #fffdfa; padding: 55px max(7.2%, calc((100% - 1090px)/2)); display: grid; grid-template-columns: repeat(2,1fr); gap: 14px; }
+.cariri-policy-grid article { border: 1px solid #e5ddd1; padding: 22px; }
+.cariri-policy-grid article > span { font-size: 9px; color: var(--cc-orange); font-weight: 800; letter-spacing: .12em; }
+.cariri-policy-grid h3 { font-size: 25px; margin: 9px 0; }
+.cariri-policy-grid p { white-space: pre-line; color: #6e6257; line-height: 1.7; font-size: 13px; margin: 0; }
+.cariri-policy-empty { color: var(--cc-muted); padding: 30px; border: 1px dashed #cfc3b2; grid-column: 1/-1; }
+.cariri-contact-panel { background: var(--cc-earth); color: white; display: flex; justify-content: space-between; gap: 30px; padding: 65px max(7.2%, calc((100% - 1090px)/2)); }
+.cariri-contact-panel h2 { font-size: clamp(34px,5vw,54px); line-height: 1.03; margin: 18px 0 0; }
+.cariri-contact-panel h2 em { color: var(--cc-sun); }
+.cariri-contact-panel > div:last-child { min-width: 290px; display: grid; align-content: center; gap: 15px; }
+.cariri-contact-panel a, .cariri-contact-panel p { display: flex; align-items: center; gap: 10px; color: #f1eae2; text-decoration: none; margin: 0; font-size: 13px; }
+.cariri-contact-panel a:hover { color: var(--cc-sun); }
+.cariri-info-hero { padding: 76px max(7.2%, calc((100% - 1090px)/2)) 68px; background: var(--cc-earth); color: white; }
+.cariri-info-hero .cariri-intro-label { color: #d1c4b7; }
+.cariri-info-hero h1 { margin: 24px 0 15px; font-size: clamp(53px,8vw,84px); line-height: .98; letter-spacing: -.05em; }
+.cariri-info-hero h1 em { color: var(--cc-sun); }
+.cariri-info-hero > p { max-width: 650px; color: #e1d8cf; font-size: 15px; line-height: 1.8; margin: 0 0 22px; }
+.cariri-booking-steps { max-width: 1090px; margin: auto; padding: 62px 24px 30px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
+.cariri-booking-steps article { min-height: 172px; padding: 23px; background: #fffdfa; border: 1px solid #e5ddd1; }
+.cariri-booking-steps article > span { color: var(--cc-orange); font-size: 11px; font-weight: 800; letter-spacing: .1em; }
+.cariri-booking-steps h2 { margin: 12px 0 8px; font-size: 25px; }
+.cariri-booking-steps p { margin: 0; color: var(--cc-muted); font-size: 13px; line-height: 1.7; }
+.cariri-booking-actions { grid-column: 1/-1; display: flex; align-items: center; gap: 25px; padding: 10px 0; }
+.cariri-info-content { max-width: 1090px; margin: auto; padding: 58px 24px 40px; }
+.cariri-info-content > .cariri-button { margin-top: 22px; }
+.cariri-info-contact { border: 1px solid #e5ddd1; background: #fffdfa; }
+.cariri-info-contact > * { min-height: 68px; padding: 17px 20px; border-bottom: 1px solid #e5ddd1; color: var(--cc-earth); display: flex; align-items: center; gap: 13px; text-decoration: none; font-size: 13px; }
+.cariri-info-contact > *:last-child { border-bottom: 0; }
+.cariri-info-contact span { margin-left: auto; color: var(--cc-muted); text-align: right; }
+.cariri-info-contact a:hover { background: #f4efe6; }
+.cariri-policy-document { padding: 28px; background: #fffdfa; border: 1px solid #e5ddd1; color: #675b4e; line-height: 1.8; font-size: 14px; white-space: pre-line; }
+.cariri-policy-document p { margin: 0; }
+.cariri-policy-caveat { margin-top: 16px; color: var(--cc-muted); font-size: 13px; line-height: 1.7; }
+.cariri-info-footer { display: flex; gap: 27px; max-width: 1090px; margin: 0 auto; padding: 0 24px 70px; }
+.cariri-destination-detail-hero { position: relative; min-height: 500px; display: flex; align-items: end; overflow: hidden; background: var(--cc-earth); color: white; }
+.cariri-destination-detail-hero > img, .cariri-destination-detail-shade { position: absolute; inset: 0; width: 100%; height: 100%; }
+.cariri-destination-detail-hero > img { object-fit: cover; }
+.cariri-destination-detail-shade { background: linear-gradient(90deg,rgba(34,24,18,.82),rgba(34,24,18,.17)),linear-gradient(0deg,rgba(27,19,13,.67),transparent 55%); }
+.cariri-destination-detail-copy { position: relative; z-index: 1; width: min(1090px,100%); margin: 0 auto; padding: 40px 24px 58px; }
+.cariri-detail-back { display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(255,255,255,.42); padding: 10px 13px; margin-bottom: 56px; color: white; background: rgba(255,255,255,.1); font-size: 12px; cursor: pointer; }
+.cariri-detail-caption { display: block; margin-bottom: 13px; color: var(--cc-sun); text-transform: uppercase; letter-spacing: .13em; font-size: 10px; font-weight: 800; }
+.cariri-destination-detail-copy h1 { max-width: 790px; margin: 0; font-size: clamp(44px,7vw,82px); line-height: .98; letter-spacing: -.045em; }
+.cariri-destination-detail-copy p { color: rgba(255,255,255,.84); font-size: 13px; margin: 18px 0 0; }
+.cariri-destination-detail-body { max-width: 1090px; margin: auto; padding: 65px 24px 75px; display: grid; grid-template-columns: 1.1fr .9fr; gap: 30px 8%; }
+.cariri-destination-detail-body h2 { margin: 20px 0 12px; font-size: clamp(35px,5vw,52px); line-height: 1.04; }
+.cariri-destination-detail-body p { max-width: 570px; color: var(--cc-muted); font-size: 14px; line-height: 1.8; }
+.cariri-detail-actions { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 14px; }
+.cariri-destination-disclaimer { grid-column: 1/-1; padding-top: 16px; border-top: 1px solid #ded5c7; color: var(--cc-muted); font-size: 11px; line-height: 1.6; }
+.cariri-destination-not-found { min-height: 55vh; padding: 30px; display: flex; flex-direction: column; gap: 14px; justify-content: center; align-items: center; text-align: center; }
+.cariri-destination-not-found p { color: var(--cc-muted); }
+
+@keyframes cariri-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes cariri-image-settle { from { transform: scale(1.035); } to { transform: scale(1); } }
+@keyframes cariri-shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .cariri-portal *, .cariri-portal *:before, .cariri-portal *:after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
+@media (max-width: 760px) {
+  .cariri-hero { height: auto; min-height: 690px; }
+  .cariri-hero-image { object-position: 56% center; }
+  .cariri-hero-shade { background: linear-gradient(90deg,rgba(35,25,18,.74),rgba(35,25,18,.18)),linear-gradient(0deg,rgba(28,21,16,.68),transparent 75%); }
+  .cariri-hero-content { padding: 27px 23px 30px; }
+  .cariri-hero-copy { margin: auto 0; }
+  .cariri-hero h1 { font-size: clamp(59px,15vw,88px); }
+  .cariri-lede { font-size: 14px; max-width: 350px; }
+  .cariri-hero-mark { right: 20px; bottom: 25px; }
+  .cariri-scroll-note { left: 24px; bottom: 42px; }
+  .cariri-intro { padding: 66px 24px 38px; }
+  .cariri-intro-grid { grid-template-columns: 1fr; gap: 22px; margin: 23px 0 43px; }
+  .cariri-intro h2, .cariri-section-heading h2, .cariri-experience-aside h2, .cariri-story-panel h2 { font-size: clamp(41px,11vw,58px); }
+  .cariri-ribbon { align-items: flex-start; flex-direction: column; padding: 20px 0; gap: 15px; }
+  .cariri-ribbon i { display: none; }
+  .cariri-places { padding: 63px 20px 70px; }
+  .cariri-categories, .cariri-reviews { padding: 57px 20px; }
+  .cariri-section-heading { align-items: flex-start; flex-direction: column; }
+  .cariri-place-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; }
+  .cariri-place-card, .cariri-place-card:nth-child(even) { height: 250px; margin-top: 0; }
+  .cariri-place-info { left: 12px; right: 12px; bottom: 14px; }
+  .cariri-place-info strong { font-size: 19px; }
+  .cariri-place-arrow { display: none; }
+  .cariri-experiences { padding: 65px 23px; grid-template-columns: 1fr; gap: 35px; }
+  .cariri-upcoming { padding: 54px 20px; }
+  .cariri-upcoming-heading { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .cariri-stamp { right: 0; bottom: -5px; width: 70px; height: 70px; }
+  .cariri-experience-list { grid-template-columns: 1fr; }
+  .cariri-story { grid-template-columns: 1fr; }
+  .cariri-story > img { min-height: 320px; height: 320px; }
+  .cariri-story-panel { padding: 53px 24px 58px; }
+  .cariri-cta-band { align-items: flex-start; flex-direction: column; padding: 35px 24px; }
+  .cariri-page-hero { min-height: 530px; padding: 70px 24px; display: flex; flex-direction: column; justify-content: center; }
+  .cariri-page-hero > img { left: 0; width: 100%; opacity: .48; }
+  .cariri-page-hero:after { background: linear-gradient(90deg,rgba(48,34,23,.94),rgba(48,34,23,.48)); }
+  .cariri-destination-grid { padding: 45px 19px 55px; grid-template-columns: 1fr; gap: 15px; }
+  .cariri-destination-image { height: 235px; }
+  .cariri-note-band { margin: 0 18px 45px; align-items: flex-start; flex-wrap: wrap; }
+  .cariri-note-band p { flex-basis: calc(100% - 45px); }
+  .cariri-note-band button { margin-left: 38px; }
+  .cariri-about-hero { grid-template-columns: 1fr; }
+  .cariri-about-hero > img { min-height: 300px; height: 300px; order: 2; }
+  .cariri-about-hero > div { padding: 55px 24px; }
+  .cariri-about-body { padding: 64px 24px; }
+  .cariri-about-links { align-items: flex-start; flex-direction: column; }
+  .cariri-policy-grid { padding: 35px 20px; grid-template-columns: 1fr; }
+  .cariri-contact-panel { padding: 52px 24px; flex-direction: column; }
+  .cariri-destination-detail-hero { min-height: 500px; }
+  .cariri-destination-detail-copy { padding: 25px 20px 40px; }
+  .cariri-detail-back { margin-bottom: 60px; }
+  .cariri-destination-detail-body { padding: 47px 20px 55px; grid-template-columns: 1fr; }
+  .cariri-detail-actions { gap: 15px; }
+  .cariri-info-hero { padding: 62px 24px; }
+  .cariri-booking-steps { padding: 38px 20px 20px; grid-template-columns: 1fr; }
+  .cariri-booking-actions { align-items: flex-start; flex-direction: column; }
+  .cariri-info-content { padding: 40px 20px 30px; }
+  .cariri-info-contact > * { align-items: flex-start; flex-wrap: wrap; }
+  .cariri-info-contact span { flex-basis: 100%; margin-left: 31px; text-align: left; }
+  .cariri-info-footer { flex-direction: column; padding: 0 20px 50px; }
+}
