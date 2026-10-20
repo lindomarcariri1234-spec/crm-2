@@ -36,6 +36,7 @@ import {
   whatsappProviderAdapter,
   zernioInstagramProviderAdapter,
 } from "./messaging-provider-adapters.js";
+import { tenantHasPermanentEmailBounceExpression } from "./campaign-bounce-recipients.js";
 
 export type OutboundRecipient =
   | { type: "client"; id: string }
@@ -150,7 +151,11 @@ export function htmlToWhatsAppText(html: string): string {
     .trim();
 }
 
-async function resolveRecipient(tenantId: string, recipient: OutboundRecipient) {
+async function resolveRecipient(
+  tenantId: string,
+  recipient: OutboundRecipient,
+  options: { checkCampaignEmailBounce?: boolean } = {},
+) {
   if (recipient.type === "direct") {
     // Most legacy producers only know the e-mail address. Resolve it against
     // the tenant client directory when possible so an e-mail-triggered event
@@ -201,6 +206,9 @@ async function resolveRecipient(tenantId: string, recipient: OutboundRecipient) 
         phone: clientsTable.phone,
         emailOptIn: clientsTable.emailOptIn,
         whatsappOptIn: clientsTable.whatsappOptIn,
+          hasPermanentEmailBounce: options.checkCampaignEmailBounce
+            ? tenantHasPermanentEmailBounceExpression(tenantId, clientsTable.id)
+            : sql<boolean>`false`,
       })
       .from(clientsTable)
       .where(and(eq(clientsTable.id, recipient.id), eq(clientsTable.tenantId, tenantId)))
@@ -212,6 +220,7 @@ async function resolveRecipient(tenantId: string, recipient: OutboundRecipient) 
       whatsapp: clean(client.whatsapp) ?? clean(client.phone),
       emailOptIn: client.emailOptIn,
       whatsappOptIn: client.whatsappOptIn,
+      hasPermanentEmailBounce: client.hasPermanentEmailBounce,
     };
   }
 
@@ -334,7 +343,16 @@ export async function createOutboundMessage(input: CreateOutboundMessageInput): 
   if (!idempotencyKey) throw new Error("idempotency_key_required");
   if (input.isReplication && input.replicatedFromId === undefined) throw new Error("replication_source_required");
 
-  const resolved = await resolveRecipient(input.tenantId, input.recipient);
+  const resolved = await resolveRecipient(input.tenantId, input.recipient, {
+    checkCampaignEmailBounce: input.origin === "campaign"
+      && input.recipient.type === "client"
+      && (!input.channels || input.channels.includes("email")),
+  });
+  const suppressCampaignEmail = input.origin === "campaign"
+    && input.recipient.type === "client"
+    && (!input.channels || input.channels.includes("email"))
+    && "hasPermanentEmailBounce" in resolved
+    && resolved.hasPermanentEmailBounce;
   const whatsappText = clean(input.whatsapp?.text) ?? (input.email?.html ? htmlToWhatsAppText(input.email.html) : null);
   const instagramText = clean(input.instagram?.text);
   const emailHtml = clean(input.email?.html);
@@ -375,7 +393,9 @@ export async function createOutboundMessage(input: CreateOutboundMessageInput): 
     if (!existing.length) {
       const deliveries = [
         deliveryValues(input, message.id, "email", resolved.email, emailHtml, emailSubject,
-          skippedReason("email", resolved.email, resolved.emailOptIn, emailHtml)),
+          suppressCampaignEmail
+            ? "permanent_email_bounce"
+            : skippedReason("email", resolved.email, resolved.emailOptIn, emailHtml)),
         deliveryValues(input, message.id, "whatsapp", resolved.whatsapp, whatsappText, null,
           skippedReason("whatsapp", resolved.whatsapp, resolved.whatsappOptIn, whatsappText)),
         ...(instagramText || input.channels?.includes("instagram")
@@ -384,6 +404,21 @@ export async function createOutboundMessage(input: CreateOutboundMessageInput): 
           : []),
       ].filter((delivery) => !input.channels || input.channels.includes(delivery.channel));
       await tx.insert(outboundDeliveriesTable).values(deliveries);
+    } else if (suppressCampaignEmail) {
+      await tx.update(outboundDeliveriesTable)
+        .set({
+          status: "skipped",
+          skippedReason: "permanent_email_bounce",
+          lastError: "permanent_email_bounce",
+          claimedAt: null,
+          failedAt: new Date(),
+        })
+        .where(and(
+          eq(outboundDeliveriesTable.tenantId, input.tenantId),
+          eq(outboundDeliveriesTable.outboundMessageId, message.id),
+          eq(outboundDeliveriesTable.channel, "email"),
+          eq(outboundDeliveriesTable.status, "pending"),
+        ));
     }
     const deliveries = await tx.select().from(outboundDeliveriesTable)
       .where(and(eq(outboundDeliveriesTable.tenantId, input.tenantId), eq(outboundDeliveriesTable.outboundMessageId, message.id)));

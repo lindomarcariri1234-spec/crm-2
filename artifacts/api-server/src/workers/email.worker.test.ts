@@ -69,12 +69,15 @@ vi.mock("@workspace/db", () => ({
     campaignId: "campaign_sends.campaign_id",
     clientId: "campaign_sends.client_id",
     tenantId: "campaign_sends.tenant_id",
+    bounceType: "campaign_sends.bounce_type",
+    bouncedAt: "campaign_sends.bounced_at",
   },
 }));
 
 vi.mock("drizzle-orm", () => ({
   eq: mockEq,
   and: mockAnd,
+  isNotNull: vi.fn(() => "isNotNull"),
 }));
 
 vi.mock("@workspace/email", () => ({
@@ -116,10 +119,28 @@ vi.mock("../lib/logger", () => ({
 import { startEmailWorker, stopEmailWorker } from "./email.worker";
 
 function mockScopedLogLookup(rows: unknown[]) {
-  const limit = vi.fn().mockResolvedValue(rows);
-  const where = vi.fn(() => ({ limit }));
-  const from = vi.fn(() => ({ where }));
-  mockSelect.mockReturnValue({ from });
+  const resultSets = [rows];
+  mockSelect.mockImplementation(() => {
+    const nextRows = resultSets.shift() ?? [];
+    const limit = vi.fn().mockResolvedValue(nextRows);
+    const where = vi.fn(() => ({ limit }));
+    const from = vi.fn(() => ({ where }));
+    return { from };
+  });
+}
+
+function mockCampaignSendLookups(
+  ownershipRows: unknown[],
+  permanentBounceRows: unknown[],
+) {
+  const resultSets = [ownershipRows, permanentBounceRows];
+  mockSelect.mockImplementation(() => {
+    const nextRows = resultSets.shift() ?? [];
+    const limit = vi.fn().mockResolvedValue(nextRows);
+    const where = vi.fn(() => ({ limit }));
+    const from = vi.fn(() => ({ where }));
+    return { from };
+  });
 }
 
 describe("email worker tenant-scoped email logs", () => {
@@ -293,7 +314,7 @@ describe("email worker tenant-scoped campaign sends", () => {
   });
 
   it("sends and updates a campaign send owned by the payload tenant", async () => {
-    mockScopedLogLookup([{ id: "campaign-send-1" }]);
+    mockCampaignSendLookups([{ id: "campaign-send-1" }], []);
     mockSendReminderHtmlEmail.mockResolvedValue({
       success: true,
       messageId: "provider-message-1",
@@ -331,6 +352,35 @@ describe("email worker tenant-scoped campaign sends", () => {
         ],
       },
     ]);
+  });
+
+  it("skips an owned campaign email when the tenant has a confirmed permanent bounce", async () => {
+    mockCampaignSendLookups(
+      [{ id: "campaign-send-1" }],
+      [{ id: "historical-permanent-bounce" }],
+    );
+    startEmailWorker();
+
+    await processors[0]({
+      id: "campaign-job-permanent-bounce",
+      name: "campaign-email",
+      data: {
+        to: "client@example.com",
+        toName: "Client",
+        subject: "A campaign",
+        htmlContent: "<p>Hello</p>",
+        fromName: "Agency",
+        campaignId: "campaign-1",
+        clientId: "client-1",
+        tenantId: "tenant-a",
+      },
+    });
+
+    expect(mockSendReminderHtmlEmail).not.toHaveBeenCalled();
+    expect(updateSets).toContainEqual({
+      status: "skipped",
+      error: "permanent_email_bounce",
+    });
   });
 
   it("tenant-scopes the campaign send update after exhausted retries", async () => {

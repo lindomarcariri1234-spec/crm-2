@@ -282,6 +282,42 @@ describe("campaign-automation: DB write failure regression", () => {
       );
       expect(mockUpdate).toHaveBeenCalled();
     });
+
+    it("records a permanent-bounce suppression as skipped instead of an error", async () => {
+      setupSelectCalls({ ...CAMPAIGN, type: "email" });
+      mockDispatchOutboundMessage.mockResolvedValue({
+        created: true,
+        message: { status: "skipped" },
+        deliveries: [{
+          channel: "email",
+          status: "skipped",
+          skippedReason: "permanent_email_bounce",
+          lastError: "permanent_email_bounce",
+        }],
+      });
+      mockInsert.mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          onConflictDoNothing: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([{ id: "test-send-id" }]),
+          }),
+        }),
+      });
+      const updateValues: Array<Record<string, unknown>> = [];
+      mockUpdate.mockImplementation(() => ({
+        set: vi.fn().mockImplementation((values: Record<string, unknown>) => {
+          updateValues.push(values);
+          return { where: vi.fn().mockResolvedValue([]) };
+        }),
+      }));
+
+      await runCampaignAutomationCron();
+
+      expect(updateValues).toContainEqual({
+        status: "skipped",
+        error: null,
+      });
+      expect(updateValues.some((values) => "sentCount" in values || "recipientsCount" in values)).toBe(false);
+    });
   });
 
   describe("queued campaign email path", () => {

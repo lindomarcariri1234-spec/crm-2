@@ -564,17 +564,23 @@ async function processTenantCampaignMultichannel(
       const hasPending = result.deliveries.some((delivery) => delivery.status === "pending");
       const hasAccepted = result.deliveries.some((delivery) => delivery.status === "accepted");
       const hasFailure = result.deliveries.some((delivery) => delivery.status === "failed");
+      const allSkipped = result.deliveries.length > 0
+        && result.deliveries.every((delivery) => delivery.status === "skipped");
       await db.update(campaignSendsTable)
         .set({
           // "sent" is the compatibility projection for a logical event that
           // has been handed to the multichannel ledger. The ledger, not the
           // legacy campaign queue reconciler, owns pending channel retries.
-          status: hasFailure && !hasPending && !hasAccepted ? "error" : "sent",
+          status: allSkipped
+            ? "skipped"
+            : hasFailure && !hasPending && !hasAccepted
+              ? "error"
+              : "sent",
           error: hasFailure ? result.deliveries.find((delivery) => delivery.status === "failed")?.lastError ?? null : null,
         })
         .where(and(eq(campaignSendsTable.id, send.id), eq(campaignSendsTable.tenantId, campaign.tenantId)));
       if (hasPending || hasAccepted) successCount++;
-      else errorCount++;
+      else if (!allSkipped) errorCount++;
     } catch (err) {
       errorCount++;
       logger.error({ err, campaignId: campaign.id, clientId: client.id }, "[campaign-automation] Multichannel dispatch failed");

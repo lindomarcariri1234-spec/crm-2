@@ -58,6 +58,7 @@ import {
 import { and, eq } from "drizzle-orm";
 import {
   createOutboundMessage,
+  dispatchOutboundMessage,
   processOutboundDelivery,
   reconcileOutboundDelivery,
   recoverOutboundDeliveries,
@@ -1319,6 +1320,193 @@ describe("outbound delivery database idempotency", () => {
       recipients: [],
       hasMore: false,
     });
+  });
+
+  it("skips campaign email delivery for permanent bounces but keeps temporary bounces eligible", async () => {
+    const historicalCampaignId = randomUUID();
+    const futureCampaignId = randomUUID();
+    const futureUnifiedCampaignId = randomUUID();
+    const otherTenantFutureCampaignId = randomUUID();
+    const permanentClientId = randomUUID();
+    const temporaryClientId = randomUUID();
+    const sameEmailOtherTenantClientId = randomUUID();
+    const trackingStartedAt = new Date();
+    const campaignDetails = {
+      name: "Campaign bounce suppression test",
+      type: "email",
+      status: "sent",
+      content: "Integration test campaign",
+      createdById: "integration-test",
+      failureTrackingStartedAt: trackingStartedAt,
+    } as const;
+
+    await db.insert(campaignsTable).values([
+      { id: historicalCampaignId, tenantId: callbackTenantId, ...campaignDetails },
+      { id: futureCampaignId, tenantId: callbackTenantId, ...campaignDetails },
+      { id: futureUnifiedCampaignId, tenantId: callbackTenantId, ...campaignDetails, type: "unified" },
+      { id: otherTenantFutureCampaignId, tenantId: callbackOtherTenantId, ...campaignDetails },
+    ]);
+    await db.insert(clientsTable).values([
+      {
+        id: permanentClientId,
+        tenantId: callbackTenantId,
+        name: "Permanent bounce client",
+        email: `permanent-${runId}@example.test`,
+        whatsapp: "5511990000001",
+      },
+      {
+        id: temporaryClientId,
+        tenantId: callbackTenantId,
+        name: "Temporary bounce client",
+        email: `temporary-${runId}@example.test`,
+        whatsapp: "5511990000002",
+      },
+      {
+        id: sameEmailOtherTenantClientId,
+        tenantId: callbackOtherTenantId,
+        name: "Same email in another tenant",
+        email: `permanent-${runId}@example.test`,
+        whatsapp: "5511990000003",
+      },
+    ]);
+    await db.insert(campaignSendsTable).values([
+      {
+        id: randomUUID(),
+        campaignId: historicalCampaignId,
+        clientId: permanentClientId,
+        tenantId: callbackTenantId,
+        status: "sent",
+        bounceType: "permanent",
+        bouncedAt: trackingStartedAt,
+      },
+      {
+        id: randomUUID(),
+        campaignId: historicalCampaignId,
+        clientId: temporaryClientId,
+        tenantId: callbackTenantId,
+        status: "sent",
+        bounceType: "temporary",
+        bouncedAt: trackingStartedAt,
+      },
+      {
+        id: randomUUID(),
+        campaignId: futureCampaignId,
+        clientId: permanentClientId,
+        tenantId: callbackTenantId,
+        status: "queued",
+      },
+      {
+        id: randomUUID(),
+        campaignId: futureCampaignId,
+        clientId: temporaryClientId,
+        tenantId: callbackTenantId,
+        status: "queued",
+      },
+      {
+        id: randomUUID(),
+        campaignId: futureUnifiedCampaignId,
+        clientId: permanentClientId,
+        tenantId: callbackTenantId,
+        status: "queued",
+      },
+      {
+        id: randomUUID(),
+        campaignId: otherTenantFutureCampaignId,
+        clientId: sameEmailOtherTenantClientId,
+        tenantId: callbackOtherTenantId,
+        status: "queued",
+      },
+    ]);
+
+    const permanentResult = await dispatchOutboundMessage({
+      tenantId: callbackTenantId,
+      eventType: "campaign_message",
+      idempotencyKey: `campaign:${futureCampaignId}:${permanentClientId}`,
+      recipient: { type: "client", id: permanentClientId },
+      channels: ["email"],
+      email: { subject: "Future campaign", html: "Hello" },
+      origin: "campaign",
+      metadata: { campaignId: futureCampaignId, clientId: permanentClientId },
+    });
+    expect(permanentResult.deliveries).toMatchObject([
+      {
+        channel: "email",
+        status: "skipped",
+        skippedReason: "permanent_email_bounce",
+      },
+    ]);
+    const [permanentDeliveryAttempt] = await db.select()
+      .from(outboundDeliveryAttemptsTable)
+      .where(and(
+        eq(outboundDeliveryAttemptsTable.tenantId, callbackTenantId),
+        eq(outboundDeliveryAttemptsTable.deliveryId, permanentResult.deliveries[0]!.id),
+      ));
+    expect(permanentDeliveryAttempt).toBeUndefined();
+
+    const unifiedResult = await createOutboundMessage({
+      tenantId: callbackTenantId,
+      eventType: "campaign_message",
+      idempotencyKey: `campaign:${futureUnifiedCampaignId}:${permanentClientId}`,
+      recipient: { type: "client", id: permanentClientId },
+      channels: ["email", "whatsapp"],
+      email: { subject: "Future campaign", html: "Hello" },
+      whatsapp: { text: "Hello" },
+      origin: "campaign",
+      metadata: { campaignId: futureUnifiedCampaignId, clientId: permanentClientId },
+    });
+    expect(unifiedResult.deliveries).toMatchObject([
+      { channel: "email", status: "skipped", skippedReason: "permanent_email_bounce" },
+      { channel: "whatsapp", status: "pending", skippedReason: null },
+    ]);
+    await db.update(outboundDeliveriesTable)
+      .set({ status: "skipped", skippedReason: "integration_test_cleanup" })
+      .where(and(
+        eq(outboundDeliveriesTable.tenantId, callbackTenantId),
+        eq(outboundDeliveriesTable.outboundMessageId, unifiedResult.message.id),
+        eq(outboundDeliveriesTable.status, "pending"),
+      ));
+
+    const temporaryResult = await createOutboundMessage({
+      tenantId: callbackTenantId,
+      eventType: "campaign_message",
+      idempotencyKey: `campaign:${futureCampaignId}:${temporaryClientId}`,
+      recipient: { type: "client", id: temporaryClientId },
+      channels: ["email"],
+      email: { subject: "Future campaign", html: "Hello" },
+      origin: "campaign",
+      metadata: { campaignId: futureCampaignId, clientId: temporaryClientId },
+    });
+    expect(temporaryResult.deliveries).toMatchObject([
+      { channel: "email", status: "pending", skippedReason: null },
+    ]);
+    await db.update(outboundDeliveriesTable)
+      .set({ status: "skipped", skippedReason: "integration_test_cleanup" })
+      .where(and(
+        eq(outboundDeliveriesTable.tenantId, callbackTenantId),
+        eq(outboundDeliveriesTable.outboundMessageId, temporaryResult.message.id),
+        eq(outboundDeliveriesTable.status, "pending"),
+      ));
+
+    const otherTenantResult = await createOutboundMessage({
+      tenantId: callbackOtherTenantId,
+      eventType: "campaign_message",
+      idempotencyKey: `campaign:${otherTenantFutureCampaignId}:${sameEmailOtherTenantClientId}`,
+      recipient: { type: "client", id: sameEmailOtherTenantClientId },
+      channels: ["email"],
+      email: { subject: "Future campaign", html: "Hello" },
+      origin: "campaign",
+      metadata: { campaignId: otherTenantFutureCampaignId, clientId: sameEmailOtherTenantClientId },
+    });
+    expect(otherTenantResult.deliveries).toMatchObject([
+      { channel: "email", status: "pending", skippedReason: null },
+    ]);
+    await db.update(outboundDeliveriesTable)
+      .set({ status: "skipped", skippedReason: "integration_test_cleanup" })
+      .where(and(
+        eq(outboundDeliveriesTable.tenantId, callbackOtherTenantId),
+        eq(outboundDeliveriesTable.outboundMessageId, otherTenantResult.message.id),
+        eq(outboundDeliveriesTable.status, "pending"),
+      ));
   });
 
   it("persists one WhatsApp delivery for concurrent campaign requests and accepts it once", async () => {
