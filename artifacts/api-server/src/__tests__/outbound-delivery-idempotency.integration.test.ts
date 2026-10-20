@@ -218,7 +218,7 @@ afterAll(async () => {
 });
 
 describe("outbound delivery database idempotency", () => {
-  it("backfills existing Resend bounce deliveries only to matching tracked campaign sends", async () => {
+  it("backfills matching tracked sends and keeps bounce totals stable when the migration is retried", async () => {
     const client = await pool.connect();
     const schemaName = `bounce_backfill_${randomUUID().replaceAll("-", "")}`;
     try {
@@ -358,12 +358,15 @@ describe("outbound delivery database idempotency", () => {
         new URL("../../../../lib/db/drizzle/0129_campaign_bounce_classification.sql", import.meta.url),
         "utf8",
       );
-      for (const statement of migrationSql.split("--> statement-breakpoint")) {
-        const sql = statement.trim();
-        if (sql) await client.query(sql);
-      }
+      const applyMigration = async () => {
+        for (const statement of migrationSql.split("--> statement-breakpoint")) {
+          const sql = statement.trim();
+          if (sql) await client.query(sql);
+        }
+      };
+      await applyMigration();
 
-      const campaigns = await client.query<{
+      const readCampaigns = () => client.query<{
         id: string;
         tenant_id: string;
         tracking_available: boolean;
@@ -379,6 +382,7 @@ describe("outbound delivery database idempotency", () => {
         FROM campaigns
         ORDER BY tenant_id, id
       `);
+      const campaigns = await readCampaigns();
       expect(campaigns.rows).toEqual([
         {
           id: "campaign-a",
@@ -403,9 +407,10 @@ describe("outbound delivery database idempotency", () => {
         },
       ]);
 
-      const sends = await client.query<{ id: string; bounce_type: string | null }>(
+      const readSends = () => client.query<{ id: string; bounce_type: string | null }>(
         "SELECT id, bounce_type FROM campaign_sends ORDER BY id",
       );
+      const sends = await readSends();
       expect(Object.fromEntries(sends.rows.map((row) => [row.id, row.bounce_type]))).toEqual({
         "send-a-ambiguous": null,
         "send-a-missing-campaign-id": null,
@@ -419,6 +424,12 @@ describe("outbound delivery database idempotency", () => {
         "send-b-temporary": "temporary",
         "send-legacy": null,
       });
+
+      await applyMigration();
+      const campaignsAfterRetry = await readCampaigns();
+      const sendsAfterRetry = await readSends();
+      expect(campaignsAfterRetry.rows).toEqual(campaigns.rows);
+      expect(sendsAfterRetry.rows).toEqual(sends.rows);
     } finally {
       try {
         await client.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
