@@ -23,6 +23,7 @@ Detailed notes by failure mode:
 - [Radix form harness](radix-form-test-harness.md)
 - [Vitest 4 constructor mocks](vitest4-constructor-mocks.md)
 - [Local PostgreSQL integration setup](local-postgres-integration.md)
+- [Pooled PostgreSQL temporary schemas](postgres-test-search-path.md)
 - [PostgreSQL lock-barrier visibility](postgres-lock-barrier-visibility.md)
 - [Browser keyboard verification](browser-keyboard-verification.md)
 

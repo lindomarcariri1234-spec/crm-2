@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const { mockWhatsAppSend, mockReconcileWhatsAppMessage } = vi.hoisted(() => ({
@@ -217,6 +218,170 @@ afterAll(async () => {
 });
 
 describe("outbound delivery database idempotency", () => {
+  it("backfills existing Resend bounce deliveries only to matching tracked campaign sends", async () => {
+    const client = await pool.connect();
+    const schemaName = `bounce_backfill_${randomUUID().replaceAll("-", "")}`;
+    try {
+      await client.query(`CREATE SCHEMA "${schemaName}"`);
+      await client.query(`SET search_path TO "${schemaName}"`);
+      await client.query(`
+        CREATE TABLE campaigns (
+          id text PRIMARY KEY,
+          tenant_id text NOT NULL,
+          failure_tracking_started_at timestamptz
+        );
+        CREATE TABLE campaign_sends (
+          id text PRIMARY KEY,
+          campaign_id text NOT NULL,
+          tenant_id text NOT NULL,
+          bounced_at timestamptz
+        );
+        CREATE TABLE outbound_messages (
+          id text PRIMARY KEY,
+          tenant_id text NOT NULL,
+          metadata jsonb NOT NULL,
+          origin text NOT NULL
+        );
+        CREATE TABLE outbound_deliveries (
+          id text PRIMARY KEY,
+          tenant_id text NOT NULL,
+          outbound_message_id text NOT NULL,
+          provider text NOT NULL,
+          channel text NOT NULL,
+          bounce_type text
+        );
+      `);
+
+      const trackingStartedAt = new Date("2026-10-20T00:00:00.000Z");
+      await client.query(`
+        INSERT INTO campaigns (id, tenant_id, failure_tracking_started_at)
+        VALUES
+          ('campaign-a', 'tenant-a', $1),
+          ('campaign-b', 'tenant-b', $1),
+          ('campaign-legacy', 'tenant-a', NULL)
+      `, [trackingStartedAt]);
+      await client.query(`
+        INSERT INTO campaign_sends (id, campaign_id, tenant_id, bounced_at)
+        VALUES
+          ('send-a-permanent', 'campaign-a', 'tenant-a', $1),
+          ('send-a-temporary', 'campaign-a', 'tenant-a', $1),
+          ('send-a-ambiguous', 'campaign-a', 'tenant-a', $1),
+          ('send-b-permanent', 'campaign-b', 'tenant-b', $1),
+          ('send-b-temporary', 'campaign-b', 'tenant-b', $1),
+          ('send-legacy', 'campaign-legacy', 'tenant-a', $1)
+      `, [trackingStartedAt]);
+
+      const deliveryFixtures = [
+        { tenantId: "tenant-a", campaignId: "campaign-a", sendId: "send-a-permanent", bounceType: "permanent" },
+        { tenantId: "tenant-a", campaignId: "campaign-a", sendId: "send-a-permanent", bounceType: "permanent" },
+        { tenantId: "tenant-a", campaignId: "campaign-a", sendId: "send-a-temporary", bounceType: "temporary" },
+        { tenantId: "tenant-a", campaignId: "campaign-a", sendId: "send-a-ambiguous", bounceType: "permanent" },
+        { tenantId: "tenant-a", campaignId: "campaign-a", sendId: "send-a-ambiguous", bounceType: "temporary" },
+        { tenantId: "tenant-b", campaignId: "campaign-b", sendId: "send-b-permanent", bounceType: "permanent" },
+        { tenantId: "tenant-b", campaignId: "campaign-b", sendId: "send-b-temporary", bounceType: "temporary" },
+        { tenantId: "tenant-a", campaignId: "campaign-legacy", sendId: "send-legacy", bounceType: "permanent" },
+        { tenantId: "tenant-a", campaignId: "campaign-b", sendId: "send-b-permanent", bounceType: "permanent" },
+        { tenantId: "tenant-b", campaignId: "campaign-a", sendId: "send-b-permanent", bounceType: "temporary" },
+      ] as const;
+      for (const [index, fixture] of deliveryFixtures.entries()) {
+        const messageId = `bounce-backfill-message-${index}`;
+        await client.query(`
+          INSERT INTO outbound_messages (id, tenant_id, metadata, origin)
+          VALUES ($1, $2, $3::jsonb, 'campaign')
+        `, [
+          messageId,
+          fixture.tenantId,
+          JSON.stringify({
+            campaignId: fixture.campaignId,
+            campaignSendId: fixture.sendId,
+          }),
+        ]);
+        await client.query(`
+          INSERT INTO outbound_deliveries (
+            id, tenant_id, outbound_message_id, provider, channel, bounce_type
+          )
+          VALUES ($1, $2, $3, 'resend', 'email', $4)
+        `, [
+          `bounce-backfill-delivery-${index}`,
+          fixture.tenantId,
+          messageId,
+          fixture.bounceType,
+        ]);
+      }
+
+      const migrationSql = await readFile(
+        new URL("../../../../lib/db/drizzle/0129_campaign_bounce_classification.sql", import.meta.url),
+        "utf8",
+      );
+      for (const statement of migrationSql.split("--> statement-breakpoint")) {
+        const sql = statement.trim();
+        if (sql) await client.query(sql);
+      }
+
+      const campaigns = await client.query<{
+        id: string;
+        tenant_id: string;
+        tracking_available: boolean;
+        permanent_bounced_count: number;
+        temporary_bounced_count: number;
+      }>(`
+        SELECT
+          id,
+          tenant_id,
+          failure_tracking_started_at IS NOT NULL AS tracking_available,
+          permanent_bounced_count,
+          temporary_bounced_count
+        FROM campaigns
+        ORDER BY tenant_id, id
+      `);
+      expect(campaigns.rows).toEqual([
+        {
+          id: "campaign-a",
+          tenant_id: "tenant-a",
+          tracking_available: true,
+          permanent_bounced_count: 1,
+          temporary_bounced_count: 1,
+        },
+        {
+          id: "campaign-legacy",
+          tenant_id: "tenant-a",
+          tracking_available: false,
+          permanent_bounced_count: 0,
+          temporary_bounced_count: 0,
+        },
+        {
+          id: "campaign-b",
+          tenant_id: "tenant-b",
+          tracking_available: true,
+          permanent_bounced_count: 1,
+          temporary_bounced_count: 1,
+        },
+      ]);
+
+      const sends = await client.query<{ id: string; bounce_type: string | null }>(
+        "SELECT id, bounce_type FROM campaign_sends ORDER BY id",
+      );
+      expect(Object.fromEntries(sends.rows.map((row) => [row.id, row.bounce_type]))).toEqual({
+        "send-a-ambiguous": null,
+        "send-a-permanent": "permanent",
+        "send-a-temporary": "temporary",
+        "send-b-permanent": "permanent",
+        "send-b-temporary": "temporary",
+        "send-legacy": null,
+      });
+    } finally {
+      try {
+        await client.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
+      } finally {
+        try {
+          await client.query("RESET search_path");
+        } finally {
+          client.release();
+        }
+      }
+    }
+  });
+
   it("counts concurrent email and WhatsApp callbacks once for a unified campaign recipient", async () => {
     mockWhatsAppSend.mockClear();
     const sharedClientId = `campaign-client-${runId}`;
