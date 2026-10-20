@@ -266,12 +266,25 @@ describe("outbound delivery database idempotency", () => {
           ('send-a-permanent', 'campaign-a', 'tenant-a', $1),
           ('send-a-temporary', 'campaign-a', 'tenant-a', $1),
           ('send-a-ambiguous', 'campaign-a', 'tenant-a', $1),
+          ('send-a-missing-campaign-id', 'campaign-a', 'tenant-a', $1),
+          ('send-a-non-campaign-origin', 'campaign-a', 'tenant-a', $1),
+          ('send-a-non-resend-provider', 'campaign-a', 'tenant-a', $1),
+          ('send-a-non-email-channel', 'campaign-a', 'tenant-a', $1),
+          ('send-a-no-bounced-at', 'campaign-a', 'tenant-a', NULL),
           ('send-b-permanent', 'campaign-b', 'tenant-b', $1),
           ('send-b-temporary', 'campaign-b', 'tenant-b', $1),
           ('send-legacy', 'campaign-legacy', 'tenant-a', $1)
       `, [trackingStartedAt]);
 
-      const deliveryFixtures = [
+      const deliveryFixtures: Array<{
+        tenantId: string;
+        campaignId?: string;
+        sendId?: string;
+        origin?: string;
+        provider?: string;
+        channel?: string;
+        bounceType: string;
+      }> = [
         { tenantId: "tenant-a", campaignId: "campaign-a", sendId: "send-a-permanent", bounceType: "permanent" },
         { tenantId: "tenant-a", campaignId: "campaign-a", sendId: "send-a-permanent", bounceType: "permanent" },
         { tenantId: "tenant-a", campaignId: "campaign-a", sendId: "send-a-temporary", bounceType: "temporary" },
@@ -282,29 +295,61 @@ describe("outbound delivery database idempotency", () => {
         { tenantId: "tenant-a", campaignId: "campaign-legacy", sendId: "send-legacy", bounceType: "permanent" },
         { tenantId: "tenant-a", campaignId: "campaign-b", sendId: "send-b-permanent", bounceType: "permanent" },
         { tenantId: "tenant-b", campaignId: "campaign-a", sendId: "send-b-permanent", bounceType: "temporary" },
+        { tenantId: "tenant-a", sendId: "send-a-missing-campaign-id", bounceType: "permanent" },
+        { tenantId: "tenant-a", campaignId: "campaign-a", bounceType: "permanent" },
+        {
+          tenantId: "tenant-a",
+          campaignId: "campaign-a",
+          sendId: "send-a-non-campaign-origin",
+          origin: "manual",
+          bounceType: "permanent",
+        },
+        {
+          tenantId: "tenant-a",
+          campaignId: "campaign-a",
+          sendId: "send-a-non-resend-provider",
+          provider: "other-provider",
+          bounceType: "permanent",
+        },
+        {
+          tenantId: "tenant-a",
+          campaignId: "campaign-a",
+          sendId: "send-a-non-email-channel",
+          channel: "whatsapp",
+          bounceType: "permanent",
+        },
+        {
+          tenantId: "tenant-a",
+          campaignId: "campaign-a",
+          sendId: "send-a-no-bounced-at",
+          bounceType: "permanent",
+        },
       ] as const;
       for (const [index, fixture] of deliveryFixtures.entries()) {
         const messageId = `bounce-backfill-message-${index}`;
         await client.query(`
           INSERT INTO outbound_messages (id, tenant_id, metadata, origin)
-          VALUES ($1, $2, $3::jsonb, 'campaign')
+          VALUES ($1, $2, $3::jsonb, $4)
         `, [
           messageId,
           fixture.tenantId,
           JSON.stringify({
-            campaignId: fixture.campaignId,
-            campaignSendId: fixture.sendId,
+            ...(fixture.campaignId ? { campaignId: fixture.campaignId } : {}),
+            ...(fixture.sendId ? { campaignSendId: fixture.sendId } : {}),
           }),
+          fixture.origin ?? "campaign",
         ]);
         await client.query(`
           INSERT INTO outbound_deliveries (
             id, tenant_id, outbound_message_id, provider, channel, bounce_type
           )
-          VALUES ($1, $2, $3, 'resend', 'email', $4)
+          VALUES ($1, $2, $3, $4, $5, $6)
         `, [
           `bounce-backfill-delivery-${index}`,
           fixture.tenantId,
           messageId,
+          fixture.provider ?? "resend",
+          fixture.channel ?? "email",
           fixture.bounceType,
         ]);
       }
@@ -363,6 +408,11 @@ describe("outbound delivery database idempotency", () => {
       );
       expect(Object.fromEntries(sends.rows.map((row) => [row.id, row.bounce_type]))).toEqual({
         "send-a-ambiguous": null,
+        "send-a-missing-campaign-id": null,
+        "send-a-no-bounced-at": null,
+        "send-a-non-campaign-origin": null,
+        "send-a-non-email-channel": null,
+        "send-a-non-resend-provider": null,
         "send-a-permanent": "permanent",
         "send-a-temporary": "temporary",
         "send-b-permanent": "permanent",
