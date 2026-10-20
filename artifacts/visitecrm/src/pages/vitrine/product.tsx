@@ -9,7 +9,6 @@ import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { trackStoreProductOpened } from "@/lib/analytics";
 import { SectionHeader } from "@/components/vitrine/SectionHeader";
 import { PremiumProductCard } from "@/components/vitrine/PremiumProductCard";
-import { InstallmentSimulator } from "@/components/vitrine/InstallmentSimulator";
 import { PriceAlert } from "@/components/vitrine/PriceAlert";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -875,7 +874,6 @@ export default function VitrineProduct({
                 </span>
                 <span className="text-sm text-muted-foreground">/ pessoa</span>
               </div>
-              <InstallmentSimulator price={effectivePrice} store={store} />
               <PriceAlert slug={slug} productId={product.id} />
             </div>
 

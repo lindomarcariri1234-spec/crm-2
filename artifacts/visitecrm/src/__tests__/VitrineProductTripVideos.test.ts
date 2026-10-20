@@ -59,10 +59,6 @@ vi.mock("@/components/vitrine/PremiumProductCard", () => ({
   PremiumProductCard: () => null,
 }));
 
-vi.mock("@/components/vitrine/InstallmentSimulator", () => ({
-  InstallmentSimulator: () => null,
-}));
-
 vi.mock("@/components/vitrine/PriceAlert", () => ({
   PriceAlert: () => null,
 }));
@@ -146,5 +142,13 @@ describe("VitrineProduct — trip videos", () => {
 
     expect(container.querySelector("video")).toBeNull();
     expect(container.textContent).not.toContain("Vídeos da Viagem");
+  });
+});
+
+describe("VitrineProduct — pricing", () => {
+  it("hides installment details on the single-product page", async () => {
+    const { container } = await renderProduct([]);
+
+    expect(container.textContent).not.toContain("Simule seu parcelamento");
   });
 });
