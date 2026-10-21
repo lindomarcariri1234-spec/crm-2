@@ -10,7 +10,9 @@ import {
 import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { decryptCredential, encryptCredential } from "../lib/crypto";
 import { generateId } from "../lib/id";
+import type { InboundProviderAdapter } from "./messaging-provider-adapters.js";
 import { logger } from "../lib/logger";
+import { persistNormalizedInboundMessage } from "./inbound-message-persistence.js";
 
 const DEFAULT_GRAPH_VERSION = "v26.0";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -48,6 +50,12 @@ export interface InstagramWebhookMessage {
   messageId: string;
   content: string;
   sentAt: Date;
+}
+
+export interface InstagramWebhookDeliveryStatus {
+  instagramUserId: string;
+  externalId: string;
+  status: "delivered" | "read";
 }
 
 export class InstagramProviderError extends Error {
@@ -288,6 +296,64 @@ export function parseInstagramWebhook(payload: unknown): InstagramWebhookMessage
   return result;
 }
 
+export const metaInstagramInboundAdapter: InboundProviderAdapter<unknown, InstagramWebhookMessage> = {
+  id: "meta",
+  normalize(payload) {
+    return parseInstagramWebhook(payload).map((message) => ({
+      provider: "meta",
+      channel: "instagram",
+      accountId: message.instagramUserId,
+      conversationId: message.senderId,
+      senderId: message.senderId,
+      externalId: message.messageId,
+      content: message.content,
+      occurredAt: message.sentAt,
+      media: message.content === "Mídia recebida pelo Instagram"
+        ? { kind: "attachment", mimeType: null, fileName: null, url: null }
+        : null,
+      providerData: message,
+    }));
+  },
+};
+
+export function resolveUniqueInstagramAccountIntegration<T>(
+  matches: readonly T[],
+): T | null {
+  return matches.length === 1 ? matches[0] ?? null : null;
+}
+
+export function parseInstagramWebhookDeliveryStatuses(payload: unknown): InstagramWebhookDeliveryStatus[] {
+  const root = asObject(payload);
+  if (!root || root.object !== "instagram" || !Array.isArray(root.entry)) return [];
+  const result = new Map<string, InstagramWebhookDeliveryStatus>();
+  for (const rawEntry of root.entry) {
+    const entry = asObject(rawEntry);
+    const instagramUserId = stringValue(entry?.id);
+    if (!instagramUserId || !Array.isArray(entry?.messaging)) continue;
+    for (const rawEvent of entry.messaging) {
+      const event = asObject(rawEvent);
+      const delivery = asObject(event?.delivery);
+      const read = asObject(event?.read);
+      if (Array.isArray(delivery?.mids)) {
+        for (const rawId of delivery.mids) {
+          const externalId = stringValue(rawId);
+          const key = externalId ? JSON.stringify([instagramUserId, externalId]) : "";
+          if (externalId && result.get(key)?.status !== "read") {
+            result.set(key, { instagramUserId, externalId, status: "delivered" });
+          }
+        }
+      }
+      const readId = stringValue(read?.mid);
+      if (readId) result.set(JSON.stringify([instagramUserId, readId]), {
+        instagramUserId,
+        externalId: readId,
+        status: "read",
+      });
+    }
+  }
+  return [...result.values()];
+}
+
 async function providerJson(
   url: URL,
   init: RequestInit = {},
@@ -491,12 +557,12 @@ export async function sendInstagramText(
   instagramUserId: string,
   recipientId: string,
   text: string,
-): Promise<void> {
+): Promise<string | null> {
   if (Buffer.byteLength(text, "utf8") > MAX_INSTAGRAM_TEXT_BYTES) {
     throw new InstagramProviderError("rejected", 413);
   }
   const url = graphUrl(config, `${encodeURIComponent(instagramUserId)}/messages`);
-  await providerJson(url, {
+  const result = await providerJson(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -507,6 +573,7 @@ export async function sendInstagramText(
       message: { text },
     }),
   });
+  return stringValue(result["message_id"]) ?? stringValue(result["id"]);
 }
 
 function parseInstagramConfig(value: unknown): Record<string, string> {
@@ -515,6 +582,19 @@ function parseInstagramConfig(value: unknown): Record<string, string> {
   return Object.fromEntries(
     Object.entries(config).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   );
+}
+
+export async function resolveInstagramMetaIntegration(instagramUserId: string) {
+  const integrations = await db.select().from(tenantIntegrationsTable)
+    .where(and(
+      eq(tenantIntegrationsTable.type, INSTAGRAM_MESSAGING_TYPE),
+      eq(tenantIntegrationsTable.enabled, true),
+      eq(tenantIntegrationsTable.status, "connected"),
+    ));
+  const matches = integrations.filter((integration) =>
+    parseInstagramConfig(integration.config)["instagramUserId"] === instagramUserId,
+  );
+  return matches.length === 1 ? matches[0] ?? null : null;
 }
 
 export async function refreshInstagramTokens(): Promise<void> {
@@ -591,7 +671,7 @@ export async function refreshInstagramTokens(): Promise<void> {
 }
 
 export async function processInstagramWebhook(payload: unknown): Promise<number> {
-  const incoming = parseInstagramWebhook(payload);
+  const incoming = metaInstagramInboundAdapter.normalize(payload);
   if (incoming.length === 0) return 0;
   const integrations = await db.select().from(tenantIntegrationsTable)
     .where(and(
@@ -611,13 +691,15 @@ export async function processInstagramWebhook(payload: unknown): Promise<number>
   }
 
   let storedCount = 0;
-  for (const message of incoming) {
-    const matches = integrationsByAccount.get(message.instagramUserId) ?? [];
-    if (matches.length !== 1) {
+  for (const event of incoming) {
+    const message = event.providerData;
+    const integration = resolveUniqueInstagramAccountIntegration(
+      integrationsByAccount.get(message.instagramUserId) ?? [],
+    );
+    if (!integration) {
       logger.warn("[instagram] Ignored message for an unmapped or ambiguous account");
       continue;
     }
-    const integration = matches[0]!;
     const stored = await db.transaction(async (tx) => {
       await tx.execute(sql`
         SELECT pg_advisory_xact_lock(
@@ -677,16 +759,11 @@ export async function processInstagramWebhook(payload: unknown): Promise<number>
           .returning();
       }
       if (!conversation) throw new Error("Could not persist Instagram conversation");
-      const [created] = await tx.insert(chatbotMessagesTable).values({
-        id: generateId(),
+      const created = await persistNormalizedInboundMessage(tx, event, {
         tenantId: integration.tenantId,
         conversationId: conversation.id,
-        sourceMessageId: `instagram:${message.messageId}`,
-        role: "user",
-        content: message.content,
-        sentAt: message.sentAt,
-        isBot: false,
-      }).onConflictDoNothing().returning({ id: chatbotMessagesTable.id });
+        sourceMessageId: event.externalId ? `instagram:${event.externalId}` : null,
+      });
       return created ? 1 : 0;
     });
     storedCount += stored;

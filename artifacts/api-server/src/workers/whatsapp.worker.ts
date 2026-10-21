@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { getRedisConnection } from "../lib/redis";
+import { getBullMQWorkerConnection } from "../lib/redis";
 import {
   attachCircuitBreaker,
   WORKER_IDLE_DRAIN_DELAY_SECONDS,
@@ -13,7 +13,7 @@ import { dispatchOutboundMessage } from "../services/outbound-delivery";
 let _worker: Worker<WhatsAppNotificationJobData> | null = null;
 
 export function startWhatsAppWorker(): Worker<WhatsAppNotificationJobData> | null {
-  const conn = getRedisConnection();
+  const conn = getBullMQWorkerConnection();
   if (!conn) {
     logger.warn("[whatsapp-worker] No Redis connection — worker not started");
     return null;

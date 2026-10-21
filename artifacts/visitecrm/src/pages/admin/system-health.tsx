@@ -67,6 +67,24 @@ function MetricRow({
   );
 }
 
+function formatReminderTime(value: string | null, timezone: string) {
+  if (!value) return "sem registro";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "horário inválido";
+  try {
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  } catch {
+    return date.toLocaleString("pt-BR");
+  }
+}
+
 export default function SystemHealthPage() {
   const { toast } = useToast();
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -143,6 +161,15 @@ export default function SystemHealthPage() {
   const orphans = data?.pipelineOrphans;
   const clientDrift = data?.clientFinancialDrift;
   const stripeSyncTables = data?.stripeSyncTables;
+  const queueCutover = data?.redis?.queueCutover;
+  const reminderSchedulers = data?.reminderSchedulers;
+  const reminderSchedulerStatus: StatusLevel = isLoading
+    ? "loading"
+    : reminderSchedulers?.status === "ok"
+    ? "ok"
+    : reminderSchedulers?.status === "degraded"
+    ? "degraded"
+    : "unknown";
 
   const seatStatus: StatusLevel = isLoading
     ? "loading"
@@ -169,6 +196,26 @@ export default function SystemHealthPage() {
     : stripeSyncTables?.ok === false
     ? "degraded"
     : "unknown";
+  const queueCutoverStatus: StatusLevel = isLoading
+    ? "loading"
+    : queueCutover?.outcome === "verified" || queueCutover?.outcome === "same_resource"
+    ? "ok"
+    : queueCutover?.outcome === "blocked" || queueCutover?.outcome === "reverted"
+    ? "degraded"
+    : "unknown";
+  const queueCutoverOutcomeLabel = queueCutover
+    ? ({
+        not_checked: "Ainda não verificado",
+        checking: "Verificando",
+        not_configured: "Redis separado não configurado",
+        workers_disabled: "Workers desativados",
+        blocked: "Troca bloqueada com segurança",
+        approved: "Aprovado, aguardando teste",
+        verified: "Redis separado confirmado",
+        reverted: "Retornado ao Redis anterior",
+        same_resource: "Mesmo recurso Redis",
+      }[queueCutover.outcome] ?? queueCutover.outcome)
+    : undefined;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -224,6 +271,121 @@ export default function SystemHealthPage() {
                 : undefined
             }
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Database className="w-4 h-4 text-primary" />
+            Redis das filas BullMQ
+          </CardTitle>
+          <CardDescription>
+            Mostra qual Redis as filas usam e por que a troca de recurso foi aprovada ou bloqueada.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 -mt-2">
+          <MetricRow
+            icon={Activity}
+            label="Redis selecionado"
+            description={queueCutover?.reason ?? (isLoading ? "Aguardando verificação..." : "Resultado de cutover indisponível.")}
+            status={queueCutoverStatus}
+            value={queueCutover ? `${queueCutover.selectedRedis} · ${queueCutoverOutcomeLabel}` : undefined}
+          />
+          {queueCutover && (queueCutover.blockerCount > 0 || queueCutover.blockedWorkCount > 0) && (
+            <div className="rounded-md border border-amber-300/70 bg-amber-50/60 p-3 text-sm dark:bg-amber-950/20">
+              <p className="font-medium">
+                {queueCutover.blockerCount} bloqueador(es) · {queueCutover.blockedWorkCount} item(ns) na fila legada
+              </p>
+              <ul className="mt-2 space-y-2">
+                {queueCutover.blockers.map((blocker, index) => (
+                  <li key={`${blocker.queue}-${blocker.state}-${index}`} className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">
+                      {blocker.queue === "*" ? "Inspeção" : blocker.queue}
+                      {blocker.count > 0 ? ` · ${blocker.count} ${blocker.state}` : ""}
+                    </span>
+                    <span className="block">{blocker.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Activity className="w-4 h-4 text-primary" />
+            Agendamentos de lembretes
+          </CardTitle>
+          <CardDescription>
+            Horários no fuso {reminderSchedulers?.timezone ?? "configurado"}; schedules ausentes ou atrasados ficam destacados.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="divide-y divide-border -mt-2">
+          <MetricRow
+            icon={Activity}
+            label="Registro dos schedulers"
+            description={
+              reminderSchedulers
+                ? `${reminderSchedulers.schedulers.length - reminderSchedulers.unattemptedCount} tentados · ${reminderSchedulers.failedCount} falha(s) · ${reminderSchedulers.missingCount} ausentes · ${reminderSchedulers.delayedCount} atrasados`
+                : "Aguardando dados de registro..."
+            }
+            status={reminderSchedulerStatus}
+          />
+          {reminderSchedulers?.schedulers.map((scheduler) => {
+            const schedulerStatus: StatusLevel = scheduler.scheduleStatus === "healthy"
+              ? "ok"
+              : scheduler.scheduleStatus === "delayed" ||
+                scheduler.scheduleStatus === "missing" ||
+                scheduler.scheduleStatus === "registration_failed"
+              ? "degraded"
+              : scheduler.scheduleStatus === "unavailable"
+              ? "unavailable"
+              : "unknown";
+            const labels: Record<string, string> = {
+              "boarding-reminder-daily": "Lembrete de embarque",
+              "payment-reminder-daily": "Lembrete de pagamento",
+              "expired-reservations-cleanup": "Limpeza de reservas expiradas",
+              "failed-email-retry": "Nova tentativa de e-mails",
+              "referral-expiry-notification-daily": "Aviso de expiração de indicação",
+              "referral-expiry-warning-daily": "Alerta de expiração de indicação",
+              "expiry-warning-email-retry": "Nova tentativa de avisos de expiração",
+              "referral-bonus-release-notification-daily": "Aviso de liberação de bônus",
+              "nps-dispatch-hourly": "Envio de pesquisa NPS",
+              "installment-due-reminder-daily": "Lembrete de parcela",
+              "seat-reconciliation-daily": "Reconciliação de assentos",
+              "trial-expiry-notification-daily": "Aviso de expiração de avaliação",
+              "uploadthing-orphan-cleanup-nightly": "Limpeza de arquivos órfãos",
+              "chatbot-delivery-retry": "Nova tentativa de entrega do chatbot",
+            };
+            const scheduleStatusLabel: Record<typeof scheduler.scheduleStatus, string> = {
+              healthy: "Agendado",
+              registration_failed: "Falha no registro",
+              missing: "Scheduler ausente na fila",
+              delayed: "Próxima execução atrasada",
+              unavailable: "Estado da fila indisponível",
+            };
+            const lastRunLabel = scheduler.lastRunAt
+              ? `${formatReminderTime(scheduler.lastRunAt, reminderSchedulers.timezone)}${scheduler.lastRunStatus === "failed" ? " (falhou)" : ""}`
+              : "sem execução recente encontrada";
+            const description = [
+              scheduleStatusLabel[scheduler.scheduleStatus],
+              `próxima: ${formatReminderTime(scheduler.nextRunAt, reminderSchedulers.timezone)}`,
+              `última: ${lastRunLabel}`,
+              scheduler.scheduleStatus === "registration_failed" ? `${scheduler.failureCount} falha(s) no registro` : "",
+            ].filter(Boolean).join(" · ");
+            return (
+              <MetricRow
+                key={scheduler.id}
+                icon={schedulerStatus === "degraded" ? AlertTriangle : Activity}
+                label={labels[scheduler.id] ?? scheduler.name}
+                description={description}
+                status={schedulerStatus}
+              />
+            );
+          })}
         </CardContent>
       </Card>
 

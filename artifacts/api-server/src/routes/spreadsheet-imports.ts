@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Router, type NextFunction } from "express";
 import { z } from "zod";
-import { and, count, eq, or, sql } from "drizzle-orm";
+import { and, count, eq, inArray, or, sql } from "drizzle-orm";
 import {
   db,
   clientsTable,
@@ -26,9 +26,13 @@ import {
 import { ADMIN_ROLES } from "../lib/tenant.js";
 import { requireAuth } from "../lib/tenant.js";
 import { AppError, ForbiddenError, ValidationError } from "../lib/errors.js";
+import { logger } from "../lib/logger.js";
 import { generateId, generateVoucherCode } from "../lib/id.js";
 import { getTenantReservationPrefix, getYearMonth, nextReservationSequence, buildReservationNumber, tripTypeToCode } from "../lib/reservation-number.js";
-import { syncReservationPaymentStatus } from "../lib/reservation-payments.js";
+import {
+  lockReservationsForPaymentReconciliation,
+  syncReservationPaymentStatus,
+} from "../lib/reservation-payments.js";
 import { normalizeExpenseCategory } from "../lib/financial-categories.js";
 import { recomputeClientClassification } from "../services/client-classification.js";
 import {
@@ -599,11 +603,14 @@ async function analyzeRows(
       } else {
         row.data.reservationId = reservationId ?? null;
         row.data.clientId = clientId ?? reservationById.get(reservationId ?? "")?.clientId ?? null;
-        if (reservationId && row.data.status === "paid") {
+        if (
+          reservationId
+          && (row.data.status === "paid" || row.data.status === "approved")
+        ) {
           const priorPaid = tenantPayments
             .filter(payment =>
               payment.reservationId === reservationId
-              && payment.status === "paid"
+              && (payment.status === "paid" || payment.status === "approved")
               && payment.id !== targetId,
             )
             .reduce((sum, payment) => sum + Number(payment.amount), 0);
@@ -612,7 +619,7 @@ async function analyzeRows(
           const totalValue = Number(reservationById.get(reservationId)?.totalValue ?? 0);
           if (nextPaid > totalValue + 0.009) {
             row.action = "rejected";
-            row.reason = "O total de pagamentos pagos excede o valor da reserva.";
+            row.reason = "O total de pagamentos recebidos excede o valor da reserva.";
           } else {
             acceptedPaidByReservation.set(reservationId, acceptedPaid + Number(row.data.amount));
           }
@@ -978,18 +985,18 @@ async function upsertPayment(tx: ImportTx, tenantId: string, row: ParsedEntityRo
     ) {
       throw new Error("Não é possível importar um pagamento ativo para uma reserva com gratuidade.");
     }
-    if (data.status === "paid") {
+    if (data.status === "paid" || data.status === "approved") {
       const paidResult = await tx.execute(sql`
         SELECT COALESCE(SUM(amount::numeric), 0) AS prior_paid
         FROM payments
         WHERE reservation_id = ${reservationId}
           AND tenant_id = ${tenantId}
-          AND status = 'paid'
+          AND status IN ('paid', 'approved')
           AND id <> ${targetId}
       `);
       const priorPaid = Number((paidResult as unknown as { rows: Array<{ prior_paid: string }> }).rows[0]?.prior_paid ?? 0);
       if (priorPaid + Number(data.amount) > Number(locked.total_value) + 0.009) {
-        throw new Error("O total de pagamentos pagos excede o valor da reserva.");
+        throw new Error("O total de pagamentos recebidos excede o valor da reserva.");
       }
     }
   }
@@ -1310,6 +1317,31 @@ router.post("/spreadsheet-imports/import", async (req, res, next: NextFunction):
       if (request.entity === "clients" || request.entity === "trips") {
         applyPlanCapacity(analyzed, remainingCapacity, request.entity);
       }
+      if (request.entity === "payments") {
+        const importableRows = analyzed.filter(row =>
+          row.action !== "rejected" && row.data && row.sourceKey,
+        );
+        const reservationIds = new Set(
+          importableRows
+            .map(row => row.data?.reservationId)
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+        );
+        const existingPaymentIds = importableRows
+          .filter(row => row.action === "updated" && row.targetId)
+          .map(row => row.targetId!);
+        if (existingPaymentIds.length > 0) {
+          const existingPayments = await tx.select({
+            reservationId: paymentsTable.reservationId,
+          }).from(paymentsTable).where(and(
+            eq(paymentsTable.tenantId, me.tenantId),
+            inArray(paymentsTable.id, existingPaymentIds),
+          ));
+          for (const payment of existingPayments) {
+            if (payment.reservationId) reservationIds.add(payment.reservationId);
+          }
+        }
+        await lockReservationsForPaymentReconciliation(me.tenantId, reservationIds, tx);
+      }
       const results: SpreadsheetImportRowResult[] = [];
       for (const row of analyzed) {
         if (!row.sourceKey || row.action === "rejected" || !row.data) {
@@ -1376,7 +1408,12 @@ router.post("/spreadsheet-imports/import", async (req, res, next: NextFunction):
     res.json({ importId: result.importId, replayed: result.kind === "replay", report: result.report });
   } catch (error) {
     if (error instanceof ValidationError || error instanceof ForbiddenError) { next(error); return; }
-    next(new AppError(error instanceof Error ? error.message : "A importação falhou.", 500, "SPREADSHEET_IMPORT_FAILED"));
+    logger.error({ err: error }, "[spreadsheet-imports] unexpected import failure");
+    next(new AppError(
+      "Não foi possível concluir a importação. Tente novamente.",
+      500,
+      "SPREADSHEET_IMPORT_FAILED",
+    ));
   }
 });
 

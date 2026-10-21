@@ -7,6 +7,7 @@ import { generateId } from "./id";
 import { sendReminderHtmlEmail, type SendEmailResult } from "@workspace/email";
 import { getCampaignEmailQueue, type CampaignEmailJobData } from "../queues/index";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
+import { campaignSendHasPermanentEmailBounceExpression } from "../services/campaign-bounce-recipients.js";
 
 const TRIGGER_TYPES = [
   "birthday",
@@ -35,6 +36,7 @@ interface QueuedCampaignSendRow {
   clientName: string;
   clientEmail: string;
   tenantName: string | null;
+  hasPermanentEmailBounce: boolean;
 }
 
 async function prepareCampaignJobSlot(
@@ -101,6 +103,7 @@ export async function reconcileStaleQueuedCampaignSends(): Promise<void> {
       clientName: clientsTable.name,
       clientEmail: clientsTable.email,
       tenantName: tenantsTable.name,
+      hasPermanentEmailBounce: campaignSendHasPermanentEmailBounceExpression(),
     })
     .from(campaignSendsTable)
     .innerJoin(
@@ -133,6 +136,19 @@ export async function reconcileStaleQueuedCampaignSends(): Promise<void> {
     // rows created by the crash window.
     const jobId = send.sendId;
     try {
+      if (send.hasPermanentEmailBounce) {
+        await db.update(campaignSendsTable)
+          .set({ status: "skipped", error: "permanent_email_bounce" })
+          .where(and(
+            eq(campaignSendsTable.id, send.sendId),
+            eq(campaignSendsTable.campaignId, send.campaignId),
+            eq(campaignSendsTable.clientId, send.clientId),
+            eq(campaignSendsTable.tenantId, send.tenantId),
+            eq(campaignSendsTable.status, "queued"),
+          ));
+        continue;
+      }
+
       const jobData: CampaignEmailJobData = {
         to: send.clientEmail,
         toName: send.clientName,
@@ -484,11 +500,51 @@ async function processTenantCampaignMultichannel(
 ) {
   let successCount = 0;
   let errorCount = 0;
+  const triggerConfig = (campaign.triggerConfig ?? {}) as Record<string, unknown>;
+  const channelConfig = (
+    triggerConfig["channels"] &&
+    typeof triggerConfig["channels"] === "object" &&
+    !Array.isArray(triggerConfig["channels"])
+  )
+    ? triggerConfig["channels"] as Record<string, unknown>
+    : {};
+  const emailConfig = (
+    channelConfig["email"] &&
+    typeof channelConfig["email"] === "object" &&
+    !Array.isArray(channelConfig["email"])
+  )
+    ? channelConfig["email"] as Record<string, unknown>
+    : {};
+  const whatsappConfig = (
+    channelConfig["whatsapp"] &&
+    typeof channelConfig["whatsapp"] === "object" &&
+    !Array.isArray(channelConfig["whatsapp"])
+  )
+    ? channelConfig["whatsapp"] as Record<string, unknown>
+    : {};
+  const selectedChannels = campaign.type === "unified"
+    ? ["email", "whatsapp"] as const
+    : campaign.type === "whatsapp"
+      ? ["whatsapp"] as const
+      : ["email"] as const;
+  const sendsEmail = campaign.type !== "whatsapp";
+  const sendsWhatsapp = campaign.type === "whatsapp" || campaign.type === "unified";
 
   for (const client of eligible) {
-    const personalised = campaign.content
+    const personalise = (content: string) => content
       .replace(/\{nome\}/gi, client.name)
       .replace(/\{name\}/gi, client.name);
+    // New campaigns keep channel-specific content in triggerConfig.channels.
+    // Older campaigns have only campaigns.content, so retain that as a fallback.
+    const emailHtml = personalise(
+      typeof emailConfig["html"] === "string" ? emailConfig["html"] : campaign.content,
+    );
+    const whatsappText = personalise(
+      typeof whatsappConfig["text"] === "string" ? whatsappConfig["text"] : campaign.content,
+    );
+    const emailSubject = typeof emailConfig["subject"] === "string"
+      ? emailConfig["subject"]
+      : campaign.subject;
     try {
       const [send] = await db
         .insert(campaignSendsTable)
@@ -510,28 +566,37 @@ async function processTenantCampaignMultichannel(
         eventType: "campaign_message",
         idempotencyKey: `campaign:${campaign.id}:${client.id}`,
         recipient: { type: "client", id: client.id },
-        email: campaign.subject
-          ? { subject: campaign.subject, html: personalised, senderName: tenantName }
-          : undefined,
-        whatsapp: { text: personalised },
+        channels: [...selectedChannels],
+        ...(sendsEmail && emailSubject
+          ? { email: { subject: emailSubject, html: emailHtml, senderName: tenantName } }
+          : {}),
+        ...(sendsWhatsapp
+          ? { whatsapp: { text: whatsappText } }
+          : {}),
         origin: "campaign",
-        originChannel: campaign.type === "whatsapp" ? "whatsapp" : "email",
+        originChannel: selectedChannels.length === 1 ? selectedChannels[0] : null,
         metadata: { campaignId: campaign.id, campaignSendId: send.id, clientId: client.id },
       });
       const hasPending = result.deliveries.some((delivery) => delivery.status === "pending");
       const hasAccepted = result.deliveries.some((delivery) => delivery.status === "accepted");
       const hasFailure = result.deliveries.some((delivery) => delivery.status === "failed");
+      const allSkipped = result.deliveries.length > 0
+        && result.deliveries.every((delivery) => delivery.status === "skipped");
       await db.update(campaignSendsTable)
         .set({
           // "sent" is the compatibility projection for a logical event that
           // has been handed to the multichannel ledger. The ledger, not the
           // legacy campaign queue reconciler, owns pending channel retries.
-          status: hasFailure && !hasPending && !hasAccepted ? "error" : "sent",
+          status: allSkipped
+            ? "skipped"
+            : hasFailure && !hasPending && !hasAccepted
+              ? "error"
+              : "sent",
           error: hasFailure ? result.deliveries.find((delivery) => delivery.status === "failed")?.lastError ?? null : null,
         })
         .where(and(eq(campaignSendsTable.id, send.id), eq(campaignSendsTable.tenantId, campaign.tenantId)));
       if (hasPending || hasAccepted) successCount++;
-      else errorCount++;
+      else if (!allSkipped) errorCount++;
     } catch (err) {
       errorCount++;
       logger.error({ err, campaignId: campaign.id, clientId: client.id }, "[campaign-automation] Multichannel dispatch failed");

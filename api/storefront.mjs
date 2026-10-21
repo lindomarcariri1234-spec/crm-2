@@ -5,6 +5,7 @@ const PUBLIC_API_ORIGIN =
   process.env["STOREFRONT_API_ORIGIN"]?.trim() ||
   "https://crm-2-lindomarcariri.replit.app";
 const PUBLIC_SITE_ORIGIN = "https://visitecrm.com";
+const FALLBACK_DESCRIPTION = "Conheça nossas viagens, pacotes e experiências.";
 
 function compactText(value, fallback, maxLength) {
   const text = typeof value === "string"
@@ -35,6 +36,19 @@ function absoluteAssetUrl(value) {
   }
 }
 
+function storefrontOrigin(store) {
+  const customDomain = typeof store.customDomain === "string"
+    ? store.customDomain.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "").toLowerCase()
+    : "";
+  const requestHost = typeof store.requestHost === "string"
+    ? store.requestHost.split(":")[0]?.toLowerCase()
+    : "";
+  if (store.domainVerified === true && customDomain && customDomain === requestHost) {
+    return `https://${customDomain}`;
+  }
+  return PUBLIC_SITE_ORIGIN;
+}
+
 async function readStorefrontIndex() {
   const candidates = [
     path.join(process.cwd(), "artifacts/visitecrm/dist/public/index.html"),
@@ -54,11 +68,11 @@ async function readStorefrontIndex() {
 }
 
 function renderMetadata(store, pathname) {
-  const title = compactText(store.metaTitle, store.name || "Agência de viagens", 200);
+  const title = compactText(store.metaTitle, store.name || "Agência de viagens", 120);
   const description = compactText(
     store.metaDescription,
-    store.tagline || store.description || "Conheça nossas viagens, pacotes e experiências.",
-    300,
+    store.tagline || store.description || FALLBACK_DESCRIPTION,
+    180,
   );
   const keywords = compactText(
     store.metaKeywords,
@@ -68,7 +82,8 @@ function renderMetadata(store, pathname) {
   const imageUrl = absoluteAssetUrl(
     store.bannerHome || store.bannerMobile || store.logo,
   );
-  const canonicalUrl = new URL(pathname, PUBLIC_SITE_ORIGIN).toString();
+  const faviconUrl = absoluteAssetUrl(store.favicon) || `${PUBLIC_SITE_ORIGIN}/favicon.svg`;
+  const canonicalUrl = new URL(pathname, storefrontOrigin(store)).toString();
   const tag = (attribute, key, content, id) =>
     `<meta id="${id}" ${attribute}="${key}" content="${escapeHtml(content)}" />`;
   const imageTags = imageUrl
@@ -78,12 +93,34 @@ function renderMetadata(store, pathname) {
         tag("name", "twitter:image", imageUrl, "page-twitter-image"),
       ].join("\n    ")
     : "";
+  const address = store.address || store.city || store.state
+    ? {
+        "@type": "PostalAddress",
+        ...(store.address ? { streetAddress: store.address } : {}),
+        ...(store.city ? { addressLocality: store.city } : {}),
+        ...(store.state ? { addressRegion: store.state } : {}),
+      }
+    : undefined;
+  const structuredData = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "TravelAgency",
+    name: store.name || title,
+    description,
+    url: canonicalUrl,
+    ...(imageUrl ? { image: imageUrl } : {}),
+    ...(absoluteAssetUrl(store.logo) ? { logo: absoluteAssetUrl(store.logo) } : {}),
+    ...(store.phone ? { telephone: store.phone } : {}),
+    ...(store.email ? { email: store.email } : {}),
+    ...(address ? { address } : {}),
+  }).replace(/</g, "\\u003c");
 
   return `<!-- VITRINE_METADATA_START -->
     <title id="page-title">${escapeHtml(title)}</title>
     ${tag("name", "description", description, "page-description")}
     ${tag("name", "keywords", keywords, "page-keywords")}
+    ${tag("name", "category", "Agência de viagens", "page-category")}
     <link id="page-canonical" rel="canonical" href="${escapeHtml(canonicalUrl)}" />
+    <link id="page-favicon" rel="icon" href="${escapeHtml(faviconUrl)}" />
     ${tag("property", "og:type", "website", "page-og-type")}
     ${tag("property", "og:site_name", store.name || title, "page-og-site-name")}
     ${tag("property", "og:title", title, "page-og-title")}
@@ -93,6 +130,7 @@ function renderMetadata(store, pathname) {
     ${tag("name", "twitter:card", imageUrl ? "summary_large_image" : "summary", "page-twitter-card")}
     ${tag("name", "twitter:title", title, "page-twitter-title")}
     ${tag("name", "twitter:description", description, "page-twitter-description")}
+    <script id="storefront-structured-data" type="application/ld+json">${structuredData}</script>
     <!-- VITRINE_METADATA_END -->`;
 }
 
@@ -131,6 +169,7 @@ export function createStorefrontHandler({
       }
 
       const store = await storeResponse.json();
+      store.requestHost = request.headers?.host ?? request.headers?.get?.("host") ?? "";
       const html = await readIndex();
       const rendered = html.replace(
         /<!-- VITRINE_METADATA_START -->[\s\S]*?<!-- VITRINE_METADATA_END -->/,

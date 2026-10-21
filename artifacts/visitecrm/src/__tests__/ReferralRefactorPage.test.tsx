@@ -138,15 +138,21 @@ vi.mock("@/components/referral-table-section", () => ({
   ]),
 }));
 vi.mock("@/components/referral-settings-dialog", () => ({
-  ReferralSettingsDialog: ({ open, onOpenChange, onSave, whatsappTestPhone, setWhatsappTestPhone, whatsappTestState, sendWhatsAppTest, testWhatsappTemplate }: any) => open
+  ReferralSettingsDialog: ({ open, onOpenChange, onSave, draft, setDraft, whatsappTestPhone, setWhatsappTestPhone, whatsappTestState, sendWhatsAppTest, testWhatsappTemplate }: any) => open
     ? createElement("div", { "data-testid": "settings-dialog" }, [
       createElement("button", { key: "close", onClick: () => onOpenChange(false) }, "Fechar configurações"),
       createElement("button", { key: "save", onClick: onSave }, "Salvar configurações"),
       createElement("input", {
         key: "phone",
-        "data-testid": "settings-whatsapp-phone",
+        "data-testid": "input-referral-whatsapp-test-destination",
         value: whatsappTestPhone,
         onChange: (event: any) => setWhatsappTestPhone(event.target.value),
+      }),
+      createElement("input", {
+        key: "share-message",
+        "data-testid": "settings-share-message",
+        value: draft?.shareMessage ?? "",
+        onChange: (event: any) => setDraft((current: any) => ({ ...current, shareMessage: event.target.value })),
       }),
       createElement("button", {
         key: "settings-whatsapp",
@@ -421,6 +427,10 @@ describe("orquestração da página de indicações", () => {
         .find((button) => button.textContent?.includes("Configurações"))
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
+    const phone = container.querySelector('[data-testid="input-referral-whatsapp-test-destination"]') as HTMLInputElement;
+    await flushAct(() => {
+      setInputValue(phone, "5511999999999");
+    });
     await flushAct(() => {
       container.querySelector('[data-testid="settings-whatsapp-test"]')
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -441,7 +451,7 @@ describe("orquestração da página de indicações", () => {
         .find((button) => button.textContent?.includes("Configurações"))
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    const phone = container.querySelector('[data-testid="settings-whatsapp-phone"]') as HTMLInputElement;
+    const phone = container.querySelector('[data-testid="input-referral-whatsapp-test-destination"]') as HTMLInputElement;
     await flushAct(() => {
       setInputValue(phone, "5511999999999");
     });
@@ -452,5 +462,50 @@ describe("orquestração da página de indicações", () => {
 
     expect(container.textContent).toContain("Não foi possível confirmar o envio. Tente novamente.");
     expect(container.textContent).not.toContain("provider timeout");
+  });
+
+  it("envia a mensagem de compartilhamento editada ao número de teste explícito", async () => {
+    const { container } = await renderComponent(createElement(Indicacoes));
+
+    await flushAct(() => {
+      Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent?.includes("Configurações"))
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const phone = container.querySelector('[data-testid="input-referral-whatsapp-test-destination"]') as HTMLInputElement;
+    const message = container.querySelector('[data-testid="settings-share-message"]') as HTMLInputElement;
+    await flushAct(() => {
+      setInputValue(phone, " 5511999999999 ");
+      setInputValue(message, "Olá {nome}, use {link}.");
+    });
+    await flushAct(() => {
+      container.querySelector('[data-testid="settings-whatsapp-test"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(mocks.testWhatsAppMessage).toHaveBeenCalledWith(
+      { type: "share", message: "Olá {nome}, use {link}.", phone: "5511999999999" },
+      { headers: { "Idempotency-Key": expect.any(String) } },
+    );
+  });
+
+  it("não envia o teste de compartilhamento sem número de destino", async () => {
+    const { container } = await renderComponent(createElement(Indicacoes));
+
+    await flushAct(() => {
+      Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent?.includes("Configurações"))
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushAct(() => {
+      container.querySelector('[data-testid="settings-whatsapp-test"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(mocks.testWhatsAppMessage).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith({
+      title: "Informe um número de WhatsApp para teste",
+      variant: "destructive",
+    });
   });
 });

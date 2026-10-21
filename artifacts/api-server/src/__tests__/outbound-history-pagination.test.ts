@@ -53,7 +53,8 @@ vi.mock("@workspace/db", () => ({
 
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: mockRequireAuth,
-  ADMIN_ROLES: ["agencia", "gerente"],
+  ADMIN_ROLES: ["superadmin", "agencia"],
+  ALL_STAFF_ROLES: ["superadmin", "agencia", "gerente", "vendedor", "suporte"],
 }));
 
 vi.mock("../services/outbound-delivery.js", () => ({
@@ -82,6 +83,32 @@ function makeApp() {
 }
 
 const createdAt = new Date("2026-09-01T12:00:00.000Z");
+
+describe("outbound messaging is staff-only", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRequireAuth.mockResolvedValue({
+      id: "client-user",
+      tenantId: "tenant-a",
+      role: "cliente",
+    });
+  });
+
+  it("does not expose the agency-wide delivery history to a client account", async () => {
+    const res = await request(makeApp()).get("/outbound-messages");
+
+    expect(res.status).toBe(403);
+    expect(mockListOutboundMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not let a client use the agency's outbound channels", async () => {
+    const res = await request(makeApp())
+      .post("/outbound-messages")
+      .send({ recipient: { type: "direct", email: "outside@example.com" } });
+
+    expect(res.status).toBe(403);
+  });
+});
 
 function historyRow(id: string, tenantId: string, status: "partial" | "failed", deliveryStatus: "failed" | "accepted") {
   return {

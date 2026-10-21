@@ -117,6 +117,7 @@ vi.mock("wouter", () => ({
 }));
 vi.mock("lucide-react", async (importOriginal) => importOriginal());
 vi.mock("@/lib/utils", () => ({
+  cn: (...values: Array<string | undefined | null | false>) => values.filter(Boolean).join(" "),
   formatCurrencyBRL: (value: unknown) => `R$ ${String(value)}`,
   formatDate: (value: unknown) => String(value),
   formatDateTime: (value: unknown) => String(value),
@@ -277,6 +278,7 @@ describe("indicações após a refatoração", () => {
     }));
 
     expect(container.textContent).toContain("Configurações do Programa de Indicações");
+    expect(container.querySelector('[data-testid="input-referral-whatsapp-test-destination"]')).not.toBeNull();
     const valueInput = Array.from(container.querySelectorAll("input")).find(
       (input) => input.value === "5.00",
     ) as HTMLInputElement;
@@ -315,10 +317,10 @@ describe("indicações após a refatoração", () => {
       const [showForm, setShowForm] = useState(false);
       const [draft, setDraft] = useState<CampaignDraft>({
         name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2",
-        bannerText: "", eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "",
-        budgetAmount: "", shareMessage: "", materialUrl: "", publicRanking: true,
+        bannerText: "", eligibleStoreProductIds: [], eligibleTierLevels: [], conversionCap: "",
+        budgetAmount: "", shareMessage: "", materialUrl: "",
         eligibleActivitySegments: [], eligibleChannels: "", commissionType: "none",
-        commissionValue: "0", commissionRecipientType: "ambassador", eligiblePartnerIds: "",
+        commissionValue: "0", commissionRecipientType: "ambassador", eligiblePartnerIds: [],
       });
       return createElement(ReferralCampaignsDialog, {
         open: true,
@@ -349,7 +351,7 @@ describe("indicações após a refatoração", () => {
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(container.textContent).toContain("Nova campanha");
-    expect(container.querySelector('input[placeholder*="Bônus Duplo"]')).not.toBeNull();
+    expect(container.querySelector('input[placeholder*="Bônus em dobro"]')).not.toBeNull();
 
     await flushAct(() => {
       Array.from(container.querySelectorAll("button"))

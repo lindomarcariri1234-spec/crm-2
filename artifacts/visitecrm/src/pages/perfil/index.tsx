@@ -6,8 +6,10 @@ import QRCode from "qrcode";
 import { useGetMe } from "@workspace/api-client-react";
 import { AsyncEmpty, AsyncError, useAsyncResource } from "./async-state";
 import { profileQuery } from "./profile-query";
+import { isNpsReservationStatusEligible } from "./nps-eligibility";
 import { RESERVATION_STATUS, REFERRAL_STATUS, INVOICE_STATUS } from "@workspace/permissions";
 import { useSignIn, useClerk } from "@clerk/react";
+import { buildReferralShareText, hasReferralShareVariable } from "@/lib/referral-message";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -772,8 +774,12 @@ function NpsCard({
         comment: comment || null,
       });
       setSubmitted(true);
-    } catch {
-      toast({ title: "Erro ao enviar avaliação", description: "Tente novamente mais tarde.", variant: "destructive" });
+    } catch (error) {
+      toast({
+        title: "Erro ao enviar avaliação",
+        description: error instanceof Error ? error.message : "Tente novamente mais tarde.",
+        variant: "destructive",
+      });
     } finally {
       setSubmitting(false);
     }
@@ -788,6 +794,25 @@ function NpsCard({
             <p className="text-sm font-semibold text-green-800">Obrigado pela avaliação!</p>
             <p className="text-xs text-green-600">Seu feedback é muito importante para nós.</p>
           </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!isNpsReservationStatusEligible(reservation.status)) {
+    return (
+      <Card>
+        <CardContent className="p-4 space-y-2">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold">Avaliação indisponível</p>
+              <p className="text-xs text-muted-foreground">{reservation.tripName}</p>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Esta reserva ainda não está elegível para avaliação. O envio é liberado apenas para reservas confirmadas ou concluídas.
+          </p>
         </CardContent>
       </Card>
     );
@@ -2259,9 +2284,20 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
   const primaryForeground = readablePortalText(primaryColor);
   const tenantLogoUrl = tenant?.logoUrl ?? null;
 
-  const shareMessage = referral.shareMessage ?? "Use meu código e ganhe desconto na sua viagem!";
+  const shareMessage = activeCampaign?.shareMessage?.trim() || referral.shareMessage || "Use meu código e ganhe desconto na sua viagem!";
+  const portalShareTemplate = hasReferralShareVariable(shareMessage, "codigo")
+    ? shareMessage
+    : `${shareMessage}\n\nMeu código: ${code}`;
+  const campaignMaterialHref = activeCampaign?.materialUrl && /^https?:\/\//i.test(activeCampaign.materialUrl)
+    ? activeCampaign.materialUrl
+    : null;
   const whatsappUrl = shareLink
-    ? `https://wa.me/?text=${encodeURIComponent(`${shareMessage}\n\nMeu código: ${code}\n\n${shareLink}`)}`
+    ? `https://wa.me/?text=${encodeURIComponent(buildReferralShareText(portalShareTemplate, {
+      name: profile.client?.name ?? profile.user?.name,
+      code,
+      link: shareLink,
+      bonus: profile.referral.bonusValue,
+    }))}`
     : null;
 
   // Campaign countdown
@@ -2472,7 +2508,15 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
                 ? activeCampaign.bannerText
                 : activeCampaign.bonusType === "multiplier"
                   ? `Bônus ${activeCampaign.bonusValue}× por tempo limitado!`
-                  : `Bônus extra de R$ ${Number(activeCampaign.bonusValue).toFixed(2).replace(".", ",")} nesta campanha!`}
+                  : activeCampaign.bonusType === "fixed_extra"
+                    ? `Bônus extra de R$ ${Number(activeCampaign.bonusValue).toFixed(2).replace(".", ",")}`
+                    : activeCampaign.bonusType === "fixed_bonus"
+                      ? `Bônus fixo de R$ ${Number(activeCampaign.bonusValue).toFixed(2).replace(".", ",")}`
+                      : activeCampaign.bonusType === "percentage_bonus"
+                        ? `Bônus de ${activeCampaign.bonusValue}% do valor-base`
+                        : activeCampaign.bonusType === "reduced_bonus"
+                          ? "Recompensa especial de indicação"
+                          : "Campanha de indicação ativa"}
             </span>
           </div>
           <p className="text-xs opacity-80">
@@ -2481,6 +2525,14 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
               {countdown}
             </span>
           </p>
+          {campaignMaterialHref && <a
+            href={campaignMaterialHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex items-center gap-1 text-xs font-semibold underline underline-offset-2"
+          >
+            Abrir material da campanha <ExternalLink className="h-3.5 w-3.5" />
+          </a>}
         </div>
       ) : <p className="text-xs text-muted-foreground">Nenhuma campanha ativa no momento.</p>}
 

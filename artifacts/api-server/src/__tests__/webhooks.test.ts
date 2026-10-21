@@ -7,10 +7,12 @@ const {
   mockUpdateOutboundDeliveryFromWebhook,
   mockProcessEvolutionInbound,
   mockProcessEvolutionDeliveryStatus,
+  mockProcessEvolutionConnectionUpdate,
 } = vi.hoisted(() => ({
   mockUpdateOutboundDeliveryFromWebhook: vi.fn(),
   mockProcessEvolutionInbound: vi.fn(),
   mockProcessEvolutionDeliveryStatus: vi.fn(),
+  mockProcessEvolutionConnectionUpdate: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -64,6 +66,7 @@ vi.mock("../lib/reservation-payments.js", () => ({
 vi.mock("../services/whatsapp-attendance.js", () => ({
   processEvolutionInbound: mockProcessEvolutionInbound,
   processEvolutionDeliveryStatus: mockProcessEvolutionDeliveryStatus,
+  processEvolutionConnectionUpdate: mockProcessEvolutionConnectionUpdate,
 }));
 vi.mock("../services/pipeline-automation.js", () => ({
   moveDealToStage: vi.fn(),
@@ -125,10 +128,13 @@ function makeEvent(type = "email.delivered", emailId = "resend-message-1", bounc
 
 describe("Resend webhook route", () => {
   let savedWebhookSecret: string | undefined;
+  let savedWebhookSecretsJson: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     savedWebhookSecret = process.env["RESEND_WEBHOOK_SECRET"];
+    savedWebhookSecretsJson = process.env["RESEND_WEBHOOK_SECRETS_JSON"];
+    delete process.env["RESEND_WEBHOOK_SECRETS_JSON"];
     process.env["RESEND_WEBHOOK_SECRET"] = WEBHOOK_SECRET;
   });
 
@@ -137,6 +143,11 @@ describe("Resend webhook route", () => {
       delete process.env["RESEND_WEBHOOK_SECRET"];
     } else {
       process.env["RESEND_WEBHOOK_SECRET"] = savedWebhookSecret;
+    }
+    if (savedWebhookSecretsJson === undefined) {
+      delete process.env["RESEND_WEBHOOK_SECRETS_JSON"];
+    } else {
+      process.env["RESEND_WEBHOOK_SECRETS_JSON"] = savedWebhookSecretsJson;
     }
   });
 
@@ -166,7 +177,35 @@ describe("Resend webhook route", () => {
     });
   });
 
-  it.each(["email.bounced", "email.failed", "email.complained"] as const)(
+  it.each(["email.opened", "email.clicked", "email.complained"] as const)(
+    "forwards a signed %s event to the campaign delivery ledger",
+    async (eventType) => {
+      mockUpdateOutboundDeliveryFromWebhook.mockResolvedValue({
+        updated: true,
+        deliveryId: "delivery-1",
+        messageId: "message-1",
+      });
+      const rawBody = JSON.stringify(makeEvent(eventType));
+
+      const response = await request(buildApp())
+        .post(`/api/webhooks/resend/${TENANT_A}`)
+        .set(makeSvixHeaders(rawBody))
+        .set("content-type", "application/json")
+        .send(rawBody);
+
+      expect(response.status).toBe(200);
+      expect(mockUpdateOutboundDeliveryFromWebhook).toHaveBeenCalledWith({
+        tenantId: TENANT_A,
+        provider: "resend",
+        externalId: "resend-message-1",
+        status: "accepted",
+        providerStatus: eventType,
+        error: null,
+      });
+    },
+  );
+
+  it.each(["email.bounced", "email.failed"] as const)(
     "forwards a valid Svix %s callback as a failed delivery",
     async (eventType) => {
       mockUpdateOutboundDeliveryFromWebhook.mockResolvedValue({
@@ -351,6 +390,57 @@ describe("Resend webhook route", () => {
     );
   });
 
+  it("validates each tenant with its own Resend webhook secret", async () => {
+    const secretA = "whsec_dGVuYW50LWEtd2ViaG9vay1zZWNyZXQ=";
+    const secretB = "whsec_dGVuYW50LWJ3ZWJob29rLXNlY3JldA==";
+    process.env["RESEND_WEBHOOK_SECRETS_JSON"] = JSON.stringify({
+      [TENANT_A]: secretA,
+      [TENANT_B]: secretB,
+    });
+    delete process.env["RESEND_WEBHOOK_SECRET"];
+    mockUpdateOutboundDeliveryFromWebhook.mockResolvedValue({ updated: true });
+
+    const rawBody = JSON.stringify(makeEvent());
+    const tenantAResponse = await request(buildApp())
+      .post(`/api/webhooks/resend/${TENANT_A}`)
+      .set(makeSvixHeaders(rawBody, secretA))
+      .set("content-type", "application/json")
+      .send(rawBody);
+    const wrongTenantResponse = await request(buildApp())
+      .post(`/api/webhooks/resend/${TENANT_B}`)
+      .set(makeSvixHeaders(rawBody, secretA))
+      .set("content-type", "application/json")
+      .send(rawBody);
+    const tenantBResponse = await request(buildApp())
+      .post(`/api/webhooks/resend/${TENANT_B}`)
+      .set(makeSvixHeaders(rawBody, secretB))
+      .set("content-type", "application/json")
+      .send(rawBody);
+
+    expect(tenantAResponse.status).toBe(200);
+    expect(wrongTenantResponse.status).toBe(400);
+    expect(tenantBResponse.status).toBe(200);
+    expect(mockUpdateOutboundDeliveryFromWebhook).toHaveBeenCalledTimes(2);
+    expect(mockUpdateOutboundDeliveryFromWebhook.mock.calls.map(([update]) =>
+      (update as { tenantId: string }).tenantId,
+    )).toEqual([TENANT_A, TENANT_B]);
+  });
+
+  it("does not fall back to the legacy global secret when a tenant map is configured", async () => {
+    process.env["RESEND_WEBHOOK_SECRETS_JSON"] = JSON.stringify({ [TENANT_A]: WEBHOOK_SECRET });
+    process.env["RESEND_WEBHOOK_SECRET"] = WEBHOOK_SECRET;
+    const rawBody = JSON.stringify(makeEvent());
+
+    const response = await request(buildApp())
+      .post(`/api/webhooks/resend/${TENANT_B}`)
+      .set(makeSvixHeaders(rawBody, WEBHOOK_SECRET))
+      .set("content-type", "application/json")
+      .send(rawBody);
+
+    expect(response.status).toBe(400);
+    expect(mockUpdateOutboundDeliveryFromWebhook).not.toHaveBeenCalled();
+  });
+
   it("acknowledges unknown events without changing delivery history", async () => {
     const rawBody = JSON.stringify(makeEvent("email.received"));
 
@@ -369,6 +459,7 @@ describe("Resend webhook route", () => {
 describe("Evolution WhatsApp webhook route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProcessEvolutionConnectionUpdate.mockResolvedValue("not_connection");
   });
 
   it("accepts the API key Evolution includes in the webhook body when no auth header is set", async () => {

@@ -305,6 +305,34 @@ describe("Financial page PMS payment adjustments", () => {
     expect(handle.container.textContent).toContain("Página 1 de 3");
   });
 
+  it("links linked payables to their exact source and labels unlinked payables", async () => {
+    mocks.search = "?tab=payable";
+    mocks.useListPayments.mockReturnValue({
+      data: {
+        data: [
+          { id: "payable-agency", description: "Internet", sourceExpenseId: "expense-123", sourceTripCostId: null, dueDate: "2026-09-30", amount: 120, status: "pending", category: "administrative" },
+          { id: "payable-trip", description: "Ônibus", sourceExpenseId: null, sourceTripCostId: "trip-cost-456", dueDate: "2026-09-30", amount: 800, status: "pending", category: "transport" },
+          { id: "payable-unlinked", description: "Outro", sourceExpenseId: null, sourceTripCostId: null, dueDate: "2026-09-30", amount: 40, status: "pending", category: "other" },
+        ],
+        total: 3,
+        page: 1,
+        limit: 50,
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(handle.container.querySelector('[data-testid="link-payment-source-payable-agency"]')?.getAttribute("href"))
+      .toBe("/financeiro/expenses?sourceType=agency&sourceId=expense-123");
+    expect(handle.container.querySelector('[data-testid="link-payment-source-payable-trip"]')?.getAttribute("href"))
+      .toBe("/financeiro/expenses?sourceType=trip&sourceId=trip-cost-456");
+    expect(handle.container.querySelector('[data-testid="text-payment-source-payable-unlinked"]')?.textContent)
+      .toContain("Sem custo associado");
+  });
+
   it("loads only the active tab's list data", async () => {
     mocks.search = "?tab=expenses";
 

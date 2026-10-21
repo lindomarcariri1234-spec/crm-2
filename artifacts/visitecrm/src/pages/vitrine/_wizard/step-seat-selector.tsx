@@ -16,6 +16,8 @@ export function StepSeatSelector({ state, store }: { state: WizardState; store: 
     toggleSeat,
     occupiedSeats,
     unitPrice,
+    childUnitPrice,
+    seatedChildCount,
     effectiveSeats,
   } = state;
 
@@ -56,6 +58,10 @@ export function StepSeatSelector({ state, store }: { state: WizardState; store: 
               onToggle={toggleLayoutSeat}
               accentColor={store?.accentColor || store?.primaryColor}
               pricePerPerson={unitPrice}
+              seatPrices={[
+                unitPrice,
+                ...Array.from({ length: seatedChildCount }, () => childUnitPrice),
+              ]}
               numberingType={liveLayoutSeatMap.numberingType}
             />
           ) : (

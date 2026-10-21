@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useLocation, useSearch } from "wouter";
 import { localToday } from "@workspace/shared";
 import {
   getListTripCostsQueryKey,
@@ -45,6 +46,15 @@ type TripPlanningRecord = {
 };
 
 export default function Expenses() {
+  const search = useSearch();
+  const [, setLocation] = useLocation();
+  const focusParams = useMemo(() => new URLSearchParams(search), [search]);
+  const sourceId = focusParams.get("sourceId")?.trim() ?? "";
+  const requestedSourceType = focusParams.get("sourceType");
+  const sourceType: "agency" | "trip" | undefined =
+    sourceId && (requestedSourceType === "agency" || requestedSourceType === "trip")
+      ? requestedSourceType
+      : undefined;
   const { can } = usePermissions();
   const canCreateExpense = can(RESOURCES.FINANCIAL, ACTIONS.CREATE);
   const canEditExpense = can(RESOURCES.FINANCIAL, ACTIONS.EDIT);
@@ -75,6 +85,8 @@ export default function Expenses() {
     tripId: tripFilter || undefined,
     category: categoryFilter || undefined,
     supplierId: supplierFilter || undefined,
+    sourceId: sourceType ? sourceId : undefined,
+    sourceType,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
     page,
@@ -297,6 +309,27 @@ export default function Expenses() {
           </Button>
         )}
       </div>
+
+      {sourceType && (
+        <Card className="border-primary/30 bg-primary/5" data-testid="card-expense-source-focus">
+          <CardContent className="flex flex-wrap items-center justify-between gap-2 p-3">
+            <div className="text-sm">
+              <span className="font-medium">Origem vinculada:</span>{" "}
+              {sourceType === "agency" ? "Despesa da agência" : "Custo da viagem"}
+              <span className="ml-2 font-mono text-xs text-muted-foreground">{sourceId}</span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setLocation("/financeiro/expenses")}
+              data-testid="button-clear-expense-source-focus"
+            >
+              Ver todas as despesas
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">Resumo financeiro das despesas</p>

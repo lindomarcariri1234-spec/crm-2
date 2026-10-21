@@ -41,6 +41,7 @@
     { "path": "/api/cron/client-scores", "schedule": "0 6 * * *" },
     { "path": "/api/cron/seat-reconciliation", "schedule": "0 7 * * *" },
     { "path": "/api/cron/abandoned-referrals", "schedule": "0 8 * * *" },
+    { "path": "/api/cron/deferred-order-accounting-recovery", "schedule": "*/15 * * * *" },
     { "path": "/api/cron/gemeo-alerts", "schedule": "0 9 * * *" },
     { "path": "/api/cron/gemeo-opportunities", "schedule": "0 10 * * 1" },
     { "path": "/api/cron/stripe-health", "schedule": "0 11 * * *" },

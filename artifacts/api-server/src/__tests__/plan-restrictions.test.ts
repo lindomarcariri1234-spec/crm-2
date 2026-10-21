@@ -185,6 +185,20 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("Starter plan — plan-restricted features are blocked", () => {
+  it("prevents client accounts from reading the full tenant settings record", async () => {
+    mockRequireAuth.mockResolvedValue({
+      id: "client-001",
+      tenantId: TENANT_ID,
+      role: "cliente",
+    });
+
+    const res = await request(buildApp()).get(`/api/tenants/${TENANT_ID}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN_ROLE");
+    expect(mockSelect).not.toHaveBeenCalled();
+  });
+
   it("PATCH /tenants/:id with referralsEnabled=true returns 403 for a Starter-plan tenant", async () => {
     asAgencyAdmin();
 

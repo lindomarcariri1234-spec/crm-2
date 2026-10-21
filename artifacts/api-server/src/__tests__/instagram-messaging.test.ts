@@ -27,6 +27,8 @@ import {
   getInstagramMetaConfig,
   isInstagramReplyWindowOpen,
   parseInstagramWebhook,
+  parseInstagramWebhookDeliveryStatuses,
+  resolveUniqueInstagramAccountIntegration,
   sendInstagramText,
   verifyInstagramSignedRequest,
   verifyInstagramWebhookSignature,
@@ -63,6 +65,15 @@ afterEach(() => {
 });
 
 describe("Instagram Direct integration", () => {
+  it("accepts only a unique connected integration for an Instagram account", () => {
+    const integrationA = { id: "integration-a" };
+    const integrationB = { id: "integration-b" };
+
+    expect(resolveUniqueInstagramAccountIntegration([])).toBeNull();
+    expect(resolveUniqueInstagramAccountIntegration([integrationA])).toBe(integrationA);
+    expect(resolveUniqueInstagramAccountIntegration([integrationA, integrationB])).toBeNull();
+  });
+
   it("builds the Instagram Business Login URL with the current message permissions", () => {
     const authorizationUrl = createInstagramAuthorizationUrl(config, "state-value");
     expect(authorizationUrl).not.toBeNull();
@@ -265,6 +276,41 @@ describe("Instagram Direct integration", () => {
       messageId: "message-2",
       content: "Mídia recebida pelo Instagram",
     });
+    expect(instagramMessagingService.metaInstagramInboundAdapter.normalize({
+      object: "instagram",
+      entry: [{
+        id: "agency-instagram-id",
+        messaging: [{
+          sender: { id: "customer-1" },
+          timestamp: 1_730_000_000_000,
+          message: { mid: "message-1", text: "Olá, gostaria de viajar." },
+        }],
+      }],
+    })[0]).toMatchObject({
+      provider: "meta",
+      channel: "instagram",
+      accountId: "agency-instagram-id",
+      conversationId: "customer-1",
+      senderId: "customer-1",
+      externalId: "message-1",
+      content: "Olá, gostaria de viajar.",
+    });
+  });
+
+  it("normalizes Meta delivered and read callbacks to provider message IDs", () => {
+    expect(parseInstagramWebhookDeliveryStatuses({
+      object: "instagram",
+      entry: [{
+        id: "agency-instagram-id",
+        messaging: [
+          { delivery: { mids: ["meta-message-1", "meta-message-2"] } },
+          { read: { mid: "meta-message-2" } },
+        ],
+      }],
+    })).toEqual([
+      { instagramUserId: "agency-instagram-id", externalId: "meta-message-1", status: "delivered" },
+      { instagramUserId: "agency-instagram-id", externalId: "meta-message-2", status: "read" },
+    ]);
   });
 
   it("enforces the 24-hour reply window and rejects provider timestamp skew", () => {
@@ -285,6 +331,15 @@ describe("Instagram Direct integration", () => {
       sendInstagramText(config, "access-token", "agency-id", "recipient-id", "á".repeat(501)),
     ).rejects.toMatchObject({ name: "InstagramProviderError", kind: "rejected", httpStatus: 413 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns Meta's provider message ID so the ledger can reconcile delivery callbacks", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message_id: "meta-message-123" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      sendInstagramText(config, "access-token", "agency-id", "recipient-id", "Olá!"),
+    ).resolves.toBe("meta-message-123");
   });
 
   it("unwraps Meta's data-array token and profile responses before exchanging the code", async () => {

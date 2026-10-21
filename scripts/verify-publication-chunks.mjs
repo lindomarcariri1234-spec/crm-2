@@ -1064,11 +1064,11 @@ async function runBrowserSmoke({
     assetsByRoute.set(route, assets);
     failures.push(...validateObservedAsset({ route, asset, expectedOrigin }));
   });
-  client.on("Network.loadingFailed", ({ requestId, errorText }) => {
+  client.on("Network.loadingFailed", ({ requestId }) => {
     const requestInfo = requests.get(requestId);
     if (!requestInfo?.route) return;
     failures.push(
-      `${requestInfo.route}: JavaScript asset ${requestInfo.url} request failed: ${errorText}`,
+      `${requestInfo.route}: JavaScript asset ${requestInfo.url} request failed.`,
     );
   });
   client.on("Runtime.executionContextCreated", ({ context }) => {

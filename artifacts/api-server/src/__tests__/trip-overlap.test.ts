@@ -3,13 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
 
-const { mockSelect, mockSelectDistinct, mockNotInArray, mockInnerJoin, selectQueue, selectDistinctQueue } = vi.hoisted(() => ({
+const { mockSelect, mockSelectDistinct, mockNotInArray, mockInArray, mockInnerJoin, mockEq, mockAnd, selectQueue, selectDistinctQueue, whereCalls } = vi.hoisted(() => ({
   mockSelect: vi.fn(),
   mockSelectDistinct: vi.fn(),
   mockNotInArray: vi.fn((column: unknown, values: unknown[]) => ({ column, values })),
+  mockInArray: vi.fn((column: unknown, values: unknown[]) => ({ kind: "inArray", column, values })),
   mockInnerJoin: vi.fn(),
+  mockEq: vi.fn((column: unknown, value: unknown) => ({ kind: "eq", column, value })),
+  mockAnd: vi.fn((...conditions: unknown[]) => ({ kind: "and", conditions })),
   selectQueue: [] as unknown[][],
   selectDistinctQueue: [] as unknown[][],
+  whereCalls: [] as unknown[],
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -21,7 +25,7 @@ vi.mock("@workspace/db", () => ({
     delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
     transaction: vi.fn(),
   },
-  reservationsTable: {},
+  reservationsTable: { id: "reservations.id", tenantId: "reservations.tenantId" },
   passengersTable: {},
   tripsTable: {},
   clientsTable: {},
@@ -49,7 +53,7 @@ vi.mock("@workspace/db", () => ({
 
 vi.mock("drizzle-orm", async () => {
   const { makeDrizzleOrmMock } = await import("./helpers/drizzle-mock.js");
-  return { ...makeDrizzleOrmMock(), notInArray: mockNotInArray };
+  return { ...makeDrizzleOrmMock(), eq: mockEq, and: mockAnd, inArray: mockInArray, notInArray: mockNotInArray };
 });
 
 vi.mock("@clerk/express", () => ({
@@ -173,7 +177,10 @@ function makeChain(data: unknown[]): QueryChain {
     mockInnerJoin(...args);
     return chain;
   };
-  chain.where = () => chain;
+  chain.where = (...args) => {
+    whereCalls.push(args[0]);
+    return chain;
+  };
   chain.limit = () => chain;
   chain.offset = () => chain;
   chain.orderBy = () => chain;
@@ -352,6 +359,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   selectQueue.length = 0;
   selectDistinctQueue.length = 0;
+  whereCalls.length = 0;
   mockSelect.mockImplementation(() => makeChain(selectQueue.shift() ?? []));
   mockSelectDistinct.mockImplementation(() => makeChain(selectDistinctQueue.shift() ?? []));
   vi.mocked(requireAuth).mockResolvedValue(USER as never);
@@ -439,6 +447,54 @@ describe("GET /api/reservations/trip-overlap", () => {
   );
 });
 
+describe("GET /api/reservations/stats — client scope", () => {
+  it("limits client-visible statistics to the caller's own reservations", async () => {
+    const clientUserId = "client-user-001";
+    vi.mocked(requireAuth).mockResolvedValue({
+      ...USER,
+      id: clientUserId,
+      role: ROLES.CLIENT,
+    } as never);
+    selectQueue.push(
+      [{ id: CLIENT_ID }],
+      [{ total: 1, confirmed: 1, pending: 0, cancelled: 0, totalOutstanding: 250 }],
+    );
+
+    const response = await request(buildApp()).get("/api/reservations/stats");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      total: 1,
+      confirmed: 1,
+      pending: 0,
+      cancelled: 0,
+      totalOutstanding: 250,
+    });
+    expect(mockEq.mock.calls.some(([, value]) => value === clientUserId)).toBe(true);
+    expect(whereCalls.some((condition) => JSON.stringify(condition).includes(CLIENT_ID))).toBe(true);
+  });
+
+  it("returns zero statistics when the client account is not linked to a client record", async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      ...USER,
+      id: "unlinked-client-user",
+      role: ROLES.CLIENT,
+    } as never);
+    selectQueue.push([]);
+
+    const response = await request(buildApp()).get("/api/reservations/stats");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      total: 0,
+      confirmed: 0,
+      pending: 0,
+      cancelled: 0,
+      totalOutstanding: 0,
+    });
+  });
+});
+
 describe("GET /api/reservations departure date filters", () => {
   it("joins trips for both the result page and total when filtering by departure date", async () => {
     const trip = makeBatchTrip("trip-target", "2026-08-15");
@@ -462,6 +518,30 @@ describe("GET /api/reservations departure date filters", () => {
     // The page and count queries must join trips; batch formatting may add
     // an additional joined query to check conflicting reservations.
     expect(mockInnerJoin.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("GET /api/reservations bulk ID filters", () => {
+  it("returns only requested IDs while retaining tenant scope", async () => {
+    selectQueue.push([], [{ count: 0 }]);
+
+    const response = await request(buildApp())
+      .get("/api/reservations?reservationIds=reservation-old");
+
+    expect(response.status).toBe(200);
+    expect(mockInArray).toHaveBeenCalledWith("reservations.id", ["reservation-old"]);
+    expect(whereCalls.some(condition => JSON.stringify(condition).includes(USER.tenantId))).toBe(true);
+  });
+
+  it("rejects more than 100 reservation IDs before querying", async () => {
+    const reservationIds = Array.from({ length: 101 }, (_, index) => `reservation-${index}`).join(",");
+
+    const response = await request(buildApp())
+      .get(`/api/reservations?reservationIds=${reservationIds}`);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(mockSelect).not.toHaveBeenCalled();
   });
 });
 

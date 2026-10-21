@@ -292,6 +292,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PmsReservationDetail"
+  /integrations/whatsapp_evolution/connections/{id}/qr:
+    post:
+      operationId: generateEvolutionConnectionQr
+      summary: Generate a WhatsApp connection QR code
+      tags: [messages]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Temporary QR code for pairing the WhatsApp device
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [qrCodeDataUrl]
+                properties:
+                  qrCodeDataUrl:
+                    type: string
+        "400":
+          description: Integration is disabled or missing required configuration
+        "403":
+          description: Administrator access required
+        "404":
+          description: Integration not found
+        "502":
+          description: Evolution API could not provide a valid QR code
+
   /health:
     get:
       operationId: healthCheck
@@ -1466,10 +1497,22 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: location
+          in: query
+          description: Case-insensitive match across trip origin and destination city/state (maximum 100 characters).
+          schema:
+            type: string
+            maxLength: 100
         - name: status
           in: query
           schema:
             type: ["string", "null"]
+        - name: storePublication
+          in: query
+          description: Filter trips by whether their linked store product is active in the public storefront.
+          schema:
+            type: string
+            enum: [published, unpublished]
         - name: type
           in: query
           schema:
@@ -1829,6 +1872,11 @@ paths:
       tags: [reservations]
       summary: List reservations
       parameters:
+        - name: reservationIds
+          in: query
+          description: Comma-separated reservation IDs to retrieve (maximum 100 IDs).
+          schema:
+            type: ["string", "null"]
         - name: search
           in: query
           schema:
@@ -2217,8 +2265,18 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: reservationIds
+          in: query
+          description: Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).
+          schema:
+            type: ["string", "null"]
         - name: clientId
           in: query
+          schema:
+            type: ["string", "null"]
+        - name: clientIds
+          in: query
+          description: Comma-separated client IDs to retrieve payments for (maximum 100 IDs).
           schema:
             type: ["string", "null"]
         - name: status
@@ -2245,6 +2303,16 @@ paths:
         - name: dueDateTo
           in: query
           description: Inclusive end of the due-date range in America/Sao_Paulo.
+          schema:
+            type: ["string", "null"]
+        - name: updatedAtFrom
+          in: query
+          description: Inclusive start of the updated-at range in America/Sao_Paulo.
+          schema:
+            type: ["string", "null"]
+        - name: updatedAtTo
+          in: query
+          description: Inclusive end of the updated-at range in America/Sao_Paulo.
           schema:
             type: ["string", "null"]
         - name: unlinkedOnly
@@ -2401,6 +2469,31 @@ paths:
                 required:
                   - success
 
+  /payments/{id}/partial-refunds:
+    post:
+      operationId: createPartialManualRefund
+      tags: [payments]
+      summary: Record a partial manual refund for a reservation payment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePartialManualRefundBody"
+      responses:
+        "201":
+          description: Created manual refund adjustment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+
   /payments/summary:
     get:
       operationId: getPaymentsSummary
@@ -2437,6 +2530,17 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: sourceId
+          in: query
+          description: Exact source record ID for opening one operational cost from its linked payable.
+          schema:
+            type: ["string", "null"]
+        - name: sourceType
+          in: query
+          description: Source record type; required together with sourceId.
+          schema:
+            type: string
+            enum: [agency, trip]
         - name: dateFrom
           in: query
           schema:
@@ -2868,7 +2972,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [email, whatsapp]
+            enum: [email, whatsapp, instagram]
         - name: deliveryStatus
           in: query
           description: Filter messages that have a delivery with this status
@@ -2964,7 +3068,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [email, whatsapp]
+            enum: [email, whatsapp, instagram]
         - name: deliveryStatus
           in: query
           description: Keep only messages that have a delivery with this status
@@ -3031,7 +3135,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [email, whatsapp]
+            enum: [email, whatsapp, instagram]
         - name: deliveryStatus
           in: query
           description: Filter exported rows by delivery status
@@ -3920,6 +4024,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Campaign"
+
+  /campaigns/{id}/permanent-bounces:
+    get:
+      operationId: listCampaignPermanentBounceRecipients
+      tags: [campaigns]
+       summary: List permanent campaign bounces and bounce-prevented email sends
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 1
+      responses:
+        "200":
+          description: Permanent bounce recipients, or unavailable metrics for untracked campaigns
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignPermanentBounceRecipientsPage"
+        "404":
+          description: Campaign not found in the authenticated tenant
 
   /campaigns/{id}:
     patch:
@@ -6558,6 +6691,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/WhatsAppBroadcastResult"
 
+  /trips/{id}/whatsapp-broadcast/preview:
+    post:
+      operationId: previewTripWhatsAppBroadcast
+      tags: [trips]
+      summary: Preview eligible and skipped WhatsApp broadcast recipients
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WhatsAppBroadcastPreviewBody"
+      responses:
+        "200":
+          description: Recipient counts and categorized skip reasons; no messages are sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhatsAppBroadcastPreviewResult"
+
   /referrals/{id}/pay-bonus:
     post:
       operationId: payReferralBonus
@@ -6675,7 +6833,7 @@ paths:
     post:
       operationId: testWhatsAppMessage
       tags: [Referrals]
-      summary: Send a referral WhatsApp test message to the configured agency number
+      summary: Send a referral WhatsApp test message to an explicit test destination
       requestBody:
         required: true
         content:
@@ -7141,7 +7299,29 @@ components:
         messageTemplate: { type: string, minLength: 1, maxLength: 2000 }
         filter: { type: string, enum: [all, confirmed, pending] }
         requestId: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid, description: Set only when the staff member explicitly intends a new campaign with the same content and audience. }
       required: [messageTemplate, filter, requestId]
+    WhatsAppBroadcastPreviewBody:
+      type: object
+      properties:
+        messageTemplate: { type: string, maxLength: 2000 }
+        filter: { type: string, enum: [all, confirmed, pending] }
+      required: [messageTemplate, filter]
+    WhatsAppBroadcastPreviewResult:
+      type: object
+      properties:
+        recipientCount: { type: integer }
+        eligibleCount: { type: integer }
+        skipped: { type: integer }
+        skippedReasons:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              count: { type: integer }
+            required: [code, count]
+      required: [recipientCount, eligibleCount, skipped, skippedReasons]
     WhatsAppBroadcastResult:
       type: object
       properties:
@@ -7151,7 +7331,34 @@ components:
         failed: { type: integer }
         unknown: { type: integer }
         skipped: { type: integer }
-      required: [recipientCount, queued, accepted, failed, unknown, skipped]
+        deduplicated: { type: integer, description: Existing campaign deliveries reused; no new send was started for these recipients. }
+        skippedReasons:
+          type: array
+          items:
+            type: object
+            properties:
+              code:
+                type: string
+                enum:
+                  - whatsapp_opted_out
+                  - contact_opted_out
+                  - whatsapp_connection_unavailable
+                  - whatsapp_connection_ambiguous
+                  - credentials_not_configured
+                  - provider_unavailable
+                  - invalid_phone
+                  - whatsapp_invalid_phone
+                  - whatsapp_address_missing
+                  - whatsapp_recipient_unavailable
+                  - recipient_client_not_found
+                  - whatsapp_recipient_changed
+                  - whatsapp_content_missing
+                  - invalid_or_duplicate_phone
+                  - passenger_data_unavailable
+                  - other
+              count: { type: integer }
+            required: [code, count]
+      required: [recipientCount, queued, accepted, failed, unknown, skipped, deduplicated, skippedReasons]
     ReverseReferralBonusBody:
       type: object
       properties:
@@ -7185,8 +7392,8 @@ components:
         phone:
           type: string
           minLength: 8
-          description: Optional test destination; defaults to the configured agency WhatsApp number.
-      required: [type]
+          description: Explicit test destination; never defaults to the agency WhatsApp number.
+      required: [type, phone]
     TestWhatsAppMessageResult:
       type: object
       properties:
@@ -8770,6 +8977,8 @@ components:
             type: string
         tripType:
           type: ["string", "null"]
+        travelType:
+          type: ["string", "null"]
         packageType:
           type: ["string", "null"]
         hasInsurance:
@@ -9022,6 +9231,8 @@ components:
             type: string
         tripType:
           type: ["string", "null"]
+        travelType:
+          type: ["string", "null"]
         packageType:
           type: ["string", "null"]
         roomId:
@@ -9231,6 +9442,8 @@ components:
         paymentMethod:
           type: ["string", "null"]
         notes:
+          type: ["string", "null"]
+        travelType:
           type: ["string", "null"]
         seats:
           type: ["array", "null"]
@@ -9557,6 +9770,12 @@ components:
           type: string
         paidAt:
           type: ["string", "null"]
+        refundedAt:
+          type: ["string", "null"]
+        refundOfPaymentId:
+          type: ["string", "null"]
+        gateway:
+          type: ["string", "null"]
         status:
           $ref: "#/components/schemas/PaymentStatus"
         description:
@@ -9643,6 +9862,18 @@ components:
           type: ["string", "null"]
         notes:
           type: ["string", "null"]
+
+    CreatePartialManualRefundBody:
+      type: object
+      properties:
+        amount:
+          type: number
+          exclusiveMinimum: 0
+          multipleOf: 0.01
+        notes:
+          type: string
+          maxLength: 1000
+      required: [amount]
 
     CreateOperationalCostPayableBody:
       type: object
@@ -10071,7 +10302,7 @@ components:
           type: string
         channel:
           type: string
-          enum: [email, whatsapp]
+          enum: [email, whatsapp, instagram]
         content:
           type: string
         mediaUrl:
@@ -10097,7 +10328,7 @@ components:
       properties:
         id: { type: string }
         outboundMessageId: { type: string }
-        channel: { type: string, enum: [email, whatsapp] }
+        channel: { type: string, enum: [email, whatsapp, instagram] }
         recipient: { type: ["string", "null"] }
         subject: { type: ["string", "null"] }
         content: { type: string }
@@ -10245,7 +10476,7 @@ components:
           type: string
         channel:
           type: string
-          enum: [email, whatsapp]
+          enum: [email, whatsapp, instagram]
         subject:
           type: ["string", "null"]
         content:
@@ -10872,8 +11103,23 @@ components:
             properties:
               productId:
                 type: string
+              productName:
+                type: string
               quantity:
                 type: integer
+              unitPrice:
+                type: number
+                description: >
+                  Client-side display estimate only. The server recalculates
+                  the amount from the current product and selected variant.
+              variantName:
+                type: string
+              variantLabel:
+                type: string
+              metadata:
+                type: object
+                additionalProperties: true
+            required: [productId, quantity]
         customerName:
           type: string
         customerEmail:
@@ -10990,12 +11236,37 @@ components:
           type: integer
         sentCount:
           type: integer
+        emailDeliveredCount:
+          type: integer
         openedCount:
           type: integer
         clickedCount:
           type: integer
+        bouncedCount:
+          type: integer
+          description: Email recipients whose messages bounced according to Resend.
+        permanentBouncedCount:
+          type: integer
+          description: Email recipients whose Resend bounce classification is permanent.
+        permanentBounceSuppressedCount:
+          type: integer
+          description: Campaign email recipients skipped because an earlier permanent bounce was confirmed.
+        temporaryBouncedCount:
+          type: integer
+          description: Email recipients whose Resend bounce classification is temporary.
+        failedCount:
+          type: integer
+          description: Email recipients whose messages failed according to Resend.
+        complainedCount:
+          type: integer
+          description: Email recipients who reported messages as spam according to Resend.
         deliveredCount:
           type: integer
+        engagementMetricsAvailable:
+          type: boolean
+        failureMetricsAvailable:
+          type: boolean
+          description: Whether bounce totals and classifications, failures, and complaints are available for this campaign.
         triggerType:
           type: ["string", "null"]
         triggerConfig:
@@ -11005,7 +11276,73 @@ components:
           type: boolean
         createdAt:
           type: string
-      required: [id, name, type, status, content, recipientsCount, sentCount, openedCount, clickedCount, createdAt]
+      required: [id, name, type, status, content, recipientsCount, sentCount, emailDeliveredCount, openedCount, clickedCount, bouncedCount, permanentBouncedCount, permanentBounceSuppressedCount, temporaryBouncedCount, failedCount, complainedCount, engagementMetricsAvailable, failureMetricsAvailable, createdAt]
+
+    CampaignPermanentBounceRecipient:
+      type: object
+      properties:
+        clientId:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        bouncedAt:
+          type: string
+          format: date-time
+      required: [clientId, name, email, bouncedAt]
+
+    CampaignPermanentBounceSuppressionRecipient:
+      type: object
+      properties:
+        clientId:
+          type: string
+        name:
+          type: string
+        email:
+          type: ["string", "null"]
+      required: [clientId, name, email]
+
+    CampaignPermanentBounceSuppressionsPage:
+      type: object
+      properties:
+        available:
+          type: boolean
+          description: False when the campaign does not send email.
+        count:
+          type: integer
+          description: Distinct clients whose email was skipped due to a confirmed permanent bounce.
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/CampaignPermanentBounceSuppressionRecipient"
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        hasMore:
+          type: boolean
+      required: [available, count, recipients, page, pageSize, hasMore]
+
+    CampaignPermanentBounceRecipientsPage:
+      type: object
+      properties:
+        available:
+          type: boolean
+          description: False when campaign email failure tracking was not available.
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/CampaignPermanentBounceRecipient"
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        hasMore:
+          type: boolean
+        permanentBounceSuppressions:
+          $ref: "#/components/schemas/CampaignPermanentBounceSuppressionsPage"
+      required: [available, recipients, page, pageSize, hasMore, permanentBounceSuppressions]
 
     CreateCampaignBody:
       type: object
@@ -11363,7 +11700,54 @@ components:
             warningThresholdPct:
               type: number
           required: [commandCount, maxCommands, usagePct, warningThresholdPct]
+        queueDailyUsage:
+          type: ["object", "null"]
+          properties:
+            commandCount:
+              type: number
+            maxCommands:
+              type: number
+            usagePct:
+              type: number
+            warningThresholdPct:
+              type: number
+          required: [commandCount, maxCommands, usagePct, warningThresholdPct]
+        queueCutover:
+          $ref: "#/components/schemas/SystemHealthBullMQRedisCutover"
       required: [status]
+
+    SystemHealthBullMQRedisCutover:
+      type: object
+      properties:
+        selectedRedis:
+          type: string
+          enum: [REDIS_URL, REDIS_QUEUE_URL, disabled]
+        outcome:
+          type: string
+          enum: [not_checked, checking, not_configured, workers_disabled, blocked, approved, verified, reverted, same_resource]
+        reason:
+          type: ["string", "null"]
+        blockerCount:
+          type: integer
+        blockedWorkCount:
+          type: integer
+        blockers:
+          type: array
+          items:
+            type: object
+            properties:
+              queue:
+                type: string
+              state:
+                type: string
+              count:
+                type: integer
+              reason:
+                type: string
+            required: [queue, state, count, reason]
+        checkedAt:
+          type: ["string", "null"]
+      required: [selectedRedis, outcome, reason, blockerCount, blockedWorkCount, blockers, checkedAt]
 
     SystemHealthStripeWebhookAuditEndpoint:
       type: object
@@ -11409,6 +11793,8 @@ components:
           $ref: "#/components/schemas/SystemHealthStripeWebhookAudit"
         stripeSyncTables:
           $ref: "#/components/schemas/SystemHealthStripeSyncTables"
+        reminderSchedulers:
+          $ref: "#/components/schemas/ReminderSchedulerRegistrationHealth"
         workers:
           type: object
           additionalProperties: true
@@ -11421,7 +11807,63 @@ components:
         clientFinancialDrift:
           type: object
           additionalProperties: true
-      required: [redis, stripeWebhookAudit, stripeSyncTables]
+      required: [redis, stripeWebhookAudit, stripeSyncTables, reminderSchedulers]
+
+    ReminderSchedulerRegistrationHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unknown]
+        failedCount:
+          type: integer
+        unattemptedCount:
+          type: integer
+        delayedCount:
+          type: integer
+        missingCount:
+          type: integer
+        unavailableCount:
+          type: integer
+        timezone:
+          type: string
+        schedulers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReminderSchedulerRegistration"
+      required: [status, failedCount, unattemptedCount, delayedCount, missingCount, unavailableCount, timezone, schedulers]
+
+    ReminderSchedulerRegistration:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [not_attempted, registered, failed]
+        scheduleStatus:
+          type: string
+          enum: [healthy, registration_failed, missing, delayed, unavailable]
+        lastAttemptAt:
+          type: ["string", "null"]
+          format: date-time
+        lastSuccessfulAt:
+          type: ["string", "null"]
+          format: date-time
+        nextRunAt:
+          type: ["string", "null"]
+          format: date-time
+        lastRunAt:
+          type: ["string", "null"]
+          format: date-time
+        lastRunStatus:
+          type: ["string", "null"]
+          enum: [completed, failed, null]
+        failureCount:
+          type: integer
+      required: [id, name, status, scheduleStatus, lastAttemptAt, lastSuccessfulAt, nextRunAt, lastRunAt, lastRunStatus, failureCount]
 
     RepairSystemHealth:
       type: object
@@ -11479,6 +11921,16 @@ components:
           type: string
         email:
           type: string
+        cnpj:
+          type: ["string", "null"]
+        address:
+          type: ["string", "null"]
+        city:
+          type: ["string", "null"]
+        state:
+          type: ["string", "null"]
+        zipCode:
+          type: ["string", "null"]
         whatsapp:
           type: ["string", "null"]
         phone:

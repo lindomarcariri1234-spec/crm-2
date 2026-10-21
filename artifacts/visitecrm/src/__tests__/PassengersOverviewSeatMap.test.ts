@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createElement } from "react";
-import { renderComponent, cleanupRoots } from "./eventSourceHarness.js";
+import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js";
 
 // ---------------------------------------------------------------------------
 // Controllable hook return values
@@ -9,6 +9,8 @@ const mockGetMe = vi.hoisted(() => vi.fn());
 const mockGetTenant = vi.hoisted(() => vi.fn());
 const mockGetTrip = vi.hoisted(() => vi.fn());
 const mockListReservations = vi.hoisted(() => vi.fn());
+const mockUseQuery = vi.hoisted(() => vi.fn());
+const mockHasPermission = vi.hoisted(() => vi.fn(() => false));
 const mockUseSeatStream = vi.hoisted(() =>
   vi.fn(() => ({ eventCount: 0, occupiedSeats: {}, connected: false })),
 );
@@ -26,7 +28,7 @@ vi.mock("wouter", () => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({ data: undefined, isLoading: false }),
+  useQuery: mockUseQuery,
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 
@@ -55,7 +57,7 @@ vi.mock("@workspace/permissions", () => ({
     CANCELLED: "cancelled",
     DRAFT: "draft",
   },
-  hasPermission: () => false,
+  hasPermission: mockHasPermission,
   RESOURCES: { FINANCIAL: "financial" },
   ACTIONS: { VIEW: "view" },
 }));
@@ -145,7 +147,23 @@ vi.mock("@/lib/labels", () => ({
 }));
 
 vi.mock("../pages/trips/PassengersOverviewFinancialDialog.js", () => ({
-  PassengersOverviewFinancialDialog: () => null,
+  PassengersOverviewFinancialDialog: ({
+    open,
+    onClose,
+    financialReport,
+  }: {
+    open: boolean;
+    onClose: (open: boolean) => void;
+    financialReport?: { totalRevenue: number };
+  }) => open
+    ? createElement("section", { "data-testid": "financial-report-dialog" },
+      createElement("span", { "data-testid": "financial-report-total" }, String(financialReport?.totalRevenue ?? "")),
+      createElement("button", {
+        "data-testid": "button-close-financial-report",
+        onClick: () => onClose(false),
+      }, "Fechar"),
+    )
+    : null,
 }));
 
 import { PassengersOverview } from "../pages/trips/PassengersOverview.js";
@@ -160,10 +178,13 @@ beforeEach(() => {
   mockRefetch.mockClear();
   mockNavigate.mockClear();
   mockTripSelectOnChange.mockReset();
+  mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+  mockHasPermission.mockReturnValue(false);
 });
 
 afterEach(async () => {
   await cleanupRoots();
+  vi.unstubAllGlobals();
 });
 
 // ---------------------------------------------------------------------------
@@ -202,6 +223,65 @@ describe("PassengersOverview — SSE-triggered refetch", () => {
     await rerender(createElement(PassengersOverview, { tripId: "trip-1" }));
 
     expect(mockRefetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("PassengersOverview — financial report refresh lifecycle", () => {
+  it("loads and refreshes while open, then disables background polling on close", async () => {
+    mockHasPermission.mockReturnValue(true);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ totalRevenue: 250 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    mockUseQuery.mockReturnValue({ data: { totalRevenue: 100 }, isLoading: false });
+
+    const view = await renderComponent(
+      createElement(PassengersOverview, { tripId: "trip-1" }),
+    );
+    const closedOptions = mockUseQuery.mock.calls.at(-1)?.[0] as {
+      enabled: boolean;
+      refetchInterval: number | false;
+    };
+    expect(closedOptions.enabled).toBe(false);
+    expect(closedOptions.refetchInterval).toBe(false);
+
+    const openButton = view.container.querySelector(
+      '[data-testid="button-open-trip-financial-report"]',
+    ) as HTMLButtonElement | null;
+    expect(openButton).not.toBeNull();
+    await flushAct(() => openButton?.click());
+
+    const openOptions = mockUseQuery.mock.calls.at(-1)?.[0] as {
+      enabled: boolean;
+      refetchInterval: number | false;
+      queryFn: () => Promise<{ totalRevenue: number }>;
+    };
+    expect(openOptions.enabled).toBe(true);
+    expect(openOptions.refetchInterval).toBe(30_000);
+
+    const refreshedReport = await openOptions.queryFn();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/trips/trip-1/financial-report",
+      { credentials: "include" },
+    );
+    expect(refreshedReport.totalRevenue).toBe(250);
+    mockUseQuery.mockReturnValue({ data: refreshedReport, isLoading: false });
+    await view.rerender(createElement(PassengersOverview, { tripId: "trip-1" }));
+    expect(view.container.querySelector('[data-testid="financial-report-total"]')?.textContent).toBe("250");
+
+    const closeButton = view.container.querySelector(
+      '[data-testid="button-close-financial-report"]',
+    ) as HTMLButtonElement | null;
+    expect(closeButton).not.toBeNull();
+    await flushAct(() => closeButton?.click());
+
+    const closedAgainOptions = mockUseQuery.mock.calls.at(-1)?.[0] as {
+      enabled: boolean;
+      refetchInterval: number | false;
+    };
+    expect(closedAgainOptions.enabled).toBe(false);
+    expect(closedAgainOptions.refetchInterval).toBe(false);
   });
 });
 

@@ -12,4 +12,5 @@ export type ListOutboundProviderFailureSummaryChannel =
 export const ListOutboundProviderFailureSummaryChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;

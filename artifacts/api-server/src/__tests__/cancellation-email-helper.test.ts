@@ -5,6 +5,7 @@ const {
   mockDbInsert,
   mockDbUpdate,
   mockDispatchOutboundMessage,
+  mockDispatchWhatsAppReferralReversed,
   mockRetryOutboundDelivery,
   mockGetCancellationEmailQueue,
   mockInsertClientNotification,
@@ -14,6 +15,7 @@ const {
   mockDbInsert: vi.fn(),
   mockDbUpdate: vi.fn(),
   mockDispatchOutboundMessage: vi.fn(),
+  mockDispatchWhatsAppReferralReversed: vi.fn().mockResolvedValue(undefined),
   mockRetryOutboundDelivery: vi.fn(),
   mockGetCancellationEmailQueue: vi.fn(),
   mockInsertClientNotification: vi.fn(),
@@ -72,12 +74,14 @@ vi.mock("../lib/client-notifications.js", () => ({
 }));
 
 vi.mock("../queues/whatsapp-helpers.js", () => ({
-  dispatchWhatsAppReferralReversed: vi.fn(),
+  dispatchWhatsAppReferralReversed: mockDispatchWhatsAppReferralReversed,
 }));
 
 import {
   dispatchTripRestorationNotification,
   dispatchReferralReversedEmail,
+  enqueueReferralBonusPaidEmail,
+  enqueueReferralConvertedEmail,
   enqueueReservationCancellationEmail,
   buildReservationConfirmationEmailHtml,
   buildWelcomeCredentialsEmailHtml,
@@ -149,6 +153,31 @@ beforeEach(() => {
   });
 });
 
+it("keeps conversion and bonus-paid common dispatch email-only", async () => {
+  await enqueueReferralConvertedEmail({
+    referrerName: "Indicador",
+    referrerEmail: "indicador@example.com",
+    referredName: "Viajante",
+    bonusAmount: 50,
+    agencyName: "Agência",
+    agencyLogo: null,
+  }, "tenant-1", "client-referrer", "referral-1");
+  await enqueueReferralBonusPaidEmail({
+    referrerName: "Indicador",
+    referrerEmail: "indicador@example.com",
+    bonusAmount: 50,
+    paidDate: "17/10/2026",
+    agencyName: "Agência",
+    agencyLogo: null,
+  }, "tenant-1", "client-referrer", "referral-1");
+
+  expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
+  for (const [payload] of mockDispatchOutboundMessage.mock.calls) {
+    expect(payload).toHaveProperty("email");
+    expect(payload).not.toHaveProperty("whatsapp");
+  }
+});
+
 it("reopens a failed reversal delivery on a repeated callback without creating a second outbound message", async () => {
   const referrer = {
     name: "Indicador",
@@ -193,6 +222,13 @@ it("reopens a failed reversal delivery on a repeated callback without creating a
   await dispatchReferralReversedEmail(callback);
 
   expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
+  expect(mockDispatchWhatsAppReferralReversed).toHaveBeenCalledTimes(2);
+  expect(mockDispatchOutboundMessage.mock.calls[0][0]).not.toHaveProperty("whatsapp");
+  expect(mockDispatchWhatsAppReferralReversed).toHaveBeenCalledWith(expect.objectContaining({
+    referrerId: "client-referrer",
+    referralId: "referral-1",
+    reservationId: "reservation-1",
+  }));
   expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
     idempotencyKey: "referral:referral-1:referral:referral-1:reversed",
     metadata: expect.objectContaining({

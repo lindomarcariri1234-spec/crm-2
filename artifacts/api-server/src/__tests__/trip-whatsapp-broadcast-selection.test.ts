@@ -105,24 +105,24 @@ describe("selectTripWhatsAppBroadcastRecipients", () => {
 });
 
 describe("buildTripWhatsAppBroadcastIdempotencyKey", () => {
-  it("replays one broadcast attempt but allows a later send to the same phone", () => {
+  it("deduplicates one logical campaign but allows an explicit new campaign", () => {
     const first = buildTripWhatsAppBroadcastIdempotencyKey(
       "trip-1",
-      "request-1",
+      "campaign-fingerprint",
       "5511999990001",
     );
     const replay = buildTripWhatsAppBroadcastIdempotencyKey(
       "trip-1",
-      "request-1",
+      "campaign-fingerprint",
       "5511999990001",
     );
-    const laterBroadcast = buildTripWhatsAppBroadcastIdempotencyKey(
+    const intentionalNewCampaign = buildTripWhatsAppBroadcastIdempotencyKey(
       "trip-1",
-      "request-2",
+      "explicit-new-campaign-uuid",
       "5511999990001",
     );
 
     expect(replay).toBe(first);
-    expect(laterBroadcast).not.toBe(first);
+    expect(intentionalNewCampaign).not.toBe(first);
   });
 });

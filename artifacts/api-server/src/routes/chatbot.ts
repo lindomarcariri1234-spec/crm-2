@@ -3,26 +3,32 @@ import {
   db,
   chatbotConversationsTable,
   chatbotMessagesTable,
+  messagesTable,
+  outboundDeliveriesTable,
+  outboundDeliveryAttemptsTable,
+  outboundMessagesTable,
   clientsTable,
   usersTable,
   supportTicketsTable,
   tenantIntegrationsTable,
 } from "@workspace/db";
-import { eq, and, desc, isNull, lte, or, sql } from "drizzle-orm";
+import { eq, and, desc, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
-import { requireAuth } from "../lib/tenant";
+import { decryptCredential } from "../lib/crypto";
+import { ALL_STAFF_ROLES, requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { deliverAttendanceReply } from "../services/whatsapp-attendance";
+import { dispatchOutboundMessage } from "../services/outbound-delivery.js";
 import {
   getInstagramMetaConfig,
   isInstagramReplyWindowOpen,
   INSTAGRAM_MESSAGING_TYPE,
-  InstagramProviderError,
-  readInstagramAccessToken,
-  sendInstagramText,
 } from "../services/instagram-messaging";
+import {
+  INSTAGRAM_ZERNIO_TYPE,
+} from "../services/instagram-zernio.js";
 import { recomputeClientClassification, recordClientClassificationEvent } from "../services/client-classification.js";
 import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
 import { extractVerifiedUploadThingKey, utapi } from "../lib/uploadthing";
@@ -32,7 +38,122 @@ import { ensureSupportTicketForConversation, recordSupportTicketEvent } from "..
 import { broadcastSupportTicketUpdate } from "../lib/realtime.js";
 
 const router = Router();
+const TIMELINE_DEFAULT_PAGE_SIZE = 50;
+const TIMELINE_MAX_PAGE_SIZE = 100;
+
+type ConversationTimelineCursor = { at: Date; id: string };
+
+function decodeConversationTimelineCursor(raw: unknown): ConversationTimelineCursor | null {
+  if (raw === undefined) return null;
+  if (typeof raw !== "string" || raw.length > 1024) {
+    throw new ValidationError("Cursor de histórico inválido.", "VALIDATION_ERROR");
+  }
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid_cursor");
+    const record = parsed as Record<string, unknown>;
+    if (
+      typeof record.at !== "string" ||
+      !Number.isFinite(Date.parse(record.at)) ||
+      typeof record.id !== "string" ||
+      !record.id ||
+      record.id.length > 300
+    ) throw new Error("invalid_cursor");
+    return { at: new Date(record.at), id: record.id };
+  } catch {
+    throw new ValidationError("Cursor de histórico inválido.", "VALIDATION_ERROR");
+  }
+}
+
+function encodeConversationTimelineCursor(at: Date, id: string): string {
+  return Buffer.from(JSON.stringify({ at: at.toISOString(), id })).toString("base64url");
+}
+
+function compareTimelineIds(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function parseConversationTimelineLimit(raw: unknown): number {
+  if (raw === undefined) return TIMELINE_DEFAULT_PAGE_SIZE;
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) {
+    throw new ValidationError("Limite de histórico inválido.", "VALIDATION_ERROR");
+  }
+  const limit = Number(raw);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > TIMELINE_MAX_PAGE_SIZE) {
+    throw new ValidationError(`O limite deve estar entre 1 e ${TIMELINE_MAX_PAGE_SIZE}.`, "VALIDATION_ERROR");
+  }
+  return limit;
+}
+
+async function requireChatbotStaff(
+  req: Parameters<typeof requireAuth>[0],
+  res: Parameters<typeof requireAuth>[1],
+  next: NextFunction,
+) {
+  const me = await requireAuth(req, res);
+  if (!me) return null;
+  if (!ALL_STAFF_ROLES.includes(me.role)) {
+    next(new ForbiddenError("Apenas membros da equipe podem acessar a caixa de entrada da agência.", "FORBIDDEN_ROLE"));
+    return null;
+  }
+  return me;
+}
 const DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
+const CHATBOT_DELIVERY_ISSUES = {
+  optedOut: "Envio cancelado: o cliente não autorizou contato pelo WhatsApp.",
+  invalidPhone: "Número de WhatsApp inválido ou desatualizado. Atualize o contato e tente novamente.",
+  conversationUnavailable: "Esta conversa não está disponível para receber respostas.",
+  connectionUnavailable: "Conexão do WhatsApp indisponível. Revise a integração e tente novamente.",
+  providerUnavailable: "O serviço do WhatsApp está indisponível. Tente novamente mais tarde.",
+  rateLimited: "O provedor limitou o envio. Aguarde alguns minutos antes de tentar novamente.",
+  deliveryUnknown: "O WhatsApp não confirmou o resultado do envio. Confira o status antes de enviar outra vez.",
+  rejected: "O WhatsApp não aceitou a mensagem. Revise o contato e a integração antes de tentar novamente.",
+} as const;
+
+function safeChatbotDeliveryIssue(
+  channel: string,
+  status: string | null | undefined,
+  rawReason: unknown,
+): string | null {
+  if (status === "unknown" && channel === "whatsapp") {
+    return CHATBOT_DELIVERY_ISSUES.deliveryUnknown;
+  }
+  if (status !== "failed" && status !== "cancelled") return null;
+  if (channel !== "whatsapp") {
+    return "A plataforma não aceitou a mensagem. Revise a conexão da conta e tente novamente.";
+  }
+  const reason = typeof rawReason === "string" ? rawReason : "";
+  if (["contact_opted_out", "whatsapp_opted_out", "whatsapp_recipient_opted_out"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.optedOut;
+  }
+  if (["invalid_phone", "whatsapp_invalid_phone", "whatsapp_address_missing", "whatsapp_recipient_changed", "whatsapp_recipient_unavailable"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.invalidPhone;
+  }
+  if (["conversation_unavailable", "whatsapp_conversation_unavailable", "outbound_message_unavailable"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.conversationUnavailable;
+  }
+  if (["credentials_not_configured", "whatsapp_connection_unavailable", "whatsapp_connection_ambiguous", "no_whatsapp_provider", "whatsapp_account_unavailable"].includes(reason)) {
+    return CHATBOT_DELIVERY_ISSUES.connectionUnavailable;
+  }
+  const providerStatus = /^(?:zapi|evolution)_(\d{3})$/.exec(reason)?.[1];
+  if (providerStatus === "401" || providerStatus === "403") return CHATBOT_DELIVERY_ISSUES.connectionUnavailable;
+  if (providerStatus === "429") return CHATBOT_DELIVERY_ISSUES.rateLimited;
+  if (providerStatus && Number(providerStatus) >= 500) return CHATBOT_DELIVERY_ISSUES.providerUnavailable;
+  if (providerStatus) return CHATBOT_DELIVERY_ISSUES.rejected;
+  return CHATBOT_DELIVERY_ISSUES.rejected;
+}
+
+function readZernioApiKey(encrypted: string | null | undefined): string | null {
+  if (!encrypted) return null;
+  try {
+    const parsed: unknown = JSON.parse(decryptCredential(encrypted));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const apiKey = (parsed as Record<string, unknown>)["apiKey"];
+    return typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 const CreateConversationBody = z.object({
   clientId: z.string().optional(),
@@ -55,7 +176,7 @@ const ReplyConversationBody = z.object({
 
 router.get("/chatbot-conversations", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const conversations = await db.select({
       id: chatbotConversationsTable.id,
@@ -139,7 +260,7 @@ router.get("/chatbot-conversations", async (req, res, next: NextFunction): Promi
 
 router.post("/chatbot-conversations", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = CreateConversationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
@@ -154,7 +275,7 @@ router.post("/chatbot-conversations", async (req, res, next: NextFunction): Prom
 
 router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const [conv] = await db.select().from(chatbotConversationsTable)
       .where(and(eq(chatbotConversationsTable.id, req.params.id), eq(chatbotConversationsTable.tenantId, me.tenantId))).limit(1);
@@ -196,41 +317,643 @@ router.get("/chatbot-conversations/:id/messages", async (req, res, next: NextFun
         message.role === "user" &&
         Boolean(message.mediaUrl);
       let expiresIn = DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS;
+      let mediaExpiresAt: Date | null = null;
       if (isInboundWhatsAppMedia) {
-        const mediaExpiresAt = getWhatsAppInboundMediaExpirationAt(message.sentAt);
+        mediaExpiresAt = getWhatsAppInboundMediaExpirationAt(message.sentAt);
         const secondsUntilExpiry = Math.floor((mediaExpiresAt.getTime() - now) / 1000);
         if (message.mediaExpiredAt || secondsUntilExpiry <= 0) {
           return {
             ...message,
             mediaUrl: null,
             mediaExpiredAt: message.mediaExpiredAt ?? mediaExpiresAt,
+            mediaExpiresAt,
           };
         }
         expiresIn = Math.min(DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS, secondsUntilExpiry);
       }
 
       const fileKey = message.mediaUrl ? extractVerifiedUploadThingKey(message.mediaUrl) : null;
-      if (!fileKey) return message;
+      if (!fileKey) {
+        return mediaExpiresAt ? { ...message, mediaExpiresAt } : message;
+      }
       try {
         const signed = await utapi.generateSignedURL(fileKey, { expiresIn });
-        return { ...message, mediaUrl: signed.ufsUrl };
+        return {
+          ...message,
+          mediaUrl: signed.ufsUrl,
+          ...(mediaExpiresAt ? { mediaExpiresAt } : {}),
+        };
       } catch {
         logger.warn(
           { tenantId: me.tenantId, messageId: message.id },
           "[chatbot] could not create temporary media URL",
         );
-        return { ...message, mediaUrl: null };
+        return {
+          ...message,
+          mediaUrl: null,
+          ...(mediaExpiresAt ? { mediaExpiresAt } : {}),
+        };
       }
     }));
-    res.json(visibleMessages);
+    res.json(visibleMessages.map((message) => {
+      const { lastDeliveryError, ...safeMessage } = message;
+      return {
+        ...safeMessage,
+        deliveryIssue: safeChatbotDeliveryIssue(conv.channel, message.deliveryStatus, lastDeliveryError),
+      };
+    }));
   } catch (err) {
     next(err);
   }
 });
 
+router.get("/chatbot-conversations/:id/timeline", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireChatbotStaff(req, res, next);
+    if (!me) return;
+    const pageSize = parseConversationTimelineLimit(req.query.limit);
+    const cursor = decodeConversationTimelineCursor(req.query.cursor);
+    const [conversation] = await db.select().from(chatbotConversationsTable)
+      .where(and(
+        eq(chatbotConversationsTable.id, req.params.id),
+        eq(chatbotConversationsTable.tenantId, me.tenantId),
+      )).limit(1);
+    if (!conversation) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+
+    const messageConditions = [
+      eq(chatbotMessagesTable.conversationId, conversation.id),
+      eq(chatbotMessagesTable.tenantId, me.tenantId),
+    ];
+    if (cursor) {
+      messageConditions.push(or(
+        lt(chatbotMessagesTable.sentAt, cursor.at),
+        and(
+          eq(chatbotMessagesTable.sentAt, cursor.at),
+          lt(sql<string>`${chatbotMessagesTable.id} COLLATE "C"`, cursor.id),
+        ),
+      )!);
+    }
+    const storedMessages = await db.select().from(chatbotMessagesTable)
+      .where(and(...messageConditions))
+      .orderBy(desc(chatbotMessagesTable.sentAt), desc(sql`${chatbotMessagesTable.id} COLLATE "C"`))
+      .limit(pageSize + 1);
+
+    const outboundSelection = {
+      id: outboundDeliveriesTable.id,
+      outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+      channel: outboundDeliveriesTable.channel,
+      content: outboundDeliveriesTable.content,
+      status: outboundDeliveriesTable.status,
+      attempts: outboundDeliveriesTable.attempts,
+      provider: outboundDeliveriesTable.provider,
+      externalId: outboundDeliveriesTable.externalId,
+      createdAt: outboundDeliveriesTable.createdAt,
+      acceptedAt: outboundDeliveriesTable.acceptedAt,
+      origin: outboundMessagesTable.origin,
+      metadata: outboundMessagesTable.metadata,
+    };
+    const outboundConditions = [
+      eq(outboundDeliveriesTable.tenantId, me.tenantId),
+      or(
+        sql`${outboundMessagesTable.metadata}->>'conversationId' = ${conversation.id}`,
+        ...(conversation.clientId
+          ? [and(
+              eq(outboundMessagesTable.recipientType, "client"),
+              eq(outboundMessagesTable.recipientId, conversation.clientId),
+            )]
+          : []),
+      )!,
+      sql`NOT EXISTS (
+        SELECT 1
+        FROM chatbot_messages linked_message
+        WHERE linked_message.id = (${outboundMessagesTable.metadata}->>'chatbotMessageId')
+          AND linked_message.conversation_id = ${conversation.id}
+          AND linked_message.tenant_id = ${me.tenantId}
+      )`,
+    ];
+    if (cursor) {
+      outboundConditions.push(or(
+        lt(outboundDeliveriesTable.createdAt, cursor.at),
+        and(
+          eq(outboundDeliveriesTable.createdAt, cursor.at),
+          sql`(('delivery:' || ${outboundDeliveriesTable.id}) COLLATE "C") < (${cursor.id} COLLATE "C")`,
+        ),
+      )!);
+    }
+    const independentOutboundRows = await db.select(outboundSelection).from(outboundDeliveriesTable)
+      .innerJoin(outboundMessagesTable, and(
+        eq(outboundMessagesTable.id, outboundDeliveriesTable.outboundMessageId),
+        eq(outboundMessagesTable.tenantId, outboundDeliveriesTable.tenantId),
+      ))
+      .where(and(...outboundConditions))
+      .orderBy(desc(outboundDeliveriesTable.createdAt), desc(sql`(('delivery:' || ${outboundDeliveriesTable.id}) COLLATE "C")`))
+      .limit(pageSize + 1);
+
+    const candidates = [
+      ...storedMessages.map((message) => ({
+        kind: "chatbot" as const,
+        id: message.id,
+        at: message.sentAt,
+        message,
+      })),
+      ...independentOutboundRows.map((row) => ({
+        kind: "delivery" as const,
+        id: `delivery:${row.id}`,
+        at: row.createdAt,
+        row,
+      })),
+    ].sort((left, right) =>
+      right.at.getTime() - left.at.getTime() || compareTimelineIds(right.id, left.id),
+    );
+    const hasMore = candidates.length > pageSize;
+    const pageCandidates = candidates.slice(0, pageSize);
+    const pageMessages = pageCandidates.flatMap((candidate) => candidate.kind === "chatbot" ? [candidate.message] : []);
+    const selectedIndependentRows = pageCandidates.flatMap((candidate) => candidate.kind === "delivery" ? [candidate.row] : []);
+    const pageMessageIds = pageMessages.map((message) => message.id);
+    const linkedOutboundRows = pageMessageIds.length
+      ? await db.select(outboundSelection).from(outboundDeliveriesTable)
+          .innerJoin(outboundMessagesTable, and(
+            eq(outboundMessagesTable.id, outboundDeliveriesTable.outboundMessageId),
+            eq(outboundMessagesTable.tenantId, outboundDeliveriesTable.tenantId),
+          ))
+          .where(and(
+            eq(outboundDeliveriesTable.tenantId, me.tenantId),
+            inArray(sql<string>`${outboundMessagesTable.metadata}->>'chatbotMessageId'`, pageMessageIds),
+            sql`${outboundMessagesTable.metadata}->>'conversationId' = ${conversation.id}`,
+          ))
+      : [];
+    const outboundRows = [...selectedIndependentRows, ...linkedOutboundRows];
+
+    const now = Date.now();
+    const visibleMessages = await Promise.all(pageMessages.map(async (message) => {
+      const mediaExpiresAt = conversation.channel === "whatsapp" && message.role === "user" && message.mediaUrl
+        ? getWhatsAppInboundMediaExpirationAt(message.sentAt)
+        : null;
+      if (mediaExpiresAt && (message.mediaExpiredAt || mediaExpiresAt.getTime() <= now)) {
+        return { ...message, mediaUrl: null, mediaExpiredAt: message.mediaExpiredAt ?? mediaExpiresAt, mediaExpiresAt };
+      }
+      const fileKey = message.mediaUrl ? extractVerifiedUploadThingKey(message.mediaUrl) : null;
+      if (!fileKey) return mediaExpiresAt ? { ...message, mediaExpiresAt } : message;
+      const expiresIn = mediaExpiresAt
+        ? Math.min(DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS, Math.max(1, Math.floor((mediaExpiresAt.getTime() - now) / 1000)))
+        : DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS;
+      try {
+        const signed = await utapi.generateSignedURL(fileKey, { expiresIn });
+        return { ...message, mediaUrl: signed.ufsUrl, ...(mediaExpiresAt ? { mediaExpiresAt } : {}) };
+      } catch {
+        logger.warn({ tenantId: me.tenantId, messageId: message.id }, "[chatbot] could not create temporary timeline media URL");
+        return { ...message, mediaUrl: null, ...(mediaExpiresAt ? { mediaExpiresAt } : {}) };
+      }
+    }));
+
+    const attempts = outboundRows.length
+      ? await db.select({
+          deliveryId: outboundDeliveryAttemptsTable.deliveryId,
+          attemptNumber: outboundDeliveryAttemptsTable.attemptNumber,
+          status: outboundDeliveryAttemptsTable.status,
+          provider: outboundDeliveryAttemptsTable.provider,
+          externalId: outboundDeliveryAttemptsTable.externalId,
+          error: outboundDeliveryAttemptsTable.error,
+          startedAt: outboundDeliveryAttemptsTable.startedAt,
+          completedAt: outboundDeliveryAttemptsTable.completedAt,
+        }).from(outboundDeliveryAttemptsTable)
+          .where(and(
+            eq(outboundDeliveryAttemptsTable.tenantId, me.tenantId),
+            inArray(outboundDeliveryAttemptsTable.deliveryId, outboundRows.map((row) => row.id)),
+          ))
+          .orderBy(outboundDeliveryAttemptsTable.attemptNumber)
+      : [];
+    const attemptsByDelivery = new Map<string, typeof attempts>();
+    for (const attempt of attempts) {
+      const list = attemptsByDelivery.get(attempt.deliveryId) ?? [];
+      list.push(attempt);
+      attemptsByDelivery.set(attempt.deliveryId, list);
+    }
+    type TimelineEntry = Omit<(typeof visibleMessages)[number], "lastDeliveryError"> & {
+      direction: "inbound" | "outbound";
+      origin: string;
+      channel: string;
+      provider: string | null;
+      externalId?: string | null;
+      deliveryAttempts?: number;
+      deliveryHistory?: Array<{
+        attemptNumber: number;
+        status: string;
+        provider: string | null;
+        externalId: string | null;
+        error: string | null;
+        startedAt: Date;
+        completedAt: Date | null;
+      }>;
+      deliveryIssue: string | null;
+    };
+    const projectedMessages: TimelineEntry[] = visibleMessages.map((message) => {
+      const { lastDeliveryError, ...safeMessage } = message;
+      return {
+        ...safeMessage,
+        direction: message.role === "user" ? "inbound" : "outbound",
+        origin: "chatbot",
+        channel: conversation.channel,
+        provider: null as string | null,
+        deliveryIssue: safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, lastDeliveryError),
+      };
+    });
+    const messageIndexById = new Map(projectedMessages.map((message, index) => [message.id, index]));
+    for (const row of outboundRows) {
+      const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+        ? row.metadata as Record<string, unknown>
+        : {};
+      const chatbotMessageId = typeof metadata.chatbotMessageId === "string" ? metadata.chatbotMessageId : null;
+      const deliveryIssue = row.status === "unknown"
+        ? "Não foi possível confirmar a entrega."
+        : row.status === "failed" || row.status === "skipped"
+          ? "A entrega não foi concluída."
+          : null;
+      const deliveryHistory = (attemptsByDelivery.get(row.id) ?? []).map((attempt) => ({
+        attemptNumber: attempt.attemptNumber,
+        status: attempt.status,
+        provider: attempt.provider,
+        externalId: attempt.externalId,
+        error: attempt.error ? "provider_error" : null,
+        startedAt: attempt.startedAt,
+        completedAt: attempt.completedAt,
+      }));
+      const linkedIndex = chatbotMessageId ? messageIndexById.get(chatbotMessageId) : undefined;
+      if (linkedIndex !== undefined) {
+        projectedMessages[linkedIndex] = {
+          ...projectedMessages[linkedIndex]!,
+          channel: row.channel,
+          origin: row.origin,
+          provider: row.provider,
+          externalId: row.externalId,
+          deliveryStatus: row.status === "accepted" ? "sent" : row.status,
+          deliveryAttempts: row.attempts,
+          deliveryIssue,
+          deliveryHistory,
+        };
+        continue;
+      }
+      projectedMessages.push({
+        id: `delivery:${row.id}`,
+        conversationId: conversation.id,
+        tenantId: me.tenantId,
+        ticketId: null,
+        sourceMessageId: null,
+        providerMessageId: row.externalId,
+        deliveryUpdatedAt: row.acceptedAt ?? row.createdAt,
+        role: "assistant",
+        content: row.content,
+        isBot: false,
+        sentAt: row.createdAt,
+        mediaUrl: null,
+        mediaMimeType: null,
+        mediaFileName: null,
+        mediaExpiredAt: null,
+        direction: "outbound",
+        origin: row.origin,
+        channel: row.channel,
+        provider: row.provider,
+        externalId: row.externalId,
+        deliveryStatus: row.status === "accepted" ? "sent" : row.status,
+        deliveryAttempts: row.attempts,
+        deliveryIssue,
+        deliveryHistory,
+      });
+    }
+    const items = projectedMessages.sort((left, right) =>
+      new Date(left.sentAt).getTime() - new Date(right.sentAt).getTime() || compareTimelineIds(left.id, right.id),
+    );
+    const oldestCandidate = pageCandidates.at(-1);
+    res.json({
+      items,
+      hasMore,
+      nextCursor: hasMore && oldestCandidate
+        ? encodeConversationTimelineCursor(oldestCandidate.at, oldestCandidate.id)
+        : null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/clients/:clientId/communication-timeline", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireChatbotStaff(req, res, next);
+    if (!me) return;
+    const pageSize = parseConversationTimelineLimit(req.query.limit);
+    const cursor = decodeConversationTimelineCursor(req.query.cursor);
+    const [client] = await db.select({ id: clientsTable.id, name: clientsTable.name })
+      .from(clientsTable)
+      .where(and(
+        eq(clientsTable.id, req.params.clientId),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .limit(1);
+    if (!client) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+
+    const legacyConditions = [
+      eq(messagesTable.tenantId, me.tenantId),
+      eq(messagesTable.toClientId, client.id),
+      sql`NOT EXISTS (
+        SELECT 1 FROM outbound_messages legacy_outbound
+        WHERE legacy_outbound.id = ${messagesTable.outboundMessageId}
+          AND legacy_outbound.tenant_id = ${me.tenantId}
+      )`,
+    ];
+    if (cursor) {
+      legacyConditions.push(or(
+        lt(messagesTable.sentAt, cursor.at),
+        and(
+          eq(messagesTable.sentAt, cursor.at),
+          sql`(('message:' || ${messagesTable.id}) COLLATE "C") < (${cursor.id} COLLATE "C")`,
+        ),
+      )!);
+    }
+    const legacyRows = await db.select({
+      id: messagesTable.id,
+      channel: messagesTable.channel,
+      content: messagesTable.content,
+      status: messagesTable.status,
+      mediaUrl: messagesTable.mediaUrl,
+      sentAt: messagesTable.sentAt,
+    }).from(messagesTable)
+      .where(and(...legacyConditions))
+      .orderBy(desc(messagesTable.sentAt), desc(sql`(('message:' || ${messagesTable.id}) COLLATE "C")`))
+      .limit(pageSize + 1);
+
+    const chatbotConditions = [
+      eq(chatbotMessagesTable.tenantId, me.tenantId),
+      eq(chatbotConversationsTable.tenantId, me.tenantId),
+      eq(chatbotConversationsTable.clientId, client.id),
+      eq(chatbotConversationsTable.channel, "whatsapp"),
+      sql`${chatbotMessagesTable.role} <> 'system'`,
+    ];
+    if (cursor) {
+      chatbotConditions.push(or(
+        lt(chatbotMessagesTable.sentAt, cursor.at),
+        and(
+          eq(chatbotMessagesTable.sentAt, cursor.at),
+          sql`(('chatbot:' || ${chatbotMessagesTable.id}) COLLATE "C") < (${cursor.id} COLLATE "C")`,
+        ),
+      )!);
+    }
+    const chatbotRows = await db.select({
+      id: chatbotMessagesTable.id,
+      conversationId: chatbotMessagesTable.conversationId,
+      role: chatbotMessagesTable.role,
+      content: chatbotMessagesTable.content,
+      isBot: chatbotMessagesTable.isBot,
+      deliveryStatus: chatbotMessagesTable.deliveryStatus,
+      lastDeliveryError: chatbotMessagesTable.lastDeliveryError,
+      mediaUrl: chatbotMessagesTable.mediaUrl,
+      mediaMimeType: chatbotMessagesTable.mediaMimeType,
+      mediaFileName: chatbotMessagesTable.mediaFileName,
+      mediaExpiredAt: chatbotMessagesTable.mediaExpiredAt,
+      sentAt: chatbotMessagesTable.sentAt,
+    }).from(chatbotMessagesTable)
+      .innerJoin(chatbotConversationsTable, and(
+        eq(chatbotConversationsTable.id, chatbotMessagesTable.conversationId),
+        eq(chatbotConversationsTable.tenantId, chatbotMessagesTable.tenantId),
+      ))
+      .where(and(...chatbotConditions))
+      .orderBy(desc(chatbotMessagesTable.sentAt), desc(sql`(('chatbot:' || ${chatbotMessagesTable.id}) COLLATE "C")`))
+      .limit(pageSize + 1);
+
+    const outboundSelection = {
+      id: outboundDeliveriesTable.id,
+      outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+      channel: outboundDeliveriesTable.channel,
+      content: outboundDeliveriesTable.content,
+      status: outboundDeliveriesTable.status,
+      attempts: outboundDeliveriesTable.attempts,
+      createdAt: outboundDeliveriesTable.createdAt,
+      acceptedAt: outboundDeliveriesTable.acceptedAt,
+      failedAt: outboundDeliveriesTable.failedAt,
+      externalId: outboundDeliveriesTable.externalId,
+      provider: outboundDeliveriesTable.provider,
+      origin: outboundMessagesTable.origin,
+      recipientName: outboundMessagesTable.recipientName,
+      metadata: outboundMessagesTable.metadata,
+    };
+    const deliveryTimelineAt = sql<Date>`COALESCE(
+      ${outboundDeliveriesTable.acceptedAt},
+      ${outboundDeliveriesTable.failedAt},
+      ${outboundDeliveriesTable.createdAt}
+    )`;
+    const deliveryConditions = [
+      eq(outboundDeliveriesTable.tenantId, me.tenantId),
+      eq(outboundMessagesTable.tenantId, me.tenantId),
+      eq(outboundMessagesTable.recipientType, "client"),
+      eq(outboundMessagesTable.recipientId, client.id),
+      sql`NOT EXISTS (
+        SELECT 1
+        FROM chatbot_messages linked_message
+        INNER JOIN chatbot_conversations linked_conversation
+          ON linked_conversation.id = linked_message.conversation_id
+         AND linked_conversation.tenant_id = linked_message.tenant_id
+        WHERE linked_message.id = (outbound_messages.metadata->>'chatbotMessageId')
+          AND linked_message.tenant_id = ${me.tenantId}
+          AND linked_conversation.client_id = ${client.id}
+          AND linked_conversation.channel = 'whatsapp'
+      )`,
+    ];
+    if (cursor) {
+      deliveryConditions.push(or(
+        lt(deliveryTimelineAt, cursor.at),
+        and(
+          eq(deliveryTimelineAt, cursor.at),
+          sql`(('outbound:' || ${outboundDeliveriesTable.outboundMessageId} || ':' || ${outboundDeliveriesTable.id}) COLLATE "C") < (${cursor.id} COLLATE "C")`,
+        ),
+      )!);
+    }
+    const deliveryRows = await db.select(outboundSelection).from(outboundDeliveriesTable)
+      .innerJoin(outboundMessagesTable, and(
+        eq(outboundMessagesTable.id, outboundDeliveriesTable.outboundMessageId),
+        eq(outboundMessagesTable.tenantId, outboundDeliveriesTable.tenantId),
+      ))
+      .where(and(...deliveryConditions))
+      .orderBy(desc(deliveryTimelineAt), desc(sql`(('outbound:' || ${outboundDeliveriesTable.outboundMessageId} || ':' || ${outboundDeliveriesTable.id}) COLLATE "C")`))
+      .limit(pageSize + 1);
+
+    const candidates = [
+      ...legacyRows.map((row) => ({ kind: "legacy" as const, id: `message:${row.id}`, at: row.sentAt, row })),
+      ...chatbotRows.map((row) => ({ kind: "chatbot" as const, id: `chatbot:${row.id}`, at: row.sentAt, row })),
+      ...deliveryRows.map((row) => ({
+        kind: "delivery" as const,
+        id: `outbound:${row.outboundMessageId}:${row.id}`,
+        at: row.acceptedAt ?? row.failedAt ?? row.createdAt,
+        row,
+      })),
+    ].sort((left, right) =>
+      right.at.getTime() - left.at.getTime() || compareTimelineIds(right.id, left.id),
+    );
+    const hasMore = candidates.length > pageSize;
+    const pageCandidates = candidates.slice(0, pageSize);
+    const pageChatbotRows = pageCandidates.flatMap((candidate) => candidate.kind === "chatbot" ? [candidate.row] : []);
+    const chatbotIds = pageChatbotRows.map((row) => row.id);
+    const linkedRows = chatbotIds.length
+      ? await db.select(outboundSelection).from(outboundDeliveriesTable)
+          .innerJoin(outboundMessagesTable, and(
+            eq(outboundMessagesTable.id, outboundDeliveriesTable.outboundMessageId),
+            eq(outboundMessagesTable.tenantId, outboundDeliveriesTable.tenantId),
+          ))
+          .where(and(
+            eq(outboundDeliveriesTable.tenantId, me.tenantId),
+            inArray(sql<string>`${outboundMessagesTable.metadata}->>'chatbotMessageId'`, chatbotIds),
+            eq(outboundMessagesTable.recipientType, "client"),
+            eq(outboundMessagesTable.recipientId, client.id),
+          ))
+      : [];
+    const linkedByMessage = new Map(linkedRows.map((row) => {
+      const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+        ? row.metadata as Record<string, unknown>
+        : {};
+      return [String(metadata.chatbotMessageId), row];
+    }));
+    const attemptDeliveryIds = [...new Set([...deliveryRows, ...linkedRows].map((row) => row.id))];
+    const attemptRows = attemptDeliveryIds.length
+      ? await db.select({
+          deliveryId: outboundDeliveryAttemptsTable.deliveryId,
+          attemptNumber: outboundDeliveryAttemptsTable.attemptNumber,
+          status: outboundDeliveryAttemptsTable.status,
+          provider: outboundDeliveryAttemptsTable.provider,
+          externalId: outboundDeliveryAttemptsTable.externalId,
+          error: outboundDeliveryAttemptsTable.error,
+          startedAt: outboundDeliveryAttemptsTable.startedAt,
+          completedAt: outboundDeliveryAttemptsTable.completedAt,
+        }).from(outboundDeliveryAttemptsTable)
+          .where(and(
+            eq(outboundDeliveryAttemptsTable.tenantId, me.tenantId),
+            inArray(outboundDeliveryAttemptsTable.deliveryId, attemptDeliveryIds),
+          ))
+          .orderBy(outboundDeliveryAttemptsTable.attemptNumber)
+      : [];
+    const attemptsByDelivery = new Map<string, typeof attemptRows>();
+    for (const attempt of attemptRows) {
+      const history = attemptsByDelivery.get(attempt.deliveryId) ?? [];
+      history.push(attempt);
+      attemptsByDelivery.set(attempt.deliveryId, history);
+    }
+    const safeAttemptHistory = (deliveryId: string) =>
+      (attemptsByDelivery.get(deliveryId) ?? []).map((attempt) => ({
+        attemptNumber: attempt.attemptNumber,
+        status: attempt.status,
+        provider: attempt.provider,
+        externalId: attempt.externalId,
+        error: attempt.error ? "provider_error" : null,
+        startedAt: attempt.startedAt,
+        completedAt: attempt.completedAt,
+      }));
+    const safeDeliveryIssue = (status: string) => status === "unknown"
+      ? "O resultado do envio é desconhecido. Confira as tentativas antes de reenviar."
+      : status === "failed"
+        ? "O envio falhou. Consulte as tentativas para ver os detalhes disponíveis."
+        : null;
+    const now = Date.now();
+    const items = await Promise.all(pageCandidates.map(async (candidate) => {
+      if (candidate.kind === "legacy") {
+        return {
+          id: candidate.id,
+          clientId: client.id,
+          clientName: client.name,
+          channel: candidate.row.channel,
+          content: candidate.row.content,
+          direction: "outbound" as const,
+          actor: "team" as const,
+          sentAt: candidate.row.sentAt,
+          status: candidate.row.status,
+          source: "message" as const,
+          mediaUrl: candidate.row.mediaUrl,
+        };
+      }
+      if (candidate.kind === "delivery") {
+        const deliveryHistory = ["failed", "unknown"].includes(candidate.row.status)
+          ? safeAttemptHistory(candidate.row.id)
+          : undefined;
+        return {
+          id: candidate.id,
+          clientId: client.id,
+          clientName: candidate.row.recipientName || client.name,
+          channel: candidate.row.channel,
+          content: candidate.row.content,
+          direction: "outbound" as const,
+          actor: "team" as const,
+          sentAt: candidate.row.acceptedAt ?? candidate.row.failedAt ?? candidate.row.createdAt,
+          status: candidate.row.status === "accepted" ? "sent" : candidate.row.status,
+          source: "outbound" as const,
+          provider: candidate.row.provider,
+          externalId: candidate.row.externalId,
+          deliveryAttempts: candidate.row.attempts,
+          ...(deliveryHistory ? { deliveryHistory } : {}),
+          deliveryIssue: safeDeliveryIssue(candidate.row.status),
+        };
+      }
+      let mediaUrl = candidate.row.mediaUrl;
+      const mediaExpiresAt = candidate.row.role === "user" && candidate.row.mediaUrl
+        ? getWhatsAppInboundMediaExpirationAt(candidate.row.sentAt)
+        : null;
+      if (mediaExpiresAt && (candidate.row.mediaExpiredAt || mediaExpiresAt.getTime() <= now)) {
+        mediaUrl = null;
+      } else if (mediaUrl) {
+        const fileKey = extractVerifiedUploadThingKey(mediaUrl);
+        if (fileKey) {
+          const expiresIn = mediaExpiresAt
+            ? Math.min(DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS, Math.max(1, Math.floor((mediaExpiresAt.getTime() - now) / 1000)))
+            : DEFAULT_MEDIA_SIGNED_URL_TTL_SECONDS;
+          try {
+            mediaUrl = (await utapi.generateSignedURL(fileKey, { expiresIn })).ufsUrl;
+          } catch {
+            mediaUrl = null;
+          }
+        }
+      }
+      const linked = linkedByMessage.get(candidate.row.id);
+      const isInbound = candidate.row.role === "user";
+      return {
+        id: candidate.id,
+        clientId: client.id,
+        clientName: client.name,
+        channel: linked?.channel ?? "whatsapp",
+        content: candidate.row.content,
+        direction: isInbound ? "inbound" as const : "outbound" as const,
+        actor: isInbound ? "client" as const : candidate.row.isBot ? "ai" as const : "team" as const,
+        sentAt: candidate.row.sentAt,
+        status: isInbound ? "received" : linked?.status === "accepted" ? "sent" : linked?.status ?? candidate.row.deliveryStatus,
+        source: "chatbot" as const,
+        ...(!isInbound && linked ? {
+          provider: linked.provider,
+          externalId: linked.externalId,
+          deliveryAttempts: linked.attempts,
+          ...(linked.status === "failed" || linked.status === "unknown"
+            ? { deliveryHistory: safeAttemptHistory(linked.id) }
+            : {}),
+          deliveryIssue: safeDeliveryIssue(linked.status),
+        } : {}),
+        mediaUrl,
+        mediaMimeType: candidate.row.mediaMimeType,
+        mediaFileName: candidate.row.mediaFileName,
+        mediaExpiredAt: candidate.row.mediaExpiredAt ?? (mediaExpiresAt && mediaUrl === null ? mediaExpiresAt : null),
+        mediaExpiresAt,
+      };
+    }));
+    const oldestCandidate = pageCandidates.at(-1);
+    res.json({
+      items: items.sort((left, right) =>
+        left.sentAt.getTime() - right.sentAt.getTime() || compareTimelineIds(left.id, right.id),
+      ),
+      hasMore,
+      nextCursor: hasMore && oldestCandidate
+        ? encodeConversationTimelineCursor(oldestCandidate.at, oldestCandidate.id)
+        : null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/chatbot-messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = CreateMessageBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
@@ -251,7 +974,7 @@ router.post("/chatbot-messages", async (req, res, next: NextFunction): Promise<v
 
 router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = z.object({
       status: z.string().optional(),
@@ -305,6 +1028,12 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
       if (parsed.data.status !== undefined) updates.status = parsed.data.status;
       if (parsed.data.assignedUserId !== undefined) updates.assignedUserId = parsed.data.assignedUserId || null;
       if (parsed.data.endedAt !== undefined) updates.endedAt = parsed.data.endedAt ? new Date(parsed.data.endedAt) : null;
+      if (parsed.data.clientId !== undefined) {
+        const currentMetadata = current.metadata && typeof current.metadata === "object" && !Array.isArray(current.metadata)
+          ? current.metadata as Record<string, unknown>
+          : {};
+        updates.metadata = { ...currentMetadata, clientAssociationManualOverride: true };
+      }
       const clientChanged = parsed.data.clientId !== undefined && parsed.data.clientId !== current.clientId;
       if (clientChanged) updates.clientId = parsed.data.clientId;
       if (Object.keys(updates).length > 0) {
@@ -450,7 +1179,7 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
  * never accepted from the browser, which keeps an agent inside their tenant. */
 router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireChatbotStaff(req, res, next);
     if (!me) return;
     const parsed = ReplyConversationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
@@ -483,6 +1212,10 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         && !Array.isArray(conversation.metadata)
         ? conversation.metadata as Record<string, unknown>
         : {};
+      const provider = metadata["provider"] === "zernio" ? "zernio" : "meta";
+      const integrationType = provider === "zernio"
+        ? INSTAGRAM_ZERNIO_TYPE
+        : INSTAGRAM_MESSAGING_TYPE;
       const integrationId = typeof metadata["instagramIntegrationId"] === "string"
         ? metadata["instagramIntegrationId"]
         : null;
@@ -491,7 +1224,7 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
           .where(and(
             eq(tenantIntegrationsTable.id, integrationId),
             eq(tenantIntegrationsTable.tenantId, me.tenantId),
-            eq(tenantIntegrationsTable.type, INSTAGRAM_MESSAGING_TYPE),
+            eq(tenantIntegrationsTable.type, integrationType),
             eq(tenantIntegrationsTable.enabled, true),
             eq(tenantIntegrationsTable.status, "connected"),
           ))
@@ -501,6 +1234,28 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         res.status(409).json({
           code: "INSTAGRAM_CONNECTION_UNAVAILABLE",
           error: "A conta do Instagram não está conectada. Reconecte-a nas configurações.",
+        });
+        return;
+      }
+      const zernioConfig = provider === "zernio"
+        ? (integration.config ?? {}) as Record<string, string>
+        : null;
+      const zernioApiKey = provider === "zernio"
+        ? readZernioApiKey(integration.secretsEncrypted)
+        : null;
+      if (
+        provider === "zernio" &&
+        (
+          !zernioApiKey ||
+          !zernioConfig?.accountId ||
+          zernioConfig.accountId !== metadata["zernioAccountId"] ||
+          zernioConfig.profileId !== metadata["zernioProfileId"] ||
+          typeof metadata["zernioConversationId"] !== "string"
+        )
+      ) {
+        res.status(409).json({
+          code: "ZERNIO_SEND_CONFIGURATION_INCOMPLETE",
+          error: "Configure a chave de API da Zernio e confira o vínculo da conta antes de enviar.",
         });
         return;
       }
@@ -559,67 +1314,37 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         return;
       }
 
-      try {
-        const meta = getInstagramMetaConfig();
-        if (!meta.appConfigured) throw new InstagramProviderError("rejected");
-        const integrationConfig = (integration.config ?? {}) as Record<string, string>;
-        const instagramUserId = integrationConfig["instagramUserId"];
-        if (!instagramUserId) throw new InstagramProviderError("rejected");
-        await sendInstagramText(
-          meta,
-          readInstagramAccessToken(integration),
-          instagramUserId,
-          conversation.sessionId,
-          parsed.data.content,
-        );
-        await db.update(chatbotMessagesTable).set({
-          deliveryStatus: "sent",
-          deliveryAttempts: 1,
-          deliveryUpdatedAt: new Date(),
-          lastDeliveryError: null,
-        }).where(and(
-          eq(chatbotMessagesTable.id, id),
-          eq(chatbotMessagesTable.tenantId, me.tenantId),
-        ));
-        await db.update(chatbotConversationsTable)
-          .set({ status: "human_handoff", assignedUserId: me.id })
-          .where(and(
-            eq(chatbotConversationsTable.id, conversation.id),
-            eq(chatbotConversationsTable.tenantId, me.tenantId),
-          ));
-        const [message] = await db.select().from(chatbotMessagesTable)
-          .where(and(eq(chatbotMessagesTable.id, id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
-          .limit(1);
-        res.status(201).json(message);
-      } catch (error) {
-        const providerError = error instanceof InstagramProviderError ? error : null;
-        const outcomeUnknown = providerError?.kind === "unknown";
-        await db.update(chatbotMessagesTable).set({
-          deliveryStatus: outcomeUnknown ? "unknown" : "failed",
-          deliveryAttempts: 1,
-          deliveryUpdatedAt: new Date(),
-          lastDeliveryError: outcomeUnknown ? "instagram-outcome-unknown" : "instagram-provider-rejected",
-        }).where(and(
-          eq(chatbotMessagesTable.id, id),
-          eq(chatbotMessagesTable.tenantId, me.tenantId),
-        ));
-        if (providerError?.httpStatus === 401) {
-          await db.update(tenantIntegrationsTable).set({
-            enabled: false,
-            status: "error",
-            lastError: "O acesso ao Instagram expirou. Reconecte a conta.",
-          }).where(and(
-            eq(tenantIntegrationsTable.id, integration.id),
-            eq(tenantIntegrationsTable.tenantId, me.tenantId),
-          ));
-        }
-        res.status(outcomeUnknown ? 502 : 422).json({
-          code: outcomeUnknown ? "INSTAGRAM_DELIVERY_UNKNOWN" : "INSTAGRAM_DELIVERY_FAILED",
-          error: outcomeUnknown
-            ? "A Meta não confirmou o resultado do envio. Verifique a conversa antes de tentar novamente."
-            : "A Meta recusou o envio. Revise a conexão e as permissões do Instagram.",
-        });
-      }
+      await db.update(chatbotConversationsTable)
+        .set({ status: "human_handoff", assignedUserId: me.id })
+        .where(and(eq(chatbotConversationsTable.id, conversation.id), eq(chatbotConversationsTable.tenantId, me.tenantId)));
+      const queued = await dispatchOutboundMessage({
+        tenantId: me.tenantId,
+        eventType: "instagram_human_reply",
+        idempotencyKey: `instagram:staff:${parsed.data.idempotencyKey}`,
+        recipient: { type: "direct", name: "Instagram" },
+        instagram: { text: parsed.data.content },
+        channels: ["instagram"],
+        origin: "instagram-attendance",
+        originChannel: "instagram",
+        createdById: me.id,
+        metadata: {
+          conversationId: conversation.id,
+          chatbotMessageId: id,
+          instagramRecipientId: conversation.sessionId,
+          instagramIntegrationId: integration.id,
+          instagramProvider: provider,
+          instagramUserId: provider === "meta"
+            ? ((integration.config ?? {}) as Record<string, string>).instagramUserId
+            : null,
+          zernioConversationId: metadata["zernioConversationId"],
+          zernioAccountId: metadata["zernioAccountId"],
+          zernioProfileId: metadata["zernioProfileId"],
+        },
+      });
+      const [message] = await db.select().from(chatbotMessagesTable)
+        .where(and(eq(chatbotMessagesTable.id, id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
+        .limit(1);
+      res.status(queued.deliveries.some((delivery) => delivery.status === "accepted") ? 201 : 202).json(message);
       return;
     }
     if (conversation.channel !== "whatsapp") {
@@ -649,20 +1374,52 @@ router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunct
         eq(chatbotMessagesTable.sourceMessageId, sourceMessageId),
       ))
       .limit(1);
-    if (!existing || !await deliverAttendanceReply({
-      tenantId: me.tenantId,
-      messageId: existing.id,
-    })) {
+    const delivered = existing
+      ? await deliverAttendanceReply({
+          tenantId: me.tenantId,
+          messageId: existing.id,
+          inlineOnQueueFailure: true,
+        })
+      : false;
+    if (!existing) {
       next(new ValidationError("Não foi possível enviar a mensagem pelo WhatsApp.", "WHATSAPP_DELIVERY_FAILED"));
+      return;
+    }
+    const [message] = await db.select().from(chatbotMessagesTable)
+      .where(and(eq(chatbotMessagesTable.id, existing.id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!message) {
+      next(new NotFoundError("Mensagem não encontrada após o envio.", "MESSAGE_NOT_FOUND"));
+      return;
+    }
+    if (!delivered && message.deliveryStatus === "cancelled") {
+      next(new ForbiddenError(
+        safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, message.lastDeliveryError)
+          ?? CHATBOT_DELIVERY_ISSUES.optedOut,
+        "WHATSAPP_OPTED_OUT",
+      ));
+      return;
+    }
+    if (!delivered && message.deliveryStatus === "unknown") {
+      res.status(502).json({
+        code: "WHATSAPP_DELIVERY_UNKNOWN",
+        error: safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, message.lastDeliveryError)
+          ?? CHATBOT_DELIVERY_ISSUES.deliveryUnknown,
+      });
+      return;
+    }
+    if (!delivered && message.deliveryStatus === "failed") {
+      next(new ValidationError(
+        safeChatbotDeliveryIssue(conversation.channel, message.deliveryStatus, message.lastDeliveryError)
+          ?? CHATBOT_DELIVERY_ISSUES.rejected,
+        "WHATSAPP_DELIVERY_FAILED",
+      ));
       return;
     }
     await db.update(chatbotConversationsTable)
       .set({ status: "human_handoff", assignedUserId: me.id })
       .where(eq(chatbotConversationsTable.id, conversation.id));
-    const [message] = await db.select().from(chatbotMessagesTable)
-      .where(and(eq(chatbotMessagesTable.id, id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
-      .limit(1);
-    res.status(201).json(message);
+    res.status(delivered ? 201 : 202).json(message);
   } catch (err) {
     next(err);
   }

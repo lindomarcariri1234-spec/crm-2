@@ -338,6 +338,29 @@ describe("POST /upload/images — gallery uploads", () => {
     expect(mockUploadFiles).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { path: "/image", field: "file", filename: "payload.txt" },
+    { path: "/images", field: "files", filename: "payload.txt" },
+    { path: "/video", field: "file", filename: "payload.txt" },
+    { path: "/document", field: "file", filename: "payload.txt" },
+  ])("rejects unauthenticated multipart requests before parsing $path", async ({ path, field, filename }) => {
+    vi.mocked(requireAuth).mockImplementationOnce(async (_req, res) => {
+      res.status(401).json({ error: "Não autenticado" });
+      return null;
+    });
+
+    const res = await request(app)
+      .post(`/upload${path}`)
+      .attach(field, Buffer.from("not an allowed file"), {
+        filename,
+        contentType: "text/plain",
+      });
+
+    expect(res.status).toBe(401);
+    expect(requireAuth).toHaveBeenCalledOnce();
+    expect(mockUploadFiles).not.toHaveBeenCalled();
+  });
+
   it("rejects non-image gallery files with a useful 400 response", async () => {
     const res = await request(app)
       .post("/upload/images")
@@ -368,6 +391,38 @@ describe("POST /upload/images — gallery uploads", () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("TOO_MANY_FILES");
     expect(mockUploadFiles).not.toHaveBeenCalled();
+  });
+
+  it("deletes successful files when another file in the batch fails, without exposing cleanup errors", async () => {
+    const providerMarker = "SYNTHETIC_UPLOADTHING_DELETE_SECRET_772";
+    mockUploadFiles.mockResolvedValueOnce([
+      {
+        data: { ufsUrl: "https://utfs.io/f/image-one", key: "image-one", name: "one.jpg", size: 101 },
+        error: null,
+      },
+      {
+        data: null,
+        error: { message: "Upload failed" },
+      },
+    ]);
+    mockDeleteFiles.mockRejectedValueOnce(new Error(providerMarker));
+
+    const res = await request(app)
+      .post("/upload/images")
+      .attach("files", Buffer.from("first-image"), {
+        filename: "one.jpg",
+        contentType: "image/jpeg",
+      })
+      .attach("files", Buffer.from("second-image"), {
+        filename: "two.jpg",
+        contentType: "image/jpeg",
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("Não foi possível enviar os arquivos. Tente novamente.");
+    expect(JSON.stringify(res.body)).not.toContain(providerMarker);
+    expect(mockDeleteFiles).toHaveBeenCalledOnce();
+    expect(mockDeleteFiles).toHaveBeenCalledWith("image-one");
   });
 
   it("enforces the gallery size limit supplied by the frontend", async () => {

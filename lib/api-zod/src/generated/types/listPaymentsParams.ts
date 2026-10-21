@@ -12,9 +12,19 @@ export type ListPaymentsParams = {
    */
   reservationId?: string | null;
   /**
+   * Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).
+   * @nullable
+   */
+  reservationIds?: string | null;
+  /**
    * @nullable
    */
   clientId?: string | null;
+  /**
+   * Comma-separated client IDs to retrieve payments for (maximum 100 IDs).
+   * @nullable
+   */
+  clientIds?: string | null;
   /**
    * @nullable
    */
@@ -41,6 +51,16 @@ export type ListPaymentsParams = {
    * @nullable
    */
   dueDateTo?: string | null;
+  /**
+   * Inclusive start of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtFrom?: string | null;
+  /**
+   * Inclusive end of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtTo?: string | null;
   /**
    * Return only payments not linked to an operational cost.
    */

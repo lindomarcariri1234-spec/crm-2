@@ -20,7 +20,7 @@ import { logger } from "./lib/logger";
 import { runFinancialCategoryIntegrityCheck } from "./lib/financial-category-integrity";
 import { runMigrations } from "@workspace/db";
 import { initStripeSync } from "./lib/stripeSync";
-import { runApiStartup } from "./lib/api-startup";
+import { runApiStartup, runMigrationsWithErrorLogging } from "./lib/api-startup";
 import { backfillEncryptedCredentials } from "./lib/credential-backfill";
 import { seedPlansIfMissing } from "./lib/seed-plans";
 import { runScheduledJob, scheduleDistributedCron } from "./lib/distributed-scheduler";
@@ -38,15 +38,22 @@ import { runExpiredReservationsCron } from "./lib/expired-reservations";
 import { runPipelineTripDepartureCron, runPipelineTripEndedCron } from "./services/pipeline-automation";
 import { calculateScoresForAllTenants } from "./lib/client-scores";
 import { runCampaignAutomationCron } from "./lib/campaign-automation";
+import { runScheduledManualCampaignsCron } from "./lib/manual-campaign-dispatch";
 import { runGemeoAlertsCron, runGemeoOpportunitiesCron } from "./lib/gemeo-cron";
 import { runFavoriteLowAvailabilityAlertCron } from "./lib/favorite-alerts";
 import { runAbandonedOrderReferralCleanup } from "./lib/abandoned-order-referrals";
+import { retryPendingDeferredOrderAccounting } from "./services/checkout/deferred-accounting-recovery";
 import { runSeatReconciliationCron } from "./lib/seat-reconciliation";
 import { runCapacityIntegrityCheck } from "./services/capacity-integrity";
 import { runStripeHealthCheckCron } from "./lib/stripe-health-check";
-import { getRedisConnection, waitForEvictionPolicyCheck, fetchUpstashDailyStats, getRedisWarningThresholdPct, maybeSendDailyLimitAlert } from "./lib/redis";
+import { getRedisConnection, getBullMQWorkerConnection, waitForEvictionPolicyCheck, fetchUpstashDailyStats, getRedisWarningThresholdPct, maybeSendDailyLimitAlert } from "./lib/redis";
 import { initSeatUpdateSubscriber, closeSeatUpdateSubscriber } from "./lib/realtime";
-import { getReminderQueue, closeQueues } from "./queues/index";
+import { getReminderQueue, closeQueues, prepareAndVerifyBullMQQueueRedisCutover } from "./queues/index";
+import {
+  getReminderSchedulerRegistrationHealth,
+  REMINDER_SCHEDULERS,
+  registerReminderScheduler,
+} from "./queues/reminder-schedulers";
 import { startEmailWorker, stopEmailWorker } from "./workers/email.worker";
 import { startReminderWorker, stopReminderWorker, retryFailedBookingEmails, retryFailedExpiryWarningEmails } from "./workers/reminder.worker";
 import { startPdfWorker, stopPdfWorker } from "./workers/pdf.worker";
@@ -159,18 +166,11 @@ const __serverDir = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__serverDir, "../../../lib/db/drizzle");
 
 async function applyMigrations() {
-  try {
-    await runMigrations(migrationsFolder);
-    logger.info("Drizzle migrations complete");
-  } catch (err) {
-    logger.error({ err }, "Drizzle migration failed");
-    // Never keep serving after a migration failure. Continuing here leaves
-    // the process alive but the schema may be incomplete, which makes the
-    // deployment probe and the first real requests fail with unrelated 500s.
-    // Re-throw so the startup catch below terminates the instance and lets
-    // Autoscale retry with a clean process.
-    throw err;
-  }
+  await runMigrationsWithErrorLogging(
+    () => runMigrations(migrationsFolder),
+    (err) => logger.error({ err }, "Drizzle migration failed"),
+  );
+  logger.info("Drizzle migrations complete");
   // Idempotently seed plan rows so a freshly-deployed/empty database does not
   // leave billing, onboarding, and plan selection broken. Insert-only — never
   // clobbers operator edits made via /admin/plans.
@@ -240,22 +240,25 @@ function warnDevServerSkipped(port: number): Promise<void> {
 
 function listenForRequests(): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    const server = app.listen(port);
-    server.once("listening", () => {
-      logger.info({ port }, "Server listening");
-      resolve(true);
-    });
-    server.once("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EADDRINUSE" && process.env["NODE_ENV"] !== "production") {
-        // Drain stderr fully before exiting so the banner is not silently
-        // discarded when the workflow pipes the process output.
-        void warnDevServerSkipped(port).then(() => process.exit(0));
-        resolve(false);
-        return;
-      }
-      logger.error({ err }, "Error listening on port");
-      reject(err);
-    });
+    void (async () => {
+      await prepareAndVerifyBullMQQueueRedisCutover();
+      const server = app.listen(port);
+      server.once("listening", () => {
+        logger.info({ port }, "Server listening");
+        resolve(true);
+      });
+      server.once("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EADDRINUSE" && process.env["NODE_ENV"] !== "production") {
+          // Drain stderr fully before exiting so the banner is not silently
+          // discarded when the workflow pipes the process output.
+          void warnDevServerSkipped(port).then(() => process.exit(0));
+          resolve(false);
+          return;
+        }
+        logger.error({ err }, "Error listening on port");
+        reject(err);
+      });
+    })().catch(reject);
   });
 }
 
@@ -309,7 +312,10 @@ void runApiStartup(process.env, {
         await runPipelineTripEndedCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      scheduleDistributedCron("pipeline-trip-departure", "* * * * *", async () => {
+      // This database-backed transition is minute-accurate but not latency-critical.
+      // Running every five minutes cuts distributed Redis lease traffic by 80%
+      // while keeping the departure-stage update delay below four minutes.
+      scheduleDistributedCron("pipeline-trip-departure", "*/5 * * * *", async () => {
         await runPipelineTripDepartureCron();
       }, { timezone: "America/Sao_Paulo" });
 
@@ -343,6 +349,10 @@ void runApiStartup(process.env, {
         await runAbandonedOrderReferralCleanup();
       }, { timezone: "America/Sao_Paulo" });
 
+      scheduleDistributedCron("deferred-order-accounting-recovery", "*/15 * * * *", async () => {
+        await retryPendingDeferredOrderAccounting();
+      }, { timezone: "America/Sao_Paulo" });
+
       scheduleDistributedCron("referral-attempt-log-cleanup", "30 5 * * *", async () => {
         logger.info("[referral-attempt-log-cleanup] Daily retention sweep triggered");
         await runReferralAttemptLogCleanup();
@@ -369,6 +379,10 @@ void runApiStartup(process.env, {
       scheduleDistributedCron("campaign-automation", "0 * * * *", async () => {
         logger.info("[campaign-automation] Daily automation cron triggered");
         await runCampaignAutomationCron();
+      }, { timezone: "America/Sao_Paulo" });
+
+      scheduleDistributedCron("campaign-scheduled-dispatch", "* * * * *", async () => {
+        await runScheduledManualCampaignsCron();
       }, { timezone: "America/Sao_Paulo" });
 
       void runScheduledJob("whatsapp-outbox-startup", retryPendingReservationConfirmedWhatsApps);
@@ -431,14 +445,29 @@ void runApiStartup(process.env, {
           }
         })
         .catch((err) => logger.warn({ err }, "[redis-stats] Failed to check daily usage on startup"));
+      fetchUpstashDailyStats("queue")
+        .then((stats) => {
+          if (!stats) return;
+          const threshold = getRedisWarningThresholdPct();
+          logger.info(
+            { commandCount: stats.commandCount, maxCommands: stats.maxCommands, usagePct: Math.round(stats.usagePct * 10) / 10 },
+            `[redis-queue-stats] Daily request usage: ${stats.commandCount.toLocaleString()} / ${stats.maxCommands.toLocaleString()} (${Math.round(stats.usagePct)}%)`,
+          );
+          if (stats.usagePct >= threshold) maybeSendDailyLimitAlert(stats, "queue");
+        })
+        .catch((err) => logger.warn({ err }, "[redis-queue-stats] Failed to check daily usage on startup"));
 
       // ── Hourly Redis daily-limit alert check ──
       // Polls usage once per hour and emails the superadmin when the configured
       // threshold is crossed. The alert itself is rate-limited to 1/hour inside
       // maybeSendDailyLimitAlert() so duplicate cron runs never flood the inbox.
       scheduleDistributedCron("redis-daily-limit", "0 * * * *", async () => {
-        const stats = await fetchUpstashDailyStats();
-        if (stats) maybeSendDailyLimitAlert(stats);
+        const [appStats, queueStats] = await Promise.all([
+          fetchUpstashDailyStats(),
+          fetchUpstashDailyStats("queue"),
+        ]);
+        if (appStats) maybeSendDailyLimitAlert(appStats, "app");
+        if (queueStats) maybeSendDailyLimitAlert(queueStats, "queue");
       });
 
       // ENABLE_WORKERS: opt-in flag for BullMQ worker initialization.
@@ -513,7 +542,7 @@ void runApiStartup(process.env, {
       }
 
       // BullMQ: start workers if Redis is available
-      const redisConn = getRedisConnection();
+      const redisConn = getBullMQWorkerConnection();
       if (redisConn) {
         try {
           // Await the eviction-policy check before initialising BullMQ workers.
@@ -544,95 +573,52 @@ void runApiStartup(process.env, {
         if (reminderQueue) {
           const REMINDER_TZ = process.env["REMINDER_TZ"] ?? "America/Sao_Paulo";
           const REMINDER_CRON = process.env["REMINDER_CRON"] ?? "0 8 * * *";
+          const schedulers = REMINDER_SCHEDULERS;
+          const schedule = (
+            scheduler: (typeof schedulers)[keyof typeof schedulers],
+            repeat: { pattern: string; tz?: string },
+          ) =>
+            registerReminderScheduler(scheduler, () =>
+              reminderQueue.upsertJobScheduler(
+                scheduler.id,
+                repeat,
+                { name: scheduler.name, data: { type: scheduler.name } },
+              ),
+            );
 
-          await reminderQueue.upsertJobScheduler(
-            "boarding-reminder-daily",
-            { pattern: REMINDER_CRON, tz: REMINDER_TZ },
-            { name: "boarding_reminder", data: { type: "boarding_reminder" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule boarding reminder"));
+          await schedule(schedulers.boardingReminderDaily, { pattern: REMINDER_CRON, tz: REMINDER_TZ });
+          await schedule(schedulers.paymentReminderDaily, { pattern: REMINDER_CRON, tz: REMINDER_TZ });
+          await schedule(schedulers.expiredReservationsCleanup, { pattern: "*/5 * * * *" });
+          await schedule(schedulers.failedEmailRetry, { pattern: "*/15 * * * *" });
+          await schedule(schedulers.referralExpiryNotificationDaily, { pattern: "0 9 * * *", tz: REMINDER_TZ });
+          await schedule(schedulers.referralExpiryWarningDaily, { pattern: "0 9 * * *", tz: REMINDER_TZ });
+          await schedule(schedulers.expiryWarningEmailRetry, { pattern: "*/15 * * * *" });
+          await schedule(schedulers.referralBonusReleaseNotificationDaily, { pattern: "0 9 * * *", tz: REMINDER_TZ });
+          await schedule(schedulers.npsDispatchHourly, { pattern: "30 * * * *" });
+          await schedule(schedulers.installmentDueReminderDaily, { pattern: REMINDER_CRON, tz: REMINDER_TZ });
+          await schedule(schedulers.seatReconciliationDaily, { pattern: "0 4 * * *", tz: "America/Sao_Paulo" });
+          await schedule(schedulers.trialExpiryNotificationDaily, { pattern: "0 9 * * *", tz: REMINDER_TZ });
+          await schedule(schedulers.uploadthingOrphanCleanupNightly, { pattern: "0 2 * * *", tz: "America/Sao_Paulo" });
+          await schedule(schedulers.chatbotDeliveryRetry, { pattern: "*/5 * * * *" });
 
-          await reminderQueue.upsertJobScheduler(
-            "payment-reminder-daily",
-            { pattern: REMINDER_CRON, tz: REMINDER_TZ },
-            { name: "payment_reminder", data: { type: "payment_reminder" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule payment reminder"));
-
-          await reminderQueue.upsertJobScheduler(
-            "expired-reservations-cleanup",
-            { pattern: "*/5 * * * *" },
-            { name: "expired_reservations_cleanup", data: { type: "expired_reservations_cleanup" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule expired reservations cleanup"));
-
-          await reminderQueue.upsertJobScheduler(
-            "failed-email-retry",
-            { pattern: "*/15 * * * *" },
-            { name: "failed_email_retry", data: { type: "failed_email_retry" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule failed-email retry"));
-
-          await reminderQueue.upsertJobScheduler(
-            "referral-expiry-notification-daily",
-            { pattern: "0 9 * * *", tz: process.env["REMINDER_TZ"] ?? "America/Sao_Paulo" },
-            { name: "referral_expiry_notification", data: { type: "referral_expiry_notification" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule referral expiry notification"));
-
-          await reminderQueue.upsertJobScheduler(
-            "referral-expiry-warning-daily",
-            { pattern: "0 9 * * *", tz: process.env["REMINDER_TZ"] ?? "America/Sao_Paulo" },
-            { name: "referral_expiry_warning", data: { type: "referral_expiry_warning" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule referral expiry warning"));
-
-          await reminderQueue.upsertJobScheduler(
-            "expiry-warning-email-retry",
-            { pattern: "*/15 * * * *" },
-            { name: "expiry_warning_email_retry", data: { type: "expiry_warning_email_retry" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule expiry-warning email retry"));
-
-          await reminderQueue.upsertJobScheduler(
-            "referral-bonus-release-notification-daily",
-            { pattern: "0 9 * * *", tz: process.env["REMINDER_TZ"] ?? "America/Sao_Paulo" },
-            { name: "referral_bonus_release_notification", data: { type: "referral_bonus_release_notification" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule referral bonus release notification"));
-
-          await reminderQueue.upsertJobScheduler(
-            "nps-dispatch-hourly",
-            { pattern: "30 * * * *" },
-            { name: "nps_dispatch", data: { type: "nps_dispatch" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule NPS dispatch"));
-
-          await reminderQueue.upsertJobScheduler(
-            "installment-due-reminder-daily",
-            { pattern: process.env["REMINDER_CRON"] ?? "0 8 * * *", tz: process.env["REMINDER_TZ"] ?? "America/Sao_Paulo" },
-            { name: "installment_due_reminder", data: { type: "installment_due_reminder" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule installment due reminder"));
-
-          await reminderQueue.upsertJobScheduler(
-            "seat-reconciliation-daily",
-            { pattern: "0 4 * * *", tz: "America/Sao_Paulo" },
-            { name: "seat_reconciliation", data: { type: "seat_reconciliation" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule seat reconciliation"));
-
-          await reminderQueue.upsertJobScheduler(
-            "trial-expiry-notification-daily",
-            { pattern: "0 9 * * *", tz: REMINDER_TZ },
-            { name: "trial_expiry_notification", data: { type: "trial_expiry_notification" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule trial expiry notification"));
-
-          await reminderQueue.upsertJobScheduler(
-            "uploadthing-orphan-cleanup-nightly",
-            { pattern: "0 2 * * *", tz: "America/Sao_Paulo" },
-            { name: "uploadthing_orphan_cleanup", data: { type: "uploadthing_orphan_cleanup" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule uploadthing orphan cleanup"));
-
-          await reminderQueue.upsertJobScheduler(
-            "chatbot-delivery-retry",
-            { pattern: "*/5 * * * *" },
-            { name: "chatbot_delivery_retry", data: { type: "chatbot_delivery_retry" } },
-          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule chatbot delivery retry"));
-
-          logger.info("[reminders] Repeatable reminder jobs registered");
+          const schedulerHealth = getReminderSchedulerRegistrationHealth();
+          if (schedulerHealth.failedCount > 0) {
+            logger.warn(
+              {
+                failedCount: schedulerHealth.failedCount,
+                unattemptedCount: schedulerHealth.unattemptedCount,
+              },
+              "[reminders] Scheduler registration completed with failures",
+            );
+          } else {
+            logger.info(
+              { registeredCount: schedulerHealth.schedulers.length },
+              "[reminders] Repeatable reminder jobs registered",
+            );
+          }
         }
       } else {
-        logger.warn("[queue] REDIS_URL not set — BullMQ workers not started, emails sent synchronously");
+        logger.warn("[queue] Neither REDIS_QUEUE_URL nor REDIS_URL is set — BullMQ workers not started, emails sent synchronously");
 
         scheduleDistributedCron("expired-reservations", "*/5 * * * *", () => {
           runExpiredReservationsCron().catch((err) =>
@@ -679,5 +665,5 @@ void runApiStartup(process.env, {
   })();
 }).catch((err) => {
   logger.error({ err }, "API startup failed before serving — aborting boot");
-  process.exit(1);
+  logger.flush(() => process.exit(1));
 });

@@ -799,6 +799,111 @@
       "when": 1809960014000,
       "tag": "0114_infinitepay_checkout",
       "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1809960015000,
+      "tag": "0115_club_benefit_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1809960016000,
+      "tag": "0116_chatbot_provider_message_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1809960017000,
+      "tag": "0117_store_order_stripe_refunded_amount",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1809960018000,
+      "tag": "0118_manual_refund_timestamp",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1809960019000,
+      "tag": "0119_partial_manual_refunds",
+      "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1809960020000,
+      "tag": "0120_trip_tenant_relationship_constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1809960021000,
+      "tag": "0121_trip_tenant_unique_constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1809960022000,
+      "tag": "0122_publish_unique_constraints_first",
+      "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1809960023000,
+      "tag": "0123_reservation_calendar_invites",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1809960024000,
+      "tag": "0124_reservation_travel_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1809960025000,
+      "tag": "0125_storefront_product_group",
+      "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "7",
+      "when": 1809960026000,
+      "tag": "0126_storefront_analytics",
+      "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1809960027000,
+      "tag": "0127_campaign_engagement_metrics",
+      "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1809960028000,
+      "tag": "0128_campaign_failure_outcomes",
+      "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1809960029000,
+      "tag": "0129_campaign_bounce_classification",
+      "breakpoints": true
     }
   ]
 }

@@ -7,10 +7,12 @@ const {
   mockUpdateDelivery,
   mockEvolutionStatus,
   mockEvolutionInbound,
+  mockEvolutionConnection,
 } = vi.hoisted(() => ({
   mockUpdateDelivery: vi.fn(),
   mockEvolutionStatus: vi.fn(),
   mockEvolutionInbound: vi.fn(),
+  mockEvolutionConnection: vi.fn(),
 }));
 
 vi.mock("../services/outbound-delivery.js", () => ({
@@ -20,6 +22,7 @@ vi.mock("../services/outbound-delivery.js", () => ({
 vi.mock("../services/whatsapp-attendance.js", () => ({
   processEvolutionDeliveryStatus: mockEvolutionStatus,
   processEvolutionInbound: mockEvolutionInbound,
+  processEvolutionConnectionUpdate: mockEvolutionConnection,
 }));
 
 import webhooksRouter from "../routes/webhooks";
@@ -52,6 +55,7 @@ describe("outbound provider webhook contracts", () => {
     process.env["RESEND_WEBHOOK_SECRET"] = SECRET;
     mockUpdateDelivery.mockResolvedValue({ updated: true });
     mockEvolutionStatus.mockResolvedValue("updated");
+    mockEvolutionConnection.mockResolvedValue("not_connection");
   });
 
   it.each([
@@ -98,7 +102,7 @@ describe("outbound provider webhook contracts", () => {
       .set("apikey", "test-key")
       .send(payload);
     const replay = await request(makeApp())
-      .post("/webhooks/whatsapp/evolution/agency-instance")
+      .post("/webhooks/whatsapp/evolution/agency-instance/messages-update")
       .set("apikey", "test-key")
       .send(payload);
 
@@ -106,6 +110,61 @@ describe("outbound provider webhook contracts", () => {
     expect(replay.status).toBe(200);
     expect(first.body).toEqual({ received: true, outcome: "updated" });
     expect(mockEvolutionStatus).toHaveBeenCalledTimes(2);
+    expect(mockEvolutionInbound).not.toHaveBeenCalled();
+  });
+
+  it("accepts event-specific Evolution message upserts and still verifies the instance key", async () => {
+    mockEvolutionStatus.mockResolvedValue("not_status");
+    mockEvolutionInbound.mockResolvedValue("inserted");
+    const payload = { event: "messages.upsert", data: { key: { id: "inbound-8" } } };
+
+    const response = await request(makeApp())
+      .post("/webhooks/whatsapp/evolution/Visite%20Cariri%20Cearense%20Receptivo/messages-upsert")
+      .set("apikey", "test-key")
+      .send(payload);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ received: true, outcome: "inserted" });
+    expect(mockEvolutionStatus).toHaveBeenCalledWith({
+      instanceName: "Visite Cariri Cearense Receptivo",
+      apiKey: "test-key",
+      payload,
+    });
+    expect(mockEvolutionInbound).toHaveBeenCalledWith({
+      instanceName: "Visite Cariri Cearense Receptivo",
+      apiKey: "test-key",
+      payload,
+    });
+  });
+
+  it("accepts authenticated Evolution connection updates on the event-specific route", async () => {
+    mockEvolutionConnection.mockResolvedValue("updated");
+    const payload = { event: "connection.update", data: { state: "open" } };
+    const response = await request(makeApp())
+      .post("/webhooks/whatsapp/evolution/agency-instance/connection-update")
+      .set("apikey", "test-key")
+      .send(payload);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ received: true, outcome: "updated" });
+    expect(mockEvolutionConnection).toHaveBeenCalledWith({
+      instanceName: "agency-instance",
+      apiKey: "test-key",
+      payload,
+      eventName: "connection-update",
+    });
+    expect(mockEvolutionStatus).not.toHaveBeenCalled();
+    expect(mockEvolutionInbound).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown Evolution webhook event suffixes", async () => {
+    const response = await request(makeApp())
+      .post("/webhooks/whatsapp/evolution/agency-instance/unknown-event")
+      .set("apikey", "test-key")
+      .send({ event: "unknown" });
+
+    expect(response.status).toBe(404);
+    expect(mockEvolutionStatus).not.toHaveBeenCalled();
     expect(mockEvolutionInbound).not.toHaveBeenCalled();
   });
 });

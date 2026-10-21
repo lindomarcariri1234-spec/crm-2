@@ -9,11 +9,17 @@ describe("store product tenant association guards", () => {
     const tripTenantGuard = /eq\(tripsTable\.tenantId, me\.tenantId\)/g;
     expect(storeRoutes.match(tripTenantGuard)).toHaveLength(2);
     expect(storeRoutes).toContain(
-      'if (data.tripId !== undefined) {',
+      'if (data.tripId !== undefined && data.tripId !== null) {',
     );
     expect(storeRoutes).toContain(
-      'if (parsed.data.tripId !== undefined) {',
+      'if (parsed.data.tripId !== undefined && parsed.data.tripId !== null) {',
     );
+    expect(storeRoutes).toContain("tripId: z.string().nullable().optional()");
+    expect(storeRoutes).toContain("await assertTripNotLinkedToAnotherStoreProduct(data.tripId)");
+    expect(storeRoutes).toContain(
+      "await assertTripNotLinkedToAnotherStoreProduct(parsed.data.tripId, existingProduct.id)",
+    );
+    expect(storeRoutes).toContain("STORE_TRIP_ALREADY_LINKED");
   });
 
   it("checks category ownership on both product write paths", () => {
@@ -25,6 +31,14 @@ describe("store product tenant association guards", () => {
     expect(storeRoutes).toContain(
       'if (parsed.data.categoryId !== undefined) {',
     );
+  });
+
+  it("checks accommodation ownership on both product write paths", () => {
+    expect(storeRoutes).toContain('if (data.accommodationId) {');
+    expect(storeRoutes).toContain('if (parsed.data.accommodationId) {');
+    const accommodationTenantGuard =
+      /eq\(accommodationsTable\.id, (?:data|parsed\.data)\.accommodationId\),\s*eq\(accommodationsTable\.tenantId, me\.tenantId\)/g;
+    expect(storeRoutes.match(accommodationTenantGuard)).toHaveLength(2);
   });
 
   it("scopes public product departure metadata to the store tenant", () => {

@@ -29,6 +29,10 @@
       "destination": "/api/storefront?store_slug=:slug&store_path=:rest*"
     },
     {
+      "source": "/api/healthz",
+      "destination": "https://crm-2-lindomarcariri.replit.app/api/healthz"
+    },
+    {
       "source": "/api",
       "destination": "https://crm-2-lindomarcariri.replit.app/api"
     },
@@ -69,6 +73,10 @@
     {
       "path": "/api/cron/abandoned-referrals",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/deferred-order-accounting-recovery",
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/cron/gemeo-alerts",

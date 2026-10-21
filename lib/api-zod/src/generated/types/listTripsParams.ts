@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { ListTripsStorePublication } from "./listTripsStorePublication";
 
 export type ListTripsParams = {
   /**
@@ -12,9 +13,18 @@ export type ListTripsParams = {
    */
   search?: string | null;
   /**
+   * Case-insensitive match across trip origin and destination city/state (maximum 100 characters).
+   * @maxLength 100
+   */
+  location?: string;
+  /**
    * @nullable
    */
   status?: string | null;
+  /**
+   * Filter trips by whether their linked store product is active in the public storefront.
+   */
+  storePublication?: ListTripsStorePublication;
   type?: string;
   /**
    * Inclusive departure-date lower bound in YYYY-MM-DD (America/Sao_Paulo).

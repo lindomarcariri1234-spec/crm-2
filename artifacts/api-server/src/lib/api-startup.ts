@@ -13,6 +13,18 @@ export interface ApiStartupHooks {
   onBackgroundServicesSkipped?: () => void;
 }
 
+export async function runMigrationsWithErrorLogging(
+  applyMigrations: () => Promise<void>,
+  logFailure: (error: unknown) => void,
+): Promise<void> {
+  try {
+    await applyMigrations();
+  } catch (error) {
+    logFailure(error);
+    throw error;
+  }
+}
+
 /**
  * Order startup side effects so the API cannot accept requests before a
  * required schema migration completes. Local development avoids implicit

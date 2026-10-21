@@ -11,6 +11,7 @@ import {
   hexToHslTriplet,
   buildVitrineTheme,
   CARIRI,
+  VISITE_CARIRI_PALETTE,
 } from "@/lib/vitrineTheme";
 
 describe("normalizeHex", () => {
@@ -82,16 +83,32 @@ describe("hexToHslTriplet", () => {
 });
 
 describe("buildVitrineTheme", () => {
-  it("falls back to Cariri when colors are the DB defaults", () => {
+  it("keeps the previous fallback for non-regional stores with DB defaults", () => {
     const theme = buildVitrineTheme({
+      slug: "another-store",
       primaryColor: "#3b82f6",
       secondaryColor: "#10b981",
       accentColor: "#f59e0b",
     });
     expect(theme.isFallback).toBe(true);
-    expect(theme.colors.primary).toBe(CARIRI.azul);
+    expect(theme.colors.primary).toBe("#1E5B8C");
     expect(theme.colors.secondary).toBe(CARIRI.verde);
     expect(theme.colors.accent).toBe(CARIRI.dourado);
+  });
+
+  it("applies the official portal palette only to visite-cariri", () => {
+    const theme = buildVitrineTheme({
+      slug: "visite-cariri",
+      primaryColor: "#3b82f6",
+      secondaryColor: "#10b981",
+      accentColor: "#f59e0b",
+    });
+    expect(theme.isFallback).toBe(false);
+    expect(theme.colors.primary).toBe(VISITE_CARIRI_PALETTE.marrom);
+    expect(theme.colors.secondary).toBe(VISITE_CARIRI_PALETTE.verde);
+    expect(theme.colors.accent).toBe(VISITE_CARIRI_PALETTE.laranja);
+    expect(VISITE_CARIRI_PALETTE.azul).toBe("#47C7F4");
+    expect(VISITE_CARIRI_PALETTE.amarelo).toBe("#F2B705");
   });
 
   it("honors custom colors when any differ from defaults", () => {

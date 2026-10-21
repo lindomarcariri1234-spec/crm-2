@@ -107,7 +107,7 @@ import
 
 import 
 {
- eq, and, desc, asc, ilike, or, sql, inArray, ne 
+ eq, and, desc, asc, ilike, or, sql, inArray, ne, isNull, isNotNull, not
 }
  from "drizzle-orm"
 ;
@@ -181,6 +181,10 @@ import
 }
  from "../services/checkout/items"
 ;
+import {
+  applyStorefrontChildPricing,
+  countSeatBearingStorefrontChildren,
+} from "../services/checkout/storefront-child-pricing.js";
 
 import 
 {
@@ -189,6 +193,10 @@ import
  from "../services/checkout/persist-order"
 ;
 import { isReferralCreditSpendable } from "../lib/referral-wallet";
+import {
+  countSeatBearingCoPassengers,
+  getStorefrontPassengerPolicyError,
+} from "../services/checkout/storefront-passenger-rules.js";
 
 import 
 {
@@ -199,10 +207,11 @@ import
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
 import { runDeferredOrderAccounting } from "../services/checkout/post-booking";
 import { applyGatewayPayment } from "./webhooks";
-import { parseInfinitePayCheckResult } from "../lib/infinitepay";
+import { classifyInfinitePayHttpFailure, formatInfinitePayPhoneNumber, parseInfinitePayCheckResult } from "../lib/infinitepay";
 import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
 import {
   getReservationFailureDiagnostic,
+  isDuplicateReservationConstraintViolation,
   toCustomerSafeReservationError,
 } from "../services/checkout/reservation-checkout-error";
 
@@ -229,8 +238,10 @@ import
  from "../lib/client-notifications"
 ;
 import { recordReferralVisit } from "../services/referral-tracking";
-
-
+import {
+  recordStorefrontMetric,
+  storefrontMetricEventSchema,
+} from "../services/storefront-analytics";
 
 const router = Router()
 ;
@@ -500,6 +511,8 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
       favicon: store.favicon,
       bannerHome: store.bannerHome,
       bannerMobile: store.bannerMobile,
+      customDomain: store.domainVerified ? store.customDomain : null,
+      domainVerified: store.domainVerified === true,
       primaryColor: store.primaryColor,
       secondaryColor: store.secondaryColor,
       accentColor: store.accentColor,
@@ -588,6 +601,22 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
 ;
 
 
+router.post("/public/store/:slug/analytics", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const store = await getActiveStore(req.params.slug);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    const parsed = storefrontMetricEventSchema.safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError("Invalid storefront analytics event", "INVALID_ANALYTICS_EVENT"));
+      return;
+    }
+    await recordStorefrontMetric(store, parsed.data);
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/public/store/:slug/categories", async (req, res, next: NextFunction): Promise<void> => 
 {
 
@@ -671,7 +700,7 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
 {
 
       category, categoryId, type, featured, search, sort = "newest",
-      destination, minPrice, maxPrice, departureFrom, minSeats,
+      destination, minPrice, maxPrice, departureFrom, minSeats, group,
       page: pageStr, limit: limitStr,
     
 }
@@ -681,6 +710,7 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
     const conditions = [
       eq(storeProductsTable.storeId, store.id),
       eq(storeProductsTable.status, "active"),
+      or(isNull(tripsTable.id), ne(tripsTable.status, "completed"))!,
     ]
 ;
 
@@ -692,6 +722,18 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
 
     if (type) conditions.push(eq(storeProductsTable.type, type as string))
 ;
+
+    if (group === "travel") {
+      conditions.push(or(
+        isNotNull(storeProductsTable.tripId),
+        eq(storeProductsTable.storefrontGroup, "travel"),
+      )!);
+    } else if (group === "other") {
+      conditions.push(and(
+        isNull(storeProductsTable.tripId),
+        eq(storeProductsTable.storefrontGroup, "other"),
+      )!);
+    }
 
     if (featured === "true") conditions.push(eq(storeProductsTable.isFeatured, true))
 ;
@@ -751,11 +793,13 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
     const selectFields = {
       id: storeProductsTable.id,
       type: storeProductsTable.type,
+      storefrontGroup: storeProductsTable.storefrontGroup,
       name: storeProductsTable.name,
       slug: storeProductsTable.slug,
       shortDescription: storeProductsTable.shortDescription,
       categoryId: storeProductsTable.categoryId,
       tripId: storeProductsTable.tripId,
+      priceChild: tripsTable.priceChild,
       accommodationId: storeProductsTable.accommodationId,
       includes: storeProductsTable.includes,
       price: storeProductsTable.price,
@@ -838,12 +882,14 @@ router.get("/public/store/:slug/products/:productSlug", async (req, res, next: N
     const [row] = await db.select({
       id: storeProductsTable.id,
       type: storeProductsTable.type,
+      storefrontGroup: storeProductsTable.storefrontGroup,
       name: storeProductsTable.name,
       slug: storeProductsTable.slug,
       shortDescription: storeProductsTable.shortDescription,
       description: storeProductsTable.description,
       categoryId: storeProductsTable.categoryId,
       tripId: storeProductsTable.tripId,
+      priceChild: tripsTable.priceChild,
       includes: storeProductsTable.includes,
       price: storeProductsTable.price,
       comparePrice: storeProductsTable.comparePrice,
@@ -910,10 +956,11 @@ router.get("/public/store/:slug/products/:productSlug", async (req, res, next: N
         eq(storeProductsTable.storeId, store.id),
         eq(storeProductsTable.slug, req.params.productSlug),
         eq(storeProductsTable.status, "active"),
+        or(isNull(tripsTable.id), ne(tripsTable.status, "completed")),
       )).limit(1);
     if (!row) { next(new NotFoundError("Product not found", "NOT_FOUND")); return; }
     await db.update(storeProductsTable)
-      .set({ viewsCount: row.viewsCount + 1 })
+      .set({ viewsCount: sql`${storeProductsTable.viewsCount} + 1` })
       .where(eq(storeProductsTable.id, row.id));
     const reviews = await db.select({
       id: storeReviewsTable.id,
@@ -959,10 +1006,12 @@ router.get("/public/store/:slug/products/:productSlug/partner-info", async (req,
       id: storeProductsTable.id,
       partnerProductId: storeProductsTable.partnerProductId,
     }).from(storeProductsTable)
+      .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
       .where(and(
         eq(storeProductsTable.storeId, store.id),
         eq(storeProductsTable.slug, req.params.productSlug!),
         eq(storeProductsTable.status, "active"),
+        or(isNull(tripsTable.id), ne(tripsTable.status, "completed")),
       )).limit(1);
 
     if (!product?.partnerProductId) { res.json({ hasPartner: false }); return; }
@@ -1094,10 +1143,12 @@ router.get("/public/store/:slug/products/:productSlug/recommendations", async (r
       name: storeProductsTable.name,
     })
       .from(storeProductsTable)
+      .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
       .where(and(
         eq(storeProductsTable.storeId, store.id),
         eq(storeProductsTable.slug, req.params.productSlug),
         eq(storeProductsTable.status, "active"),
+        or(isNull(tripsTable.id), ne(tripsTable.status, "completed")),
       )).limit(1);
     // Best-effort: an unknown product yields an empty list rather than a 404.
     if (!current) { res.json({ data: [] }); return; }
@@ -1107,6 +1158,7 @@ router.get("/public/store/:slug/products/:productSlug/recommendations", async (r
     const cardFields = {
       id: storeProductsTable.id,
       type: storeProductsTable.type,
+      storefrontGroup: storeProductsTable.storefrontGroup,
       name: storeProductsTable.name,
       slug: storeProductsTable.slug,
       shortDescription: storeProductsTable.shortDescription,
@@ -1141,6 +1193,7 @@ router.get("/public/store/:slug/products/:productSlug/recommendations", async (r
         eq(storeProductsTable.storeId, store.id),
         eq(storeProductsTable.status, "active"),
         ne(storeProductsTable.id, current.id),
+        or(isNull(tripsTable.id), ne(tripsTable.status, "completed")),
       ))
       .orderBy(desc(storeProductsTable.salesCount))
       .limit(24);
@@ -1338,6 +1391,7 @@ const CreateOrderBody = z.object({
     productName: z.string().optional(),
     quantity: z.number().int().min(1),
     unitPrice: z.number().nonnegative().optional(),
+    variantName: z.string().optional(),
     variantLabel: z.string().optional(),
     variantData: z.record(z.string(), z.unknown()).optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
@@ -1358,6 +1412,8 @@ const CreateOrderBody = z.object({
     name: z.string().trim().min(1),
     cpf: z.string().trim().optional(),
     phone: z.string().trim().optional(),
+    isChildUnder7: z.boolean().optional(),
+    occupiesSeat: z.boolean().optional(),
   })).optional(),
   depositAmount: z.number().nonnegative().optional(),
   // Client-generated key, one per checkout attempt. Lets a browser retry /
@@ -1378,6 +1434,10 @@ function validateCheckoutPassengerData(
   const totalTripQuantity = tripQuantities.reduce((sum, item) => sum + item.totalQty, 0);
   const coPassengers = data.coPassengers ?? [];
   const submittedSeats = (data.seats ?? []).map((seat) => seat.trim()).filter(Boolean);
+  const passengerPolicyError = getStorefrontPassengerPolicyError(coPassengers);
+  if (passengerPolicyError) {
+    throw new ValidationError(passengerPolicyError.message, passengerPolicyError.code);
+  }
 
   if (tripLinkedProducts.size === 0) {
     if (coPassengers.length > 0 || submittedSeats.length > 0) {
@@ -1419,9 +1479,12 @@ function validateCheckoutPassengerData(
     );
   }
 
-  if (tripLinkedProducts.size === 1 && coPassengers.length !== totalTripQuantity - 1) {
+  if (
+    tripLinkedProducts.size === 1
+    && countSeatBearingCoPassengers(coPassengers) !== totalTripQuantity - 1
+  ) {
     throw new ValidationError(
-      `Informe o nome dos ${Math.max(0, totalTripQuantity - 1)} acompanhante(s) desta reserva`,
+      `Informe os dados de ${Math.max(0, totalTripQuantity - 1)} criança(s) com poltrona`,
       "PASSENGER_QUANTITY_MISMATCH",
     );
   }
@@ -1729,17 +1792,52 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     }
 
     checkoutFailureStage = "prepare_items";
-    const 
-{
- subtotal, orderItemsData, fetchedProducts, quantityByProductId, tripLinkedProducts 
-}
- =
-      await prepareCheckoutItems(
-{
- storeId: store.id, tenantId: store.tenantId, items: data.items 
-}
-)
-;
+    let {
+      subtotal,
+      orderItemsData,
+      fetchedProducts,
+      quantityByProductId,
+      tripLinkedProducts,
+    } = await prepareCheckoutItems({
+      storeId: store.id,
+      tenantId: store.tenantId,
+      items: data.items,
+    });
+
+    // Validate passenger quantity and age/seat rules before calculating child
+    // fares. The API remains authoritative for all amounts charged.
+    try {
+      validateCheckoutPassengerData(data, tripLinkedProducts);
+    } catch (validationErr) {
+      if (validationErr instanceof ValidationError) {
+        next(validationErr);
+        return;
+      }
+      throw validationErr;
+    }
+
+    const childSeatCount = countSeatBearingStorefrontChildren(data.coPassengers ?? []);
+    if (childSeatCount > 0) {
+      const tripIds = [...tripLinkedProducts.keys()];
+      const tripPrices = await db.select({
+        id: tripsTable.id,
+        priceChild: tripsTable.priceChild,
+      }).from(tripsTable).where(and(
+        eq(tripsTable.tenantId, store.tenantId),
+        inArray(tripsTable.id, tripIds),
+      ));
+      const repriced = applyStorefrontChildPricing({
+        subtotal,
+        orderItemsData,
+        fetchedProducts,
+        tripLinkedProducts,
+        childSeatCount,
+        priceChildByTrip: new Map(tripPrices.map((trip) => [trip.id, trip.priceChild])),
+      });
+      subtotal = repriced.subtotal;
+      orderItemsData = repriced.orderItemsData;
+      tripLinkedProducts = repriced.tripLinkedProducts;
+    }
 
     checkoutFailureStage = "resolve_discounts";
     const discounts = await resolveCheckoutDiscounts(
@@ -1927,16 +2025,6 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
           return;
         }
       }
-    }
-
-    try {
-      validateCheckoutPassengerData(data, tripLinkedProducts);
-    } catch (validationErr) {
-      if (validationErr instanceof ValidationError) {
-        next(validationErr);
-        return;
-      }
-      throw validationErr;
     }
 
     checkoutFailureStage = "persist_order";
@@ -2228,23 +2316,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         // Race condition: two simultaneous checkouts for the same client+trip
         // both passed the order-creation step and raced to insert the reservation.
         // The unique index fires a 23505 — return 409 instead of a generic 500/502.
-        if (
-          reservationErr != null &&
-          typeof reservationErr === "object" &&
-          "code" in reservationErr &&
-          (reservationErr as 
-{
- code: unknown 
-}
-).code === "23505" &&
-          "constraint" in reservationErr &&
-          (reservationErr as 
-{
- constraint: unknown 
-}
-          ).constraint === "reservations_active_client_trip_unique"
-          || (reservationErr as { constraint?: unknown }).constraint === "reservations_active_store_order_trip_unique"
-        ) 
+        if (isDuplicateReservationConstraintViolation(reservationErr))
 {
 
           next(new ConflictError(
@@ -2436,8 +2508,8 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
   }
 });
 
-// Attach a gateway payment id (Stripe paymentIntentId / MP payment id) to
-// an order. Gated by the one-shot paymentToken returned at order creation.
+// Legacy confirmation endpoint. Payment identifiers are assigned by the
+// provider-specific server checkout routes; this endpoint is idempotent-only.
 router.post("/public/store/:slug/orders/:orderNumber/payment-intent", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const store = await getActiveStore(req.params.slug);
@@ -2482,18 +2554,45 @@ router.post("/public/store/:slug/orders/:orderNumber/payment-intent", async (req
       return;
     }
 
+    if (!order.existingPaymentIntentId) {
+      next(new ValidationError(
+        "Payment IDs must be created by the configured checkout provider",
+        "PAYMENT_ID_NOT_CREATED",
+      ));
+      return;
+    }
+
     if (order.existingPaymentIntentId && order.existingPaymentIntentId !== paymentIntentId) {
       next(new ValidationError("Order already has a different paymentIntentId", "ALREADY_SET"));
       return;
     }
 
-    await db
-      .update(storeOrdersTable)
-      .set({
-        paymentIntentId,
-        ...(paymentChargeId ? { paymentChargeId } : {}),
-      })
-      .where(eq(storeOrdersTable.id, order.id));
+    if (paymentChargeId) {
+      next(new ValidationError(
+        "Payment charge IDs are confirmed by the payment provider",
+        "UNVERIFIED_PAYMENT_CHARGE",
+      ));
+      return;
+    }
+
+    const [paymentOwner] = await db
+      .select({ id: storeOrdersTable.id })
+      .from(storeOrdersTable)
+      .where(and(
+        eq(storeOrdersTable.tenantId, store.tenantId),
+        eq(storeOrdersTable.storeId, store.id),
+        eq(storeOrdersTable.paymentIntentId, paymentIntentId),
+        ne(storeOrdersTable.id, order.id),
+      ))
+      .limit(1);
+
+    if (paymentOwner) {
+      next(new ValidationError(
+        "Payment ID is already linked to another order",
+        "PAYMENT_ID_ALREADY_BOUND",
+      ));
+      return;
+    }
 
     res.json({ ok: true });
   } catch (err) {
@@ -2618,6 +2717,7 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
         birthDate: passengersTable.birthDate,
         ageCategory: passengersTable.ageCategory,
         seatNumber: passengersTable.seatNumber,
+        isChildUnder7: passengersTable.isChildUnder7,
         isPrimary: passengersTable.isPrimary,
         boardingLocationId: passengersTable.boardingLocationId,
         phone: passengersTable.phone,
@@ -3432,40 +3532,80 @@ router.post("/public/store/:slug/infinitepay/checkout", async (req, res, next: N
     const origin = store.customDomain ? `https://${store.customDomain}` : publicBase;
     const redirectUrl = new URL(returnPath, origin).toString();
     const webhookUrl = `${publicBase}/api/public/store/${encodeURIComponent(store.slug)}/infinitepay/webhook`;
-    const apiResponse = await fetch("https://api.checkout.infinitepay.io/links", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        handle: store.infinitePayHandle,
-        order_nsu: orderNumber,
-        items: [{ quantity: 1, price: amountCents, description: `Pedido ${orderNumber}` }],
-        customer: {
-          name: order.customerName,
-          email: order.customerEmail,
-          ...(order.customerPhone ? { phone_number: order.customerPhone } : {}),
-        },
-        redirect_url: redirectUrl,
-        webhook_url: webhookUrl,
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!apiResponse.ok) {
-      await db.update(storeOrdersTable).set({ paymentIntentId: null })
-        .where(and(eq(storeOrdersTable.id, order.id), eq(storeOrdersTable.paymentIntentId, creatingMarker)));
+    const customerPhone = formatInfinitePayPhoneNumber(order.customerPhone);
+    let checkoutUrl: string;
+    try {
+      const apiResponse = await fetch("https://api.checkout.infinitepay.io/links", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          handle: store.infinitePayHandle,
+          order_nsu: orderNumber,
+          items: [{ quantity: 1, price: amountCents, description: `Pedido ${orderNumber}` }],
+          customer: {
+            name: order.customerName,
+            email: order.customerEmail,
+            ...(customerPhone ? { phone_number: customerPhone } : {}),
+          },
+          redirect_url: redirectUrl,
+          webhook_url: webhookUrl,
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!apiResponse.ok) {
+        // InfinitePay does not document a /links error-body schema. Treat any
+        // response body as untrusted and classify only its HTTP status.
+        logger.warn(
+          {
+            requestId: req.id ?? "unknown",
+            providerStatusCode: apiResponse.status,
+            providerFailureKind: classifyInfinitePayHttpFailure(apiResponse.status),
+          },
+          "InfinitePay link API rejected checkout",
+        );
+        throw new AppError("InfinitePay checkout creation failed", 502, "INFINITEPAY_CHECKOUT_FAILED");
+      }
+      const responseBody = await apiResponse.json() as { url?: unknown };
+      if (typeof responseBody.url !== "string" || !responseBody.url.startsWith("https://")) {
+        throw new AppError("InfinitePay returned an invalid checkout URL", 502, "INFINITEPAY_INVALID_RESPONSE");
+      }
+      const [savedClaim] = await db.update(storeOrdersTable).set({
+        paymentIntentId: marker,
+        infinitePayCheckoutUrl: responseBody.url,
+      }).where(and(
+        eq(storeOrdersTable.id, order.id),
+        eq(storeOrdersTable.paymentProvider, "infinitepay"),
+        eq(storeOrdersTable.paymentIntentId, creatingMarker),
+      )).returning({ id: storeOrdersTable.id });
+      if (!savedClaim) {
+        throw new ConflictError("O checkout InfinitePay perdeu sua reserva de criação.", "INFINITEPAY_CHECKOUT_STATE_CHANGED");
+      }
+      checkoutUrl = responseBody.url;
+    } catch (providerErr) {
+      // Release the in-progress marker for transport failures, malformed
+      // success responses, and persistence errors so a customer can retry.
+      // A response that was never returned to the customer cannot be used to
+      // pay, and the conditional update prevents clearing a newer checkout.
+      try {
+        await db.update(storeOrdersTable).set({ paymentIntentId: null })
+          .where(and(
+            eq(storeOrdersTable.id, order.id),
+            eq(storeOrdersTable.paymentIntentId, creatingMarker),
+          ));
+      } catch {
+        logger.warn(
+          { requestId: req.id ?? "unknown", orderId: order.id },
+          "Failed to release InfinitePay checkout claim after an error",
+        );
+      }
+      if (providerErr instanceof AppError) throw providerErr;
+      logger.warn(
+        { requestId: req.id ?? "unknown", orderId: order.id },
+        "InfinitePay checkout request failed before a URL was saved",
+      );
       throw new AppError("InfinitePay checkout creation failed", 502, "INFINITEPAY_CHECKOUT_FAILED");
     }
-    const responseBody = await apiResponse.json() as { url?: unknown };
-    if (typeof responseBody.url !== "string" || !responseBody.url.startsWith("https://")) {
-      throw new AppError("InfinitePay returned an invalid checkout URL", 502, "INFINITEPAY_INVALID_RESPONSE");
-    }
-    await db.update(storeOrdersTable).set({
-      paymentIntentId: marker,
-      infinitePayCheckoutUrl: responseBody.url,
-    }).where(and(
-      eq(storeOrdersTable.id, order.id),
-      eq(storeOrdersTable.paymentProvider, "infinitepay"),
-    ));
-    res.json({ checkoutUrl: responseBody.url });
+    res.json({ checkoutUrl });
   } catch (err) { next(err); }
 });
 
@@ -3482,7 +3622,10 @@ router.post("/public/store/:slug/infinitepay/confirm", async (req, res, next: Ne
       next(new ValidationError("Dados de retorno InfinitePay inválidos", "VALIDATION_ERROR"));
       return;
     }
-    const store = await getActiveStore(req.params.slug);
+    // Keep payment confirmation available for orders created before a store
+    // was deactivated; the provider's payment_check still authenticates the
+    // transaction before any order/payment state is changed.
+    const store = await getStoreForPublicPage(req.params.slug);
     const verified = await checkInfinitePayPayment(store, input);
     res.json({ verified });
   } catch (err) { next(err); }
@@ -3498,7 +3641,9 @@ router.post("/public/store/:slug/infinitepay/webhook", async (req, res, next: Ne
       res.status(400).json({ received: false });
       return;
     }
-    const store = await getActiveStore(req.params.slug);
+    // Provider callbacks may arrive after the storefront has been disabled.
+    // Resolve by slug and rely on payment_check + order binding for trust.
+    const store = await getStoreForPublicPage(req.params.slug);
     const [order] = await db.select({ paymentToken: storeOrdersTable.paymentToken })
       .from(storeOrdersTable).where(and(
         eq(storeOrdersTable.storeId, store?.id ?? ""),

@@ -5,8 +5,8 @@ import { applyPlugin } from "jspdf-autotable";
 import { db, auditLogsTable, OUTBOUND_BOUNCE_TYPES } from "@workspace/db";
 import { generateId } from "../lib/id";
 import { getClientIp } from "../lib/get-client-ip";
-import { ADMIN_ROLES, requireAuth } from "../lib/tenant";
-import { AppError, ValidationError } from "../lib/errors";
+import { ALL_STAFF_ROLES, ADMIN_ROLES, requireAuth } from "../lib/tenant";
+import { AppError, ForbiddenError, ValidationError } from "../lib/errors";
 import { MAX_EXPORT_ROWS } from "../lib/list-limits";
 import { parseBrazilDateRange } from "../lib/brazil-calendar";
 import {
@@ -23,9 +23,23 @@ applyPlugin(jsPDF);
 
 const router = Router();
 
+async function requireOutboundStaff(
+  req: Parameters<typeof requireAuth>[0],
+  res: Parameters<typeof requireAuth>[1],
+  next: NextFunction,
+) {
+  const me = await requireAuth(req, res);
+  if (!me) return null;
+  if (!ALL_STAFF_ROLES.includes(me.role)) {
+    next(new ForbiddenError("Apenas membros da equipe podem acessar as mensagens da agência.", "FORBIDDEN_ROLE"));
+    return null;
+  }
+  return me;
+}
+
 router.get("/outbound-messages/stream", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireOutboundStaff(req, res, next);
     if (!me) return;
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -310,7 +324,7 @@ function outboundExportRows(rows: Awaited<ReturnType<typeof listOutboundMessages
 
 router.get("/outbound-messages/export", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireOutboundStaff(req, res, next);
     if (!me) return;
     const format = req.query.format === "pdf" ? "pdf" : req.query.format === "csv" ? "csv" : null;
     if (!format) {
@@ -401,7 +415,7 @@ router.get("/outbound-messages/export", async (req, res, next: NextFunction): Pr
 
 router.post("/outbound-messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireOutboundStaff(req, res, next);
     if (!me) return;
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -424,7 +438,7 @@ router.post("/outbound-messages", async (req, res, next: NextFunction): Promise<
 
 router.get("/outbound-messages", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireOutboundStaff(req, res, next);
     if (!me) return;
     const filters = parseOutboundFilters({ query: req.query as Record<string, unknown> });
     const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
@@ -445,7 +459,7 @@ router.get("/outbound-messages", async (req, res, next: NextFunction): Promise<v
 
 router.get("/outbound-messages/provider-failure-summary", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireOutboundStaff(req, res, next);
     if (!me) return;
     const filters = parseOutboundFilters({ query: req.query as Record<string, unknown> });
     const summary = await listOutboundProviderFailureSummary(me.tenantId, filters);
@@ -538,18 +552,44 @@ router.post("/outbound-messages/:deliveryId/reconcile/retry", async (req, res, n
 
 router.post("/outbound-messages/:deliveryId/retry", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireOutboundStaff(req, res, next);
     if (!me) return;
-    await retryOutboundDelivery(me.tenantId, req.params.deliveryId);
+    await retryOutboundDelivery(me.tenantId, req.params.deliveryId, {
+      userId: me.id,
+      ipAddress: getClientIp(req),
+      userAgent: req.headers["user-agent"] ?? null,
+      isAdmin: ADMIN_ROLES.includes(me.role),
+    });
     res.status(202).json({ ok: true });
   } catch (error) {
-    if (error instanceof Error && ["delivery_not_found", "delivery_not_authorized", "delivery_not_retryable"].includes(error.message)) {
+    if (error instanceof Error && [
+      "delivery_not_found",
+      "delivery_not_authorized",
+      "delivery_not_retryable",
+      "delivery_admin_required",
+      "whatsapp_connection_unavailable",
+      "whatsapp_connection_ambiguous",
+      "delivery_retry_audit_failed",
+    ].includes(error.message)) {
       const messages: Record<string, string> = {
         delivery_not_found: "A entrega não foi encontrada neste espaço de trabalho.",
         delivery_not_authorized: "Esta entrega foi ignorada por opt-out, contato ausente ou número inválido e não pode ser repetida sem corrigir a autorização.",
         delivery_not_retryable: "A entrega não está em um estado que permita nova tentativa.",
+        delivery_admin_required: "Somente administradores podem reenviar uma entrega WhatsApp ignorada por falta de conexão ou credenciais.",
+        whatsapp_connection_unavailable: "Ative e conecte a integração WhatsApp vinculada a esta entrega antes de tentar novamente.",
+        whatsapp_connection_ambiguous: "Há mais de uma conexão WhatsApp possível. Defina a conexão correta antes de tentar novamente.",
+        delivery_retry_audit_failed: "A nova tentativa foi interrompida porque não foi possível registrar a auditoria.",
       };
-      next(new AppError(messages[error.message], error.message === "delivery_not_found" ? 404 : 422, error.message.toUpperCase()));
+      const status = error.message === "delivery_not_found"
+        ? 404
+        : error.message === "delivery_admin_required"
+          ? 403
+          : error.message === "delivery_retry_audit_failed"
+            ? 500
+            : error.message === "whatsapp_connection_ambiguous"
+              ? 409
+              : 422;
+      next(new AppError(messages[error.message], status, error.message.toUpperCase()));
       return;
     }
     next(error);
@@ -559,18 +599,44 @@ router.post("/outbound-messages/:deliveryId/retry", async (req, res, next: NextF
 // Alias kept for clients that address the delivery resource directly.
 router.post("/outbound-deliveries/:deliveryId/retry", async (req, res, next: NextFunction): Promise<void> => {
   try {
-    const me = await requireAuth(req, res);
+    const me = await requireOutboundStaff(req, res, next);
     if (!me) return;
-    await retryOutboundDelivery(me.tenantId, req.params.deliveryId);
+    await retryOutboundDelivery(me.tenantId, req.params.deliveryId, {
+      userId: me.id,
+      ipAddress: getClientIp(req),
+      userAgent: req.headers["user-agent"] ?? null,
+      isAdmin: ADMIN_ROLES.includes(me.role),
+    });
     res.status(202).json({ ok: true });
   } catch (error) {
-    if (error instanceof Error && ["delivery_not_found", "delivery_not_authorized", "delivery_not_retryable"].includes(error.message)) {
+    if (error instanceof Error && [
+      "delivery_not_found",
+      "delivery_not_authorized",
+      "delivery_not_retryable",
+      "delivery_admin_required",
+      "whatsapp_connection_unavailable",
+      "whatsapp_connection_ambiguous",
+      "delivery_retry_audit_failed",
+    ].includes(error.message)) {
       const messages: Record<string, string> = {
         delivery_not_found: "A entrega não foi encontrada neste espaço de trabalho.",
         delivery_not_authorized: "Esta entrega foi ignorada por opt-out, contato ausente ou número inválido e não pode ser repetida sem corrigir a autorização.",
         delivery_not_retryable: "A entrega não está em um estado que permita nova tentativa.",
+        delivery_admin_required: "Somente administradores podem reenviar uma entrega WhatsApp ignorada por falta de conexão ou credenciais.",
+        whatsapp_connection_unavailable: "Ative e conecte a integração WhatsApp vinculada a esta entrega antes de tentar novamente.",
+        whatsapp_connection_ambiguous: "Há mais de uma conexão WhatsApp possível. Defina a conexão correta antes de tentar novamente.",
+        delivery_retry_audit_failed: "A nova tentativa foi interrompida porque não foi possível registrar a auditoria.",
       };
-      next(new AppError(messages[error.message], error.message === "delivery_not_found" ? 404 : 422, error.message.toUpperCase()));
+      const status = error.message === "delivery_not_found"
+        ? 404
+        : error.message === "delivery_admin_required"
+          ? 403
+          : error.message === "delivery_retry_audit_failed"
+            ? 500
+            : error.message === "whatsapp_connection_ambiguous"
+              ? 409
+              : 422;
+      next(new AppError(messages[error.message], status, error.message.toUpperCase()));
       return;
     }
     next(error);

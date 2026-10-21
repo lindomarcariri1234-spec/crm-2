@@ -10,7 +10,10 @@ import {
   flushAct,
   renderComponent,
 } from "./eventSourceHarness.js";
-import { ConversationsTab } from "../pages/communication/CommunicationInboxTabs";
+import {
+  ConversationsTab,
+  MessageMediaAttachment,
+} from "../pages/communication/CommunicationInboxTabs";
 import {
   submitInboxMessage,
   type InboxMessageToast,
@@ -21,6 +24,7 @@ import type {
   CommunicationTimelineEntry,
 } from "../lib/communicationTimeline";
 import { useConversationAiMessages } from "../pages/communication/useConversationAiMessages";
+import { useClientCommunicationTimeline } from "../pages/communication/useClientCommunicationTimeline";
 
 type ConversationsTabProps = ComponentProps<typeof ConversationsTab>;
 
@@ -382,6 +386,131 @@ function LargeConversationHistoryHarness({ conversationCount }: { conversationCo
   );
 }
 
+function ClientTimelineRaceHarness() {
+  const [selectedClientId, setSelectedClientId] = useState<string | null>("client-a");
+  const timeline = useClientCommunicationTimeline({
+    enabled: true,
+    selectedClientId,
+  });
+
+  return createElement(
+    "section",
+    null,
+    createElement("button", {
+      "data-testid": "select-timeline-client-a",
+      onClick: () => setSelectedClientId("client-a"),
+    }, "Selecionar Ana"),
+    createElement("button", {
+      "data-testid": "select-timeline-client-b",
+      onClick: () => setSelectedClientId("client-b"),
+    }, "Selecionar Bruna"),
+    createElement("button", {
+      "data-testid": "load-older-client-timeline",
+      onClick: () => void timeline.loadOlder(),
+    }, "Carregar anteriores"),
+    createElement("button", {
+      "data-testid": "retry-client-timeline",
+      onClick: () => void timeline.retry(),
+    }, "Tentar novamente"),
+    createElement("p", { "data-testid": "timeline-selected-client" }, selectedClientId),
+    createElement("p", { "data-testid": "timeline-loading" }, String(timeline.loading)),
+    createElement("p", { "data-testid": "timeline-loading-older" }, String(timeline.loadingOlder)),
+    createElement("p", { "data-testid": "timeline-error" }, timeline.error ?? ""),
+    createElement("p", { "data-testid": "timeline-cursor" }, timeline.cursor ?? ""),
+    createElement(
+      "div",
+      { "data-testid": "timeline-messages" },
+      timeline.messages.map((message) => createElement("p", { key: message.id }, message.content)),
+    ),
+  );
+}
+
+function ScrollAnchoredClientTimelineHarness() {
+  const [selectedClientId, setSelectedClientId] = useState<string | null>("client-a");
+  const timeline = useClientCommunicationTimeline({
+    enabled: true,
+    selectedClientId,
+  });
+  return createElement(
+    "section",
+    null,
+    createElement("button", {
+      "data-testid": "select-scroll-client-b",
+      onClick: () => setSelectedClientId("client-b"),
+    }, "Selecionar Bruna"),
+    createElement("p", { "data-testid": "scroll-selected-client" }, selectedClientId),
+    createElement("p", { "data-testid": "scroll-client-loading" }, String(timeline.loading)),
+    createElement("p", { "data-testid": "scroll-client-cursor" }, timeline.cursor ?? ""),
+    createElement(ConversationsTab, {
+      ...makeProps(selectedClientId, setSelectedClientId, timeline.messages),
+      hasMoreClientTimeline: timeline.hasMore,
+      loadingOlderClientTimeline: timeline.loadingOlder,
+      onLoadOlderClientTimeline: timeline.loadOlder,
+      loadingConversationAiMessages: timeline.loading,
+      conversationAiError: timeline.error,
+      onRetryConversationAiMessages: timeline.retry,
+    }),
+  );
+}
+
+function installDeferredClientTimelineFetch() {
+  const requests = new Map<string, Deferred<Response>[]>();
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://example.test");
+    const clientId = url.pathname.match(/\/clients\/([^/]+)\/communication-timeline/)?.[1];
+    if (!clientId) throw new Error(`Unexpected client timeline URL: ${url.pathname}`);
+    const cursor = url.searchParams.get("cursor") ?? "first";
+    const key = `${decodeURIComponent(clientId)}:${cursor}`;
+    const request = createDeferred<Response>();
+    requests.set(key, [...(requests.get(key) ?? []), request]);
+    return request.promise;
+  }));
+  return requests;
+}
+
+function getClientTimelineRequest(
+  requests: Map<string, Deferred<Response>[]>,
+  clientId: string,
+  cursor = "first",
+  attempt = 0,
+) {
+  const request = requests.get(`${clientId}:${cursor}`)?.[attempt];
+  if (!request) throw new Error(`No pending timeline request for ${clientId} at ${cursor}`);
+  return request;
+}
+
+function makeClientTimelineResponse(
+  items: CommunicationTimelineEntry[],
+  nextCursor: string | null,
+  hasMore: boolean,
+): Response {
+  return {
+    ok: true,
+    json: async () => ({ items, nextCursor, hasMore }),
+  } as unknown as Response;
+}
+
+async function settleClientTimelineSuccess(
+  request: Deferred<Response>,
+  items: CommunicationTimelineEntry[],
+  nextCursor: string | null,
+  hasMore: boolean,
+) {
+  request.resolve(makeClientTimelineResponse(items, nextCursor, hasMore));
+  await request.promise;
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+async function settleClientTimelineFailure(request: Deferred<Response>) {
+  request.reject(new Error("Falha de rede"));
+  await request.promise.catch(() => undefined);
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function setInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   if (!setter) throw new Error("HTMLInputElement.value setter is unavailable");
@@ -393,6 +522,119 @@ function setInputValue(input: HTMLInputElement, value: string) {
 afterEach(async () => {
   await cleanupRoots();
   vi.unstubAllGlobals();
+});
+
+describe("Instagram conversation attachments", () => {
+  it("renders safe image previews and reports media that can no longer be loaded", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/photo.jpg",
+      mimeType: "image/jpeg",
+      fileName: "photo.jpg",
+      expiredAt: null,
+    }));
+    const image = container.querySelector<HTMLImageElement>("img");
+    expect(image?.getAttribute("src")).toBe("https://media.example.test/photo.jpg");
+    expect(image?.alt).toBe("photo.jpg");
+
+    await flushAct(() => image!.dispatchEvent(new Event("error")));
+    expect(container.textContent).toContain("Anexo indisponível ou expirado");
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("renders known audio as a player and reports playback failures", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/voice.mp3",
+      mimeType: "audio/mpeg",
+      fileName: "voice.mp3",
+      expiredAt: null,
+    }));
+    const audio = container.querySelector<HTMLAudioElement>("audio");
+    expect(audio).not.toBeNull();
+    expect(audio?.hasAttribute("controls")).toBe(true);
+    expect(audio?.getAttribute("src")).toBe("https://media.example.test/voice.mp3");
+    expect(audio?.getAttribute("preload")).toBe("none");
+
+    await flushAct(() => audio!.dispatchEvent(new Event("error")));
+    expect(container.textContent).toContain("Anexo indisponível ou expirado");
+    expect(container.querySelector("audio")).toBeNull();
+  });
+
+  it("renders known video as a player and reports playback failures", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/clip.mp4",
+      mimeType: "video/mp4",
+      fileName: "clip.mp4",
+      expiredAt: null,
+    }));
+    const video = container.querySelector<HTMLVideoElement>("video");
+    expect(video).not.toBeNull();
+    expect(video?.hasAttribute("controls")).toBe(true);
+    expect(video?.getAttribute("src")).toBe("https://media.example.test/clip.mp4");
+    expect(video?.getAttribute("preload")).toBe("metadata");
+
+    await flushAct(() => video!.dispatchEvent(new Event("error")));
+    expect(container.textContent).toContain("Anexo indisponível ou expirado");
+    expect(container.querySelector("video")).toBeNull();
+  });
+
+  it("previews PDFs and links unsupported media only through safe web URLs", async () => {
+    const { container: fileContainer } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/itinerary.pdf",
+      mimeType: "application/pdf; charset=binary",
+      fileName: "itinerary.pdf",
+      expiredAt: null,
+    }));
+    const pdfPreview = fileContainer.querySelector<HTMLObjectElement>("object");
+    expect(pdfPreview?.getAttribute("data")).toBe("https://media.example.test/itinerary.pdf");
+    expect(pdfPreview?.getAttribute("type")).toBe("application/pdf");
+    expect(pdfPreview?.getAttribute("aria-label")).toBe("Pré-visualização de itinerary.pdf");
+    expect(pdfPreview?.hasAttribute("download")).toBe(false);
+    expect(pdfPreview?.querySelector('[role="status"]')?.textContent)
+      .toContain("Não foi possível pré-visualizar este PDF.");
+    const pdfFallbackLink = pdfPreview?.querySelector<HTMLAnchorElement>("a");
+    expect(pdfFallbackLink?.getAttribute("href")).toBe("https://media.example.test/itinerary.pdf");
+    expect(pdfFallbackLink?.getAttribute("target")).toBe("_blank");
+    expect(pdfFallbackLink?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(pdfFallbackLink?.hasAttribute("download")).toBe(false);
+    expect(fileContainer.querySelector("audio, video, img, iframe")).toBeNull();
+    expect(fileContainer.querySelector('[role="status"]')).not.toBeNull();
+
+    const { container: unsupportedContainer } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://media.example.test/clip.mov",
+      mimeType: "video/quicktime",
+      fileName: "clip.mov",
+      expiredAt: null,
+    }));
+    const unsupportedLink = unsupportedContainer.querySelector<HTMLAnchorElement>("a");
+    expect(unsupportedLink?.getAttribute("href")).toBe("https://media.example.test/clip.mov");
+    expect(unsupportedLink?.textContent).toBe("clip.mov");
+    expect(unsupportedLink?.getAttribute("download")).toBe("clip.mov");
+    expect(unsupportedLink?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(unsupportedContainer.querySelector("object, iframe, video")).toBeNull();
+  });
+
+  it("does not create links for non-web attachment URLs", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "javascript:alert(1)",
+      mimeType: null,
+      fileName: null,
+      expiredAt: null,
+    }));
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("Mídia anexada");
+  });
+
+  it("does not create links for URLs containing embedded credentials", async () => {
+    const { container } = await renderComponent(createElement(MessageMediaAttachment, {
+      url: "https://user:pass@media.example.test/private.pdf",
+      mimeType: "application/pdf",
+      fileName: "private.pdf",
+      expiredAt: null,
+    }));
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("iframe, object")).toBeNull();
+    expect(container.textContent).toContain("Anexo indisponível ou expirado");
+  });
 });
 
 describe("conversation list search interactions", () => {
@@ -763,5 +1005,335 @@ describe("delayed conversation history refreshes", () => {
     expect(history?.textContent).toContain("Histórico carregado 0");
     expect(history?.textContent).toContain("Histórico carregado 12");
     expect(history?.textContent).not.toContain("Histórico carregado 7");
+  });
+});
+
+describe("client timeline request scoping", () => {
+  it("ignores delayed selected-client and older-page responses after switching clients", async () => {
+    const requests = installDeferredClientTimelineFetch();
+    const { container } = await renderComponent(createElement(ClientTimelineRaceHarness));
+    const read = (testId: string) =>
+      container.querySelector(`[data-testid="${testId}"]`)?.textContent ?? "";
+    const timeline = container.querySelector<HTMLElement>('[data-testid="timeline-messages"]')!;
+
+    expect(read("timeline-selected-client")).toBe("client-a");
+    expect(read("timeline-loading")).toBe("true");
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="select-timeline-client-b"]',
+    )!.click());
+    expect(read("timeline-selected-client")).toBe("client-b");
+    expect(read("timeline-loading")).toBe("true");
+
+    const delayedA = {
+      ...firstMessage,
+      id: "delayed-client-a-message",
+      content: "Resposta atrasada da Ana",
+    };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a"),
+        [delayedA],
+        null,
+        false,
+      );
+    });
+    expect(read("timeline-loading")).toBe("true");
+    expect(read("timeline-error")).toBe("");
+    expect(timeline.textContent).not.toContain(delayedA.content);
+
+    const currentB = { ...secondMessage, id: "current-client-b-message" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-b"),
+        [currentB],
+        "client-b-older",
+        true,
+      );
+    });
+    expect(read("timeline-loading")).toBe("false");
+    expect(timeline.textContent).toContain(currentB.content);
+    expect(read("timeline-cursor")).toBe("client-b-older");
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="load-older-client-timeline"]',
+    )!.click());
+    expect(read("timeline-loading-older")).toBe("true");
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="select-timeline-client-a"]',
+    )!.click());
+    expect(read("timeline-selected-client")).toBe("client-a");
+    expect(read("timeline-loading")).toBe("true");
+    expect(read("timeline-loading-older")).toBe("false");
+    expect(timeline.textContent).toBe("");
+
+    const olderB = { ...secondMessage, id: "older-client-b-message", content: "Página antiga da Bruna" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-b", "client-b-older"),
+        [olderB],
+        null,
+        false,
+      );
+    });
+    expect(read("timeline-loading")).toBe("true");
+    expect(read("timeline-cursor")).toBe("");
+    expect(timeline.textContent).not.toContain(olderB.content);
+
+    await flushAct(async () => {
+      await settleClientTimelineFailure(getClientTimelineRequest(requests, "client-a", "first", 1));
+    });
+    expect(read("timeline-loading")).toBe("false");
+    expect(read("timeline-error")).toContain("Não foi possível carregar");
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="retry-client-timeline"]',
+    )!.click());
+    expect(read("timeline-loading")).toBe("true");
+    expect(read("timeline-error")).toBe("");
+    const retriedA = { ...latestFirstMessage, id: "retried-client-a-message" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", "first", 2),
+        [retriedA],
+        null,
+        false,
+      );
+    });
+
+    expect(read("timeline-loading")).toBe("false");
+    expect(read("timeline-error")).toBe("");
+    expect(timeline.textContent).toContain(retriedA.content);
+    expect(timeline.textContent).not.toContain(currentB.content);
+    expect(timeline.textContent).not.toContain(olderB.content);
+    expect(timeline.textContent).not.toContain(delayedA.content);
+  });
+});
+
+describe("overlapping client timeline pages", () => {
+  it("retries the same cursor and prepends only unseen entries in order", async () => {
+    const requests = installDeferredClientTimelineFetch();
+    const { container } = await renderComponent(createElement(ClientTimelineRaceHarness));
+    const timeline = container.querySelector<HTMLElement>('[data-testid="timeline-messages"]')!;
+    const cursor = "client-a-older-cursor";
+    const currentNewest = {
+      ...firstMessage,
+      id: "overlap-current-newest",
+      content: "Mensagem atual mais recente",
+    };
+    const currentShared = {
+      ...firstMessage,
+      id: "overlap-current-shared",
+      content: "Mensagem atual compartilhada",
+    };
+
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a"),
+        [currentNewest, currentShared],
+        cursor,
+        true,
+      );
+    });
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="load-older-client-timeline"]',
+    )!.click());
+    await flushAct(async () => {
+      await settleClientTimelineFailure(
+        getClientTimelineRequest(requests, "client-a", cursor),
+      );
+    });
+    expect(container.querySelector('[data-testid="timeline-error"]')?.textContent)
+      .toContain("Não foi possível carregar");
+    expect(container.querySelector('[data-testid="timeline-cursor"]')?.textContent)
+      .toBe(cursor);
+
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="load-older-client-timeline"]',
+    )!.click());
+    expect(requests.get(`client-a:${cursor}`)).toHaveLength(2);
+
+    const olderOnly = {
+      ...firstMessage,
+      id: "overlap-older-only",
+      content: "Mensagem antiga inédita",
+    };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", cursor, 1),
+        [olderOnly, currentShared, currentNewest],
+        "client-a-next-cursor",
+        false,
+      );
+    });
+
+    const renderedMessages = Array.from(
+      timeline.querySelectorAll("p"),
+      (element) => element.textContent,
+    );
+    expect(renderedMessages).toEqual([
+      olderOnly.content,
+      currentNewest.content,
+      currentShared.content,
+    ]);
+    expect(renderedMessages.filter((content) => content === olderOnly.content)).toHaveLength(1);
+    expect(renderedMessages.filter((content) => content === currentNewest.content)).toHaveLength(1);
+    expect(renderedMessages.filter((content) => content === currentShared.content)).toHaveLength(1);
+    expect(container.querySelector('[data-testid="timeline-cursor"]')?.textContent)
+      .toBe("client-a-next-cursor");
+  });
+
+  it("stops offering older messages when the server repeats the current cursor", async () => {
+    const requests = installDeferredClientTimelineFetch();
+    const { container } = await renderComponent(
+      createElement(ScrollAnchoredClientTimelineHarness),
+    );
+    const current = {
+      ...firstMessage,
+      id: "stalled-cursor-current",
+      content: "Mensagem mais recente",
+    };
+
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a"),
+        [current],
+        "cursor-does-not-advance",
+        true,
+      );
+    });
+
+    const olderButton = () => container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-load-older-client-timeline"]',
+    );
+    expect(olderButton()).not.toBeNull();
+
+    await flushAct(() => olderButton()!.click());
+    const older = {
+      ...firstMessage,
+      id: "stalled-cursor-older",
+      content: "Mensagem antiga recebida",
+    };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", "cursor-does-not-advance"),
+        [older, current],
+        "cursor-does-not-advance",
+        true,
+      );
+    });
+
+    expect(container.querySelector('[data-testid="scroll-client-cursor"]')?.textContent)
+      .toBe("");
+    expect(container.querySelector('[data-testid="client-conversation-timeline"]')?.textContent)
+      .toContain(older.content);
+    expect(olderButton()).toBeNull();
+    expect(requests.get("client-a:cursor-does-not-advance")).toHaveLength(1);
+  });
+});
+
+describe("client timeline scroll position", () => {
+  it("anchors older-page prepends and discards scroll measurements from a previous client", async () => {
+    const requests = installDeferredClientTimelineFetch();
+    const { container } = await renderComponent(
+      createElement(ScrollAnchoredClientTimelineHarness),
+    );
+    const timeline = container.querySelector<HTMLDivElement>(
+      '[data-testid="client-conversation-timeline"]',
+    );
+    expect(timeline).not.toBeNull();
+
+    let scrollHeight = 2_000;
+    Object.defineProperty(timeline!, "scrollHeight", {
+      configurable: true,
+      get: () => scrollHeight,
+    });
+    Object.defineProperty(timeline!, "clientHeight", {
+      configurable: true,
+      value: 500,
+    });
+
+    const currentA = { ...firstMessage, id: "scroll-current-a" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a"),
+        [currentA],
+        "a-older-1",
+        true,
+      );
+    });
+
+    timeline!.scrollTop = 600;
+    await flushAct(() => timeline!.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-load-older-client-timeline"]',
+    )!.click());
+    expect(container.querySelector('[data-testid="button-load-older-client-timeline"]')?.textContent)
+      .toContain("Carregando");
+
+    const olderA = { ...firstMessage, id: "scroll-older-a", content: "Mensagem anterior da Ana" };
+    scrollHeight = 2_300;
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", "a-older-1"),
+        [olderA],
+        "a-older-2",
+        true,
+      );
+    });
+    expect(timeline!.textContent).toContain(olderA.content);
+    expect(timeline!.scrollTop).toBe(900);
+
+    timeline!.scrollTop = 350;
+    await flushAct(() => timeline!.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="button-load-older-client-timeline"]',
+    )!.click());
+    await flushAct(() => container.querySelector<HTMLButtonElement>(
+      '[data-testid="select-scroll-client-b"]',
+    )!.click());
+
+    expect(container.querySelector('[data-testid="scroll-selected-client"]')?.textContent)
+      .toBe("client-b");
+    expect(container.querySelector('[data-testid="scroll-client-loading"]')?.textContent)
+      .toBe("true");
+    expect(timeline!.scrollTop).toBe(2_300);
+    expect(timeline!.textContent).not.toContain(olderA.content);
+
+    const staleOlderA = {
+      ...firstMessage,
+      id: "stale-older-a",
+      content: "Página atrasada da Ana",
+    };
+    scrollHeight = 2_600;
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-a", "a-older-2"),
+        [staleOlderA],
+        null,
+        false,
+      );
+    });
+    expect(timeline!.scrollTop).toBe(2_300);
+    expect(timeline!.textContent).not.toContain(staleOlderA.content);
+    expect(container.querySelector('[data-testid="scroll-client-loading"]')?.textContent)
+      .toBe("true");
+
+    const currentB = { ...secondMessage, id: "scroll-current-b" };
+    await flushAct(async () => {
+      await settleClientTimelineSuccess(
+        getClientTimelineRequest(requests, "client-b"),
+        [currentB],
+        null,
+        false,
+      );
+    });
+    expect(timeline!.textContent).toContain(currentB.content);
+    expect(timeline!.textContent).not.toContain(staleOlderA.content);
+    expect(timeline!.scrollTop).toBe(2_600);
+    expect(container.querySelector('[data-testid="scroll-client-loading"]')?.textContent)
+      .toBe("false");
   });
 });

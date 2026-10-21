@@ -12,6 +12,29 @@ export interface VariantItem {
   options: VariantOption[];
 }
 
+type ApiStoreCategory = Omit<StoreCategory, "imageUrl" | "position"> & {
+  image?: string | null;
+  order?: number;
+};
+
+function fromApiStoreCategory(category: ApiStoreCategory): StoreCategory {
+  const { image, order, ...rest } = category;
+  return {
+    ...rest,
+    imageUrl: image ?? null,
+    position: order ?? 0,
+  };
+}
+
+function toApiCategoryInput(data: Partial<CategoryInput>): Record<string, unknown> {
+  const { imageUrl, position, ...rest } = data;
+  return {
+    ...rest,
+    ...(imageUrl !== undefined ? { image: imageUrl } : {}),
+    ...(position !== undefined ? { order: position } : {}),
+  };
+}
+
 async function authHeaders(): Promise<HeadersInit> {
   return { "Content-Type": "application/json" };
 }
@@ -43,7 +66,51 @@ async function req<T = void>(
   return JSON.parse(text) as T;
 }
 
+export type StorefrontPageType = "home" | "catalog" | "product" | "checkout" | "other";
+export type StorefrontAnalyticsGroup = "travel" | "other" | "all" | "unknown";
+
+export type StorefrontMetricEvent =
+  | { event: "page_view"; pageType: StorefrontPageType; group?: StorefrontAnalyticsGroup }
+  | { event: "group_selected"; group: "all" | "travel" | "other"; source: "catalog_tab" | "home_link" }
+  | { event: "product_opened"; group: "travel" | "other" | "unknown" }
+  | { event: "search_submitted"; group: "travel" | "other" | "unknown"; source: "header_search" | "catalog_search" }
+  | { event: "checkout_started"; group: "travel" | "other" | "unknown" };
+
+export interface StorefrontAnalyticsSummary {
+  periodDays: 7 | 30 | 90;
+  pageViews: {
+    total: number;
+    previousTotal: number;
+    byDay: Array<{
+      date: string;
+      home: number;
+      catalog: number;
+      product: number;
+      checkout: number;
+      other: number;
+    }>;
+    byType: Array<{ pageType: StorefrontPageType; count: number }>;
+  };
+  topProducts: Array<{ name: string; views: number; group: "travel" | "other" | "unknown" }>;
+  groups: Array<{
+    group: StorefrontAnalyticsGroup;
+    selections: number;
+    productOpens: number;
+    searches: number;
+    checkoutStarts: number;
+  }>;
+  totals: { productOpens: number; searches: number; checkoutStarts: number };
+  previousTotals: { productOpens: number; searches: number; checkoutStarts: number };
+}
+
 export const storeApi = {
+  getStorefrontAnalytics: (periodDays: 7 | 30 | 90) =>
+    req<StorefrontAnalyticsSummary>(
+      "GET",
+      `/store/analytics/storefront?periodDays=${periodDays}`,
+      undefined,
+      { cache: "no-store" },
+    ),
   getSettings: () => req<StoreSettings>("GET", "/store/settings", undefined, { cache: "no-store" }),
   updateSettings: (data: Partial<StoreSettings>) =>
     req<StoreSettings>("PUT", "/store/settings", data),
@@ -52,11 +119,16 @@ export const storeApi = {
   initStore: (data: InitStoreInput) =>
     req<StoreSettings>("POST", "/store/init", data),
 
-  getCategories: () => req<StoreCategory[]>("GET", "/store/categories"),
-  createCategory: (data: CategoryInput) =>
-    req<StoreCategory>("POST", "/store/categories", data),
-  updateCategory: (id: string, data: Partial<CategoryInput>) =>
-    req<StoreCategory>("PUT", `/store/categories/${id}`, data),
+  getCategories: async () =>
+    (await req<ApiStoreCategory[]>("GET", "/store/categories")).map(fromApiStoreCategory),
+  createCategory: async (data: CategoryInput) =>
+    fromApiStoreCategory(
+      await req<ApiStoreCategory>("POST", "/store/categories", toApiCategoryInput(data)),
+    ),
+  updateCategory: async (id: string, data: Partial<CategoryInput>) =>
+    fromApiStoreCategory(
+      await req<ApiStoreCategory>("PUT", `/store/categories/${id}`, toApiCategoryInput(data)),
+    ),
   deleteCategory: (id: string) =>
     req<void>("DELETE", `/store/categories/${id}`),
 
@@ -85,6 +157,9 @@ export const storeApi = {
     return req<{ data: StoreOrder[]; total: number; page: number; limit: number }>("GET", `/store/orders${qs}`);
   },
   getOrder: (id: string) => req<StoreOrder>("GET", `/store/orders/${id}`),
+  getLatePayments: () => req<{ data: LatePaymentReview[] }>("GET", "/store/late-payments"),
+  refundLatePayment: (id: string) =>
+    req<{ success: boolean; status: string; refundId: string }>("POST", `/store/late-payments/${id}/refund`, {}),
   recordManualPixDeposit: (id: string, amount: number, idempotencyKey: string) =>
     req<{
       success: boolean;
@@ -143,7 +218,7 @@ async function publicReq<T>(
   method: string,
   path: string,
   body?: unknown,
-  options?: Pick<RequestInit, "cache">,
+  options?: Pick<RequestInit, "cache" | "keepalive">,
 ): Promise<T> {
   const res = await fetch(`${BASE}/api${path}`, {
     method,
@@ -160,6 +235,9 @@ async function publicReq<T>(
       err.code,
       typeof err.requestId === "string" ? err.requestId : undefined,
     );
+  }
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as unknown as T;
   }
   return res.json();
 }
@@ -186,8 +264,9 @@ export const publicStoreApi = {
       paymentMethods: Array.isArray(raw.paymentMethods) ? raw.paymentMethods as string[] : [],
     } as PublicStore;
   },
-  getCategories: (slug: string) =>
-    publicReq<StoreCategory[]>("GET", `/public/store/${slug}/categories`),
+  getCategories: async (slug: string) =>
+    (await publicReq<ApiStoreCategory[]>("GET", `/public/store/${slug}/categories`))
+      .map(fromApiStoreCategory),
   getProducts: (
     slug: string,
     params?: Record<string, string | number | boolean>
@@ -225,7 +304,7 @@ export const publicStoreApi = {
     ),
   getReviews: (slug: string, params?: { limit?: number; featured?: boolean }) => {
     const qs = params ? "?" + new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString() : "";
-    return publicReq<StoreReview[]>("GET", `/public/store/${slug}/reviews${qs}`);
+    return publicReq<PublicStoreReview[]>("GET", `/public/store/${slug}/reviews${qs}`);
   },
   createOrder: (slug: string, data: CreateOrderInput) =>
     publicReq<StoreCheckoutOrder>("POST", `/public/store/${slug}/orders`, data),
@@ -321,6 +400,13 @@ export const publicStoreApi = {
     utmCampaign?: string;
   }) =>
     publicReq<{ cookieId: string; tracked: boolean }>("POST", `/public/store/${slug}/referral/track`, data),
+  trackAnalyticsEvent: (slug: string, data: StorefrontMetricEvent) =>
+    publicReq<void>(
+      "POST",
+      `/public/store/${encodeURIComponent(slug)}/analytics`,
+      data,
+      { keepalive: true },
+    ),
 };
 
 export interface StoreSettings {
@@ -478,6 +564,8 @@ export interface StoreCategory {
   updatedAt: string;
 }
 
+export type StorefrontGroup = "travel" | "other";
+
 export interface StoreProduct {
   id: string;
   storeId?: string;
@@ -500,11 +588,13 @@ export interface StoreProduct {
   boardingPoints?: Array<{ id: string; name: string; time?: string | null; address?: string | null }> | null;
   tripVideos?: string[] | null;
   type: string;
+  storefrontGroup?: StorefrontGroup;
   name: string;
   slug: string;
   shortDescription?: string | null;
   description?: string | null;
   price: string;
+  priceChild?: string | number | null;
   comparePrice?: string | null;
   costPrice?: string | null;
   onSale: boolean;
@@ -594,6 +684,7 @@ export interface StoreOrderPassenger {
   ageCategory?: string | null;
   seatNumber?: string | null;
   isPrimary?: boolean;
+  isChildUnder7?: boolean;
   boardingLocationId?: string | null;
   phone?: string | null;
 }
@@ -627,6 +718,20 @@ export interface StoreOrderReservation {
   boardingReference?: string | null;
   boardingDepartureTime?: string | null;
   passengers: StoreOrderPassenger[];
+}
+
+export interface LatePaymentReview {
+  id: string;
+  amount: string;
+  status: string;
+  gateway: string | null;
+  transactionId: string | null;
+  notes: string | null;
+  createdAt: string;
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  isTestMode: boolean | null;
 }
 
 export interface StoreOrder extends LinkedData {
@@ -728,6 +833,22 @@ export interface StoreReview {
   updatedAt: string;
 }
 
+/** Public review payload returned by GET /public/store/:slug/reviews (approved-only). */
+export interface PublicStoreReview {
+  id: string;
+  reviewerName: string;
+  rating: number;
+  title?: string | null;
+  comment?: string | null;
+  images?: string[] | null;
+  verifiedPurchase: boolean;
+  isFeatured: boolean;
+  reply?: string | null;
+  repliedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface InitStoreInput {
   name: string;
   slug: string;
@@ -750,8 +871,9 @@ export interface ProductInput {
   name: string;
   slug?: string;
   type?: string;
+  storefrontGroup?: StorefrontGroup;
   categoryId?: string;
-  tripId?: string;
+  tripId?: string | null;
   accommodationId?: string | null;
   shortDescription?: string;
   description?: string;
@@ -826,6 +948,7 @@ export interface CreateOrderInput {
     productName: string;
     quantity: number;
     unitPrice: number;
+    variantName?: string;
     variantLabel?: string;
     metadata?: Record<string, unknown>;
   }>;
@@ -847,7 +970,13 @@ export interface CreateOrderInput {
 
   boardingLocationId?: string;
 
-  coPassengers?: Array<{ name: string; cpf?: string; phone?: string }>;
+  coPassengers?: Array<{
+    name: string;
+    cpf?: string;
+    phone?: string;
+    isChildUnder7?: boolean;
+    occupiesSeat?: boolean;
+  }>;
   depositAmount?: number;
   /**
    * Client-generated key, one per checkout attempt (see checkout.tsx). Lets a

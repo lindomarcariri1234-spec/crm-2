@@ -45,10 +45,11 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
     query: { queryKey: ["reservation", reservationId], enabled: open && !!reservationId },
   });
   const { data: paymentsData } = useListPayments(
-    { reservationId, limit: 50 },
+    { reservationId, limit: 500 },
     { query: { queryKey: ["payments", reservationId], enabled: open && !!reservationId } }
   );
   const payments = paymentsData?.data ?? [];
+  const hasStripeRefunds = payments.some((payment) => payment.category === "stripe_refund");
   const financial = data
     ? getReservationFinancialSummary(data as ReservationWithFinancialLinks)
     : null;
@@ -187,7 +188,7 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
                     <p className="font-semibold text-lg">{fmt(summary.total)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Pago</p>
+                    <p className="text-xs text-muted-foreground mb-1">{hasStripeRefunds ? "Pago líquido" : "Pago"}</p>
                     <p className="font-semibold text-lg text-green-600">{fmt(summary.paid)}</p>
                   </div>
                   <div>
@@ -202,7 +203,7 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
                     <p className="font-semibold text-lg">{fmt(summary.total)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Pago</p>
+                    <p className="text-xs text-muted-foreground mb-1">{hasStripeRefunds ? "Pago líquido" : "Pago"}</p>
                     <p className="font-semibold text-lg text-green-600">{fmt(summary.paid)}</p>
                   </div>
                   <div>
@@ -354,26 +355,38 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {payments.map(p => (
-                    <div key={p.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg border text-sm">
-                      <div>
-                        <p className="font-medium">{METHOD_LABELS[p.paymentMethod ?? ""] ?? p.paymentMethod ?? "—"}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          Venc: {new Date(p.dueDate).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}
-                          {p.description && ` · ${p.description}`}
-                        </p>
-                        {p.paidAt && <p className="text-xs text-green-600 mt-0.5">Pago em {new Date(p.paidAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}</p>}
+                  {payments.map(p => {
+                    const isStripeRefund = p.category === "stripe_refund";
+                    const amount = Number(p.amount);
+                    const paymentDate = p.paidAt ?? p.dueDate;
+                    return (
+                      <div key={p.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg border text-sm">
+                        <div>
+                          <p className={`font-medium ${isStripeRefund ? "text-destructive" : ""}`}>
+                            {isStripeRefund
+                              ? "Estorno Stripe"
+                              : METHOD_LABELS[p.paymentMethod ?? ""] ?? p.paymentMethod ?? "—"}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {isStripeRefund
+                              ? `Estornado em ${new Date(paymentDate).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
+                              : `Venc: ${new Date(p.dueDate).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}`}
+                            {isStripeRefund && ` · Método original: ${METHOD_LABELS[p.paymentMethod ?? ""] ?? p.paymentMethod ?? "—"}`}
+                            {p.description && ` · ${p.description}`}
+                          </p>
+                          {!isStripeRefund && p.paidAt && <p className="text-xs text-green-600 mt-0.5">Pago em {new Date(p.paidAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}</p>}
+                        </div>
+                        <div className="text-right">
+                          <p className={`font-semibold text-base ${isStripeRefund ? "text-destructive" : p.status === PAYMENT_STATUS.PAID ? "text-green-600" : ""}`}>
+                            {isStripeRefund ? `− ${fmt(Math.abs(amount))}` : fmt(amount)}
+                          </p>
+                          <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${isStripeRefund ? "bg-destructive/10 text-destructive" : p.status === PAYMENT_STATUS.PAID ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
+                            {isStripeRefund ? "Estornado" : p.status === PAYMENT_STATUS.PAID ? "Pago" : "Pendente"}
+                          </span>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className={`font-semibold text-base ${p.status === PAYMENT_STATUS.PAID ? "text-green-600" : ""}`}>
-                          {fmt(parseFloat(String(p.amount)))}
-                        </p>
-                        <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${p.status === PAYMENT_STATUS.PAID ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
-                          {p.status === PAYMENT_STATUS.PAID ? "Pago" : "Pendente"}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
               <div className="p-3 bg-muted/30 rounded-lg border">
@@ -386,7 +399,7 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
                 ) : (
                   <div className="flex justify-between text-sm"><span className="text-muted-foreground">Total líquido:</span><span className="font-semibold">{fmt(financial!.total)}</span></div>
                 )}
-                <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Pago:</span><span className="font-semibold text-green-600">{fmt(financial!.paid)}</span></div>
+                <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">{hasStripeRefunds ? "Pago líquido:" : "Pago:"}</span><span className="font-semibold text-green-600">{fmt(financial!.paid)}</span></div>
                 <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Saldo devedor:</span><span className={`font-semibold ${financial!.balance > 0 ? "text-destructive" : "text-green-600"}`}>{fmt(financial!.balance)}</span></div>
               </div>
             </TabsContent>

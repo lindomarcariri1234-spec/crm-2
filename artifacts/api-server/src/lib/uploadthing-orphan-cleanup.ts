@@ -37,8 +37,9 @@
  * node-cron fallback: same schedule in both !workersEnabled and !redisConn branches.
  */
 
-import { db, platformSettingsTable } from "@workspace/db";
+import { db, platformSettingsTable, pool } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import type { PoolClient } from "pg";
 import { utapi } from "./uploadthing";
 import { collectReferencedUploadThingKeys } from "./collectReferencedUploadThingKeys";
 import { generateId } from "./id";
@@ -55,6 +56,7 @@ import {
 const GRACE_MS = 26 * 60 * 60 * 1000; // 26 hours
 
 const STAGING_KEY = "uploadthing_orphan_candidates";
+const STAGING_LOCK_KEY = "uploadthing-orphan-cleanup-staging";
 const PAGE_SIZE = 500;
 const DELETE_BATCH_SIZE = 100;
 
@@ -137,6 +139,8 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
   };
 
   let retentionCleanupRejected = false;
+  let stagingLockClient: PoolClient | undefined;
+  let stagingLockHeld = false;
 
   try {
     // Expire old inbound media references before collecting keys, so files
@@ -147,6 +151,13 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
       result.retention = { expiredMessages: 0, errors: 1 };
       retentionCleanupRejected = true;
     }
+
+    stagingLockClient = await pool.connect();
+    await stagingLockClient.query(
+      "SELECT pg_advisory_lock(hashtextextended($1, 0))",
+      [STAGING_LOCK_KEY],
+    );
+    stagingLockHeld = true;
 
     const now = Date.now();
 
@@ -161,12 +172,15 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     // ── Step 2: Page through UploadThing and identify current orphans ─────────
     const currentOrphanKeys = new Set<string>();
     let offset = 0;
+    let listingComplete = true;
 
     while (true) {
       let page: Awaited<ReturnType<typeof utapi.listFiles>>;
       try {
         page = await utapi.listFiles({ limit: PAGE_SIZE, offset });
       } catch (listErr) {
+        listingComplete = false;
+        result.errors++;
         logger.error(
           { providerError: safeErrorLogFields(listErr), offset },
           "[uploadthing-orphan] Failed to list files from UploadThing — aborting scan",
@@ -186,26 +200,36 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     }
 
     logger.info(
-      { scanned: result.scanned, currentOrphans: currentOrphanKeys.size },
-      "[uploadthing-orphan] Scan complete",
+      {
+        scanned: result.scanned,
+        currentOrphans: currentOrphanKeys.size,
+        listingComplete,
+      },
+      listingComplete
+        ? "[uploadthing-orphan] Scan complete"
+        : "[uploadthing-orphan] Scan incomplete — preserving existing staging",
     );
 
     // ── Step 3: Separate into "ready to delete" vs "newly staged" ────────────
     const toDelete: string[] = [];
-    const updatedStaging: StagedCandidate[] = [];
+    const updatedStaging: StagedCandidate[] = listingComplete
+      ? []
+      : [...existingStaged];
 
-    for (const key of currentOrphanKeys) {
-      const stagedAt = existingStagedMap.get(key);
-      if (stagedAt !== undefined && now - stagedAt >= GRACE_MS) {
-        // Candidate has been an orphan for the full grace period → eligible for deletion
-        toDelete.push(key);
-      } else if (stagedAt === undefined) {
-        // First time we've seen this key as an orphan → stage it
-        updatedStaging.push({ key, stagedAt: now });
-        result.newlyStaged++;
-      } else {
-        // Still within grace period → keep staged
-        updatedStaging.push({ key, stagedAt });
+    if (listingComplete) {
+      for (const key of currentOrphanKeys) {
+        const stagedAt = existingStagedMap.get(key);
+        if (stagedAt !== undefined && now - stagedAt >= GRACE_MS) {
+          // Candidate has been an orphan for the full grace period → eligible for deletion
+          toDelete.push(key);
+        } else if (stagedAt === undefined) {
+          // First time we've seen this key as an orphan → stage it
+          updatedStaging.push({ key, stagedAt: now });
+          result.newlyStaged++;
+        } else {
+          // Still within grace period → keep staged
+          updatedStaging.push({ key, stagedAt });
+        }
       }
     }
     // Keys in existingStaged that are no longer orphans (now in DB) are intentionally
@@ -217,9 +241,7 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     );
 
     // ── Step 4: Delete eligible candidates in batches, with per-batch re-check ─
-    const deletedKeys: string[] = [];
-
-    if (toDelete.length > 0) {
+    if (listingComplete && toDelete.length > 0) {
       for (let i = 0; i < toDelete.length; i += DELETE_BATCH_SIZE) {
         const batch = toDelete.slice(i, i + DELETE_BATCH_SIZE);
 
@@ -250,11 +272,41 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
 
         try {
           const deleteResult = await utapi.deleteFiles(confirmedBatch);
-          result.deleted += deleteResult.deletedCount;
-          deletedKeys.push(...confirmedBatch.slice(0, deleteResult.deletedCount));
+          const reportedDeletedCount = deleteResult.deletedCount;
+          const validDeletedCount =
+            Number.isInteger(reportedDeletedCount) &&
+            reportedDeletedCount >= 0 &&
+            reportedDeletedCount <= confirmedBatch.length;
+          const deletedCount = validDeletedCount ? reportedDeletedCount : 0;
+          result.deleted += deletedCount;
+
+          if (deletedCount < confirmedBatch.length) {
+            const retainedCount = confirmedBatch.length - deletedCount;
+            result.errors += retainedCount;
+            // The provider reports only a count, not which keys were deleted.
+            // Retain the whole batch with its original timestamps; the next list
+            // scan drops keys that really disappeared and retries the rest.
+            for (const key of confirmedBatch) {
+              updatedStaging.push({
+                key,
+                stagedAt: existingStagedMap.get(key) ?? now,
+              });
+            }
+            logger.warn(
+              {
+                batchStart: i,
+                requestedCount: confirmedBatch.length,
+                deletedCount,
+                retainedCount,
+                invalidProviderCount: !validDeletedCount,
+              },
+              "[uploadthing-orphan] Partial batch deletion — retaining candidates for retry",
+            );
+          }
+
           logger.info(
-            { batchStart: i, batchSize: confirmedBatch.length, deletedCount: deleteResult.deletedCount },
-            "[uploadthing-orphan] Batch deleted",
+            { batchStart: i, batchSize: confirmedBatch.length, deletedCount },
+            "[uploadthing-orphan] Batch delete response processed",
           );
         } catch (batchErr) {
           result.errors += confirmedBatch.length;
@@ -275,13 +327,15 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     }
 
     // ── Step 5: Persist updated staging ──────────────────────────────────────
-    try {
-      await writeStagedCandidates(updatedStaging);
-    } catch (writeErr) {
-      logger.error(
-        { error: safeErrorLogFields(writeErr) },
-        "[uploadthing-orphan] Failed to persist updated staging — next run will re-discover candidates",
-      );
+    if (listingComplete) {
+      try {
+        await writeStagedCandidates(updatedStaging);
+      } catch (writeErr) {
+        logger.error(
+          { error: safeErrorLogFields(writeErr) },
+          "[uploadthing-orphan] Failed to persist updated staging — next run will re-discover candidates",
+        );
+      }
     }
 
   } catch (err) {
@@ -289,6 +343,33 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
       { error: safeErrorLogFields(err) },
       "[uploadthing-orphan] Unexpected error during orphan cleanup — run aborted",
     );
+  } finally {
+    if (stagingLockClient) {
+      let releaseFailure: unknown;
+      if (stagingLockHeld) {
+        try {
+          const { rows } = await stagingLockClient.query<{ unlocked: boolean }>(
+            "SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked",
+            [STAGING_LOCK_KEY],
+          );
+          if (rows[0]?.unlocked !== true) {
+            throw new Error("UploadThing cleanup staging lock was not held");
+          }
+        } catch (error) {
+          releaseFailure = error;
+        }
+      }
+
+      // A failed unlock must not return a still-locked session to the pool.
+      stagingLockClient.release(releaseFailure ? true : undefined);
+      if (releaseFailure) {
+        result.errors++;
+        logger.error(
+          { error: safeErrorLogFields(releaseFailure) },
+          "[uploadthing-orphan] Failed to release staging lock; connection discarded",
+        );
+      }
+    }
   }
 
   const completionSummary = {

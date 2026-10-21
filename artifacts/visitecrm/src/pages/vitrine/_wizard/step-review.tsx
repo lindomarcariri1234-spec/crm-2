@@ -17,10 +17,9 @@ export function StepReview({ state, store }: { state: WizardState; store: Public
     isSoldOut,
     qty,
     coPassengers,
+    seatedChildCount,
+    lapChildCount,
     canProceedFromDados,
-    maxSeats,
-    incrementQty,
-    decrementQty,
     form,
     set,
     partnerInfo,
@@ -84,39 +83,28 @@ export function StepReview({ state, store }: { state: WizardState; store: Public
           </div>
         )}
 
-        <div
-          className={`space-y-3 p-4 border rounded-xl ${
-            isSoldOut ? "opacity-50 pointer-events-none" : ""
-          }`}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Users className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm font-medium">Quantidade de passageiros</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={decrementQty}
-                className="w-8 h-8 rounded-full border flex items-center justify-center text-lg font-bold hover:bg-muted transition-colors"
-                disabled={qty <= 1}
-              >
-                −
-              </button>
-              <span data-testid="review-passenger-quantity" className="w-8 text-center font-bold text-lg">
-                {qty}
-              </span>
-              <button
-                onClick={incrementQty}
-                className="w-8 h-8 rounded-full border flex items-center justify-center text-lg font-bold hover:bg-muted transition-colors"
-                disabled={qty >= maxSeats}
-              >
-                +
-              </button>
-            </div>
+        <div className={`space-y-3 rounded-xl border p-4 ${isSoldOut ? "opacity-50" : ""}`}>
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Resumo de passageiros</span>
+          </div>
+          <div className="space-y-1 text-sm">
+            <p>
+              1 passageiro principal + {seatedChildCount}{" "}
+              {seatedChildCount === 1 ? "criança com poltrona" : "crianças com poltrona"}
+            </p>
+            {lapChildCount > 0 && (
+              <p className="text-muted-foreground">
+                {lapChildCount} criança(s) no colo, sem cobrança
+              </p>
+            )}
+            <p className="font-semibold">
+              {qty} {qty === 1 ? "passagem com poltrona cobrada" : "passagens com poltrona cobradas"}
+            </p>
           </div>
           {!canProceedFromDados() && (
             <p className="text-xs text-amber-700" role="status">
-              Volte à etapa anterior e informe os dados dos novos acompanhantes antes de continuar.
+              Volte aos dados para completar as crianças ou ajustar a quantidade de poltronas.
             </p>
           )}
         </div>
@@ -321,13 +309,15 @@ export function StepReview({ state, store }: { state: WizardState; store: Public
                 <p className="font-medium">{fmtDate(form.customerBirthdate)}</p>
               </div>
             )}
-            {coPassengers.slice(0, Math.max(0, qty - 1)).length > 0 && (
+            {coPassengers.length > 0 && (
               <div className="sm:col-span-2">
-                <p className="text-muted-foreground text-xs">Acompanhantes</p>
+                <p className="text-muted-foreground text-xs">Crianças incluídas</p>
                 <ul className="mt-1 space-y-1">
-                  {coPassengers.slice(0, Math.max(0, qty - 1)).map((passenger, index) => (
+                  {coPassengers.map((passenger, index) => (
                     <li key={index} className="font-medium">
-                      Passageiro {index + 2}: {passenger.name}
+                      {passenger.name} — {passenger.occupiesSeat
+                        ? "poltrona e passagem"
+                        : "no colo, sem cobrança"}
                     </li>
                   ))}
                 </ul>

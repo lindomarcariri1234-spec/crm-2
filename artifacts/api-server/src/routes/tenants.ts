@@ -23,7 +23,7 @@ import { generateId } from "../lib/id";
 import { requireAuth, ADMIN_ROLES } from "../lib/tenant";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { deleteOrphanedFile } from "../lib/uploadthing";
-import { ROLES } from "@workspace/permissions";
+import { ACTIONS, hasPermission, RESOURCES, ROLES } from "@workspace/permissions";
 import { enqueueAgencySuspendedEmail, enqueueAgencyReactivatedEmail } from "../queues/email-helpers";
 import { canEnableFeature, getFeatureLabel, getFeatureRequiredPlanLabel, hasSeatMapFeature } from "../lib/plan-features";
 import { formatTrip } from "./trips.js";
@@ -159,6 +159,9 @@ router.get("/tenants/:id", async (req, res, next: NextFunction): Promise<void> =
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.VIEW)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
+    }
     if (me.role !== ROLES.SUPER_ADMIN && me.tenantId !== req.params.id) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }

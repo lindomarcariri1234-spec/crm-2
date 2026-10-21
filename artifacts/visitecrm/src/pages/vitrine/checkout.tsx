@@ -47,7 +47,10 @@ import {
   saveOrderLookupToStorage,
   setStoredValue,
 } from "./utils/storage";
-import { trackReferralCreditReduction } from "@/lib/analytics";
+import {
+  trackReferralCreditReduction,
+  trackStoreCheckoutStarted,
+} from "@/lib/analytics";
 import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "./referral-messages";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { isStripeTestPayment, StripeTestPaymentNotice } from "./StripeTestPaymentNotice";
@@ -479,12 +482,26 @@ export default function VitrineCheckout({
   const [loadingReferralCreditBalance, setLoadingReferralCreditBalance] = useState(false);
   const [referralCreditBalanceError, setReferralCreditBalanceError] = useState<string | null>(null);
   const checkoutMountedRef = useRef(true);
+  const checkoutStartTrackedRef = useRef(false);
 
   useEffect(() => {
     return () => {
       checkoutMountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      items.length === 0 ||
+      checkoutStartTrackedRef.current ||
+      stripeReturnRecovery ||
+      failedStripeReturn
+    ) {
+      return;
+    }
+    checkoutStartTrackedRef.current = true;
+    trackStoreCheckoutStarted(slug);
+  }, [items.length, stripeReturnRecovery, failedStripeReturn]);
 
   async function refreshRecoveredReferralCreditBalance(
     context: RecoveredReferralCreditRefreshContext,
@@ -877,6 +894,7 @@ export default function VitrineCheckout({
           productName: i.productName,
           quantity: i.quantity,
           unitPrice: i.unitPrice,
+          variantName: i.variantName,
           variantLabel: i.variantLabel,
         })),
         couponCode: couponResult?.valid ? form.couponCode : undefined,

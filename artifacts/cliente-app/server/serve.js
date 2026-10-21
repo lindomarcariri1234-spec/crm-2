@@ -50,7 +50,12 @@ function getAppName() {
 }
 
 function serveManifest(platform, res) {
-  const manifestPath = MANIFEST_PATHS[platform];
+  const manifestPath =
+    platform === "ios"
+      ? MANIFEST_PATHS.ios
+      : platform === "android"
+        ? MANIFEST_PATHS.android
+        : null;
 
   if (!manifestPath || !fs.existsSync(manifestPath)) {
     res.writeHead(404, { "content-type": "application/json" });

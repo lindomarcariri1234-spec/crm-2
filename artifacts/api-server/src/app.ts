@@ -7,7 +7,7 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { clerkMiddleware, getAuth } from "@clerk/express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, ne, or } from "drizzle-orm";
 import { db, storeProductsTable, storesTable, tripsTable } from "@workspace/db";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
 import { requestId, errorHandler } from "./middlewares/errorHandler";
@@ -19,6 +19,7 @@ import {
   buildStorefrontMetadata,
   injectStorefrontMetadata,
   productSlugFromStorefrontPath,
+  shouldServePublishedStorefront,
 } from "./lib/storefront-metadata";
 import {
   canonicalizeInstagramConnectClerkRequest,
@@ -379,11 +380,20 @@ const referralTrackLimiter = rateLimit({
   handler: rateLimitHandler,
 });
 
+const storefrontAnalyticsLimiter = rateLimit({
+  windowMs: 60_000,
+  max: parseRateLimitEnv("RATE_LIMIT_STOREFRONT_ANALYTICS_MAX", 60),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+});
+
 app.use("/api/public", publicGeneralLimiter);
 app.post("/api/public/store/:slug/orders", publicOrderLimiter);
 app.get("/api/public/store/:slug/orders/:orderNumber", orderLookupLimiter);
 app.post("/api/public/store/:slug/referral/validate", referralValidateLimiter);
 app.post("/api/public/store/:slug/referral/track", referralTrackLimiter);
+app.post("/api/public/store/:slug/analytics", storefrontAnalyticsLimiter);
 app.get("/api/public/store/:slug/referral/info", referralInfoLimiter);
 app.post("/api/public/store/:slug/price-alerts", priceAlertSubscribeLimiter);
 
@@ -516,7 +526,7 @@ app.use("/api", (_req, _res, next) => {
   next(new NotFoundError("API route not found", "API_ROUTE_NOT_FOUND"));
 });
 
-if (!isDev) {
+if (shouldServePublishedStorefront()) {
   const frontendDist = path.join(process.cwd(), "artifacts/visitecrm/dist/public");
   const storefrontIndexPath = path.join(frontendDist, "index.html");
   let storefrontIndexHtml: Promise<string> | null = null;
@@ -594,6 +604,7 @@ if (!isDev) {
             eq(storeProductsTable.storeId, store.id),
             eq(storeProductsTable.slug, productSlug),
             eq(storeProductsTable.status, "active"),
+            or(isNull(tripsTable.id), ne(tripsTable.status, "completed")),
           ))
           .limit(1)
         : [];

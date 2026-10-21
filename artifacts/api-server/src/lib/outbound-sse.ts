@@ -6,7 +6,7 @@ export interface OutboundDeliveryUpdatePayload {
   deliveryId: string;
   messageId: string;
   status: string;
-  channel: "email" | "whatsapp";
+  channel: "email" | "whatsapp" | "instagram";
   provider: string;
 }
 

@@ -22,6 +22,8 @@ export interface Reservation {
   /** @nullable */
   tripType?: string | null;
   /** @nullable */
+  travelType?: string | null;
+  /** @nullable */
   packageType?: string | null;
   hasInsurance: boolean;
   isGratuidade: boolean;

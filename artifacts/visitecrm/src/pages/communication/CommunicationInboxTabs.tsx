@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { MessageSquare, Send } from "lucide-react";
 import type { AiConversationMessage } from "@/lib/communicationTimeline";
 import type { ClientConversationSummary, CommunicationTimelineEntry } from "@/lib/communicationTimeline";
@@ -18,6 +18,7 @@ export interface AiConversation {
   status: string;
   assignedUserId: string | null;
   sessionId: string | null;
+  metadata?: Record<string, unknown> | null;
   startedAt: string;
   createdAt: string;
   lastMessageId: string | null;
@@ -37,10 +38,27 @@ export interface AiMessage {
   isBot: boolean;
   sentAt: string;
   deliveryStatus?: string | null;
+  deliveryIssue?: string | null;
+  direction?: "inbound" | "outbound";
+  channel?: string | null;
+  provider?: string | null;
+  origin?: string | null;
+  externalId?: string | null;
+  deliveryAttempts?: number | null;
+  deliveryHistory?: Array<{
+    attemptNumber: number;
+    status: string;
+    provider: string | null;
+    externalId: string | null;
+    error: string | null;
+    startedAt: string | Date;
+    completedAt: string | Date | null;
+  }>;
   mediaUrl?: string | null;
   mediaMimeType?: string | null;
   mediaFileName?: string | null;
   mediaExpiredAt?: string | null;
+  mediaExpiresAt?: string | null;
 }
 
 export type ClientLinkStatus = "checking" | "valid" | "missing" | "unavailable";
@@ -112,13 +130,46 @@ export function MessageMediaAttachment({
   mimeType,
   fileName,
   expiredAt,
+  expiresAt,
 }: {
   url: string | null | undefined;
   mimeType: string | null | undefined;
   fileName: string | null | undefined;
   expiredAt: string | null | undefined;
+  expiresAt?: string | null;
 }) {
-  if (expiredAt) {
+  const [now, setNow] = useState(() => Date.now());
+  const [loadFailed, setLoadFailed] = useState(false);
+  const expiryTime = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+  let safeUrl: string | null = null;
+  try {
+    const parsedUrl = url ? new URL(url) : null;
+    if (parsedUrl && (parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:") && !parsedUrl.username && !parsedUrl.password) {
+      safeUrl = parsedUrl.toString();
+    }
+  } catch {
+    safeUrl = null;
+  }
+
+  useEffect(() => {
+    if (!Number.isFinite(expiryTime)) return;
+    const remainingMs = expiryTime - Date.now();
+    if (remainingMs <= 0) {
+      setNow(Date.now());
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setNow(Date.now()),
+      Math.min(remainingMs, 24 * 60 * 60 * 1000),
+    );
+    return () => window.clearTimeout(timer);
+  }, [expiryTime, now]);
+
+  useEffect(() => {
+    setLoadFailed(false);
+  }, [safeUrl]);
+
+  if (expiredAt || (Number.isFinite(expiryTime) && expiryTime <= Math.max(now, Date.now()))) {
     return (
       <span className="mt-1 block text-xs opacity-80" role="status">
         Anexo expirado após 90 dias
@@ -126,33 +177,35 @@ export function MessageMediaAttachment({
     );
   }
 
-  if (!url) {
+  if (!safeUrl || loadFailed) {
     return (
-      <span className="mt-1 block text-xs opacity-80">
-        {mimeType ? "Anexo indisponível" : "Mídia anexada"}
+      <span className="mt-1 block text-xs opacity-80" role={mimeType || loadFailed ? "status" : undefined}>
+        {mimeType || loadFailed ? "Anexo indisponível ou expirado" : "Mídia anexada"}
       </span>
     );
   }
 
-  const normalizedMimeType = mimeType?.toLowerCase() ?? "";
+  const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   if (INLINE_AUDIO_TYPES.has(normalizedMimeType)) {
     return (
       <audio
         className="mt-2 block w-full max-w-full"
         controls
+        onError={() => setLoadFailed(true)}
         preload="none"
-        src={url}
+        src={safeUrl}
         aria-label={fileName || "Áudio recebido"}
       />
     );
   }
   if (INLINE_IMAGE_TYPES.has(normalizedMimeType)) {
     return (
-      <a href={url} target="_blank" rel="noreferrer" className="mt-2 block">
+      <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="mt-2 block">
         <img
-          src={url}
+          src={safeUrl}
           alt={fileName || "Imagem recebida"}
           loading="lazy"
+          onError={() => setLoadFailed(true)}
           className="max-h-64 max-w-full rounded-md object-contain"
         />
       </a>
@@ -163,17 +216,40 @@ export function MessageMediaAttachment({
       <video
         className="mt-2 block max-h-64 max-w-full rounded-md"
         controls
+        onError={() => setLoadFailed(true)}
         preload="metadata"
-        src={url}
+        src={safeUrl}
         aria-label={fileName || "Vídeo recebido"}
       />
     );
   }
+  if (normalizedMimeType === "application/pdf") {
+    return (
+      <object
+        className="mt-2 block h-80 w-full max-w-full rounded-md border border-border/70 bg-white"
+        aria-label={fileName ? `Pré-visualização de ${fileName}` : "Pré-visualização de documento PDF"}
+        data={safeUrl}
+        type="application/pdf"
+      >
+        <span className="block p-3 text-xs" role="status">
+          Não foi possível pré-visualizar este PDF.
+          <a
+            className="ml-1 underline underline-offset-2"
+            href={safeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Abrir em uma nova guia
+          </a>
+        </span>
+      </object>
+    );
+  }
   return (
     <a
-      href={url}
+      href={safeUrl}
       target="_blank"
-      rel="noreferrer"
+      rel="noopener noreferrer"
       download={fileName || undefined}
       className="mt-1 block text-xs underline underline-offset-2"
     >
@@ -199,6 +275,9 @@ interface ConversationsTabProps {
   refetchOutboundMessages: () => unknown;
   fetchAiInbox: () => unknown;
   conversationMessages: CommunicationTimelineEntry[];
+  hasMoreClientTimeline?: boolean;
+  loadingOlderClientTimeline?: boolean;
+  onLoadOlderClientTimeline?: () => unknown;
   selectedClientName: string | undefined;
   loadingConversationAiMessages: boolean;
   retryingConversationIds?: string[];
@@ -236,6 +315,9 @@ export function ConversationsTab({
   refetchOutboundMessages,
   fetchAiInbox,
   conversationMessages,
+  hasMoreClientTimeline = false,
+  loadingOlderClientTimeline = false,
+  onLoadOlderClientTimeline = () => undefined,
   selectedClientName,
   loadingConversationAiMessages,
   retryingConversationIds = [],
@@ -258,17 +340,33 @@ export function ConversationsTab({
   const timelineRef = useRef<HTMLDivElement>(null);
   const previousClientIdRef = useRef(selectedClientId);
   const followLatestMessageRef = useRef(true);
+  const pendingPrependScrollRef = useRef<{ height: number; top: number } | null>(null);
 
   useLayoutEffect(() => {
     if (previousClientIdRef.current !== selectedClientId) {
       previousClientIdRef.current = selectedClientId;
       followLatestMessageRef.current = true;
+      pendingPrependScrollRef.current = null;
     }
     const timeline = timelineRef.current;
-    if (timeline && followLatestMessageRef.current) {
+    const pending = pendingPrependScrollRef.current;
+    if (timeline && pending && !loadingOlderClientTimeline) {
+      timeline.scrollTop = pending.top + timeline.scrollHeight - pending.height;
+      pendingPrependScrollRef.current = null;
+    } else if (timeline && followLatestMessageRef.current) {
       timeline.scrollTop = timeline.scrollHeight;
     }
-  }, [conversationMessages, selectedClientId]);
+  }, [conversationMessages, selectedClientId, loadingOlderClientTimeline]);
+
+  const loadOlderMessages = async () => {
+    const timeline = timelineRef.current;
+    if (!timeline || loadingOlderClientTimeline) return;
+    pendingPrependScrollRef.current = {
+      height: timeline.scrollHeight,
+      top: timeline.scrollTop,
+    };
+    await onLoadOlderClientTimeline();
+  };
 
   const handleTimelineScroll = () => {
     const timeline = timelineRef.current;
@@ -394,6 +492,20 @@ export function ConversationsTab({
                   role="log"
                   aria-live="polite"
                 >
+                  {hasMoreClientTimeline && (
+                    <div className="flex justify-center">
+                      <Button
+                        data-testid="button-load-older-client-timeline"
+                        disabled={loadingOlderClientTimeline}
+                        onClick={() => { void loadOlderMessages(); }}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        {loadingOlderClientTimeline ? "Carregando mensagens anteriores..." : "Carregar mensagens anteriores"}
+                      </Button>
+                    </div>
+                  )}
                   {loadingConversationAiMessages && (
                     <p className="rounded-lg bg-secondary/70 px-3 py-2 text-xs text-muted-foreground" role="status">Carregando mensagens recebidas…</p>
                   )}
@@ -491,6 +603,7 @@ export function ConversationsTab({
                               mimeType={message.mediaMimeType}
                               fileName={message.mediaFileName}
                               expiredAt={message.mediaExpiredAt}
+                              expiresAt={message.mediaExpiresAt}
                             />
                           )}
                         </div>
@@ -513,6 +626,48 @@ export function ConversationsTab({
                             {channelLabels[message.channel] ?? message.channel}
                           </Badge>
                         </div>
+                        {message.direction === "outbound" && (message.provider || message.externalId || message.deliveryAttempts != null) && (
+                          <p
+                            className="mt-1 break-all text-[10px] text-muted-foreground"
+                            data-testid={`client-delivery-reference-${message.id}`}
+                          >
+                            {[
+                              message.provider ? `Provedor: ${message.provider}` : null,
+                              message.externalId ? `Referência: ${message.externalId}` : null,
+                              message.deliveryAttempts != null ? `${message.deliveryAttempts} tentativa(s)` : null,
+                            ].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
+                        {message.direction === "outbound"
+                          && (message.status === "failed" || message.status === "unknown")
+                          && Boolean(message.deliveryHistory?.length) && (
+                            <details
+                              className="mt-1 text-[10px] text-muted-foreground"
+                              data-testid={`client-delivery-attempts-${message.id}`}
+                            >
+                              <summary className="cursor-pointer">
+                                Tentativas de envio ({message.deliveryHistory!.length})
+                              </summary>
+                              <ul className="mt-1 space-y-1 break-all pl-3">
+                                {message.deliveryHistory!.map((attempt) => (
+                                  <li key={`${message.id}-${attempt.attemptNumber}`}>
+                                    Tentativa {attempt.attemptNumber}: {attempt.status}
+                                    {attempt.provider ? ` · ${attempt.provider}` : ""}
+                                    {attempt.externalId ? ` · Ref. ${attempt.externalId}` : ""}
+                                    {attempt.startedAt
+                                      ? ` · ${new Date(attempt.startedAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
+                                      : ""}
+                                    {attempt.error ? " · O provedor informou uma falha." : ""}
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          )}
+                        {message.direction === "outbound" && message.deliveryIssue && (
+                          <p className="mt-1 text-[10px] text-muted-foreground" role="status">
+                            {message.deliveryIssue}
+                          </p>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -773,6 +928,7 @@ export function AiInboxTab({
                             mimeType={message.mediaMimeType}
                             fileName={message.mediaFileName}
                             expiredAt={message.mediaExpiredAt}
+                            expiresAt={message.mediaExpiresAt}
                           />
                         )}
                         <p className="mt-1.5 text-[10px] opacity-75">

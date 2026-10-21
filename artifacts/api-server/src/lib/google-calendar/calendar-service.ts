@@ -315,6 +315,8 @@ export interface CalendarEventData {
   googleEventId?: string;
 }
 
+export type CalendarSendUpdates = "all" | "externalOnly" | "none";
+
 export class GoogleCalendarService {
   private calendar;
   readonly userId: string;
@@ -334,7 +336,11 @@ export class GoogleCalendarService {
     }
   }
 
-  async createEvent(data: CalendarEventData, ctx: Record<string, unknown> = {}): Promise<{ id: string } | null> {
+  async createEvent(
+    data: CalendarEventData,
+    ctx: Record<string, unknown> = {},
+    sendUpdates: CalendarSendUpdates = "none",
+  ): Promise<{ id: string } | null> {
     try {
       const end = data.endDateTime ?? data.startDateTime;
       const event = {
@@ -357,7 +363,7 @@ export class GoogleCalendarService {
       const response = await this.calendar.events.insert({
         calendarId: "primary",
         requestBody: event,
-        sendUpdates: "none",
+        sendUpdates,
       });
       return { id: response.data.id! };
     } catch (err) {
@@ -377,7 +383,12 @@ export class GoogleCalendarService {
     }
   }
 
-  async updateEvent(eventId: string, data: Partial<CalendarEventData>, ctx: Record<string, unknown> = {}): Promise<boolean | "not-found"> {
+  async updateEvent(
+    eventId: string,
+    data: Partial<CalendarEventData>,
+    ctx: Record<string, unknown> = {},
+    sendUpdates: CalendarSendUpdates = "none",
+  ): Promise<boolean | "not-found"> {
     try {
       const patch: Record<string, unknown> = {};
       if (data.summary) patch.summary = data.summary;
@@ -396,7 +407,7 @@ export class GoogleCalendarService {
         calendarId: "primary",
         eventId,
         requestBody: patch,
-        sendUpdates: "none",
+        sendUpdates,
       });
       return true;
     } catch (err) {
@@ -412,12 +423,16 @@ export class GoogleCalendarService {
     }
   }
 
-  async deleteEvent(eventId: string, ctx: Record<string, unknown> = {}): Promise<boolean | "not-found"> {
+  async deleteEvent(
+    eventId: string,
+    ctx: Record<string, unknown> = {},
+    sendUpdates: CalendarSendUpdates = "none",
+  ): Promise<boolean | "not-found"> {
     try {
       await this.calendar.events.delete({
         calendarId: "primary",
         eventId,
-        sendUpdates: "none",
+        sendUpdates,
       });
       return true;
     } catch (err) {

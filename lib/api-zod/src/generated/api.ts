@@ -1092,6 +1092,17 @@ export const AssignPmsReservationUnitsResponse = zod.object({
 });
 
 /**
+ * @summary Generate a WhatsApp connection QR code
+ */
+export const GenerateEvolutionConnectionQrParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GenerateEvolutionConnectionQrResponse = zod.object({
+  qrCodeDataUrl: zod.string(),
+});
+
+/**
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
@@ -1151,6 +1162,42 @@ export const GetSystemHealthResponse = zod.object({
         warningThresholdPct: zod.number(),
       })
       .nullish(),
+    queueDailyUsage: zod
+      .object({
+        commandCount: zod.number(),
+        maxCommands: zod.number(),
+        usagePct: zod.number(),
+        warningThresholdPct: zod.number(),
+      })
+      .nullish(),
+    queueCutover: zod
+      .object({
+        selectedRedis: zod.enum(["REDIS_URL", "REDIS_QUEUE_URL", "disabled"]),
+        outcome: zod.enum([
+          "not_checked",
+          "checking",
+          "not_configured",
+          "workers_disabled",
+          "blocked",
+          "approved",
+          "verified",
+          "reverted",
+          "same_resource",
+        ]),
+        reason: zod.string().nullable(),
+        blockerCount: zod.number().int(),
+        blockedWorkCount: zod.number().int(),
+        blockers: zod.array(
+          zod.object({
+            queue: zod.string(),
+            state: zod.string(),
+            count: zod.number().int(),
+            reason: zod.string(),
+          }),
+        ),
+        checkedAt: zod.string().nullable(),
+      })
+      .optional(),
   }),
   stripeWebhookAudit: zod.object({
     status: zod.enum(["ok", "duplicate", "unknown"]),
@@ -1166,6 +1213,41 @@ export const GetSystemHealthResponse = zod.object({
   stripeSyncTables: zod.object({
     ok: zod.boolean().nullable(),
     checkedAt: zod.string().nullable(),
+  }),
+  reminderSchedulers: zod.object({
+    status: zod.enum(["ok", "degraded", "unknown"]),
+    failedCount: zod.number().int(),
+    unattemptedCount: zod.number().int(),
+    delayedCount: zod.number().int(),
+    missingCount: zod.number().int(),
+    unavailableCount: zod.number().int(),
+    timezone: zod.string(),
+    schedulers: zod.array(
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        status: zod.enum(["not_attempted", "registered", "failed"]),
+        scheduleStatus: zod.enum([
+          "healthy",
+          "registration_failed",
+          "missing",
+          "delayed",
+          "unavailable",
+        ]),
+        lastAttemptAt: zod.coerce.date().nullable(),
+        lastSuccessfulAt: zod.coerce.date().nullable(),
+        nextRunAt: zod.coerce.date().nullable(),
+        lastRunAt: zod.coerce.date().nullable(),
+        lastRunStatus: zod
+          .union([
+            zod.literal("completed"),
+            zod.literal("failed"),
+            zod.literal(null),
+          ])
+          .nullable(),
+        failureCount: zod.number().int(),
+      }),
+    ),
   }),
   workers: zod.record(zod.string(), zod.unknown()).optional(),
   seatDrift: zod.record(zod.string(), zod.unknown()).optional(),
@@ -1697,6 +1779,11 @@ export const SuspendTenantResponse = zod.object({
   name: zod.string(),
   slug: zod.string(),
   email: zod.string(),
+  cnpj: zod.string().nullish(),
+  address: zod.string().nullish(),
+  city: zod.string().nullish(),
+  state: zod.string().nullish(),
+  zipCode: zod.string().nullish(),
   whatsapp: zod.string().nullish(),
   phone: zod.string().nullish(),
   planId: zod.string(),
@@ -1723,6 +1810,11 @@ export const ActivateTenantResponse = zod.object({
   name: zod.string(),
   slug: zod.string(),
   email: zod.string(),
+  cnpj: zod.string().nullish(),
+  address: zod.string().nullish(),
+  city: zod.string().nullish(),
+  state: zod.string().nullish(),
+  zipCode: zod.string().nullish(),
   whatsapp: zod.string().nullish(),
   phone: zod.string().nullish(),
   planId: zod.string(),
@@ -3117,12 +3209,27 @@ export const DeleteLayoutResponse = zod.object({
 /**
  * @summary List trips
  */
+export const listTripsQueryLocationMax = 100;
+
 export const listTripsQueryPageDefault = 1;
 export const listTripsQueryLimitDefault = 20;
 
 export const ListTripsQueryParams = zod.object({
   search: zod.coerce.string().nullish(),
+  location: zod.coerce
+    .string()
+    .max(listTripsQueryLocationMax)
+    .optional()
+    .describe(
+      "Case-insensitive match across trip origin and destination city/state (maximum 100 characters).",
+    ),
   status: zod.coerce.string().nullish(),
+  storePublication: zod
+    .enum(["published", "unpublished"])
+    .optional()
+    .describe(
+      "Filter trips by whether their linked store product is active in the public storefront.",
+    ),
   type: zod.coerce.string().optional(),
   date: zod.coerce
     .string()
@@ -4224,6 +4331,10 @@ export const listReservationsQueryPageDefault = 1;
 export const listReservationsQueryLimitDefault = 20;
 
 export const ListReservationsQueryParams = zod.object({
+  reservationIds: zod.coerce
+    .string()
+    .nullish()
+    .describe("Comma-separated reservation IDs to retrieve (maximum 100 IDs)."),
   search: zod.coerce.string().nullish(),
   tripId: zod.coerce.string().nullish(),
   clientId: zod.coerce.string().nullish(),
@@ -4248,6 +4359,7 @@ export const ListReservationsResponse = zod.object({
       clientId: zod.string(),
       seats: zod.array(zod.string()),
       tripType: zod.string().nullish(),
+      travelType: zod.string().nullish(),
       packageType: zod.string().nullish(),
       hasInsurance: zod.boolean(),
       isGratuidade: zod.boolean(),
@@ -4399,6 +4511,7 @@ export const CreateReservationBody = zod.object({
   clientId: zod.string(),
   seats: zod.array(zod.string()),
   tripType: zod.string().nullish(),
+  travelType: zod.string().nullish(),
   packageType: zod.string().nullish(),
   roomId: zod
     .string()
@@ -4463,6 +4576,7 @@ export const CreateReservationResponse = zod.object({
   clientId: zod.string(),
   seats: zod.array(zod.string()),
   tripType: zod.string().nullish(),
+  travelType: zod.string().nullish(),
   packageType: zod.string().nullish(),
   hasInsurance: zod.boolean(),
   isGratuidade: zod.boolean(),
@@ -4627,6 +4741,7 @@ export const GetReservationResponse = zod.object({
   clientId: zod.string(),
   seats: zod.array(zod.string()),
   tripType: zod.string().nullish(),
+  travelType: zod.string().nullish(),
   packageType: zod.string().nullish(),
   hasInsurance: zod.boolean(),
   isGratuidade: zod.boolean(),
@@ -4786,6 +4901,7 @@ export const UpdateReservationBody = zod.object({
     .optional(),
   paymentMethod: zod.string().nullish(),
   notes: zod.string().nullish(),
+  travelType: zod.string().nullish(),
   seats: zod.array(zod.string()).nullish(),
   totalValue: zod.number().nullish(),
   installments: zod.number().int().nullish(),
@@ -4828,6 +4944,7 @@ export const UpdateReservationResponse = zod.object({
   clientId: zod.string(),
   seats: zod.array(zod.string()),
   tripType: zod.string().nullish(),
+  travelType: zod.string().nullish(),
   packageType: zod.string().nullish(),
   hasInsurance: zod.boolean(),
   isGratuidade: zod.boolean(),
@@ -4988,6 +5105,7 @@ export const CheckInReservationResponse = zod.object({
   clientId: zod.string(),
   seats: zod.array(zod.string()),
   tripType: zod.string().nullish(),
+  travelType: zod.string().nullish(),
   packageType: zod.string().nullish(),
   hasInsurance: zod.boolean(),
   isGratuidade: zod.boolean(),
@@ -5448,7 +5566,19 @@ export const listPaymentsQueryLimitDefault = 20;
 
 export const ListPaymentsQueryParams = zod.object({
   reservationId: zod.coerce.string().nullish(),
+  reservationIds: zod.coerce
+    .string()
+    .nullish()
+    .describe(
+      "Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).",
+    ),
   clientId: zod.coerce.string().nullish(),
+  clientIds: zod.coerce
+    .string()
+    .nullish()
+    .describe(
+      "Comma-separated client IDs to retrieve payments for (maximum 100 IDs).",
+    ),
   status: zod.coerce.string().nullish(),
   type: zod.coerce.string().nullish(),
   dateFrom: zod.coerce.string().nullish(),
@@ -5461,6 +5591,14 @@ export const ListPaymentsQueryParams = zod.object({
     .string()
     .nullish()
     .describe("Inclusive end of the due-date range in America/Sao_Paulo."),
+  updatedAtFrom: zod.coerce
+    .string()
+    .nullish()
+    .describe("Inclusive start of the updated-at range in America/Sao_Paulo."),
+  updatedAtTo: zod.coerce
+    .string()
+    .nullish()
+    .describe("Inclusive end of the updated-at range in America/Sao_Paulo."),
   unlinkedOnly: zod.coerce
     .boolean()
     .optional()
@@ -5483,6 +5621,9 @@ export const ListPaymentsResponse = zod.object({
       totalInstallments: zod.number().int(),
       dueDate: zod.string(),
       paidAt: zod.string().nullish(),
+      refundedAt: zod.string().nullish(),
+      refundOfPaymentId: zod.string().nullish(),
+      gateway: zod.string().nullish(),
       status: zod.enum([
         "pending",
         "paid",
@@ -5550,6 +5691,9 @@ export const CreatePaymentResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
+  gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
     "paid",
@@ -5602,6 +5746,9 @@ export const CreateOperationalCostPayableResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
+  gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
     "paid",
@@ -5651,6 +5798,9 @@ export const GetPaymentResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
+  gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
     "paid",
@@ -5708,6 +5858,9 @@ export const UpdatePaymentResponse = zod.object({
   totalInstallments: zod.number().int(),
   dueDate: zod.string(),
   paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
+  gateway: zod.string().nullish(),
   status: zod.enum([
     "pending",
     "paid",
@@ -5738,6 +5891,59 @@ export const DeletePaymentResponse = zod.object({
 });
 
 /**
+ * @summary Record a partial manual refund for a reservation payment
+ */
+export const CreatePartialManualRefundParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const createPartialManualRefundBodyAmountExclusiveMin = 0;
+export const createPartialManualRefundBodyAmountMultipleOf = 0.01;
+
+export const createPartialManualRefundBodyNotesMax = 1000;
+
+export const CreatePartialManualRefundBody = zod.object({
+  amount: zod
+    .number()
+    .gt(createPartialManualRefundBodyAmountExclusiveMin)
+    .multipleOf(createPartialManualRefundBodyAmountMultipleOf),
+  notes: zod.string().max(createPartialManualRefundBodyNotesMax).optional(),
+});
+
+export const CreatePartialManualRefundResponse = zod.object({
+  id: zod.string(),
+  reservationId: zod.string().nullish(),
+  clientId: zod.string().nullish(),
+  type: zod.enum(["receivable", "payable"]),
+  category: zod.string(),
+  amount: zod.number(),
+  paymentMethod: zod.string(),
+  installmentNumber: zod.number().int(),
+  totalInstallments: zod.number().int(),
+  dueDate: zod.string(),
+  paidAt: zod.string().nullish(),
+  refundedAt: zod.string().nullish(),
+  refundOfPaymentId: zod.string().nullish(),
+  gateway: zod.string().nullish(),
+  status: zod.enum([
+    "pending",
+    "paid",
+    "overdue",
+    "cancelled",
+    "approved",
+    "failed",
+    "refunded",
+    "charged_back",
+  ]),
+  description: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  sourceExpenseId: zod.string().nullable(),
+  sourceTripCostId: zod.string().nullable(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+});
+
+/**
  * @summary Get financial summary
  */
 export const GetPaymentsSummaryResponse = zod.object({
@@ -5762,6 +5968,16 @@ export const ListExpensesQueryParams = zod.object({
   status: zod.coerce.string().nullish(),
   category: zod.coerce.string().nullish(),
   supplierId: zod.coerce.string().nullish(),
+  sourceId: zod.coerce
+    .string()
+    .nullish()
+    .describe(
+      "Exact source record ID for opening one operational cost from its linked payable.",
+    ),
+  sourceType: zod
+    .enum(["agency", "trip"])
+    .optional()
+    .describe("Source record type; required together with sourceId."),
   dateFrom: zod.coerce.string().nullish(),
   dateTo: zod.coerce.string().nullish(),
   includeTripCosts: zod.coerce
@@ -6341,7 +6557,7 @@ export const ListMessagesResponse = zod.array(ListMessagesResponseItem);
  */
 export const SendMessageBody = zod.object({
   toClientId: zod.string(),
-  channel: zod.enum(["email", "whatsapp"]),
+  channel: zod.enum(["email", "whatsapp", "instagram"]),
   content: zod.string(),
   mediaUrl: zod.string().nullish(),
 });
@@ -6381,7 +6597,7 @@ export const listOutboundMessagesQueryOffsetMin = 0;
 
 export const ListOutboundMessagesQueryParams = zod.object({
   status: zod.coerce.string().optional(),
-  channel: zod.enum(["email", "whatsapp"]).optional(),
+  channel: zod.enum(["email", "whatsapp", "instagram"]).optional(),
   deliveryStatus: zod
     .enum(["pending", "processing", "accepted", "failed", "skipped", "unknown"])
     .optional()
@@ -6438,7 +6654,7 @@ export const ListOutboundMessagesResponseItem = zod.object({
     zod.object({
       id: zod.string(),
       outboundMessageId: zod.string(),
-      channel: zod.enum(["email", "whatsapp"]),
+      channel: zod.enum(["email", "whatsapp", "instagram"]),
       recipient: zod.string().nullish(),
       subject: zod.string().nullish(),
       content: zod.string(),
@@ -6561,7 +6777,7 @@ export const CreateOutboundMessageResponse = zod
       zod.object({
         id: zod.string(),
         outboundMessageId: zod.string(),
-        channel: zod.enum(["email", "whatsapp"]),
+        channel: zod.enum(["email", "whatsapp", "instagram"]),
         recipient: zod.string().nullish(),
         subject: zod.string().nullish(),
         content: zod.string(),
@@ -6619,7 +6835,7 @@ export const CreateOutboundMessageResponse = zod
  */
 export const ListOutboundProviderFailureSummaryQueryParams = zod.object({
   status: zod.coerce.string().optional(),
-  channel: zod.enum(["email", "whatsapp"]).optional(),
+  channel: zod.enum(["email", "whatsapp", "instagram"]).optional(),
   deliveryStatus: zod
     .enum(["pending", "processing", "accepted", "failed", "skipped", "unknown"])
     .optional()
@@ -6659,7 +6875,7 @@ export const ListOutboundProviderFailureSummaryResponse = zod.array(
 export const ExportOutboundMessagesQueryParams = zod.object({
   format: zod.enum(["csv", "pdf"]),
   status: zod.coerce.string().optional(),
-  channel: zod.enum(["email", "whatsapp"]).optional(),
+  channel: zod.enum(["email", "whatsapp", "instagram"]).optional(),
   deliveryStatus: zod
     .enum(["pending", "processing", "accepted", "failed", "skipped", "unknown"])
     .optional()
@@ -6756,7 +6972,7 @@ export const ListMessageTemplatesResponse = zod.array(
  */
 export const CreateMessageTemplateBody = zod.object({
   name: zod.string(),
-  channel: zod.enum(["email", "whatsapp"]),
+  channel: zod.enum(["email", "whatsapp", "instagram"]),
   subject: zod.string().nullish(),
   content: zod.string(),
   variables: zod.array(zod.string()).optional(),
@@ -7817,9 +8033,48 @@ export const ListCampaignsResponseItem = zod.object({
   sentAt: zod.string().nullish(),
   recipientsCount: zod.number().int(),
   sentCount: zod.number().int(),
+  emailDeliveredCount: zod.number().int(),
   openedCount: zod.number().int(),
   clickedCount: zod.number().int(),
+  bouncedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages bounced according to Resend."),
+  permanentBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is permanent.",
+    ),
+  permanentBounceSuppressedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Campaign email recipients skipped because an earlier permanent bounce was confirmed.",
+    ),
+  temporaryBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is temporary.",
+    ),
+  failedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages failed according to Resend."),
+  complainedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients who reported messages as spam according to Resend.",
+    ),
   deliveredCount: zod.number().int().optional(),
+  engagementMetricsAvailable: zod.boolean(),
+  failureMetricsAvailable: zod
+    .boolean()
+    .describe(
+      "Whether bounce totals and classifications, failures, and complaints are available for this campaign.",
+    ),
   triggerType: zod.string().nullish(),
   triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),
   autoEnabled: zod.boolean().optional(),
@@ -7853,13 +8108,102 @@ export const CreateCampaignResponse = zod.object({
   sentAt: zod.string().nullish(),
   recipientsCount: zod.number().int(),
   sentCount: zod.number().int(),
+  emailDeliveredCount: zod.number().int(),
   openedCount: zod.number().int(),
   clickedCount: zod.number().int(),
+  bouncedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages bounced according to Resend."),
+  permanentBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is permanent.",
+    ),
+  permanentBounceSuppressedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Campaign email recipients skipped because an earlier permanent bounce was confirmed.",
+    ),
+  temporaryBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is temporary.",
+    ),
+  failedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages failed according to Resend."),
+  complainedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients who reported messages as spam according to Resend.",
+    ),
   deliveredCount: zod.number().int().optional(),
+  engagementMetricsAvailable: zod.boolean(),
+  failureMetricsAvailable: zod
+    .boolean()
+    .describe(
+      "Whether bounce totals and classifications, failures, and complaints are available for this campaign.",
+    ),
   triggerType: zod.string().nullish(),
   triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),
   autoEnabled: zod.boolean().optional(),
   createdAt: zod.string(),
+});
+
+/**
+ * @summary List permanent campaign bounces and bounce-prevented email sends
+ */
+export const ListCampaignPermanentBounceRecipientsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const listCampaignPermanentBounceRecipientsQueryPageDefault = 1;
+export const listCampaignPermanentBounceRecipientsQueryPageMax = 1000;
+
+export const ListCampaignPermanentBounceRecipientsQueryParams = zod.object({
+  page: zod.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(listCampaignPermanentBounceRecipientsQueryPageMax)
+    .default(listCampaignPermanentBounceRecipientsQueryPageDefault),
+});
+
+export const ListCampaignPermanentBounceRecipientsResponse = zod.object({
+  available: zod
+    .boolean()
+    .describe("False when campaign email failure tracking was not available."),
+  recipients: zod.array(
+    zod.object({
+      clientId: zod.string(),
+      name: zod.string(),
+      email: zod.string(),
+      bouncedAt: zod.coerce.date(),
+    }),
+  ),
+  page: zod.number().int(),
+  pageSize: zod.number().int(),
+  hasMore: zod.boolean(),
+  permanentBounceSuppressions: zod.object({
+    available: zod.boolean().describe("False when the campaign does not send email."),
+    count: zod.number().int().describe(
+      "Distinct clients whose email was skipped due to a confirmed permanent bounce.",
+    ),
+    recipients: zod.array(zod.object({
+      clientId: zod.string(),
+      name: zod.string(),
+      email: zod.string().nullable(),
+    })),
+    page: zod.number().int(),
+    pageSize: zod.number().int(),
+    hasMore: zod.boolean(),
+  }),
 });
 
 /**
@@ -7890,9 +8234,48 @@ export const UpdateCampaignResponse = zod.object({
   sentAt: zod.string().nullish(),
   recipientsCount: zod.number().int(),
   sentCount: zod.number().int(),
+  emailDeliveredCount: zod.number().int(),
   openedCount: zod.number().int(),
   clickedCount: zod.number().int(),
+  bouncedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages bounced according to Resend."),
+  permanentBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is permanent.",
+    ),
+  permanentBounceSuppressedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Campaign email recipients skipped because an earlier permanent bounce was confirmed.",
+    ),
+  temporaryBouncedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients whose Resend bounce classification is temporary.",
+    ),
+  failedCount: zod
+    .number()
+    .int()
+    .describe("Email recipients whose messages failed according to Resend."),
+  complainedCount: zod
+    .number()
+    .int()
+    .describe(
+      "Email recipients who reported messages as spam according to Resend.",
+    ),
   deliveredCount: zod.number().int().optional(),
+  engagementMetricsAvailable: zod.boolean(),
+  failureMetricsAvailable: zod
+    .boolean()
+    .describe(
+      "Whether bounce totals and classifications, failures, and complaints are available for this campaign.",
+    ),
   triggerType: zod.string().nullish(),
   triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),
   autoEnabled: zod.boolean().optional(),
@@ -8270,6 +8653,11 @@ export const ListTenantsResponseItem = zod
     name: zod.string(),
     slug: zod.string(),
     email: zod.string(),
+    cnpj: zod.string().nullish(),
+    address: zod.string().nullish(),
+    city: zod.string().nullish(),
+    state: zod.string().nullish(),
+    zipCode: zod.string().nullish(),
     whatsapp: zod.string().nullish(),
     phone: zod.string().nullish(),
     planId: zod.string(),
@@ -8306,6 +8694,11 @@ export const CreateTenantResponse = zod.object({
   name: zod.string(),
   slug: zod.string(),
   email: zod.string(),
+  cnpj: zod.string().nullish(),
+  address: zod.string().nullish(),
+  city: zod.string().nullish(),
+  state: zod.string().nullish(),
+  zipCode: zod.string().nullish(),
   whatsapp: zod.string().nullish(),
   phone: zod.string().nullish(),
   planId: zod.string(),
@@ -8332,6 +8725,11 @@ export const GetTenantResponse = zod.object({
   name: zod.string(),
   slug: zod.string(),
   email: zod.string(),
+  cnpj: zod.string().nullish(),
+  address: zod.string().nullish(),
+  city: zod.string().nullish(),
+  state: zod.string().nullish(),
+  zipCode: zod.string().nullish(),
   whatsapp: zod.string().nullish(),
   phone: zod.string().nullish(),
   planId: zod.string(),
@@ -8389,6 +8787,11 @@ export const UpdateTenantResponse = zod.object({
   name: zod.string(),
   slug: zod.string(),
   email: zod.string(),
+  cnpj: zod.string().nullish(),
+  address: zod.string().nullish(),
+  city: zod.string().nullish(),
+  state: zod.string().nullish(),
+  zipCode: zod.string().nullish(),
   whatsapp: zod.string().nullish(),
   phone: zod.string().nullish(),
   planId: zod.string(),
@@ -11183,6 +11586,13 @@ export const BroadcastTripWhatsAppBody = zod.object({
     .max(broadcastTripWhatsAppBodyMessageTemplateMax),
   filter: zod.enum(["all", "confirmed", "pending"]),
   requestId: zod.string().uuid(),
+  campaignId: zod
+    .string()
+    .uuid()
+    .optional()
+    .describe(
+      "Set only when the staff member explicitly intends a new campaign with the same content and audience.",
+    ),
 });
 
 export const BroadcastTripWhatsAppResponse = zod.object({
@@ -11192,6 +11602,63 @@ export const BroadcastTripWhatsAppResponse = zod.object({
   failed: zod.number().int(),
   unknown: zod.number().int(),
   skipped: zod.number().int(),
+  deduplicated: zod
+    .number()
+    .int()
+    .describe(
+      "Existing campaign deliveries reused; no new send was started for these recipients.",
+    ),
+  skippedReasons: zod.array(
+    zod.object({
+      code: zod.enum([
+        "whatsapp_opted_out",
+        "contact_opted_out",
+        "whatsapp_connection_unavailable",
+        "whatsapp_connection_ambiguous",
+        "credentials_not_configured",
+        "provider_unavailable",
+        "invalid_phone",
+        "whatsapp_invalid_phone",
+        "whatsapp_address_missing",
+        "whatsapp_recipient_unavailable",
+        "recipient_client_not_found",
+        "whatsapp_recipient_changed",
+        "whatsapp_content_missing",
+        "invalid_or_duplicate_phone",
+        "passenger_data_unavailable",
+        "other",
+      ]),
+      count: zod.number().int(),
+    }),
+  ),
+});
+
+/**
+ * @summary Preview eligible and skipped WhatsApp broadcast recipients
+ */
+export const PreviewTripWhatsAppBroadcastParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const previewTripWhatsAppBroadcastBodyMessageTemplateMax = 2000;
+
+export const PreviewTripWhatsAppBroadcastBody = zod.object({
+  messageTemplate: zod
+    .string()
+    .max(previewTripWhatsAppBroadcastBodyMessageTemplateMax),
+  filter: zod.enum(["all", "confirmed", "pending"]),
+});
+
+export const PreviewTripWhatsAppBroadcastResponse = zod.object({
+  recipientCount: zod.number().int(),
+  eligibleCount: zod.number().int(),
+  skipped: zod.number().int(),
+  skippedReasons: zod.array(
+    zod.object({
+      code: zod.string(),
+      count: zod.number().int(),
+    }),
+  ),
 });
 
 /**
@@ -11466,7 +11933,7 @@ export const ReversePaidReferralBonusResponse = zod
   );
 
 /**
- * @summary Send a referral WhatsApp test message to the configured agency number
+ * @summary Send a referral WhatsApp test message to an explicit test destination
  */
 export const testWhatsAppMessageBodyPhoneMin = 8;
 
@@ -11476,9 +11943,8 @@ export const TestWhatsAppMessageBody = zod.object({
   phone: zod
     .string()
     .min(testWhatsAppMessageBodyPhoneMin)
-    .optional()
     .describe(
-      "Optional test destination; defaults to the configured agency WhatsApp number.",
+      "Explicit test destination; never defaults to the agency WhatsApp number.",
     ),
 });
 

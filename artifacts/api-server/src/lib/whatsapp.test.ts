@@ -101,6 +101,52 @@ describe("WhatsApp transport contracts", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("ignores a disconnected default when another connected default can send", async () => {
+    const disconnectedDefault = {
+      ...evolutionIntegration,
+      id: "integration-disconnected",
+      enabled: false,
+      status: "disconnected",
+      config: { ...evolutionIntegration.config, instanceName: "stale-instance" },
+    };
+    const activeDefault = {
+      ...evolutionIntegration,
+      id: "integration-active",
+      config: { ...evolutionIntegration.config, instanceName: "active-instance" },
+    };
+    mockDbSelect.mockReturnValue(makeSelectQuery([disconnectedDefault, activeDefault]));
+    mockSafeFetch.mockResolvedValue({ ok: true, status: 201, text: "{}" });
+
+    await expect(sendTenantWhatsAppMessage("tenant-a", "+5511999990001", "Olá"))
+      .resolves.toMatchObject({ success: true, provider: "evolution" });
+
+    expect(mockSafeFetch).toHaveBeenCalledWith(
+      "https://evolution.example.com/message/sendText/active-instance",
+      expect.any(Object),
+    );
+    expect(mockSafeFetch).not.toHaveBeenCalledWith(
+      "https://evolution.example.com/message/sendText/stale-instance",
+      expect.any(Object),
+    );
+  });
+
+  it("refuses to guess when multiple connected integrations are marked default", async () => {
+    mockDbSelect.mockReturnValue(makeSelectQuery([
+      evolutionIntegration,
+      { ...evolutionIntegration, id: "integration-second-default" },
+    ]));
+
+    await expect(sendTenantWhatsAppMessage("tenant-a", "+5511999990001", "Olá"))
+      .resolves.toEqual({
+        success: false,
+        error: "whatsapp_connection_ambiguous",
+        provider: "evolution",
+      });
+
+    expect(mockSafeFetch).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("uses the selected connection for a support reply instead of the tenant default", async () => {
     const defaultConnection = {
       ...evolutionIntegration,

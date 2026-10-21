@@ -139,7 +139,10 @@ export function StepPaymentSummary({
   const {
     product,
     qty,
+    lapChildCount,
+    seatedChildCount,
     unitPrice,
+    childUnitPrice,
     subtotal,
     referralDiscount,
     referralDiscountPct,
@@ -165,13 +168,31 @@ export function StepPaymentSummary({
         <h3 className="font-bold text-base">Resumo Financeiro</h3>
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Preço por pessoa</span>
+            <span className="text-muted-foreground">Passageiro principal</span>
             <span className="font-medium">R$ {unitPrice.toFixed(2)}</span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Quantidade</span>
-            <span className="font-medium">× {qty}</span>
-          </div>
+          {seatedChildCount > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">
+                Crianças com poltrona ({seatedChildCount} × R$ {childUnitPrice.toFixed(2)})
+              </span>
+              <span className="font-medium">
+                R$ {(seatedChildCount * childUnitPrice).toFixed(2)}
+              </span>
+            </div>
+          )}
+          {seatedChildCount === 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Passagens cobradas</span>
+              <span className="font-medium">× {qty}</span>
+            </div>
+          )}
+          {lapChildCount > 0 && (
+            <div className="flex justify-between text-muted-foreground">
+              <span>Crianças no colo (gratuito)</span>
+              <span>{lapChildCount}</span>
+            </div>
+          )}
           <div className="border-t pt-2 flex justify-between">
             <span className="text-muted-foreground">Subtotal</span>
             <span className="font-medium">R$ {subtotal.toFixed(2)}</span>
@@ -232,9 +253,25 @@ export function StepPaymentSummary({
           )}
         </div>
         <div className="flex justify-between">
-          <span className="text-muted-foreground">Passageiros</span>
-          <span className="font-medium">{qty}</span>
+          <span className="text-muted-foreground">Passageiro principal</span>
+          <span className="font-medium">R$ {unitPrice.toFixed(2)}</span>
         </div>
+        {seatedChildCount > 0 && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">
+              Crianças com poltrona ({seatedChildCount} × R$ {childUnitPrice.toFixed(2)})
+            </span>
+            <span className="font-medium">
+              R$ {(seatedChildCount * childUnitPrice).toFixed(2)}
+            </span>
+          </div>
+        )}
+        {lapChildCount > 0 && (
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>Crianças no colo (gratuito)</span>
+            <span>{lapChildCount}</span>
+          </div>
+        )}
         {effectiveSeats.length > 0 && (
           <div>
             <p className="text-xs text-muted-foreground mb-1">Assentos</p>

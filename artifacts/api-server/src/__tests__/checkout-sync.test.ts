@@ -408,6 +408,23 @@ describe("POST /api/public/store/:slug/orders — checkout sync", () => {
     expect(mockBroadcastSeatUpdate).toHaveBeenCalledWith("trip-001", "tenant-001");
   });
 
+  it("rejects a stale cart when its linked trip has already been completed", async () => {
+    selectQueue.length = 0;
+    selectQueue.push(
+      [FAKE_STORE],
+      [FAKE_TRIP_PRODUCT],
+      [{ availableSeats: 10, status: "completed" }],
+    );
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send(VALID_BODY);
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("TRIP_COMPLETED");
+    expect(mockCreateReservationsForOrder).not.toHaveBeenCalled();
+  });
+
   // ── (b) createReservationsForOrder IS called at checkout (sync design) ──
   //
   // Reservations, CRM client, and pipeline deal creation are triggered

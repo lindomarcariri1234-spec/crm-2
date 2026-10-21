@@ -203,6 +203,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       totalEarnings: string;
       creditBalance: string;
       shareMessage: string | null;
+      bonusValue: string;
       currentTierLevel: string;
       currentTierLabel: string;
       currentTierMultiplier: number;
@@ -229,6 +230,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       totalEarnings: "0.00",
       creditBalance: "0.00",
       shareMessage: null,
+      bonusValue: "0.00",
       currentTierLevel: "bronze",
       currentTierLabel: "Bronze",
       currentTierMultiplier: 1,
@@ -439,6 +441,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       const [refSettings] = await db
         .select({
           shareMessage: referralSettingsTable.shareMessage,
+          bonusValue: referralSettingsTable.bonusValue,
           tiersConfig: referralSettingsTable.tiersConfig,
           pointsPerReferral: referralSettingsTable.pointsPerReferral,
           bonusValidityDays: referralSettingsTable.bonusValidityDays,
@@ -483,6 +486,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
         totalEarnings: totalEarnings.toFixed(2),
         creditBalance: referralWallet.availableCredit.toFixed(2),
         shareMessage: refSettings?.shareMessage ?? null,
+        bonusValue: refSettings?.bonusValue ?? "0.00",
         currentTierLevel: currentTier.level,
         currentTierLabel: currentTier.label,
         currentTierMultiplier: currentTier.bonusMultiplier,
@@ -1653,6 +1657,7 @@ router.get("/client/me/referral-campaign", async (req, res, next: NextFunction):
         shareMessage: referralCampaignsTable.shareMessage,
         materialUrl: referralCampaignsTable.materialUrl,
         eligibleActivitySegments: referralCampaignsTable.eligibleActivitySegments,
+        eligibleTierLevels: referralCampaignsTable.eligibleTierLevels,
       })
       .from(referralCampaignsTable)
       .where(and(
@@ -1678,8 +1683,20 @@ router.get("/client/me/referral-campaign", async (req, res, next: NextFunction):
       res.json(null);
       return;
     }
+    const eligibleTiers = campaign.eligibleTierLevels ?? [];
+    if (eligibleTiers.length > 0) {
+      const [settings] = await db.select({ tiersConfig: referralSettingsTable.tiersConfig })
+        .from(referralSettingsTable)
+        .where(eq(referralSettingsTable.tenantId, me.tenantId))
+        .limit(1);
+      const currentTier = computeReferralTier(client.successfulReferrals, settings?.tiersConfig).tier;
+      if (!eligibleTiers.includes(currentTier.level)) {
+        res.json(null);
+        return;
+      }
+    }
 
-    const { eligibleActivitySegments: _internalSegmentPolicy, ...safeCampaign } = campaign;
+    const { eligibleActivitySegments: _internalSegmentPolicy, eligibleTierLevels: _internalTierPolicy, ...safeCampaign } = campaign;
     res.json({ ...safeCampaign, bonusValue: Number(campaign.bonusValue) });
   } catch (err) {
     next(err);

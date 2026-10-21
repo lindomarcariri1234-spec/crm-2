@@ -2,7 +2,7 @@ import { Worker } from "bullmq";
 import { db, emailLogsTable, campaignSendsTable, reservationsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { sendReservationConfirmationEmail, sendReservationCancellationEmail, sendBirthdayEmail, sendNewBookingNotificationEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendReferralWelcomeEmail, sendReminderHtmlEmail, sendReferralLoyaltyPointsEmail } from "@workspace/email";
-import { getRedisConnection } from "../lib/redis";
+import { getBullMQWorkerConnection } from "../lib/redis";
 import {
   attachCircuitBreaker,
   WORKER_IDLE_DRAIN_DELAY_SECONDS,
@@ -11,6 +11,7 @@ import { logger } from "../lib/logger";
 import type { ReservationEmailJobData, CancellationEmailJobData, BirthdayEmailJobData, NewBookingNotificationEmailJobData, ReferralBonusPaidEmailJobData, ReferralConvertedEmailJobData, ReferralExpiredEmailJobData, ReferralExpiringSoonEmailJobData, ReferralBonusReleasedEmailJobData, ReferralWelcomeEmailJobData, CampaignEmailJobData, ReferralLoyaltyPointsEmailJobData } from "../queues/index";
 import type { SendEmailResult } from "@workspace/email";
 import { dispatchOutboundMessage, htmlToWhatsAppText } from "../services/outbound-delivery";
+import { hasTenantPermanentEmailBounce } from "../services/campaign-bounce-recipients.js";
 
 type EmailJobData = ReservationEmailJobData | CancellationEmailJobData | BirthdayEmailJobData | NewBookingNotificationEmailJobData | ReferralBonusPaidEmailJobData | ReferralConvertedEmailJobData | ReferralExpiredEmailJobData | ReferralExpiringSoonEmailJobData | ReferralBonusReleasedEmailJobData | ReferralWelcomeEmailJobData | ReferralLoyaltyPointsEmailJobData | CampaignEmailJobData;
 
@@ -133,7 +134,7 @@ async function bridgeLegacyEmailToWhatsApp(
 }
 
 export function startEmailWorker(): Worker<EmailJobData> | null {
-  const conn = getRedisConnection();
+  const conn = getBullMQWorkerConnection();
   if (!conn) {
     logger.warn("[email-worker] No Redis connection — worker not started");
     return null;
@@ -273,6 +274,24 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
           logger.warn(
             { jobId: job.id, campaignId, clientId, tenantId },
             "[email-worker] Skipping campaign email job: campaign send does not belong to tenant",
+          );
+          return;
+        }
+        if (await hasTenantPermanentEmailBounce(tenantId, clientId)) {
+          await db
+            .update(campaignSendsTable)
+            .set({ status: "skipped", error: "permanent_email_bounce" })
+            .where(
+              and(
+                eq(campaignSendsTable.id, job.id),
+                eq(campaignSendsTable.campaignId, campaignId),
+                eq(campaignSendsTable.clientId, clientId),
+                eq(campaignSendsTable.tenantId, tenantId),
+              ),
+            );
+          logger.info(
+            { jobId: job.id, campaignId, clientId, tenantId },
+            "[email-worker] Skipping campaign email job: client has a permanent bounce",
           );
           return;
         }

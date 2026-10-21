@@ -167,7 +167,7 @@ function buildApp() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Stub Clerk getUser to return a user with the given email and no inviteId. */
+/** Stub an unverified Clerk primary email with no inviteId. */
 function stubClerkUser(email = "traveller@example.com") {
   mockGetUser.mockResolvedValue({
     emailAddresses: [{ id: "ea_1", emailAddress: email }],
@@ -228,11 +228,11 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
       data: { ...BASE_BODY, clerkId: "spoofed-clerk-id", storeSlug: "agencia-abc" },
     });
 
-    // Select call sequence for the new-user path:
-    // 1. usersTable lookup → [] (user does not exist yet)
-    // 2. invitesTable byEmail → [] (no pending invite)
-    // 3. storesTable by slug → [{tenantId: "store-tenant-001"}]
-    // 4. usersTable re-fetch after insert → [new user row]
+    // Select call sequence for the new-user path. The unverified email cannot
+    // be used to claim an invite, so the route goes straight to the store.
+    // 1. usersTable lookup → []
+    // 2. storesTable by slug → [{tenantId: "store-tenant-001"}]
+    // 3. usersTable re-fetch after insert → [new user row]
     const newUserRow = {
       id: "gen-user-id",
       clerkId: "clerk_new_user",
@@ -254,9 +254,8 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
 
     mockLimit
       .mockResolvedValueOnce([])                        // 1. usersTable (no existing)
-      .mockResolvedValueOnce([])                        // 2. invitesTable byEmail (no invite)
-      .mockResolvedValueOnce([{ tenantId: "store-tenant-001" }]) // 3. storesTable
-      .mockResolvedValueOnce([newUserRow]);              // 4. usersTable re-fetch
+      .mockResolvedValueOnce([{ tenantId: "store-tenant-001" }]) // 2. storesTable
+      .mockResolvedValueOnce([newUserRow]);              // 3. usersTable re-fetch
 
     const res = await request(buildApp())
       .post("/api/users/me/sync")
@@ -306,15 +305,11 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
       lastLoginAt: null,
     };
 
-    // Select call sequence for the existing-user update path:
-    // 1. usersTable → [existingUser] (user found)
-    // 2. invitesTable byEmail lookup for the stale-tenant safety check → []
-    //    (no pending invite at all, so no migration is even considered)
-    // 3. usersTable re-fetch after update → [existingUser (unchanged role)]
+    // The unverified email is not eligible for invite reconciliation, so this
+    // path reads the existing user and then re-fetches it after the profile update.
     mockLimit
       .mockResolvedValueOnce([existingUser])  // 1. usersTable lookup
-      .mockResolvedValueOnce([])              // 2. invitesTable byEmail (none pending)
-      .mockResolvedValueOnce([existingUser]); // 3. usersTable re-fetch
+      .mockResolvedValueOnce([existingUser]); // 2. usersTable re-fetch
 
     const res = await request(buildApp())
       .post("/api/users/me/sync")
@@ -372,9 +367,8 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
     // 4. usersTable re-fetch → [newUserRow with AGENCY_ADMIN]
     mockLimit
       .mockResolvedValueOnce([])         // 1. usersTable (no existing)
-      .mockResolvedValueOnce([])         // 2. invitesTable byEmail (no invite)
-      .mockResolvedValueOnce([])         // 3. storesTable (store not found)
-      .mockResolvedValueOnce([newUserRow]); // 4. usersTable re-fetch
+      .mockResolvedValueOnce([])         // 2. storesTable (store not found)
+      .mockResolvedValueOnce([newUserRow]); // 3. usersTable re-fetch
 
     const res = await request(buildApp())
       .post("/api/users/me/sync")
@@ -396,7 +390,7 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
   // -------------------------------------------------------------------------
 
   it("uses the pending invite role/tenantId and never queries storesTable when both are present", async () => {
-    stubClerkUser();
+    stubVerifiedClerkUser();
 
     mockSyncMeBodySafeParse.mockReturnValue({
       success: true,
@@ -501,10 +495,8 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
 
     // No storeSlug → no storesTable lookup
     // 1. usersTable → []
-    // 2. invitesTable byEmail → []
-    // 3. usersTable re-fetch → [newUserRow]
+    // 2. usersTable re-fetch → [newUserRow]
     mockLimit
-      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([newUserRow]);
 

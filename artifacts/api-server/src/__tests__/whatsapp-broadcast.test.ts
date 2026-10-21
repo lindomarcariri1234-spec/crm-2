@@ -20,10 +20,18 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { normalizeBrazilPhone } from "@workspace/shared";
+import express from "express";
+import request from "supertest";
 
 // ─── Hoisted state (must exist before any vi.mock factory runs) ───────────────
 
-const { setQueue, mockDispatchOutboundMessage, mockInterpolate, mockDb } = vi.hoisted(() => {
+const {
+  setQueue,
+  mockDispatchOutboundMessage,
+  mockInterpolate,
+  mockRequireAuth,
+  mockDb,
+} = vi.hoisted(() => {
   // Shared select queue — tests populate this before each assertion.
   const queue: unknown[][] = [];
 
@@ -59,12 +67,14 @@ const { setQueue, mockDispatchOutboundMessage, mockInterpolate, mockDb } = vi.ho
   const mockInterpolate = vi.fn(
     (_template: string, vars: Record<string, string>) => JSON.stringify(vars),
   );
+  const mockRequireAuth = vi.fn();
 
   return {
     setQueue:  (rows: unknown[][]) => { queue.length = 0; queue.push(...rows); },
     mockDb,
     mockDispatchOutboundMessage,
     mockInterpolate,
+    mockRequireAuth,
   };
 });
 
@@ -73,13 +83,44 @@ const { setQueue, mockDispatchOutboundMessage, mockInterpolate, mockDb } = vi.ho
 vi.mock("@workspace/db", () => ({
   db: mockDb,
   systemConfigsTable:  {},
-  passengersTable:     {},
-  reservationsTable:   {},
-  clientsTable:        {},
-  tripsTable:          {},
-  tenantsTable:        {},
   referralSettingsTable: {},
   referralsTable:      {},
+  tripsTable: {
+    id: "trips.id",
+    tenantId: "trips.tenant_id",
+  },
+  reservationsTable: {
+    id: "reservations.id",
+    tripId: "reservations.trip_id",
+    tenantId: "reservations.tenant_id",
+    status: "reservations.status",
+    clientId: "reservations.client_id",
+    reservationNumber: "reservations.reservation_number",
+    voucherCode: "reservations.voucher_code",
+  },
+  passengersTable: {
+    id: "passengers.id",
+    reservationId: "passengers.reservation_id",
+    name: "passengers.name",
+    phone: "passengers.phone",
+    boardingLocationId: "passengers.boarding_location_id",
+  },
+  clientsTable: {
+    id: "clients.id",
+    name: "clients.name",
+    whatsapp: "clients.whatsapp",
+    phone: "clients.phone",
+    tenantId: "clients.tenant_id",
+  },
+  tenantsTable: { id: "tenants.id", name: "tenants.name" },
+  tenantIntegrationsTable: {
+    tenantId: "tenant_integrations.tenant_id",
+    type: "tenant_integrations.type",
+    enabled: "tenant_integrations.enabled",
+    status: "tenant_integrations.status",
+    isDefault: "tenant_integrations.is_default",
+    secretsEncrypted: "tenant_integrations.secrets_encrypted",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -103,6 +144,18 @@ vi.mock("../lib/whatsapp.js", () => ({
 
 vi.mock("../services/outbound-delivery.js", () => ({
   dispatchOutboundMessage: mockDispatchOutboundMessage,
+}));
+
+vi.mock("../lib/tenant.js", () => ({
+  requireAuth: mockRequireAuth,
+  getTenantUser: vi.fn(),
+  MANAGEMENT_ROLES: ["admin", "agencia", "gerente"],
+  ADMIN_ROLES: ["admin", "agencia"],
+}));
+
+vi.mock("../services/pipeline-automation.js", () => ({
+  cancelDealOnReservationCancellation: vi.fn(),
+  moveDealToStage: vi.fn(),
 }));
 
 vi.mock("../lib/redis.js", () => ({
@@ -134,6 +187,9 @@ import {
   enqueueWhatsAppMessage,
   enqueueOrSend,
 } from "../queues/whatsapp-helpers.js";
+import { ROLES } from "@workspace/permissions";
+import tripsRouter from "../routes/trips.js";
+import { errorHandler } from "../middlewares/errorHandler.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -507,6 +563,248 @@ describe("broadcastToReservationPassengers", () => {
 
     // Passenger's own phone is sent once; client phone is the same digits → no second send.
     expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /trips/:id/whatsapp-broadcast route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRequireAuth.mockResolvedValue({
+      id: "staff-1",
+      tenantId: "tenant-1",
+      role: ROLES.AGENCY_ADMIN,
+    });
+    mockDispatchOutboundMessage.mockImplementation(async (input: {
+      recipient: { type: string; id?: string };
+    }) => {
+      const reason = input.recipient.id === "client-opted-out"
+        ? "whatsapp_opted_out"
+        : "whatsapp_connection_unavailable";
+      return {
+        deliveries: [{
+          channel: "whatsapp",
+          status: "skipped",
+          skippedReason: reason,
+        }],
+      };
+    });
+  });
+
+  it("reports opt-out and unavailable-connection skip counts without accepting the opted-out contact", async () => {
+    setQueue([
+      [{
+        id: "trip-1",
+        tenantId: "tenant-1",
+        name: "Litoral Norte",
+        departureDate: new Date("2026-12-10T12:00:00-03:00"),
+        boardingPoints: [],
+        freePassengers: [],
+      }],
+      [{ name: "Agência Teste" }],
+      [
+        { id: "reservation-1", clientId: "client-opted-out", status: "confirmed", reservationNumber: "R-1" },
+        { id: "reservation-2", clientId: "client-disconnected", status: "confirmed", reservationNumber: "R-2" },
+      ],
+      [
+        { id: "passenger-1", reservationId: "reservation-1", name: "Pessoa sem consentimento", phone: null },
+        { id: "passenger-2", reservationId: "reservation-2", name: "Pessoa sem conexão", phone: null },
+      ],
+      [
+        { id: "client-opted-out", name: "Cliente opt-out", whatsapp: "5511999990001", phone: null, whatsappOptIn: false },
+        { id: "client-disconnected", name: "Cliente desconectado", whatsapp: "5511999990002", phone: null, whatsappOptIn: true },
+      ],
+      [{ id: "client-opted-out" }],
+      [{ id: "client-disconnected" }],
+    ]);
+
+    const app = express();
+    app.use(express.json());
+    app.use("/api", tripsRouter);
+    app.use(errorHandler);
+    const response = await request(app)
+      .post("/api/trips/trip-1/whatsapp-broadcast")
+      .send({
+        messageTemplate: "Olá {nome}",
+        filter: "all",
+        requestId: "b711f64a-19a7-48e6-ae1c-aad3b8f58f64",
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      recipientCount: 2,
+      queued: 0,
+      accepted: 0,
+      failed: 0,
+      unknown: 0,
+      skipped: 2,
+      deduplicated: 0,
+      skippedReasons: [
+        { code: "whatsapp_opted_out", count: 1 },
+        { code: "whatsapp_connection_unavailable", count: 1 },
+      ],
+    });
+    expect(response.body.skippedReasons.reduce(
+      (total: number, reason: { count: number }) => total + reason.count,
+      0,
+    )).toBe(response.body.skipped);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipient: { type: "client", id: "client-opted-out" },
+        originChannel: "whatsapp",
+        eventType: "trip_whatsapp_broadcast",
+      }),
+      { inlineOnQueueFailure: true },
+    );
+    expect(response.body.accepted).toBe(0);
+  });
+
+  it("shares one recipient key across concurrent and repeated requests, but permits an explicit new campaign", async () => {
+    let authArrivals = 0;
+    let releaseAuthBarrier!: () => void;
+    const authBarrier = new Promise<void>((resolve) => {
+      releaseAuthBarrier = resolve;
+    });
+    mockRequireAuth.mockImplementation(async () => {
+      authArrivals++;
+      if (authArrivals === 2) releaseAuthBarrier();
+      await authBarrier;
+      return { id: "staff-1", tenantId: "tenant-1", role: ROLES.AGENCY_ADMIN };
+    });
+    const storedCampaignKeys = new Set<string>();
+    mockDispatchOutboundMessage.mockImplementation(async (input: { idempotencyKey: string }) => {
+      const created = !storedCampaignKeys.has(input.idempotencyKey);
+      storedCampaignKeys.add(input.idempotencyKey);
+      return {
+        created,
+        deliveries: [{ channel: "whatsapp", status: "accepted" }],
+      };
+    });
+    const tripRows = [{
+      id: "trip-1",
+      tenantId: "tenant-1",
+      name: "Litoral Norte",
+      departureDate: new Date("2026-12-10T12:00:00-03:00"),
+      boardingPoints: [],
+      freePassengers: [],
+    }];
+    const tenantRows = [{ name: "Agência Teste" }];
+    const reservationRows = [{
+      id: "reservation-1",
+      clientId: "client-1",
+      status: "confirmed",
+      reservationNumber: "R-1",
+    }];
+    const passengerRows = [{
+      id: "passenger-1",
+      reservationId: "reservation-1",
+      name: "Passageiro",
+      phone: null,
+    }];
+    const clientRows = [{
+      id: "client-1",
+      name: "Cliente",
+      whatsapp: "5511999990001",
+      phone: null,
+    }];
+    const lookupRows = [{ id: "client-1" }];
+    const app = express();
+    app.use(express.json());
+    app.use("/api", tripsRouter);
+    app.use(errorHandler);
+    const send = (requestId: string, campaignId?: string) =>
+      request(app).post("/api/trips/trip-1/whatsapp-broadcast").send({
+        messageTemplate: "Aviso de embarque",
+        filter: "confirmed",
+        requestId,
+        ...(campaignId ? { campaignId } : {}),
+      });
+
+    // The query mock consumes rows in select-call order: trip and tenant reads
+    // interleave, then both requests resolve their audience and contact lookup.
+    setQueue([
+      tripRows, tripRows, tenantRows, tenantRows, reservationRows, reservationRows,
+      passengerRows, clientRows, passengerRows, clientRows, lookupRows, lookupRows,
+    ]);
+    const [first, concurrent] = await Promise.all([
+      send("b711f64a-19a7-48e6-ae1c-aad3b8f58f64"),
+      send("c822075b-2a58-49f7-bf2d-bbe4c9a69f75"),
+    ]);
+    expect(first.status).toBe(200);
+    expect(concurrent.status, JSON.stringify(concurrent.body)).toBe(200);
+    expect([first.body.deduplicated, concurrent.body.deduplicated].sort()).toEqual([0, 1]);
+    const concurrentKeys = mockDispatchOutboundMessage.mock.calls
+      .slice(0, 2)
+      .map(([input]) => (input as { idempotencyKey: string }).idempotencyKey);
+    expect(concurrentKeys).toHaveLength(2);
+    expect(concurrentKeys[0]).toBe(concurrentKeys[1]);
+
+    setQueue([tripRows, tenantRows, reservationRows, passengerRows, clientRows, lookupRows]);
+    const repeated = await send("d933186c-3b69-40a8-8e3e-ccf5d0b7b8d8");
+    expect(repeated.status).toBe(200);
+    expect(repeated.body.deduplicated).toBe(1);
+    const repeatedKey = (mockDispatchOutboundMessage.mock.calls[2][0] as { idempotencyKey: string }).idempotencyKey;
+    expect(repeatedKey).toBe(concurrentKeys[0]);
+
+    setQueue([tripRows, tenantRows, reservationRows, passengerRows, clientRows, lookupRows]);
+    const intentional = await send(
+      "e044297d-4c7a-41b9-9f4f-dd06e1c8c9e9",
+      "f1553a8e-5d8b-42ca-9a60-ee17f2d9d0fa",
+    );
+    expect(intentional.status).toBe(200);
+    expect(intentional.body.deduplicated).toBe(0);
+    const intentionalKey = (mockDispatchOutboundMessage.mock.calls[3][0] as { idempotencyKey: string }).idempotencyKey;
+    expect(intentionalKey).not.toBe(concurrentKeys[0]);
+  });
+
+  it("previews only tenant-scoped counts and never starts a send", async () => {
+    setQueue([
+      [{
+        id: "trip-1",
+        tenantId: "tenant-1",
+        freePassengers: [],
+      }],
+      [
+        { id: "reservation-1", clientId: "client-opted-out", status: "confirmed" },
+        { id: "reservation-2", clientId: "client-disconnected", status: "confirmed" },
+      ],
+      [
+        { reservationId: "reservation-1", name: "Pessoa opt-out", phone: "5511999990001" },
+        { reservationId: "reservation-2", name: "Pessoa desconectada", phone: null },
+      ],
+      [
+        { id: "client-opted-out", whatsapp: "5511999990001", phone: null, whatsappOptIn: false },
+        { id: "client-disconnected", whatsapp: "5511999990002", phone: null, whatsappOptIn: true },
+      ],
+      [{
+        enabled: true,
+        status: "disconnected",
+        isDefault: true,
+        secretsEncrypted: "encrypted",
+      }],
+      [{ whatsapp: "5511999990001", phone: null, whatsappOptIn: false }],
+    ]);
+
+    const app = express();
+    app.use(express.json());
+    app.use("/api", tripsRouter);
+    app.use(errorHandler);
+    const response = await request(app)
+      .post("/api/trips/trip-1/whatsapp-broadcast/preview")
+      .send({ messageTemplate: "Aviso {nome}", filter: "confirmed" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      recipientCount: 2,
+      eligibleCount: 0,
+      skipped: 2,
+      skippedReasons: [
+        { code: "whatsapp_opted_out", count: 1 },
+        { code: "whatsapp_connection_unavailable", count: 1 },
+      ],
+    });
+    expect(JSON.stringify(response.body)).not.toContain("Pessoa opt-out");
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -975,7 +1273,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
 
   it("sends to referrer who has whatsappOptIn = true", async () => {
     setQueue([
-      REFERRAL_SETTINGS_ENABLED,
+      [{ whatsappEnabled: true, whatsappConvertedMessage: "Conversão de {nome} no código {codigo}: R$ {valor}." }],
       [REFERRER_OPTED_IN],
       TENANT_ROW,
       LATEST_REFERRAL_ROW,
@@ -985,6 +1283,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
       referrerId: "ref-1",
       referredName: "Ana",
       referralCode: "CODE1",
+      referralId: "ref-1",
       tenantId: "tenant-1",
     });
 
@@ -992,10 +1291,13 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
     expect((mockDispatchOutboundMessage.mock.calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone("+5511999990001"));
     expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
       eventType: "referral_converted",
-      idempotencyKey: "referral:tenant-1:ref-1:CODE1:converted",
-      email: expect.objectContaining({ html: expect.any(String) }),
+      idempotencyKey: "referral:tenant-1:ref-1:converted",
       whatsapp: expect.objectContaining({ text: expect.any(String) }),
     }));
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      "Conversão de {nome} no código {codigo}: R$ {valor}.",
+      expect.objectContaining({ nome: "Ana", codigo: "CODE1" }),
+    );
   });
 
   it("skips referrer who has whatsappOptIn = false", async () => {
@@ -1008,6 +1310,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
       referrerId: "ref-1",
       referredName: "Ana",
       referralCode: "CODE1",
+      referralId: "ref-1",
       tenantId: "tenant-1",
     });
 
@@ -1021,6 +1324,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
       referrerId: "ref-1",
       referredName: "Ana",
       referralCode: "CODE1",
+      referralId: "ref-1",
       tenantId: "tenant-1",
     });
 
@@ -1036,7 +1340,7 @@ describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
 
   it("sends to referrer who has whatsappOptIn = true", async () => {
     setQueue([
-      REFERRAL_SETTINGS_ENABLED,
+      [{ whatsappEnabled: true, whatsappBonusPaidMessage: "Bônus {codigo}: {bonus}, {agencia}" }],
       [REFERRER_OPTED_IN],
     ]);
 
@@ -1046,12 +1350,21 @@ describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
       referrerName: "João",
       referralCode: "CODE1",
       bonusAmount: 50,
+      referralId: "ref-2",
       tenantId: "tenant-1",
       tenantName: "Agência Teste",
     });
 
     expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect((mockDispatchOutboundMessage.mock.calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone("+5511999990001"));
+    expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
+      idempotencyKey: "referral:tenant-1:ref-2:bonus-paid",
+      whatsapp: expect.objectContaining({ text: expect.any(String) }),
+    }));
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      "Bônus {codigo}: {bonus}, {agencia}",
+      expect.objectContaining({ codigo: "CODE1", agencia: "Agência Teste" }),
+    );
   });
 
   it("skips referrer who has whatsappOptIn = false even when referrerPhone is supplied", async () => {
@@ -1066,6 +1379,7 @@ describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
       referrerName: "João",
       referralCode: "CODE1",
       bonusAmount: 50,
+      referralId: "ref-2",
       tenantId: "tenant-1",
       tenantName: "Agência Teste",
     });
@@ -1082,7 +1396,7 @@ describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
 
   it("sends to referrer who has whatsappOptIn = true", async () => {
     setQueue([
-      REFERRAL_SETTINGS_ENABLED,
+      [{ whatsappEnabled: true, whatsappReversedMessage: "Estorno de {nome}: {valor}; saldo {saldo}; {agencia}" }],
       [REFERRER_OPTED_IN],
       TENANT_ROW,
     ]);
@@ -1092,11 +1406,20 @@ describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
       referredName: "Maria",
       bonusAmount: 50,
       newPendingBalance: 100,
+      referralId: "ref-3",
       tenantId: "tenant-1",
     });
 
     expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect((mockDispatchOutboundMessage.mock.calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone("+5511999990001"));
+    expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
+      idempotencyKey: "referral:tenant-1:ref-3:reversed",
+      whatsapp: expect.objectContaining({ text: expect.any(String) }),
+    }));
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      "Estorno de {nome}: {valor}; saldo {saldo}; {agencia}",
+      expect.objectContaining({ nome: "Maria", agencia: "Agência Teste" }),
+    );
   });
 
   it("skips referrer who has whatsappOptIn = false", async () => {
@@ -1110,6 +1433,7 @@ describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
       referredName: "Maria",
       bonusAmount: 50,
       newPendingBalance: 100,
+      referralId: "ref-3",
       tenantId: "tenant-1",
     });
 

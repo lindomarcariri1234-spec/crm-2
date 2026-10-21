@@ -7,12 +7,23 @@ import { requireAuth, getTenantUser } from "../lib/tenant";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { z } from "zod";
 import { ADMIN_ROLES } from '../lib/tenant';
-import { STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
+import { ROLES, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { resolveSegment } from "../lib/campaign-segment";
+import { sendManualCampaignNow } from "../lib/manual-campaign-dispatch";
+import {
+  listCampaignPermanentBounceRecipients,
+  listCampaignPermanentBounceSuppressionCounts,
+} from "../services/campaign-bounce-recipients.js";
 import { getAIClientForTenant } from "../lib/ai-client";
 import { parseBrazilDateRange } from "../lib/brazil-calendar";
 
 const router = Router();
+const CAMPAIGN_RESULTS_ROLES = [
+  ROLES.SUPER_ADMIN,
+  ROLES.AGENCY_ADMIN,
+  ROLES.AGENCY_MANAGER,
+  ROLES.SUPPORT,
+] as const;
 
 function requireNpsDateRange(dateFrom?: string, dateTo?: string) {
   const range = parseBrazilDateRange(dateFrom, dateTo);
@@ -49,6 +60,10 @@ const UpdateCampaignBody = z.object({
   triggerType: z.string().optional(),
   triggerConfig: z.record(z.unknown()).optional().nullable(),
   autoEnabled: z.boolean().optional(),
+});
+
+const CampaignPermanentBounceRecipientsQuery = z.object({
+  page: z.coerce.number().int().min(1).max(1000).default(1),
 });
 
 const SegmentPreviewBody = z.object({
@@ -119,7 +134,10 @@ const UpdateOrderBody = z.object({
   paymentStatus: z.string().optional(),
 });
 
-function formatCampaign(c: typeof campaignsTable.$inferSelect) {
+function formatCampaign(
+  c: typeof campaignsTable.$inferSelect,
+  permanentBounceSuppressedCount = 0,
+) {
   return {
     id: c.id, tenantId: c.tenantId, name: c.name, type: c.type,
     status: c.status, subject: c.subject, content: c.content,
@@ -127,7 +145,16 @@ function formatCampaign(c: typeof campaignsTable.$inferSelect) {
     scheduledAt: c.scheduledAt?.toISOString() ?? null,
     sentAt: c.sentAt?.toISOString() ?? null,
     recipientsCount: c.recipientsCount, sentCount: c.sentCount,
-    deliveredCount: c.deliveredCount, openedCount: c.openedCount, clickedCount: c.clickedCount,
+    deliveredCount: c.deliveredCount, emailDeliveredCount: c.emailDeliveredCount,
+    openedCount: c.openedCount, clickedCount: c.clickedCount,
+    engagementMetricsAvailable: c.engagementTrackingStartedAt !== null,
+    bouncedCount: c.bouncedCount,
+    permanentBouncedCount: c.permanentBouncedCount,
+    temporaryBouncedCount: c.temporaryBouncedCount,
+    failedCount: c.failedCount,
+    complainedCount: c.complainedCount,
+    failureMetricsAvailable: c.failureTrackingStartedAt !== null,
+    permanentBounceSuppressedCount,
     triggerType: c.triggerType ?? "manual",
     triggerConfig: c.triggerConfig ?? null,
     autoEnabled: c.autoEnabled ?? false,
@@ -166,7 +193,39 @@ router.get("/campaigns", async (req, res, next: NextFunction): Promise<void> => 
     const campaigns = await db.select().from(campaignsTable)
       .where(eq(campaignsTable.tenantId, me.tenantId))
       .orderBy(desc(campaignsTable.createdAt));
-    res.json(campaigns.map(formatCampaign));
+    const suppressionCounts = await listCampaignPermanentBounceSuppressionCounts(me.tenantId);
+    res.json(campaigns.map((campaign) => formatCampaign(
+      campaign,
+      suppressionCounts.get(campaign.id) ?? 0,
+    )));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/campaigns/:id/permanent-bounces", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!CAMPAIGN_RESULTS_ROLES.includes(me.role as (typeof CAMPAIGN_RESULTS_ROLES)[number])) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+    const parsed = CampaignPermanentBounceRecipientsQuery.safeParse(req.query);
+    if (!parsed.success) {
+      next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR"));
+      return;
+    }
+    const result = await listCampaignPermanentBounceRecipients(
+      me.tenantId,
+      req.params.id,
+      parsed.data.page,
+    );
+    if (!result) {
+      next(new NotFoundError("Campaign not found", "NOT_FOUND"));
+      return;
+    }
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -179,17 +238,23 @@ router.post("/campaigns", async (req, res, next: NextFunction): Promise<void> =>
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateCampaignBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    const scheduledAt = parsed.data.scheduledAt ? new Date(parsed.data.scheduledAt) : null;
+    if (scheduledAt && !Number.isFinite(scheduledAt.getTime())) {
+      next(new ValidationError("A data de agendamento é inválida.", "INVALID_CAMPAIGN_SCHEDULE"));
+      return;
+    }
     const id = generateId();
+    const isManual = !parsed.data.triggerType || parsed.data.triggerType === "manual";
     await db.insert(campaignsTable).values({
       id,
       tenantId: me.tenantId,
       name: parsed.data.name,
       type: parsed.data.type,
-      status: "draft",
+      status: isManual && scheduledAt ? "scheduled" : "draft",
       subject: parsed.data.subject ?? null,
       content: parsed.data.content,
       targetSegment: parsed.data.targetSegment ?? {},
-      scheduledAt: parsed.data.scheduledAt ? new Date(parsed.data.scheduledAt) : null,
+      scheduledAt,
       triggerType: parsed.data.triggerType ?? "manual",
       triggerConfig: parsed.data.triggerConfig ?? null,
       autoEnabled: parsed.data.autoEnabled ?? false,
@@ -212,6 +277,11 @@ router.patch("/campaigns/:id", async (req, res, next: NextFunction): Promise<voi
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = UpdateCampaignBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    if (parsed.data.status === "sending") {
+      const campaign = await sendManualCampaignNow(me.tenantId, req.params.id);
+      res.json(formatCampaign(campaign));
+      return;
+    }
     const updates: Partial<typeof campaignsTable.$inferInsert> = {};
     if (parsed.data.name != null) updates.name = parsed.data.name;
     if (parsed.data.status != null) updates.status = parsed.data.status;

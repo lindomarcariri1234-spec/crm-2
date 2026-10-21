@@ -19,6 +19,7 @@ const {
   mockDispatchOutboundMessage,
   mockReversePaidReferralBonus,
   mockDispatchReferralReversedEmail,
+  mockDispatchWhatsAppReferralBonusPaid,
   capturedUpdates,
   updateMocks,
 } = vi.hoisted(() => {
@@ -43,6 +44,7 @@ const {
     mockDispatchOutboundMessage,
     mockReversePaidReferralBonus: vi.fn(),
     mockDispatchReferralReversedEmail: vi.fn().mockResolvedValue(undefined),
+    mockDispatchWhatsAppReferralBonusPaid: vi.fn().mockResolvedValue(undefined),
     capturedUpdates,
     updateMocks: { update, set, where, returning },
   };
@@ -152,7 +154,6 @@ vi.mock("../queues/email-helpers.js", () => ({
     idempotencyKey: `referral:${clientId}:bonus_paid`,
     recipient: { type: "client", id: clientId },
     email: { subject: `Seu bônus de indicação foi pago! — ${props.agencyName}`, html: `<p>${props.referrerName}: ${props.bonusAmount}</p>` },
-    whatsapp: { text: `Bônus pago: ${props.bonusAmount}` },
     origin: "referral-bonus_paid",
     metadata: { referralId },
   })),
@@ -174,7 +175,7 @@ vi.mock("../lib/client-notifications.js", () => ({
 }));
 
 vi.mock("../queues/whatsapp-helpers.js", () => ({
-  dispatchWhatsAppReferralBonusPaid: vi.fn().mockResolvedValue(undefined),
+  dispatchWhatsAppReferralBonusPaid: mockDispatchWhatsAppReferralBonusPaid,
 }));
 
 vi.mock("../services/outbound-delivery.js", () => ({
@@ -259,6 +260,7 @@ function buildApp() {
 const FAKE_ADMIN  = { id: "user-001", tenantId: "tenant-001", role: ROLES.AGENCY_ADMIN, name: "Admin", email: "admin@ag.com" };
 const FAKE_MANAGER = { id: "user-manager", tenantId: "tenant-001", role: ROLES.AGENCY_MANAGER, name: "Manager", email: "manager@ag.com" };
 const FAKE_VIEWER = { id: "user-002", tenantId: "tenant-001", role: "viewer",            name: "Viewer", email: "viewer@ag.com" };
+const FAKE_SUPPORT = { id: "user-support", tenantId: "tenant-001", role: ROLES.SUPPORT, name: "Support", email: "support@ag.com" };
 
 function makeReferral(overrides: Record<string, unknown> = {}) {
   return {
@@ -333,6 +335,11 @@ describe("POST /api/referrals/:id/pay-bonus", () => {
     expect(capturedUpdates[0].set).toMatchObject({ bonusPaid: true });
     expect(capturedUpdates[0].set.bonusPaidAt).toBeInstanceOf(Date);
     expect(capturedUpdates[0].set.updatedAt).toBeInstanceOf(Date);
+    expect(mockDispatchWhatsAppReferralBonusPaid).toHaveBeenCalledWith(expect.objectContaining({
+      referrerId: makeJoinedRow().referrerId,
+      referralId: "ref-001",
+      bonusAmount: Number(makeJoinedRow().bonusAmount),
+    }));
   });
 
   it("returns 422 when bonus has already been paid", async () => {
@@ -528,6 +535,54 @@ describe("GET /api/referrals/validate/:code", () => {
       valid: false,
       bonusAmount: 0,
     });
+  });
+});
+
+describe("referral permission matrix enforcement", () => {
+  it.each([
+    "/api/referrals",
+    "/api/referrals/stats",
+    "/api/referrals/ref-001/expiry-email-status",
+    "/api/referrals/ref-001/bonus-release-email-status",
+    "/api/referrals/ref-001/share",
+    "/api/referrals/analytics",
+    "/api/referrals/active-campaign",
+  ])("denies support from GET %s before reading referral data", async (path) => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_SUPPORT);
+
+    const res = await request(buildApp()).get(path);
+
+    expect(res.status).toBe(403);
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
+  it("requires COMMISSIONS.CREATE to create a referral", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_MANAGER);
+
+    const res = await request(buildApp()).post("/api/referrals").send({
+      referrerId: "client-001",
+      code: "MARIA2026",
+    });
+
+    expect(res.status).toBe(403);
+    expect(db.select).not.toHaveBeenCalled();
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it("allows an administrator with COMMISSIONS.CREATE to create a referral", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ id: "client-001" }]))
+      .mockImplementationOnce(() => makeChain([]))
+      .mockImplementationOnce(() => makeChain([makeReferral({ id: "gen-id", code: "MARIA2026" })]));
+
+    const res = await request(buildApp()).post("/api/referrals").send({
+      referrerId: "client-001",
+      code: "MARIA2026",
+    });
+
+    expect(res.status).toBe(201);
+    expect(db.insert).toHaveBeenCalled();
   });
 });
 
@@ -877,22 +932,16 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
     }));
   });
 
-  it("falls back to the configured agency number when no explicit destination is sent", async () => {
+  it("requires an explicit test destination instead of falling back to the agency number", async () => {
     (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
-    (db.select as ReturnType<typeof vi.fn>)
-      .mockImplementationOnce(() => makeChain([{ whatsappPhoneNumber: "5511888888888", bonusValue: "25" }]))
-      .mockImplementationOnce(() => makeChain([{ name: "Agência Teste" }]));
 
     const res = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
       .set("Idempotency-Key", "attempt-configured-001")
       .send({ type: "share", message: "Use o código {codigo}." });
 
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true });
-    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
-      recipient: { type: "direct", whatsapp: "5511888888888" },
-    }));
+    expect(res.status).toBe(400);
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -995,15 +1044,15 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
     const first = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
       .set("Idempotency-Key", "attempt-share-001")
-      .send({ type: "share", message: "Use o código {codigo}." });
+      .send({ type: "share", message: "Use o código {codigo}.", phone: "5511999999999" });
     const repeated = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
       .set("Idempotency-Key", "attempt-share-001")
-      .send({ type: "share", message: "Use o código {codigo}." });
+      .send({ type: "share", message: "Use o código {codigo}.", phone: "5511999999999" });
     const later = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
       .set("Idempotency-Key", "attempt-share-002")
-      .send({ type: "share", message: "Use o código {codigo}." });
+      .send({ type: "share", message: "Use o código {codigo}.", phone: "5511999999999" });
 
     expect(first.status).toBe(200);
     expect(repeated.status).toBe(200);
@@ -1022,7 +1071,7 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
 
     const res = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
-      .send({ type: "share", message: "Use o código {codigo}." });
+      .send({ type: "share", message: "Use o código {codigo}.", phone: "5511999999999" });
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "idempotency_key_required" });

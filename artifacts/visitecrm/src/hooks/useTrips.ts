@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useSearch, useLocation } from "wouter";
 import {
-  useListTrips, useCreateTrip, useDeleteTrip, useGetDashboardUpcomingTrips, useGetMe,
+  useListTrips, useCreateTrip, useUpdateTrip, useGetDashboardUpcomingTrips, useGetMe,
 } from "@workspace/api-client-react";
 import type { Trip } from "@workspace/api-client-react";
 import { ROLES } from "@workspace/permissions";
@@ -13,7 +13,9 @@ type ExportTripsBatchHandler = (trips: Trip[]) => void;
 
 interface TripFilters {
   search: string;
+  locationFilter: string;
   statusFilter: string;
+  storePublicationFilter: string;
   typeFilter: string;
   dateFilter: string;
   page: number;
@@ -23,7 +25,9 @@ function parseTripFilters(searchStr: string): TripFilters {
   const params = new URLSearchParams(searchStr);
   return {
     search: params.get("q") ?? "",
+    locationFilter: params.get("location") ?? "",
     statusFilter: params.get("status") ?? "all",
+    storePublicationFilter: params.get("storePublication") ?? "all",
     typeFilter: params.get("type") ?? "all",
     dateFilter: params.get("date") ?? "",
     page: parseInt(params.get("page") ?? "1") || 1,
@@ -32,7 +36,9 @@ function parseTripFilters(searchStr: string): TripFilters {
 
 function tripFiltersMatch(left: TripFilters, right: TripFilters): boolean {
   return left.search === right.search
+    && left.locationFilter === right.locationFilter
     && left.statusFilter === right.statusFilter
+    && left.storePublicationFilter === right.storePublicationFilter
     && left.typeFilter === right.typeFilter
     && left.dateFilter === right.dateFilter
     && left.page === right.page;
@@ -41,7 +47,9 @@ function tripFiltersMatch(left: TripFilters, right: TripFilters): boolean {
 function serializeTripFilters(filters: TripFilters): string {
   const params = new URLSearchParams();
   if (filters.search) params.set("q", filters.search);
+  if (filters.locationFilter) params.set("location", filters.locationFilter);
   if (filters.statusFilter !== "all") params.set("status", filters.statusFilter);
+  if (filters.storePublicationFilter !== "all") params.set("storePublication", filters.storePublicationFilter);
   if (filters.typeFilter !== "all") params.set("type", filters.typeFilter);
   if (filters.dateFilter) params.set("date", filters.dateFilter);
   if (filters.page > 1) params.set("page", String(filters.page));
@@ -57,11 +65,25 @@ export function useTrips() {
   const lastObservedSearchStrRef = useRef(searchStr);
   const pendingUrlFiltersRef = useRef<TripFilters | null>(null);
 
-  const [search, setSearch] = useState(initialFilters.search);
-  const [statusFilter, setStatusFilter] = useState(initialFilters.statusFilter);
+  const [search, setSearchState] = useState(initialFilters.search);
+  const [locationFilter, setLocationFilterState] = useState(initialFilters.locationFilter);
+  const [statusFilter, setStatusFilterState] = useState(initialFilters.statusFilter);
+  const [storePublicationFilter, setStorePublicationFilterState] = useState(initialFilters.storePublicationFilter);
   const [typeFilter, setTypeFilterState] = useState(initialFilters.typeFilter);
   const [dateFilter, setDateFilterState] = useState(initialFilters.dateFilter);
   const [page, setPage] = useState(initialFilters.page);
+  const setSearch = useCallback((value: string) => {
+    setSearchState(value);
+    setPage(1);
+  }, []);
+  const setStatusFilter = useCallback((value: string) => {
+    setStatusFilterState(value);
+    setPage(1);
+  }, []);
+  const setStorePublicationFilter = useCallback((value: string) => {
+    setStorePublicationFilterState(value);
+    setPage(1);
+  }, []);
   const setTypeFilter = useCallback((value: string) => {
     setTypeFilterState(value);
     setPage(1);
@@ -70,9 +92,13 @@ export function useTrips() {
     setDateFilterState(value);
     setPage(1);
   }, []);
+  const setLocationFilter = useCallback((value: string) => {
+    setLocationFilterState(value);
+    setPage(1);
+  }, []);
 
   useEffect(() => {
-    const currentFilters = { search, statusFilter, typeFilter, dateFilter, page };
+    const currentFilters = { search, locationFilter, statusFilter, storePublicationFilter, typeFilter, dateFilter, page };
 
     if (lastObservedSearchStrRef.current !== searchStr) {
       lastObservedSearchStrRef.current = searchStr;
@@ -84,8 +110,10 @@ export function useTrips() {
         return;
       }
 
-      setSearch(incomingFilters.search);
-      setStatusFilter(incomingFilters.statusFilter);
+      setSearchState(incomingFilters.search);
+      setLocationFilterState(incomingFilters.locationFilter);
+      setStatusFilterState(incomingFilters.statusFilter);
+      setStorePublicationFilterState(incomingFilters.storePublicationFilter);
       setTypeFilterState(incomingFilters.typeFilter);
       setDateFilterState(incomingFilters.dateFilter);
       setPage(incomingFilters.page);
@@ -103,13 +131,15 @@ export function useTrips() {
     const qs = serializeTripFilters(currentFilters);
     if (new URLSearchParams(searchStr).toString() === qs) return;
     navigate(qs ? `?${qs}` : window.location.pathname, { replace: true });
-  }, [search, statusFilter, typeFilter, dateFilter, page, searchStr, navigate]);
+  }, [search, locationFilter, statusFilter, storePublicationFilter, typeFilter, dateFilter, page, searchStr, navigate]);
 
-  const hasActiveFilters = !!(search || statusFilter !== "all" || typeFilter !== "all" || dateFilter);
+  const hasActiveFilters = !!(search || locationFilter || statusFilter !== "all" || storePublicationFilter !== "all" || typeFilter !== "all" || dateFilter);
 
   const clearFilters = () => {
     setSearch("");
+    setLocationFilterState("");
     setStatusFilter("all");
+    setStorePublicationFilter("all");
     setTypeFilter("all");
     setDateFilter("");
     setPage(1);
@@ -120,7 +150,9 @@ export function useTrips() {
 
   const { data: tripsData, isLoading, isError, error, refetch } = useListTrips({
     search: search || undefined,
+    location: locationFilter.trim() || undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
+    storePublication: storePublicationFilter !== "all" ? storePublicationFilter as "published" | "unpublished" : undefined,
     type: typeFilter !== "all" ? typeFilter : undefined,
     date: dateFilter || undefined,
     page,
@@ -128,7 +160,7 @@ export function useTrips() {
   });
 
   const createTrip = useCreateTrip();
-  const deleteTrip = useDeleteTrip();
+  const updateTrip = useUpdateTrip();
   const { data: upcomingTrips = [] } = useGetDashboardUpcomingTrips();
 
   const exportTrips = useCallback(async (onBatch: ExportTripsBatchHandler): Promise<number> => {
@@ -224,20 +256,22 @@ export function useTrips() {
     refetch();
   };
 
-  const handleDelete = async (id: string) => {
-    await deleteTrip.mutateAsync({ id });
+  const handleMarkCompleted = async (id: string) => {
+    await updateTrip.mutateAsync({ id, data: { status: "completed" } });
     refetch();
   };
 
   return {
     trips, exportTrips, isLoading, isError, error, totalPages, upcomingTrips, stats, me, isVendedor,
     search, setSearch,
+    locationFilter, setLocationFilter,
     statusFilter, setStatusFilter,
+    storePublicationFilter, setStorePublicationFilter,
     typeFilter, setTypeFilter,
     dateFilter, setDateFilter,
     page, setPage,
     hasActiveFilters, clearFilters,
-    refetch, deleteTrip,
-    handleDuplicate, handleDelete,
+    refetch, updateTrip,
+    handleDuplicate, handleMarkCompleted,
   };
 }

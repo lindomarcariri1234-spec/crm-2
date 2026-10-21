@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { WhatsAppBroadcastResultSkippedReasonsItem } from "./whatsAppBroadcastResultSkippedReasonsItem";
 
 export interface WhatsAppBroadcastResult {
   recipientCount: number;
@@ -13,4 +14,7 @@ export interface WhatsAppBroadcastResult {
   failed: number;
   unknown: number;
   skipped: number;
+  /** Existing campaign deliveries reused; no new send was started for these recipients. */
+  deduplicated: number;
+  skippedReasons: WhatsAppBroadcastResultSkippedReasonsItem[];
 }

@@ -12,6 +12,36 @@ import {
 import type { ReactNode } from "react";
 import { createElement } from "react";
 
+export type PaymentProvider = "stripe" | "infinitepay" | "manual";
+
+export function isPaymentMethodAvailable(
+  methodId: string,
+  provider: PaymentProvider,
+  stripeEnabled: boolean,
+  infinitePayEnabled: boolean,
+): boolean {
+  if (methodId === "credit_card") {
+    return provider === "stripe"
+      ? stripeEnabled
+      : provider === "infinitepay" && infinitePayEnabled;
+  }
+  if (methodId === "debit_card") {
+    return provider === "stripe" && stripeEnabled;
+  }
+  return true;
+}
+
+export function getPaymentMethodDescription(
+  methodId: string,
+  provider: PaymentProvider,
+  fallback: string,
+): string {
+  if (methodId !== "credit_card") return fallback;
+  if (provider === "infinitepay") return "Checkout hospedado seguro da InfinitePay";
+  if (provider === "stripe") return "Pagamento processado com segurança pela Stripe";
+  return "Selecione um provedor para pagar com cartão";
+}
+
 export type Step = "dados" | "revisao" | "assento" | "pagamento" | "confirmado";
 
 export const STEPS: { key: Step; label: string; icon: ReactNode }[] = [

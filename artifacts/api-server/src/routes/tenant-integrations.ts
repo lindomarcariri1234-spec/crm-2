@@ -9,6 +9,16 @@ import type { AuthedUser } from "../lib/tenant";
 import { generateId } from "../lib/id";
 import { encryptCredential, decryptCredential } from "../lib/crypto";
 import { assertSafeUrl, ssrfSafeFetchBounded } from "../lib/ssrf";
+import {
+  configureEvolutionWebhook,
+  connectEvolutionInstance,
+  getEvolutionConnectionState,
+  parseEvolutionQrDataUrl,
+} from "../services/evolution-api";
+import {
+  importZernioInstagramHistoryChunk,
+  INSTAGRAM_ZERNIO_TYPE,
+} from "../services/instagram-zernio.js";
 
 const router = Router();
 
@@ -40,7 +50,24 @@ function maskSecret(value: string): string {
 
 function sanitizeExternalError(err: unknown): string {
   const name = (err as { name?: string } | null)?.name;
-  if (name === "AbortError" || name === "TimeoutError") return "Tempo de conexão esgotado.";
+  // Undici wraps connect failures in a TypeError; the safe cause code is more
+  // useful than its generic "fetch failed" message. Never return the raw cause.
+  const networkError = err as { code?: unknown; cause?: { code?: unknown } } | null;
+  const code = networkError?.cause?.code ?? networkError?.code;
+  if (name === "AbortError" || name === "TimeoutError"
+    || code === "UND_ERR_CONNECT_TIMEOUT" || code === "ETIMEDOUT") {
+    return "Tempo de conexão esgotado. Verifique se o serviço está disponível e se a porta HTTPS (443) permite conexões do servidor do CRM.";
+  }
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return "Não foi possível resolver o endereço do serviço. Confira a URL Base e o DNS do servidor.";
+  }
+  if (code === "ECONNREFUSED" || code === "ECONNRESET") {
+    return "O servidor externo recusou ou interrompeu a conexão. Confira o serviço, o proxy HTTPS e o firewall.";
+  }
+  if (code === "CERT_HAS_EXPIRED" || code === "DEPTH_ZERO_SELF_SIGNED_CERT"
+    || code === "ERR_TLS_CERT_ALTNAME_INVALID" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
+    return "Não foi possível validar o certificado HTTPS do serviço. Confira o certificado da URL Base.";
+  }
   if (
     err instanceof Error &&
     err.message.length < 120 &&
@@ -108,27 +135,8 @@ async function configureEvolutionInboundWebhook(
   }
 
   const callbackUrl = `${publicBaseUrl}/api/webhooks/whatsapp/evolution/${encodeURIComponent(instanceName)}`;
-  const endpoint = `${baseUrl.replace(/\/+$/, "")}/webhook/set/${encodeURIComponent(instanceName)}`;
   try {
-    const result = await ssrfSafeFetchBounded(endpoint, {
-      method: "POST",
-      headers: {
-        apikey: apiKey,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        webhook: {
-          enabled: true,
-          url: callbackUrl,
-          webhookByEvents: false,
-          webhookBase64: false,
-          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE"],
-          headers: { apikey: apiKey },
-        },
-      }),
-      timeoutMs: 12000,
-      maxBytes: 16 * 1024,
-    });
+    const result = await configureEvolutionWebhook(baseUrl, apiKey, instanceName, callbackUrl);
     if (!result.ok) {
       return {
         ok: false,
@@ -139,6 +147,34 @@ async function configureEvolutionInboundWebhook(
   } catch (err) {
     return { ok: false, message: sanitizeExternalError(err) };
   }
+}
+
+type EvolutionConnectionStatus = "connected" | "disconnected" | null;
+
+function parseEvolutionConnectionStatus(
+  statusCode: number,
+  responseText: string,
+): EvolutionConnectionStatus {
+  // The provider documents 404 as "instance not found", not as a closed session.
+  if (statusCode === 404) return null;
+  if (statusCode < 200 || statusCode >= 300) return null;
+
+  try {
+    const payload: unknown = JSON.parse(responseText);
+    const root = typeof payload === "object" && payload !== null
+      ? payload as Record<string, unknown>
+      : {};
+    const instance = typeof root.instance === "object" && root.instance !== null
+      ? root.instance as Record<string, unknown>
+      : {};
+    const state = String(instance.state ?? root.state ?? root.connectionState ?? "").toLowerCase();
+    if (state === "open" || state === "connected") return "connected";
+    if (state === "close" || state === "closed" || state === "disconnected") return "disconnected";
+  } catch {
+    // A 2xx response without a recognized JSON connection state is not proof
+    // that the WhatsApp session is open.
+  }
+  return null;
 }
 
 // ─── Audit log ────────────────────────────────────────────────────────────────
@@ -182,6 +218,39 @@ async function requireIntegrationAdmin(
   return me;
 }
 
+async function promoteConnectedEvolutionDefault(
+  tenantId: string,
+  integrationId: string,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.update(tenantIntegrationsTable)
+      .set({ isDefault: false })
+      .where(and(
+        eq(tenantIntegrationsTable.tenantId, tenantId),
+        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+        eq(tenantIntegrationsTable.isDefault, true),
+      ));
+    const [promoted] = await tx.update(tenantIntegrationsTable)
+      .set({ isDefault: true })
+      .where(and(
+        eq(tenantIntegrationsTable.tenantId, tenantId),
+        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+        eq(tenantIntegrationsTable.id, integrationId),
+        eq(tenantIntegrationsTable.enabled, true),
+        eq(tenantIntegrationsTable.status, "connected"),
+      ))
+      .returning({ id: tenantIntegrationsTable.id });
+    if (!promoted) throw new Error("evolution_default_requires_connected_integration");
+  });
+}
+
+function isEvolutionDefaultConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const dbError = error as { code?: unknown; constraint?: unknown };
+  return dbError.code === "23505"
+    && dbError.constraint === "tenant_integrations_whatsapp_default_uq";
+}
+
 // ─── Registry ─────────────────────────────────────────────────────────────────
 // Each entry declares the fields (config = non-secret, secrets = encrypted),
 // which config fields need SSRF validation, and how to test the connection.
@@ -191,6 +260,7 @@ async function requireIntegrationAdmin(
 interface FieldDef {
   key: string;
   label: string;
+  description?: string;
   secret: boolean;
   ssrfCheck?: boolean; // must pass assertSafeUrl before being stored
   optional?: boolean;
@@ -267,21 +337,9 @@ const REGISTRY: Record<string, RegistryEntry> = {
         };
       }
 
-      // Path-encode instanceName so any slash or special character cannot escape
-      // the intended URL segment.
-      const encodedInstance = encodeURIComponent(instanceName);
-      const testUrl = `${baseUrl.replace(/\/$/, "")}/instance/connectionState/${encodedInstance}`;
-
       try {
-        const result = await ssrfSafeFetchBounded(testUrl, {
-          headers: { apikey: apiKey },
-          timeoutMs: 12000,
-          maxBytes: 16 * 1024,
-        });
+        const result = await getEvolutionConnectionState(baseUrl, apiKey, instanceName);
 
-        if (result.ok) {
-          return { ok: true, message: "Instância WhatsApp conectada." };
-        }
         if (result.status === 401 || result.status === 403) {
           return {
             ok: false,
@@ -291,10 +349,25 @@ const REGISTRY: Record<string, RegistryEntry> = {
         if (result.status === 404) {
           return {
             ok: false,
-            message: "Instância não encontrada (HTTP 404). Verifique o Nome da Instância.",
+            message: "Instância não encontrada neste servidor (HTTP 404). Confirme a URL Base e o Nome da Instância exatos na mesma instalação Evolution.",
           };
         }
-        return { ok: false, message: `Falha na conexão (HTTP ${result.status}).` };
+        if (!result.ok) return { ok: false, message: `Falha na conexão (HTTP ${result.status}).` };
+
+        const connectionStatus = parseEvolutionConnectionStatus(result.status, result.text);
+        if (connectionStatus === "connected") {
+          return { ok: true, message: "Instância WhatsApp conectada." };
+        }
+        if (connectionStatus === "disconnected") {
+          return {
+            ok: false,
+            message: "A instância foi encontrada, mas a sessão do WhatsApp está desconectada. Conecte o aparelho na Evolution e atualize o status.",
+          };
+        }
+        return {
+          ok: false,
+          message: "A Evolution respondeu, mas não confirmou que a sessão está conectada. Confira o estado da instância e atualize o status.",
+        };
       } catch (err) {
         return { ok: false, message: sanitizeExternalError(err) };
       }
@@ -452,6 +525,45 @@ const REGISTRY: Record<string, RegistryEntry> = {
       return { ok: true, message: "Configuração do Google Analytics válida." };
     },
   },
+
+  instagram_zernio: {
+    label: "Instagram Direct (Zernio)",
+    fields: [
+      {
+        key: "accountId",
+        label: "Account ID da Zernio",
+        description: "ID exato recebido em account.accountId no evento do webhook; não use o @ do Instagram.",
+        secret: false,
+      },
+      {
+        key: "profileId",
+        label: "Profile ID da Zernio",
+        description: "ID exato recebido em account.profileId. Necessário para associar eventos ao perfil correto.",
+        secret: false,
+      },
+      {
+        key: "apiKey",
+        label: "Chave de API da Zernio",
+        description: "Necessária para enviar respostas do CRM. A chave precisa ter permissão para mensagens (messages).",
+        secret: true,
+        optional: true,
+      },
+    ],
+    async testConnection(config) {
+      const accountId = config.accountId?.trim();
+      const profileId = config.profileId?.trim();
+      if (!accountId || !profileId) {
+        return {
+          ok: false,
+          message: "Informe o Account ID e o Profile ID da conta Zernio.",
+        };
+      }
+      return {
+        ok: true,
+        message: "Mapeamento da conta e do perfil Zernio validado.",
+      };
+    },
+  },
 };
 
 const ALLOWED_TYPES = Object.keys(REGISTRY);
@@ -553,6 +665,173 @@ router.get("/integrations/whatsapp_evolution/connections", async (req, res, next
   }
 });
 
+router.post(
+  "/integrations/whatsapp_evolution/connections/:id/qr",
+  async (req, res, next: NextFunction): Promise<void> => {
+    try {
+      const me = await requireIntegrationAdmin(req, res, next);
+      if (!me) return;
+
+      const [row] = await db.select({
+        id: tenantIntegrationsTable.id,
+        config: tenantIntegrationsTable.config,
+        secretsEncrypted: tenantIntegrationsTable.secretsEncrypted,
+        enabled: tenantIntegrationsTable.enabled,
+      }).from(tenantIntegrationsTable)
+        .where(and(
+          eq(tenantIntegrationsTable.id, req.params.id!),
+          eq(tenantIntegrationsTable.tenantId, me.tenantId),
+          eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+        ))
+        .limit(1);
+      if (!row) {
+        next(new NotFoundError("Integração WhatsApp não encontrada.", "NOT_FOUND"));
+        return;
+      }
+      if (!row.enabled) {
+        next(new ValidationError("Ative a integração antes de conectar o WhatsApp.", "INTEGRATION_DISABLED"));
+        return;
+      }
+
+      const config = (row.config ?? {}) as Record<string, string>;
+      const baseUrl = config.baseUrl?.trim();
+      const instanceName = config.instanceName?.trim();
+      const apiKey = row.secretsEncrypted
+        ? decryptSecrets(row.secretsEncrypted).apiKey?.trim()
+        : undefined;
+      if (!baseUrl || !instanceName || !apiKey) {
+        next(new ValidationError("Salve a URL Base, o Nome da Instância e a API Key antes de conectar.", "INTEGRATION_CONFIG_INCOMPLETE"));
+        return;
+      }
+
+      let result;
+      try {
+        await assertSafeUrl(baseUrl);
+        result = await connectEvolutionInstance(baseUrl, apiKey, instanceName);
+      } catch (err) {
+        const message = `Não foi possível solicitar o QR Code à Evolution. ${sanitizeExternalError(err)}`;
+        await writeLog(me, "whatsapp_evolution", "qr_connect", "warn", message);
+        res.status(502).json({ message });
+        return;
+      }
+      if (!result.ok) {
+        const message = result.status === 404
+          ? "A instância não foi encontrada na Evolution (HTTP 404)."
+          : result.status === 401 || result.status === 403
+            ? `A Evolution recusou a API Key (HTTP ${result.status}).`
+            : `Falha ao solicitar o QR Code à Evolution (HTTP ${result.status}).`;
+        await writeLog(me, "whatsapp_evolution", "qr_connect", "warn", message);
+        res.status(502).json({ message });
+        return;
+      }
+
+      const qrCodeDataUrl = await parseEvolutionQrDataUrl(result.text);
+      if (!qrCodeDataUrl) {
+        await writeLog(
+          me,
+          "whatsapp_evolution",
+          "qr_connect",
+          "warn",
+          "A Evolution não retornou um QR Code válido para esta instância.",
+        );
+        res.status(502).json({
+          message: "A Evolution não retornou um QR Code. Confirme se a instância ainda precisa ser conectada.",
+        });
+        return;
+      }
+
+      await writeLog(me, "whatsapp_evolution", "qr_connect", "info", "QR Code de conexão solicitado.");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.json({ qrCodeDataUrl });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// Refreshes only provider-confirmed Evolution connection states. Network errors,
+// auth failures, malformed payloads, and transitional states leave stored flags
+// untouched so a temporary outage cannot remove a usable default.
+router.post("/integrations/whatsapp_evolution/connections/refresh", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireIntegrationAdmin(req, res, next);
+    if (!me) return;
+
+    const rows = await db.select({
+      id: tenantIntegrationsTable.id,
+      config: tenantIntegrationsTable.config,
+      secretsEncrypted: tenantIntegrationsTable.secretsEncrypted,
+      enabled: tenantIntegrationsTable.enabled,
+      status: tenantIntegrationsTable.status,
+      isDefault: tenantIntegrationsTable.isDefault,
+    }).from(tenantIntegrationsTable)
+      .where(and(
+        eq(tenantIntegrationsTable.tenantId, me.tenantId),
+        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+      ));
+
+    let unverified = 0;
+    let disconnectedDefaults = 0;
+    await Promise.all(rows.filter((row) => row.enabled || row.isDefault).map(async (row) => {
+      try {
+        const config = (row.config ?? {}) as Record<string, string>;
+        const baseUrl = config.baseUrl?.trim();
+        const instanceName = config.instanceName?.trim();
+        if (!baseUrl || !instanceName || !row.secretsEncrypted) {
+          unverified += 1;
+          return;
+        }
+        const secrets = decryptSecrets(row.secretsEncrypted);
+        const apiKey = secrets.apiKey?.trim();
+        if (!apiKey) {
+          unverified += 1;
+          return;
+        }
+        await assertSafeUrl(baseUrl);
+        const result = await getEvolutionConnectionState(baseUrl, apiKey, instanceName, 8_000);
+
+        const nextStatus = parseEvolutionConnectionStatus(result.status, result.text);
+        if (!nextStatus) {
+          unverified += 1;
+          return;
+        }
+
+        const updated = await db.update(tenantIntegrationsTable)
+          .set({
+            status: nextStatus,
+            lastSyncAt: new Date(),
+            lastError: nextStatus === "connected" ? null : "A Evolution confirmou que esta instância está desconectada.",
+            ...(nextStatus === "disconnected" ? { isDefault: false } : {}),
+          })
+          .where(and(
+            eq(tenantIntegrationsTable.id, row.id),
+            eq(tenantIntegrationsTable.tenantId, me.tenantId),
+            eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+            eq(tenantIntegrationsTable.enabled, row.enabled),
+            eq(tenantIntegrationsTable.status, row.status),
+            eq(tenantIntegrationsTable.isDefault, row.isDefault),
+            eq(tenantIntegrationsTable.config, row.config),
+            eq(tenantIntegrationsTable.secretsEncrypted, row.secretsEncrypted),
+          ))
+          .returning({ id: tenantIntegrationsTable.id });
+        if (updated.length === 0) {
+          unverified += 1;
+          return;
+        }
+        if (nextStatus === "disconnected" && row.isDefault && updated.length > 0) {
+          disconnectedDefaults += 1;
+        }
+      } catch {
+        unverified += 1;
+      }
+    }));
+
+    res.json({ ok: true, unverified, disconnectedDefaults });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── GET /integrations/:type ──────────────────────────────────────────────────
 // Returns the current config with all secret fields masked. Never returns
 // plaintext secrets.
@@ -625,10 +904,113 @@ router.get("/integrations/:type", async (req, res, next: NextFunction): Promise<
       fieldDefs: entry.fields.map((f) => ({
         key: f.key,
         label: f.label,
+        ...(f.description ? { description: f.description } : {}),
         secret: f.secret,
         optional: f.optional ?? false,
       })),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/integrations/instagram_zernio/import-history", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireIntegrationAdmin(req, res, next);
+    if (!me) return;
+    const body = z.object({
+      integrationId: z.string().min(1).max(200),
+      cursor: z.string().max(80_000).nullable().optional(),
+    }).safeParse(req.body);
+    if (!body.success) {
+      next(new ValidationError("Selecione uma integração Zernio válida.", "VALIDATION_ERROR"));
+      return;
+    }
+    const [integration] = await db.select().from(tenantIntegrationsTable)
+      .where(and(
+        eq(tenantIntegrationsTable.id, body.data.integrationId),
+        eq(tenantIntegrationsTable.tenantId, me.tenantId),
+        eq(tenantIntegrationsTable.type, INSTAGRAM_ZERNIO_TYPE),
+        eq(tenantIntegrationsTable.enabled, true),
+        eq(tenantIntegrationsTable.status, "connected"),
+      ))
+      .limit(1);
+    if (!integration) {
+      next(new NotFoundError("Integração Zernio ativa não encontrada.", "NOT_FOUND"));
+      return;
+    }
+    const config = (integration.config ?? {}) as Record<string, string>;
+    const accountId = config["accountId"]?.trim();
+    const profileId = config["profileId"]?.trim();
+    const apiKey = integration.secretsEncrypted
+      ? decryptSecrets(integration.secretsEncrypted)["apiKey"]?.trim()
+      : null;
+    if (!accountId || !profileId || !apiKey) {
+      next(new ValidationError("Configure Account ID, Profile ID e chave de API antes de importar.", "VALIDATION_ERROR"));
+      return;
+    }
+    let resumeCursor: unknown;
+    if (body.data.cursor) {
+      try {
+        const checkpoint: unknown = JSON.parse(decryptCredential(body.data.cursor));
+        if (
+          typeof checkpoint !== "object" ||
+          checkpoint === null ||
+          !("cursor" in checkpoint) ||
+          !("integrationId" in checkpoint) ||
+          !("accountId" in checkpoint) ||
+          checkpoint.integrationId !== integration.id ||
+          checkpoint.accountId !== accountId
+        ) {
+          throw new Error("invalid checkpoint");
+        }
+        resumeCursor = checkpoint.cursor;
+      } catch {
+        next(new ValidationError("O ponto de retomada da importação é inválido. Inicie novamente.", "VALIDATION_ERROR"));
+        return;
+      }
+    }
+    try {
+      const result = await importZernioInstagramHistoryChunk(
+        apiKey,
+        accountId,
+        profileId,
+        integration.id,
+        resumeCursor,
+      );
+      if (result.done) {
+        await writeLog(
+          me,
+          INSTAGRAM_ZERNIO_TYPE,
+          "history_import",
+          "info",
+          `Histórico importado: ${result.progress.conversationsProcessed} conversas, ${result.progress.messagesImported} mensagens novas, ${result.progress.messagesAlreadyPresent} já existentes e ${result.progress.messagesSkipped} não importadas.`,
+        );
+      }
+      res.json({
+        done: result.done,
+        progress: result.progress,
+        cursor: result.cursor
+          ? encryptCredential(JSON.stringify({
+              integrationId: integration.id,
+              accountId,
+              cursor: result.cursor,
+            }))
+          : null,
+      });
+    } catch {
+      await writeLog(
+        me,
+        INSTAGRAM_ZERNIO_TYPE,
+        "history_import",
+        "error",
+        "Falha ao importar o histórico da Zernio; os itens já importados podem ser mantidos. Tente novamente.",
+      );
+      res.status(502).json({
+        message: "Não foi possível concluir esta etapa. O progresso salvo foi preservado; tente continuar a importação.",
+        cursor: body.data.cursor ?? null,
+      });
+    }
   } catch (err) {
     next(err);
   }
@@ -752,9 +1134,13 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
     const enabled = body.enabled ?? existing?.enabled ?? false;
     const environment = body.environment ?? existing?.environment ?? "production";
     const name = body.name ?? existing?.name ?? null;
-    const isDefault = type === "whatsapp_evolution"
-      ? body.isDefault ?? existing?.isDefault ?? !firstConnection
+    const requestedIsDefault = type === "whatsapp_evolution"
+      ? body.isDefault ?? (enabled ? existing?.isDefault ?? !firstConnection : false)
       : false;
+    if (type === "whatsapp_evolution" && requestedIsDefault && !enabled) {
+      next(new ValidationError("Ative e conecte a integração antes de defini-la como padrão.", "VALIDATION_ERROR"));
+      return;
+    }
     if (type === "distribution_reference" && enabled && environment !== "test") {
       next(new ValidationError(
         "O adaptador de referência só pode ser ativado no ambiente de teste.",
@@ -783,6 +1169,11 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       environment !== (existing?.environment ?? "production");
     const resetStatus = !existing || secretsChanged || configChanged || !enabled;
     const status = resetStatus ? "disconnected" : existing?.status ?? "disconnected";
+    let isDefault = type === "whatsapp_evolution"
+      && body.isDefault === undefined
+      && !!existing?.isDefault
+      && enabled
+      && status === "connected";
     const integrationId = existing?.id ?? generateId();
 
     const savedValues = {
@@ -795,33 +1186,7 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       status,
       ...(resetStatus ? { lastError: null } : {}),
     };
-    if (type === "whatsapp_evolution" && isDefault) {
-      await db.transaction(async (tx) => {
-        await tx.update(tenantIntegrationsTable)
-          .set({ isDefault: false })
-          .where(and(
-            eq(tenantIntegrationsTable.tenantId, me.tenantId),
-            eq(tenantIntegrationsTable.type, type),
-            eq(tenantIntegrationsTable.isDefault, true),
-          ));
-        if (existing) {
-          await tx.update(tenantIntegrationsTable)
-            .set(savedValues)
-            .where(and(
-              eq(tenantIntegrationsTable.tenantId, me.tenantId),
-              eq(tenantIntegrationsTable.type, type),
-              eq(tenantIntegrationsTable.id, integrationId),
-            ));
-        } else {
-          await tx.insert(tenantIntegrationsTable).values({
-            id: integrationId,
-            tenantId: me.tenantId,
-            type,
-            ...savedValues,
-          });
-        }
-      });
-    } else if (existing) {
+    if (existing) {
       await db.update(tenantIntegrationsTable)
         .set(savedValues)
         .where(and(
@@ -847,10 +1212,14 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
     );
 
     let webhookSetup: { ok: boolean; message: string } | undefined;
+    let defaultSelectionMessage: string | undefined;
 
     // Auto-verify the saved config so the persisted status always reflects the
     // stored credentials. Never auto-test disabled integrations (stale status).
-    if (enabled && (newSecretsEncrypted || secretFields.length === 0)) {
+    if (
+      enabled &&
+      (newSecretsEncrypted || secretFields.length === 0 || type === INSTAGRAM_ZERNIO_TYPE)
+    ) {
       try {
         const secrets = newSecretsEncrypted ? decryptSecrets(newSecretsEncrypted) : {};
         const testResult = await entry.testConnection(resolvedConfig, secrets);
@@ -865,10 +1234,34 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
               ),
             );
           await writeLog(me, type, "test", "info", `Conexão verificada após salvar: ${testResult.message}`);
+          if (type === "whatsapp_evolution" && requestedIsDefault) {
+            try {
+              await promoteConnectedEvolutionDefault(me.tenantId, integrationId);
+              isDefault = true;
+            } catch (promotionError) {
+              isDefault = false;
+              const defaultMessage = isEvolutionDefaultConflict(promotionError)
+                ? "Outro administrador definiu o número padrão ao mesmo tempo. Atualize a lista e tente novamente."
+                : "O número não pôde ser definido porque não está mais ativo e conectado. Atualize a lista e tente novamente.";
+              defaultSelectionMessage = defaultMessage;
+              await writeLog(
+                me,
+                type,
+                "default_selection",
+                "warn",
+                defaultMessage,
+              );
+            }
+          }
         } else {
+          if (type === "whatsapp_evolution") isDefault = false;
           await db
             .update(tenantIntegrationsTable)
-            .set({ status: "error", lastError: testResult.message })
+            .set({
+              status: "error",
+              lastError: testResult.message,
+              ...(type === "whatsapp_evolution" ? { isDefault: false } : {}),
+            })
             .where(
               and(
                 eq(tenantIntegrationsTable.tenantId, me.tenantId),
@@ -879,12 +1272,13 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
         }
 
         if (type === "whatsapp_evolution") {
-          webhookSetup = testResult.ok
-            ? await configureEvolutionInboundWebhook(resolvedConfig, secrets["apiKey"] ?? "")
-            : {
-                ok: false,
-                message: "O webhook de recebimento não foi configurado porque o teste da conexão Evolution falhou.",
-              };
+          // Webhook configuration is independent of the WhatsApp session state.
+          // Evolution can accept the callback while the phone is disconnected;
+          // the test result still determines the stored connection status above.
+          webhookSetup = await configureEvolutionInboundWebhook(
+            resolvedConfig,
+            secrets["apiKey"] ?? "",
+          );
           await writeLog(
             me,
             type,
@@ -895,9 +1289,14 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
         }
       } catch (testErr) {
         const msg = sanitizeExternalError(testErr);
+        if (type === "whatsapp_evolution") isDefault = false;
         await db
           .update(tenantIntegrationsTable)
-          .set({ status: "error", lastError: msg })
+          .set({
+            status: "error",
+            lastError: msg,
+            ...(type === "whatsapp_evolution" ? { isDefault: false } : {}),
+          })
           .where(
             and(
               eq(tenantIntegrationsTable.tenantId, me.tenantId),
@@ -906,11 +1305,17 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
           );
         await writeLog(me, type, "test", "error", `Falha ao verificar após salvar: ${msg}`);
         if (type === "whatsapp_evolution") {
-          webhookSetup = {
-            ok: false,
-            message: "O webhook de recebimento não foi configurado porque o teste da conexão Evolution falhou.",
-          };
-          await writeLog(me, type, "webhook_setup", "warn", webhookSetup.message);
+          webhookSetup = await configureEvolutionInboundWebhook(
+            resolvedConfig,
+            decryptSecrets(newSecretsEncrypted!)["apiKey"] ?? "",
+          );
+          await writeLog(
+            me,
+            type,
+            "webhook_setup",
+            webhookSetup.ok ? "info" : "warn",
+            webhookSetup.message,
+          );
         }
       }
     } else if (enabled && type === "whatsapp_evolution") {
@@ -925,6 +1330,12 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
       ok: true,
       integrationId,
       isDefault,
+      ...(type === "whatsapp_evolution" && requestedIsDefault && !isDefault
+        ? {
+            message: defaultSelectionMessage
+              ?? "O número só pode ser padrão depois de uma verificação bem-sucedida.",
+          }
+        : {}),
       ...(webhookSetup ? { webhook: webhookSetup } : {}),
     });
   } catch (err) {
@@ -1083,6 +1494,7 @@ router.post("/integrations/:type/revoke", async (req, res, next: NextFunction): 
         enabled: false,
         status: "disconnected",
         lastError: null,
+        ...(type === "whatsapp_evolution" ? { isDefault: false } : {}),
       })
       .where(and(...rowConditions));
 

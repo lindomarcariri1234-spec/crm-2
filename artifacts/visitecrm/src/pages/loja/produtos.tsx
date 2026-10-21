@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { storeApi, StoreProduct, StoreCategory, ProductInput, VariantItem } from "@/lib/storeApi";
-import { useListAccommodations } from "@workspace/api-client-react";
+import { useListAccommodations, useListTrips } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -66,7 +66,7 @@ const PRODUCT_TYPES = [
   { value: "tour", label: "Passeio / Tour" },
   { value: "service", label: "Serviço" },
   { value: "hotel", label: "Hospedagem" },
-  { value: "transfer", label: "Transfer" },
+  { value: "transfer", label: "Serviço de transfer" },
   { value: "insurance", label: "Seguro" },
   { value: "product", label: "Produto" },
 ];
@@ -252,11 +252,13 @@ function VariantsEditor({
 function ProductForm({
   product,
   categories,
+  products,
   onSave,
   onClose,
 }: {
   product?: StoreProduct;
   categories: StoreCategory[];
+  products: StoreProduct[];
   onSave: () => void;
   onClose: () => void;
 }) {
@@ -266,7 +268,9 @@ function ProductForm({
     name: product?.name ?? "",
     slug: product?.slug ?? "",
     type: product?.type ?? "package",
+    storefrontGroup: product?.tripId ? "travel" : product?.storefrontGroup ?? "other",
     categoryId: product?.categoryId ?? undefined,
+    tripId: product?.tripId ?? null,
     accommodationId: product?.accommodationId ?? undefined,
     shortDescription: product?.shortDescription ?? "",
     description: product?.description ?? "",
@@ -291,6 +295,7 @@ function ProductForm({
   const { data: accommodations = [] } = useListAccommodations({
     query: { queryKey: ["accommodations"], enabled: form.type === "hotel" },
   });
+  const { data: tripsData, isLoading: isLoadingTrips } = useListTrips({ limit: 500 });
 
   function set(field: string, value: unknown) {
     if (field === "name" && !product) {
@@ -298,6 +303,12 @@ function ProductForm({
         ...p,
         name: value as string,
         slug: !p.slug ? slugify(value as string) : p.slug,
+      }));
+    } else if (field === "tripId") {
+      setForm((p) => ({
+        ...p,
+        tripId: value as string | null,
+        ...(value ? { storefrontGroup: "travel" as const } : {}),
       }));
     } else {
       setForm((p) => ({ ...p, [field]: value }));
@@ -379,6 +390,16 @@ function ProductForm({
 
   const isTrip = ["package", "tour", "transfer"].includes(form.type ?? "");
   const isAccommodation = form.type === "hotel";
+  const trips = tripsData?.data ?? [];
+  const availableTrips = trips.filter(
+    (trip) => !["completed", "cancelled"].includes(trip.status) || trip.id === form.tripId,
+  );
+  const hasCurrentTripOption = availableTrips.some((trip) => trip.id === form.tripId);
+  const linkedTripIds = new Set(
+    products
+      .filter((candidate) => candidate.id !== product?.id && candidate.tripId)
+      .map((candidate) => candidate.tripId as string),
+  );
 
   return (
     <div className="max-h-[80vh] overflow-y-auto pr-1">
@@ -421,6 +442,58 @@ function ProductForm({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Grupo na vitrine</Label>
+              <Select
+                value={form.tripId ? "travel" : form.storefrontGroup ?? "other"}
+                onValueChange={(value) => set("storefrontGroup", value)}
+                disabled={Boolean(form.tripId)}
+              >
+                <SelectTrigger data-testid="select-storefront-group">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="travel">Viagens e experiências</SelectItem>
+                  <SelectItem value="other">Outros itens</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Define em qual grupo público o produto aparece, independentemente do tipo comercial. Produtos vinculados a uma viagem ficam em Viagens.
+              </p>
+            </div>
+            <div className="space-y-2 col-span-2">
+              <Label>Viagem operacional vinculada (opcional)</Label>
+              <Select
+                value={form.tripId ?? "none"}
+                onValueChange={(value) => set("tripId", value === "none" ? null : value)}
+              >
+                <SelectTrigger data-testid="select-store-product-trip">
+                  <SelectValue placeholder="Sem vínculo com uma viagem" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Sem vínculo com uma viagem</SelectItem>
+                  {form.tripId && !hasCurrentTripOption && (
+                    <SelectItem value={form.tripId}>Viagem vinculada (não localizada na lista)</SelectItem>
+                  )}
+                  {availableTrips.map((trip) => {
+                    const linkedByAnotherProduct = linkedTripIds.has(trip.id);
+                    return (
+                      <SelectItem key={trip.id} value={trip.id} disabled={linkedByAnotherProduct}>
+                        {trip.name}
+                        {trip.destination ? ` — ${trip.destination}` : ""}
+                        {linkedByAnotherProduct ? " (já vinculada a outro produto)" : ""}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Vincule somente quando este produto representar uma viagem cadastrada. O vínculo controla reservas e disponibilidade; a categoria não o substitui.
+              </p>
+              {isLoadingTrips && (
+                <p className="text-xs text-muted-foreground">Carregando viagens…</p>
+              )}
             </div>
             {isAccommodation && (
               <div className="space-y-2 col-span-2">
@@ -974,6 +1047,7 @@ export default function LojaProdutos() {
               <TableRow>
                 <TableHead>Produto</TableHead>
                 <TableHead>Tipo</TableHead>
+                <TableHead>Grupo na vitrine</TableHead>
                 <TableHead>Categoria</TableHead>
                 <TableHead>Preço</TableHead>
                 <TableHead>Status</TableHead>
@@ -1012,6 +1086,13 @@ export default function LojaProdutos() {
                   <TableCell>
                     <Badge variant="outline" className="text-xs">
                       {getTypeLabel(product.type)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="secondary" className="text-xs">
+                      {product.tripId || product.storefrontGroup === "travel"
+                        ? "Viagens e experiências"
+                        : "Outros itens"}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -1111,6 +1192,7 @@ export default function LojaProdutos() {
           <ProductForm
             product={editingProduct}
             categories={categories}
+            products={products}
             onSave={() => {
               setShowDialog(false);
               load();

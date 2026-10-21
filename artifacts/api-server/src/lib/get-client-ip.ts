@@ -1,5 +1,11 @@
 import { isIP } from "node:net";
-import type { Request } from "express";
+
+interface ClientIpRequest {
+  ip?: string;
+  socket?: {
+    remoteAddress?: string | null;
+  } | null;
+}
 
 /**
  * Returns the canonical real client IP for an Express request.
@@ -12,7 +18,7 @@ import type { Request } from "express";
  * We intentionally do NOT re-parse `x-forwarded-for` here — doing so would
  * bypass Express's trust-proxy logic and re-introduce spoofability.
  */
-export function getClientIp(req: Request): string | null {
+export function getClientIp(req: ClientIpRequest): string | null {
   const ip = req.ip ?? req.socket?.remoteAddress ?? null;
   if (!ip) return null;
 

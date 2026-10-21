@@ -150,6 +150,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
     {
       productIds: storeProductIds,
       referrerTierLevel: tier.level,
+      tierBonusMultiplier: tier.bonusMultiplier,
       activitySegment: referralActivitySegment(currentCompleted),
       attributionChannel,
     },

@@ -44,6 +44,9 @@ const {
   mockLogInfo,
   mockLogError,
   mockRunWhatsAppMediaRetentionCleanup,
+  mockPoolConnect,
+  mockLockClientQuery,
+  mockLockClientRelease,
 } = vi.hoisted(() => {
   const mockListFiles = vi.fn();
   const mockDeleteFiles = vi.fn();
@@ -67,6 +70,9 @@ const {
   const mockLogInfo = vi.fn();
   const mockLogError = vi.fn();
   const mockRunWhatsAppMediaRetentionCleanup = vi.fn();
+  const mockLockClientQuery = vi.fn();
+  const mockLockClientRelease = vi.fn();
+  const mockPoolConnect = vi.fn();
 
   return {
     mockListFiles, mockDeleteFiles, mockCollectReferenced,
@@ -75,6 +81,7 @@ const {
     mockDbInsert, mockDbInsertValues,
     mockLogInfo, mockLogError,
     mockRunWhatsAppMediaRetentionCleanup,
+    mockPoolConnect, mockLockClientQuery, mockLockClientRelease,
   };
 });
 
@@ -93,6 +100,7 @@ vi.mock("../lib/whatsapp-media-retention.js", () => ({
 }));
 
 vi.mock("@workspace/db", () => ({
+  pool: { connect: mockPoolConnect },
   db: {
     select: mockDbSelect,
     update: mockDbUpdate,
@@ -161,8 +169,8 @@ function mockStagingEmpty() {
     .mockResolvedValueOnce([]); // write existence check → insert path
 }
 
-function writtenStaging(): Array<{ key: string; stagedAt: number }> {
-  const updateCall = (mockDbUpdateSet.mock.calls as unknown[][])[0];
+function writtenStaging(callIndex = 0): Array<{ key: string; stagedAt: number }> {
+  const updateCall = (mockDbUpdateSet.mock.calls as unknown[][])[callIndex];
   const updatePayload = updateCall?.[0] as
     | { value?: unknown }
     | undefined;
@@ -189,6 +197,9 @@ beforeEach(() => {
   mockLogInfo.mockReset();
   mockLogError.mockReset();
   mockRunWhatsAppMediaRetentionCleanup.mockReset();
+  mockPoolConnect.mockReset();
+  mockLockClientQuery.mockReset();
+  mockLockClientRelease.mockReset();
 
   // Re-wire the db chain after reset
   mockDbSelect.mockReturnValue({ from: mockDbSelectFrom });
@@ -204,6 +215,11 @@ beforeEach(() => {
   mockDbUpdateSetWhere.mockResolvedValue([]);
   mockDbInsertValues.mockResolvedValue([]);
   mockRunWhatsAppMediaRetentionCleanup.mockResolvedValue({ expiredMessages: 0, errors: 0 });
+  mockPoolConnect.mockResolvedValue({
+    query: mockLockClientQuery,
+    release: mockLockClientRelease,
+  });
+  mockLockClientQuery.mockResolvedValue({ rows: [{ unlocked: true }] });
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -345,6 +361,40 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       expect(written.find((c: { key: string }) => c.key === KEY)).toBeUndefined();
     });
 
+    it("retains original timestamps after a partial provider delete and retries the remaining files immediately", async () => {
+      const stagedAt = Date.now() - GRACE_MS - 5_000;
+      const staged = ["partial-a", "partial-b", "partial-c"].map((key) => ({
+        key,
+        stagedAt,
+      }));
+      mockStaging(staged);
+      mockListFiles.mockResolvedValueOnce(buildPage(staged.map(({ key }) => key)));
+      mockCollectReferenced
+        .mockResolvedValueOnce(new Set())
+        .mockResolvedValueOnce(new Set());
+      mockDeleteFiles.mockResolvedValueOnce({ deletedCount: 1 });
+
+      const partialResult = await runUploadThingOrphanCleanup();
+
+      expect(partialResult.deleted).toBe(1);
+      expect(partialResult.errors).toBe(2);
+      expect(writtenStaging()).toEqual(staged);
+
+      mockStaging(staged);
+      mockListFiles.mockResolvedValueOnce(buildPage(["partial-b", "partial-c"]));
+      mockCollectReferenced
+        .mockResolvedValueOnce(new Set())
+        .mockResolvedValueOnce(new Set());
+      mockDeleteFiles.mockResolvedValueOnce({ deletedCount: 2 });
+
+      const retryResult = await runUploadThingOrphanCleanup();
+
+      expect(retryResult.deleted).toBe(2);
+      expect(retryResult.errors).toBe(0);
+      expect(mockDeleteFiles).toHaveBeenNthCalledWith(2, ["partial-b", "partial-c"]);
+      expect(writtenStaging(1)).toEqual([]);
+    });
+
     it("rescues an old-staged file that was committed to DB since staging (per-batch re-check)", async () => {
       const KEY = "late-committed-key";
       const oldStagedAt = Date.now() - GRACE_MS - 5000;
@@ -406,23 +456,32 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       expect(mockListFiles).toHaveBeenNthCalledWith(2, { limit: 500, offset: 500 });
     });
 
-    it("aborts scan and stages any found candidates when listFiles throws mid-pagination", async () => {
-      const KEY = "key-before-error";
+    it("preserves existing staging and skips deletion when listFiles throws mid-pagination", async () => {
+      const visibleKey = "already-staged-visible-key";
+      const unseenKey = "already-staged-unseen-key";
+      const stagedAt = Date.now() - GRACE_MS - 1000;
       const marker = "SYNTHETIC_UPLOADTHING_LIST_SECRET_418";
       const secretMarker = "uploadthing-test-secret-not-for-logs";
       const providerError = Object.assign(new Error(`UploadThing API unreachable ${marker}`), {
         request: { headers: { "x-uploadthing-api-key": secretMarker } },
       });
-      mockStagingEmpty();
+      mockStaging([
+        { key: visibleKey, stagedAt },
+        { key: unseenKey, stagedAt },
+      ]);
       mockListFiles
-        .mockResolvedValueOnce(buildPage([KEY], /* hasMore= */ true))
+        .mockResolvedValueOnce(buildPage([visibleKey], /* hasMore= */ true))
         .mockRejectedValueOnce(providerError);
 
       const result = await runUploadThingOrphanCleanup();
 
       expect(result.scanned).toBe(1);
-      expect(result.newlyStaged).toBe(1);
+      expect(result.newlyStaged).toBe(0);
+      expect(result.deleted).toBe(0);
+      expect(result.errors).toBe(1);
       expect(mockDeleteFiles).not.toHaveBeenCalled();
+      expect(mockDbUpdate).not.toHaveBeenCalled();
+      expect(mockDbInsert).not.toHaveBeenCalled();
       expect(mockLogError).toHaveBeenCalledTimes(1);
       expect(mockLogError).toHaveBeenCalledWith(
         expect.objectContaining({

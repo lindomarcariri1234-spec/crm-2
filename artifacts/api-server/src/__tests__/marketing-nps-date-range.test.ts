@@ -74,12 +74,12 @@ function makeApp() {
   const app = express();
   app.use(marketingRouter);
   app.use((
-    error: Error & { status?: number },
+    error: Error & { status?: number; statusCode?: number },
     _req: express.Request,
     res: express.Response,
     _next: express.NextFunction,
   ) => {
-    res.status(error.status ?? 500).json({ error: error.message });
+    res.status(error.status ?? error.statusCode ?? 500).json({ error: error.message });
   });
   return app;
 }
@@ -114,5 +114,25 @@ describe("NPS civil date filters", () => {
     ]);
     expect(sqlConditions.filter((condition: any) => condition.parts.join("").includes(">="))).toHaveLength(2);
     expect(sqlConditions.filter((condition: any) => condition.parts.join("").includes(" < "))).toHaveLength(2);
+  });
+});
+
+describe("campaign permanent-bounce recipient access", () => {
+  beforeEach(() => {
+    capturedConditions.length = 0;
+    mockRequireAuth.mockReset();
+    mockRequireAuth.mockResolvedValue({
+      id: "client-user",
+      tenantId: "tenant-a",
+      role: "cliente",
+    });
+  });
+
+  it("blocks non-campaign staff before querying recipient data", async () => {
+    const response = await request(makeApp())
+      .get("/campaigns/campaign-a/permanent-bounces");
+
+    expect(response.status, JSON.stringify(response.body)).toBe(403);
+    expect(capturedConditions).toHaveLength(0);
   });
 });

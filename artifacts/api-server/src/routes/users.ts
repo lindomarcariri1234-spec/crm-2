@@ -356,7 +356,7 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
     const referralCode = (await import("crypto")).randomBytes(4).toString("hex").substring(0, 6).toUpperCase();
 
       let pendingInvite: typeof invitesTable.$inferSelect | undefined;
-      if (!clerkFetchFailed) {
+      if (!clerkFetchFailed && canonicalEmailVerified) {
         pendingInvite = await resolveInviteForUser(clerkId, canonicalEmail, inviteIdFromMeta, req.log);
       }
 
@@ -507,7 +507,7 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       // resolveStaleTenantInvite for the safety conditions on Case B.
       let reconcileInvite: typeof invitesTable.$inferSelect | undefined;
       let staleTenantInvite: typeof invitesTable.$inferSelect | undefined;
-      if (!clerkFetchFailed) {
+      if (!clerkFetchFailed && canonicalEmailVerified) {
         // Case A: the account has no tenant at all (most common — e.g. it was
         // created before a matching invite existed, or a previous sync attempt
         // hit a transient Clerk failure). Every subsequent successful login

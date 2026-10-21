@@ -5,27 +5,38 @@ const {
   mockDbInsert,
   mockAuditValues,
   mockDbUpdate,
+  mockDbTransaction,
   mockUpdateSets,
   mockSendReminderHtmlEmail,
   mockSendTenantWhatsAppMessage,
   mockReconcileTenantWhatsAppMessage,
   mockGetOutboundDeliveryQueue,
+  mockQueueCircuitOpen,
   mockLoggerWarn,
+  mockEmitOutboundDeliveryUpdate,
   mockAnd,
   mockEq,
+  mockSql,
 } = vi.hoisted(() => ({
   mockDbSelect: vi.fn(),
   mockDbInsert: vi.fn(),
   mockAuditValues: vi.fn(),
   mockDbUpdate: vi.fn(),
+  mockDbTransaction: vi.fn(),
   mockUpdateSets: [] as unknown[],
   mockSendReminderHtmlEmail: vi.fn(),
   mockSendTenantWhatsAppMessage: vi.fn(),
   mockReconcileTenantWhatsAppMessage: vi.fn(),
   mockGetOutboundDeliveryQueue: vi.fn(() => null),
+  mockQueueCircuitOpen: vi.fn(() => false),
   mockLoggerWarn: vi.fn(),
+  mockEmitOutboundDeliveryUpdate: vi.fn(),
   mockAnd: vi.fn((...conditions: unknown[]) => ({ conditions })),
   mockEq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
+  mockSql: vi.fn((strings: readonly string[], ...values: unknown[]) => ({
+    query: strings.join("?"),
+    values,
+  })),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -33,12 +44,41 @@ vi.mock("@workspace/db", () => ({
     select: mockDbSelect,
     insert: mockDbInsert,
     update: mockDbUpdate,
+    transaction: mockDbTransaction,
   },
   auditLogsTable: {},
   clientsTable: {
     id: "clients.id",
     tenantId: "clients.tenant_id",
     whatsappOptIn: "clients.whatsapp_opt_in",
+  },
+  campaignSendsTable: {
+    id: "campaign_sends.id",
+    campaignId: "campaign_sends.campaign_id",
+    tenantId: "campaign_sends.tenant_id",
+    deliveredAt: "campaign_sends.delivered_at",
+    emailDeliveredAt: "campaign_sends.email_delivered_at",
+    openedAt: "campaign_sends.opened_at",
+    clickedAt: "campaign_sends.clicked_at",
+    bouncedAt: "campaign_sends.bounced_at",
+    bounceType: "campaign_sends.bounce_type",
+    failedAt: "campaign_sends.failed_at",
+    complainedAt: "campaign_sends.complained_at",
+  },
+  campaignsTable: {
+    id: "campaigns.id",
+    tenantId: "campaigns.tenant_id",
+    deliveredCount: "campaigns.delivered_count",
+    emailDeliveredCount: "campaigns.email_delivered_count",
+    openedCount: "campaigns.opened_count",
+    clickedCount: "campaigns.clicked_count",
+    bouncedCount: "campaigns.bounced_count",
+    permanentBouncedCount: "campaigns.permanent_bounced_count",
+    temporaryBouncedCount: "campaigns.temporary_bounced_count",
+    failedCount: "campaigns.failed_count",
+    complainedCount: "campaigns.complained_count",
+    engagementTrackingStartedAt: "campaigns.engagement_tracking_started_at",
+    failureTrackingStartedAt: "campaigns.failure_tracking_started_at",
   },
   chatbotConversationsTable: {
     id: "chatbot_conversations.id",
@@ -53,6 +93,9 @@ vi.mock("@workspace/db", () => ({
     tenantId: "tenant_integrations.tenant_id",
     type: "tenant_integrations.type",
     isDefault: "tenant_integrations.is_default",
+    enabled: "tenant_integrations.enabled",
+    status: "tenant_integrations.status",
+    secretsEncrypted: "tenant_integrations.secrets_encrypted",
   },
   tenantsTable: {},
   usersTable: {},
@@ -66,6 +109,7 @@ vi.mock("@workspace/db", () => ({
     outboundMessageId: "outbound_deliveries.outbound_message_id",
     channel: "outbound_deliveries.channel",
     status: "outbound_deliveries.status",
+    skippedReason: "outbound_deliveries.skipped_reason",
     externalId: "outbound_deliveries.external_id",
     provider: "outbound_deliveries.provider",
     bounceType: "outbound_deliveries.bounce_type",
@@ -100,7 +144,7 @@ vi.mock("drizzle-orm", () => ({
   isNull: vi.fn(() => "isNull"),
   lte: vi.fn(() => "lte"),
   or: vi.fn(() => "or"),
-  sql: vi.fn(() => "sql"),
+  sql: mockSql,
 }));
 
 vi.mock("@workspace/email", () => ({
@@ -109,6 +153,10 @@ vi.mock("@workspace/email", () => ({
 
 vi.mock("../queues", () => ({
   getOutboundDeliveryQueue: mockGetOutboundDeliveryQueue,
+}));
+
+vi.mock("../lib/redis", () => ({
+  isQueueRedisDailyLimitCircuitOpen: mockQueueCircuitOpen,
 }));
 
 vi.mock("../lib/whatsapp", () => ({
@@ -125,7 +173,7 @@ vi.mock("../lib/logger", () => ({
 }));
 
 vi.mock("../lib/outbound-sse", () => ({
-  emitOutboundDeliveryUpdate: vi.fn(),
+  emitOutboundDeliveryUpdate: mockEmitOutboundDeliveryUpdate,
 }));
 
 import {
@@ -198,11 +246,16 @@ beforeEach(() => {
   mockDbInsert.mockReset();
   mockAuditValues.mockReset();
   mockDbUpdate.mockReset();
+  mockDbTransaction.mockReset();
+  mockDbTransaction.mockImplementation((callback: (tx: { update: typeof mockDbUpdate; insert: typeof mockDbInsert }) => Promise<unknown>) =>
+    callback({ update: mockDbUpdate, insert: mockDbInsert }));
   mockSendReminderHtmlEmail.mockReset();
   mockSendTenantWhatsAppMessage.mockReset();
   mockReconcileTenantWhatsAppMessage.mockReset();
   mockGetOutboundDeliveryQueue.mockReset();
   mockGetOutboundDeliveryQueue.mockReturnValue(null);
+  mockQueueCircuitOpen.mockReset();
+  mockQueueCircuitOpen.mockReturnValue(false);
   mockUpdateSets.length = 0;
   mockAuditValues.mockResolvedValue([]);
   mockDbInsert.mockReturnValue({ values: mockAuditValues });
@@ -483,7 +536,7 @@ describe("legacy email history synchronization", () => {
       .mockReturnValueOnce(makeSelectQuery([]));
     mockDbUpdate
       .mockReturnValueOnce(makeUpdateQuery([staleDelivery]))
-      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "attempt-1" }]))
       .mockReturnValueOnce(makeUpdateQuery());
 
     await expect(recoverOutboundDeliveries({ databaseFallback: true })).resolves.toEqual({
@@ -535,9 +588,11 @@ describe("legacy email history synchronization", () => {
         whatsapp: delivery.recipient,
         phone: null,
       }]))
+      .mockReturnValueOnce(makeSelectQuery([{ id: "integration-a" }]))
       .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
     mockDbUpdate
       .mockReturnValueOnce(makeUpdateQuery([processing]))
+      .mockReturnValueOnce(makeUpdateQuery())
       .mockReturnValueOnce(makeUpdateQuery([accepted]))
       .mockReturnValueOnce(makeUpdateQuery())
       .mockReturnValueOnce(makeUpdateQuery());
@@ -560,8 +615,14 @@ describe("legacy email history synchronization", () => {
       "tenant-a",
       delivery.recipient,
       delivery.content,
-      { integrationId: undefined, requireEvolution: false },
+      { integrationId: "integration-a", requireEvolution: false },
     );
+    const metadataUpdate = mockUpdateSets.find((values) =>
+      values && typeof values === "object" && "metadata" in values,
+    ) as { metadata?: { query?: string } } | undefined;
+    expect(metadataUpdate?.metadata?.query).toContain("COALESCE(?::jsonb, '{}'::jsonb)");
+    expect(metadataUpdate?.metadata?.query).toContain("jsonb_build_object('whatsappIntegrationId', ?::text)");
+    expect(metadataUpdate?.metadata?.query).toContain("))::json");
     expect(mockLoggerWarn.mock.calls).toContainEqual([
       { tenantId: "tenant-a", deliveryId: "delivery-1" },
       expect.stringContaining("Queue add failed"),
@@ -623,7 +684,7 @@ describe("legacy email history synchronization", () => {
     expect(mockAnd).toHaveBeenCalledWith(
       { column: "outbound_deliveries.status", value: "pending" },
       expect.anything(),
-      { column: "outbound_deliveries.channel", value: "whatsapp" },
+      "inArray",
     );
   });
 
@@ -698,6 +759,174 @@ describe("legacy email history synchronization", () => {
     await expect(retryOutboundDelivery("tenant-a", "delivery-1"))
       .rejects.toThrow("delivery_not_retryable");
     expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledOnce();
+  });
+
+  it("allows an administrator to retry a connection-skipped WhatsApp delivery without creating a new campaign row", async () => {
+    const skippedDelivery = makeDelivery({
+      channel: "whatsapp",
+      status: "skipped",
+      skippedReason: "credentials_not_configured",
+      externalId: null,
+      provider: "evolution",
+    });
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ metadata: { whatsappIntegrationId: "integration-1" } }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        id: "integration-1",
+        isDefault: true,
+        enabled: true,
+        status: "connected",
+        secretsEncrypted: "encrypted-secrets",
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "pending" }]))
+      .mockReturnValueOnce(makeSelectQuery([{ id: "delivery-1", status: "pending" }]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([{
+        id: "delivery-1",
+        outboundMessageId: "message-1",
+      }]))
+      .mockReturnValueOnce(makeUpdateQuery());
+    const queueAdd = vi.fn().mockResolvedValue(undefined);
+    mockGetOutboundDeliveryQueue.mockReturnValue({ add: queueAdd } as never);
+
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      ipAddress: "203.0.113.10",
+      userAgent: "test-agent",
+      isAdmin: true,
+    })).resolves.toBeUndefined();
+
+    expect(mockDbTransaction).toHaveBeenCalledOnce();
+    expect(mockAuditValues).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "admin-1",
+      action: "retry_skipped_whatsapp_connection_delivery",
+      entityId: "delivery-1",
+      before: expect.objectContaining({
+        status: "skipped",
+        skippedReason: "credentials_not_configured",
+      }),
+      after: expect.objectContaining({
+        status: "pending",
+        integrationId: "integration-1",
+        outboundMessageId: "message-1",
+      }),
+      ipAddress: "203.0.113.10",
+      userAgent: "test-agent",
+    }));
+    expect(mockUpdateSets[0]).toEqual(expect.objectContaining({
+      status: "pending",
+      skippedReason: null,
+      lastError: null,
+    }));
+    expect(queueAdd).toHaveBeenCalledWith(
+      "outbound-delivery",
+      { deliveryId: "delivery-1", tenantId: "tenant-a" },
+      { jobId: "outbound-delivery:tenant-a:delivery-1" },
+    );
+    expect(mockEmitOutboundDeliveryUpdate).toHaveBeenCalledWith("tenant-a", expect.objectContaining({
+      deliveryId: "delivery-1",
+      messageId: "message-1",
+      status: "pending",
+      channel: "whatsapp",
+    }));
+    expect(mockDbInsert).toHaveBeenCalledTimes(1);
+    expect(mockSendTenantWhatsAppMessage).not.toHaveBeenCalled();
+  });
+
+  it("requires an administrator and a connected credentialed integration for a skipped WhatsApp retry", async () => {
+    const skippedDelivery = makeDelivery({
+      channel: "whatsapp",
+      status: "skipped",
+      skippedReason: "whatsapp_connection_unavailable",
+      externalId: null,
+    });
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]));
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "staff-1",
+      isAdmin: false,
+    })).rejects.toThrow("delivery_admin_required");
+    expect(mockDbTransaction).not.toHaveBeenCalled();
+
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ metadata: { whatsappIntegrationId: "integration-1" } }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        id: "integration-1",
+        isDefault: true,
+        enabled: true,
+        status: "connected",
+        secretsEncrypted: null,
+      }]));
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      isAdmin: true,
+    })).rejects.toThrow("whatsapp_connection_unavailable");
+    expect(mockDbTransaction).not.toHaveBeenCalled();
+
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ metadata: { whatsappIntegrationId: "integration-1" } }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        id: "different-integration",
+        isDefault: true,
+        enabled: true,
+        status: "connected",
+        secretsEncrypted: "encrypted-secrets",
+      }]));
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      isAdmin: true,
+    })).rejects.toThrow("whatsapp_connection_unavailable");
+    expect(mockDbTransaction).not.toHaveBeenCalled();
+  });
+
+  it("does not queue a skipped delivery when the audit transaction fails", async () => {
+    const skippedDelivery = makeDelivery({
+      channel: "whatsapp",
+      status: "skipped",
+      skippedReason: "whatsapp_connection_unavailable",
+      externalId: null,
+    });
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([skippedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ metadata: { whatsappIntegrationId: "integration-1" } }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        id: "integration-1",
+        isDefault: true,
+        enabled: true,
+        status: "connected",
+        secretsEncrypted: "encrypted-secrets",
+      }]));
+    mockDbUpdate.mockReturnValueOnce(makeUpdateQuery([{
+      id: "delivery-1",
+      outboundMessageId: "message-1",
+    }]));
+    mockAuditValues.mockRejectedValueOnce(new Error("database unavailable"));
+
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      isAdmin: true,
+    })).rejects.toThrow("delivery_retry_audit_failed");
+    expect(mockGetOutboundDeliveryQueue).not.toHaveBeenCalled();
+    expect(mockEmitOutboundDeliveryUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each(["unknown", "accepted"] as const)("never retries a %s WhatsApp delivery through the skipped retry path", async (status) => {
+    mockDbSelect.mockReturnValueOnce(makeSelectQuery([makeDelivery({
+      channel: "whatsapp",
+      status,
+      skippedReason: null,
+      externalId: status === "accepted" ? "provider-accepted-1" : null,
+    })]));
+    mockDbUpdate.mockReturnValueOnce(makeUpdateQuery([]));
+    await expect(retryOutboundDelivery("tenant-a", "delivery-1", {
+      userId: "admin-1",
+      isAdmin: true,
+    })).rejects.toThrow("delivery_not_retryable");
+    expect(mockDbTransaction).not.toHaveBeenCalled();
+    expect(mockGetOutboundDeliveryQueue).not.toHaveBeenCalled();
   });
 
   it("skips a queued WhatsApp message when the client revokes consent before the provider call", async () => {
@@ -931,6 +1160,126 @@ describe("legacy email history synchronization", () => {
     expect(mockUpdateSets[6]).toEqual(mockUpdateSets[2]);
   });
 
+  it("counts repeated campaign delivery callbacks once per recipient and tenant", async () => {
+    const delivery = makeDelivery({
+      status: "processing",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      origin: "campaign",
+      metadata: { campaignId: "campaign-a", campaignSendId: "send-a" },
+    });
+    const acceptedDelivery = { ...delivery, status: "accepted" };
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]))
+      .mockReturnValueOnce(makeSelectQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "send-a" }]))
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "send-a" }]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeUpdateQuery([]))
+      .mockReturnValueOnce(makeUpdateQuery([]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
+
+    const callback = {
+      tenantId: "tenant-a",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      status: "accepted" as const,
+      providerStatus: "email.delivered",
+      error: null,
+    };
+
+    await expect(updateOutboundDeliveryFromWebhook(callback)).resolves.toMatchObject({ updated: true });
+    await expect(updateOutboundDeliveryFromWebhook(callback)).resolves.toMatchObject({ updated: true });
+
+    const campaignCounterUpdates = mockUpdateSets.filter((values) =>
+      values !== null && typeof values === "object"
+      && ("deliveredCount" in values || "emailDeliveredCount" in values),
+    );
+    expect(campaignCounterUpdates).toHaveLength(1);
+    expect(campaignCounterUpdates[0]).toEqual(expect.objectContaining({
+      deliveredCount: expect.anything(),
+      emailDeliveredCount: expect.anything(),
+    }));
+    expect(mockDbInsert).not.toHaveBeenCalled();
+    expect(mockEq).toHaveBeenCalledWith("campaign_sends.tenant_id", "tenant-a");
+    expect(mockEq).toHaveBeenCalledWith("campaigns.tenant_id", "tenant-a");
+  });
+
+  it.each([
+    ["email.opened", "openedCount"],
+    ["email.clicked", "clickedCount"],
+  ] as const)("counts repeated %s callbacks once for a campaign recipient", async (providerStatus, metricName) => {
+    const delivery = makeDelivery({
+      status: "processing",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      origin: "campaign",
+      metadata: { campaignId: "campaign-a", campaignSendId: "send-a" },
+    });
+    const acceptedDelivery = { ...delivery, status: "accepted" };
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]))
+      .mockReturnValueOnce(makeSelectQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "send-a" }]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery([acceptedDelivery]))
+      .mockReturnValueOnce(makeUpdateQuery([]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery());
+
+    const callback = {
+      tenantId: "tenant-a",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      status: "accepted" as const,
+      providerStatus,
+      error: null,
+    };
+
+    await expect(updateOutboundDeliveryFromWebhook(callback)).resolves.toMatchObject({ updated: true });
+    await expect(updateOutboundDeliveryFromWebhook(callback)).resolves.toMatchObject({ updated: true });
+
+    const campaignCounterUpdates = mockUpdateSets.filter((values) =>
+      values !== null && typeof values === "object" && metricName in values,
+    );
+    expect(campaignCounterUpdates).toHaveLength(1);
+    expect(mockDbInsert).not.toHaveBeenCalled();
+  });
+
+  it("does not find a delivery when the same provider ID belongs to another tenant", async () => {
+    mockDbSelect.mockReturnValueOnce(makeSelectQuery([]));
+
+    await expect(updateOutboundDeliveryFromWebhook({
+      tenantId: "tenant-b",
+      provider: "resend",
+      externalId: "resend-campaign-1",
+      status: "accepted",
+      providerStatus: "email.opened",
+    })).resolves.toEqual({ updated: false });
+
+    expect(mockDbUpdate).not.toHaveBeenCalled();
+    expect(mockEq).toHaveBeenCalledWith("outbound_deliveries.tenant_id", "tenant-b");
+  });
+
   it("marks the legacy log and message failed when a provider bounce arrives", async () => {
     const delivery = makeDelivery({
       status: "processing",
@@ -1008,6 +1357,55 @@ describe("legacy email history synchronization", () => {
 });
 
 describe("manual WhatsApp queue fallback", () => {
+  it("processes staff WhatsApp inline while the queue circuit is open", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "pending",
+    });
+    const accepted = makeDelivery({
+      ...delivery,
+      status: "accepted",
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    });
+    mockQueueCircuitOpen.mockReturnValue(true);
+    mockProcessQueries(delivery, accepted);
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        origin: "user",
+        recipientType: "client",
+        recipientId: "client-1",
+        emailAddress: null,
+        metadata: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        whatsappOptIn: true,
+        whatsapp: delivery.recipient,
+        phone: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockSendTenantWhatsAppMessage.mockResolvedValue({
+      success: true,
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    });
+
+    await expect(enqueueOutboundDelivery("delivery-1", "tenant-a", {
+      inlineOnQueueFailure: true,
+    })).resolves.toBe("inline");
+
+    expect(mockGetOutboundDeliveryQueue).not.toHaveBeenCalled();
+    expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledOnce();
+    expect(mockUpdateSets).toContainEqual(expect.objectContaining({
+      status: "accepted",
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    }));
+  });
+
   it("uses the atomic delivery claim when BullMQ rejects a manual WhatsApp job", async () => {
     const delivery = makeDelivery({
       channel: "whatsapp",

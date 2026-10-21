@@ -7,7 +7,7 @@ vi.mock("@workspace/db", () => ({
     id: "id", tenantId: "tenant_id", bonusType: "bonus_type", bonusValue: "bonus_value",
     eligibleStoreProductIds: "eligible_products", eligibleTierLevels: "eligible_tiers",
     eligibleActivitySegments: "eligible_activity_segments", eligibleChannels: "eligible_channels",
-    startsAt: "starts_at", endsAt: "ends_at",
+    startsAt: "starts_at", endsAt: "ends_at", conversionCap: "conversion_cap", budgetAmount: "budget_amount",
   },
 }));
 vi.mock("drizzle-orm", () => ({
@@ -24,7 +24,11 @@ function queryRunner() {
     select: () => ({
       from: () => ({
         where: () => ({
-          orderBy: () => ({ limit: () => selectResult() }),
+          orderBy: () => ({
+            limit: () => selectResult(),
+            for: () => ({ limit: () => selectResult() }),
+          }),
+          for: () => ({ limit: () => selectResult() }),
         }),
       }),
     }),

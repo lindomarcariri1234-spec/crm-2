@@ -1,6 +1,7 @@
 import { pgTable, text, timestamp, numeric, integer, boolean, json, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import type { OutboundBounceType } from "./communication-deliveries";
 
 export const campaignsTable = pgTable("campaigns", {
   id: text("id").primaryKey(),
@@ -17,8 +18,16 @@ export const campaignsTable = pgTable("campaigns", {
   recipientsCount: integer("recipients_count").notNull().default(0),
   sentCount: integer("sent_count").notNull().default(0),
   deliveredCount: integer("delivered_count").notNull().default(0),
+  emailDeliveredCount: integer("email_delivered_count").notNull().default(0),
   openedCount: integer("opened_count").notNull().default(0),
   clickedCount: integer("clicked_count").notNull().default(0),
+  bouncedCount: integer("bounced_count").notNull().default(0),
+  permanentBouncedCount: integer("permanent_bounced_count").notNull().default(0),
+  temporaryBouncedCount: integer("temporary_bounced_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  complainedCount: integer("complained_count").notNull().default(0),
+  engagementTrackingStartedAt: timestamp("engagement_tracking_started_at", { withTimezone: true }),
+  failureTrackingStartedAt: timestamp("failure_tracking_started_at", { withTimezone: true }),
   triggerType: text("trigger_type").notNull().default("manual"),
   triggerConfig: json("trigger_config").$type<Record<string, unknown>>(),
   autoEnabled: boolean("auto_enabled").notNull().default(false),
@@ -39,6 +48,14 @@ export const campaignSendsTable = pgTable(
     clientId: text("client_id").notNull(),
     tenantId: text("tenant_id").notNull(),
     sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    emailDeliveredAt: timestamp("email_delivered_at", { withTimezone: true }),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
+    clickedAt: timestamp("clicked_at", { withTimezone: true }),
+    bouncedAt: timestamp("bounced_at", { withTimezone: true }),
+    bounceType: text("bounce_type").$type<OutboundBounceType>(),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    complainedAt: timestamp("complained_at", { withTimezone: true }),
     status: text("status").notNull().default("sent"),
     error: text("error"),
   },

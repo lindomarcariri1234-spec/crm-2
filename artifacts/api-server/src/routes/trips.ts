@@ -4,16 +4,17 @@ import sanitizeHtml from "sanitize-html";
 import { db } from "@workspace/db";
 import {
   buildTripWhatsAppBroadcastIdempotencyKey,
+  normalizeBrazilPhone,
   selectTripWhatsAppBroadcastRecipients,
 } from "@workspace/shared";
 import { addSeatClient, removeSeatClient } from "../lib/seat-sse";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { tryAddBoardingClient, removeBoardingClient, emitBoardingUpdate } from "../lib/boarding-sse";
 import { getClientIp } from "../lib/get-client-ip";
-import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationRoomsTable, accommodationsTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, tripCostsTable, expensesTable, paymentsTable, type TripImportResult } from "@workspace/db";
+import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationRoomsTable, accommodationsTable, clientsTable, tenantsTable, tenantIntegrationsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, tripCostsTable, expensesTable, paymentsTable, storesTable, storeProductsTable, type TripImportResult } from "@workspace/db";
 import { checkPlanLimit } from "../lib/planLimits";
 import type { LayoutCell, FixedCostItem, VariableCostItem, FreePassenger } from "@workspace/db";
-import { eq, and, ilike, sql, desc, asc, inArray, or, gt, gte, isNotNull } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, asc, inArray, or, gt, gte, isNotNull, exists, notExists } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser, MANAGEMENT_ROLES, ADMIN_ROLES } from "../lib/tenant";
 import { parseBrazilCalendarDateStart } from "../lib/trip-date-filter";
@@ -47,7 +48,7 @@ import {
   type ManifestPanel,
 } from "../lib/manifest-helpers.js";
 import { isValidTripTime, normalizeTripTime } from "../lib/trip-date-time.js";
-import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, TRIP_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type TripStatus, type ReservationStatus } from "@workspace/permissions";
+import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, TRIP_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, ROLES, type TripStatus, type ReservationStatus } from "@workspace/permissions";
 import { parseTripStatus } from "../lib/status-validators";
 import { getPassengerExportFinancialValues } from "../lib/passenger-export";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
@@ -73,7 +74,9 @@ function tripImportFingerprint(data: { name: string; destination: string; destin
 
 const ListTripsQuery = z.object({
   search: z.string().optional(),
+  location: z.string().trim().max(100).optional(),
   status: z.enum(["draft", "published", "active", "confirmed", "cancelled", "completed"]).optional(),
+  storePublication: z.enum(["published", "unpublished"]).optional(),
   type: z.string().optional(),
   date: z.string()
     .refine((value) => parseBrazilCalendarDateStart(value) !== null, {
@@ -517,6 +520,52 @@ export function formatTrip(t: typeof tripsTable.$inferSelect) {
   };
 }
 
+export function formatClientTrip(t: typeof tripsTable.$inferSelect) {
+  return {
+    ...formatTrip(t),
+    driverCnh: null,
+    driverPhone: null,
+    driver1Cpf: null,
+    driver1Cnh: null,
+    driver1CnhCategory: null,
+    driver1CnhExpiry: null,
+    driver2Cpf: null,
+    driver2Cnh: null,
+    driver2CnhCategory: null,
+    driver2CnhExpiry: null,
+    tourGuideCpf: null,
+    tourGuideRegistration: null,
+    manifestNumber: null,
+    fixedCosts: [],
+    variableCosts: [],
+  };
+}
+
+async function getClientTripScope(me: { id: string; tenantId: string }) {
+  const [client] = await db.select({ id: clientsTable.id })
+    .from(clientsTable)
+    .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.userId, me.id)))
+    .limit(1);
+  if (!client) return { clientId: null, tripIds: [] as string[] };
+
+  const reservations = await db.select({ tripId: reservationsTable.tripId })
+    .from(reservationsTable)
+    .where(and(
+      eq(reservationsTable.tenantId, me.tenantId),
+      eq(reservationsTable.clientId, client.id),
+    ));
+  return {
+    clientId: client.id,
+    tripIds: [...new Set(reservations.map(row => row.tripId).filter((id): id is string => Boolean(id)))],
+  };
+}
+
+async function requireClientTripAccess(me: { id: string; tenantId: string; role: string }, tripId: string) {
+  if (me.role !== ROLES.CLIENT) return;
+  const { tripIds } = await getClientTripScope(me);
+  if (!tripIds.includes(tripId)) throw new NotFoundError("Trip not found", "TRIP_NOT_FOUND");
+}
+
 router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -527,12 +576,49 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
       next(new ValidationError(queryResult.error.errors[0]?.message ?? "Invalid query params", "VALIDATION_ERROR"));
       return;
     }
-    const { search, status, type, date, page: pageNum, limit: limitNum } = queryResult.data;
+    const { search, location, status, storePublication, type, date, page: pageNum, limit: limitNum } = queryResult.data;
     const offset = (pageNum - 1) * limitNum;
 
     const conditions: ReturnType<typeof eq>[] = [eq(tripsTable.tenantId, me.tenantId)];
+    if (me.role === ROLES.CLIENT) {
+      const { tripIds } = await getClientTripScope(me);
+      if (tripIds.length === 0) {
+        res.json({
+          data: [],
+          total: 0,
+          page: pageNum,
+          limit: limitNum,
+          stats: { total: 0, active: 0, totalCapacity: 0, occupiedSeats: 0, totalRevenue: 0 },
+        });
+        return;
+      }
+      conditions.push(inArray(tripsTable.id, tripIds) as ReturnType<typeof eq>);
+    }
     if (search) conditions.push(ilike(tripsTable.name, `%${search}%`) as ReturnType<typeof eq>);
+    if (location) {
+      const pattern = `%${location}%`;
+      conditions.push(or(
+        ilike(tripsTable.destination, pattern),
+        ilike(tripsTable.destinationCity, pattern),
+        ilike(tripsTable.destinationState, pattern),
+        ilike(tripsTable.originCity, pattern),
+        ilike(tripsTable.originState, pattern),
+      )! as ReturnType<typeof eq>);
+    }
     if (status) conditions.push(eq(tripsTable.status, parseTripStatus(status)));
+    if (storePublication) {
+      const activeStoreProduct = db.select({ id: storeProductsTable.id })
+        .from(storeProductsTable)
+        .innerJoin(storesTable, eq(storeProductsTable.storeId, storesTable.id))
+        .where(and(
+          eq(storeProductsTable.tripId, tripsTable.id),
+          eq(storeProductsTable.status, "active"),
+          eq(storesTable.tenantId, tripsTable.tenantId),
+        ));
+      conditions.push((storePublication === "published"
+        ? exists(activeStoreProduct)
+        : notExists(activeStoreProduct)) as ReturnType<typeof eq>);
+    }
     if (type) conditions.push(eq(tripsTable.type, type) as ReturnType<typeof eq>);
     if (date) {
       const departureDateStart = parseBrazilCalendarDateStart(date);
@@ -580,7 +666,7 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
     ]);
 
     res.json({
-      data: trips.map(formatTrip),
+      data: trips.map(me.role === ROLES.CLIENT ? formatClientTrip : formatTrip),
       total: Number(countResult?.count ?? 0),
       page: pageNum,
       limit: limitNum,
@@ -589,7 +675,7 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
         active: Number(statsResult?.active ?? 0),
         totalCapacity: Number(statsResult?.totalCapacity ?? 0),
         occupiedSeats: Number(statsResult?.occupiedSeats ?? 0),
-        totalRevenue: Number(statsResult?.totalRevenue ?? 0),
+        totalRevenue: me.role === ROLES.CLIENT ? 0 : Number(statsResult?.totalRevenue ?? 0),
       },
     });
   } catch (err) {
@@ -1116,11 +1202,12 @@ router.get("/trips/:id", async (req, res, next: NextFunction): Promise<void> => 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    await requireClientTripAccess(me, req.params.id);
     const [trip] = await db.select().from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
       .limit(1);
     if (!trip) { next(new NotFoundError("Trip not found", "TRIP_NOT_FOUND")); return; }
-    res.json(formatTrip(trip));
+    res.json(me.role === ROLES.CLIENT ? formatClientTrip(trip) : formatTrip(trip));
   } catch (err) {
     next(err);
   }
@@ -1130,6 +1217,10 @@ router.get("/trips/:id/room-allocation-summary", async (req, res, next: NextFunc
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.MANAGE)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const [trip] = await db.select().from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
       .limit(1);
@@ -1711,6 +1802,7 @@ router.get("/trips/:id/seat-map", async (req, res, next: NextFunction): Promise<
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    await requireClientTripAccess(me, req.params.id);
     const features = await getTenantSupportedFeatures(me.tenantId);
     if (!hasSeatMapFeature(features)) {
       next(new ForbiddenError("Mapa de assentos não está disponível no seu plano atual", "FEATURE_NOT_IN_PLAN"));
@@ -1763,8 +1855,8 @@ router.get("/trips/:id/seat-map", async (req, res, next: NextFunction): Promise<
         : freeSeats[num]
           ? "free"
           : (data.type && !["seat", "vip", "accessible"].includes(data.type) ? data.type : "available"),
-      occupantName: freeSeats[num] ?? null,
-      reservationId: occupiedSeats[num]?.reservationId ?? null,
+      occupantName: me.role === ROLES.CLIENT ? null : freeSeats[num] ?? null,
+      reservationId: me.role === ROLES.CLIENT ? null : occupiedSeats[num]?.reservationId ?? null,
     }));
 
     const maxCol = Math.max(...seats.map(s => s.col), 4);
@@ -2036,6 +2128,7 @@ router.post("/trips/:id/sync-seat-counters", async (req, res, next: NextFunction
 router.get("/trips/:id/seats/stream", async (req, res, next: NextFunction): Promise<void> => {
   const me = await requireAuth(req, res);
   if (!me) return;
+  await requireClientTripAccess(me, req.params.id);
 
   const features = await getTenantSupportedFeatures(me.tenantId);
   if (!hasSeatMapFeature(features)) {
@@ -3066,7 +3159,10 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
       .limit(1);
     if (!trip) { next(new NotFoundError("Viagem não encontrada", "TRIP_NOT_FOUND")); return; }
 
-    const [passenger] = await db.select({ id: passengersTable.id })
+    const [passenger] = await db.select({
+      id: passengersTable.id,
+      reservationId: passengersTable.reservationId,
+    })
       .from(passengersTable)
       .innerJoin(reservationsTable, eq(passengersTable.reservationId, reservationsTable.id))
       .where(and(
@@ -3076,6 +3172,10 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
       ))
       .limit(1);
     if (!passenger) { next(new NotFoundError("Passageiro não encontrado", "PASSENGER_NOT_FOUND")); return; }
+    if (reservationId && reservationId !== passenger.reservationId) {
+      next(new ValidationError("A reserva não corresponde ao passageiro.", "VALIDATION_ERROR"));
+      return;
+    }
 
     const checkedInAt = new Date();
     await db.insert(tripCheckinsTable)
@@ -3084,7 +3184,7 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
         tripId: req.params.id!,
         tenantId: me.tenantId,
         passengerId,
-        reservationId: reservationId ?? null,
+        reservationId: passenger.reservationId,
         checkedInByUserRef: me.id,
         checkedInAt,
         notes: notes ?? null,
@@ -3148,6 +3248,10 @@ router.get("/trips/:id/boarding-live", async (req, res, next: NextFunction): Pro
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const [trip] = await db.select({
       id: tripsTable.id,
@@ -3296,6 +3400,10 @@ router.get("/trips/:id/boarding-live/stream", async (req, res, next: NextFunctio
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const tripId = req.params.id!;
     const [trip] = await db.select({ id: tripsTable.id })
@@ -3333,6 +3441,188 @@ const WhatsAppBroadcastBody = z.object({
   messageTemplate: z.string().min(1).max(2000),
   filter: z.enum(["all", "confirmed", "pending"]),
   requestId: z.string().uuid(),
+  campaignId: z.string().uuid().optional(),
+});
+
+const WhatsAppBroadcastPreviewBody = z.object({
+  messageTemplate: z.string().max(2000),
+  filter: z.enum(["all", "confirmed", "pending"]),
+});
+
+router.post("/trips/:id/whatsapp-broadcast/preview", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) {
+      next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE"));
+      return;
+    }
+    const parsed = WhatsAppBroadcastPreviewBody.safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR"));
+      return;
+    }
+
+    const [trip] = await db.select().from(tripsTable)
+      .where(and(eq(tripsTable.id, req.params.id!), eq(tripsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!trip) {
+      next(new NotFoundError("Trip not found", "TRIP_NOT_FOUND"));
+      return;
+    }
+
+    const conditions: ReturnType<typeof eq>[] = [
+      eq(reservationsTable.tripId, trip.id),
+      eq(reservationsTable.tenantId, me.tenantId),
+    ];
+    if (parsed.data.filter === "confirmed") {
+      conditions.push(eq(reservationsTable.status, "confirmed" as const));
+    } else if (parsed.data.filter === "pending") {
+      conditions.push(eq(reservationsTable.status, "pending" as const));
+    } else {
+      conditions.push(sql`${reservationsTable.status} NOT IN ('cancelled', 'refunded')`);
+    }
+    const reservations = await db.select({
+      id: reservationsTable.id,
+      clientId: reservationsTable.clientId,
+      status: reservationsTable.status,
+    }).from(reservationsTable).where(and(...conditions));
+    const reservationIds = reservations.map((reservation) => reservation.id);
+    const clientIds = [...new Set(reservations
+      .map((reservation) => reservation.clientId)
+      .filter((id): id is string => id != null))];
+    const [passengers, clients, integrations] = await Promise.all([
+      reservationIds.length
+        ? db.select({
+            reservationId: passengersTable.reservationId,
+            name: passengersTable.name,
+            phone: passengersTable.phone,
+          }).from(passengersTable).where(inArray(passengersTable.reservationId, reservationIds))
+        : Promise.resolve([]),
+      clientIds.length
+        ? db.select({
+            id: clientsTable.id,
+            whatsapp: clientsTable.whatsapp,
+            phone: clientsTable.phone,
+            whatsappOptIn: clientsTable.whatsappOptIn,
+          }).from(clientsTable).where(and(
+            eq(clientsTable.tenantId, me.tenantId),
+            inArray(clientsTable.id, clientIds),
+          ))
+        : Promise.resolve([]),
+      db.select({
+        enabled: tenantIntegrationsTable.enabled,
+        status: tenantIntegrationsTable.status,
+        isDefault: tenantIntegrationsTable.isDefault,
+        secretsEncrypted: tenantIntegrationsTable.secretsEncrypted,
+      }).from(tenantIntegrationsTable).where(and(
+        eq(tenantIntegrationsTable.tenantId, me.tenantId),
+        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+      )),
+    ]);
+
+    const clientMap = new Map(clients.map((client) => [client.id, client]));
+    const reservationMap = new Map(reservations.map((reservation) => [reservation.id, reservation]));
+    const passengerContacts = passengers.flatMap((passenger) => {
+      const reservation = reservationMap.get(passenger.reservationId);
+      if (!reservation) return [];
+      const client = reservation.clientId ? clientMap.get(reservation.clientId) : null;
+      return [{
+        reservationStatus: reservation.status,
+        name: passenger.name,
+        phones: [
+          { phone: passenger.phone },
+          { phone: client?.whatsapp, clientId: client?.id },
+          { phone: client?.phone, clientId: client?.id },
+        ],
+      }];
+    });
+    const freePassengers = Array.isArray(trip.freePassengers)
+      ? trip.freePassengers as Array<{ name: string; whatsapp: string }>
+      : [];
+    const selection = selectTripWhatsAppBroadcastRecipients(
+      parsed.data.filter,
+      passengerContacts,
+      freePassengers.map((passenger) => ({
+        name: passenger.name,
+        phones: [{ phone: passenger.whatsapp }],
+      })),
+    );
+    const directPhones = selection.recipients
+      .filter((recipient) => !recipient.recipientClientId)
+      .map((recipient) => recipient.phone);
+    const directOptOutPhones = new Set<string>();
+    const normalizedClientPhone = (
+      column: typeof clientsTable.whatsapp | typeof clientsTable.phone,
+    ) => {
+      const digits = sql`regexp_replace(coalesce(${column}, ''), '[^0-9]', '', 'g')`;
+      return sql`CASE
+        WHEN length(${digits}) >= 12 AND ${digits} LIKE '55%' THEN ${digits}
+        ELSE '55' || ${digits}
+      END`;
+    };
+    for (let offset = 0; offset < directPhones.length; offset += 500) {
+      const phoneBatch = directPhones.slice(offset, offset + 500);
+      const matchedClients = await db.select({
+        whatsapp: clientsTable.whatsapp,
+        phone: clientsTable.phone,
+        whatsappOptIn: clientsTable.whatsappOptIn,
+      }).from(clientsTable).where(and(
+        eq(clientsTable.tenantId, me.tenantId),
+        or(
+          inArray(normalizedClientPhone(clientsTable.whatsapp), phoneBatch),
+          inArray(normalizedClientPhone(clientsTable.phone), phoneBatch),
+        ),
+      ));
+      for (const client of matchedClients) {
+        if (client.whatsappOptIn !== false) continue;
+        const matchedPhone = normalizeBrazilPhone(client.whatsapp ?? client.phone ?? "");
+        if (matchedPhone) directOptOutPhones.add(matchedPhone);
+      }
+    }
+    const activeConnections = integrations.filter((integration) =>
+      integration.enabled && integration.status === "connected",
+    );
+    const usableConnections = activeConnections.filter((integration) => Boolean(integration.secretsEncrypted));
+    const connectedDefaults = usableConnections.filter((integration) => integration.isDefault);
+    const connectionReason = connectedDefaults.length > 1
+      ? "whatsapp_connection_ambiguous"
+      : usableConnections.length === 0
+        ? activeConnections.length > 0 ? "credentials_not_configured" : "whatsapp_connection_unavailable"
+        : null;
+    const reasons = new Map<string, number>();
+    const addReason = (code: string, count: number) => {
+      if (count > 0) reasons.set(code, (reasons.get(code) ?? 0) + count);
+    };
+    addReason("invalid_or_duplicate_phone", selection.skipped);
+    addReason("passenger_data_unavailable", passengers.length - passengerContacts.length);
+
+    let eligibleCount = 0;
+    const contentMissing = parsed.data.messageTemplate.trim().length === 0;
+    for (const recipient of selection.recipients) {
+      const optedOut = recipient.recipientClientId
+        ? clientMap.get(recipient.recipientClientId)?.whatsappOptIn === false
+        : directOptOutPhones.has(recipient.phone);
+      if (optedOut) {
+        addReason("whatsapp_opted_out", 1);
+      } else if (contentMissing) {
+        addReason("whatsapp_content_missing", 1);
+      } else if (connectionReason) {
+        addReason(connectionReason, 1);
+      } else {
+        eligibleCount++;
+      }
+    }
+    const skipped = [...reasons.values()].reduce((sum, count) => sum + count, 0);
+    res.json({
+      recipientCount: selection.recipients.length,
+      eligibleCount,
+      skipped,
+      skippedReasons: [...reasons].map(([code, count]) => ({ code, count })),
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction): Promise<void> => {
@@ -3445,12 +3735,48 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
         phones: [{ phone: passenger.whatsapp }],
       })),
     );
+    // A trip, audience, message and recipient set identify one logical
+    // campaign across different staff request IDs. An explicit campaignId
+    // represents a deliberate new send of the same campaign.
+    const campaignId = parsed.data.campaignId ?? createHash("sha256")
+      .update(JSON.stringify([
+        parsed.data.filter,
+        parsed.data.messageTemplate.trim(),
+        selection.recipients.map((recipient) => recipient.phone).sort(),
+      ]))
+      .digest("hex");
 
     let queued = 0;
     let accepted = 0;
     let failed = 0;
     let unknown = 0;
+    let deduplicated = 0;
     let skipped = selection.skipped + (passengers.length - passengerContacts.length);
+    const safeSkipReasonCodes = new Set([
+      "whatsapp_opted_out",
+      "contact_opted_out",
+      "whatsapp_connection_unavailable",
+      "whatsapp_connection_ambiguous",
+      "credentials_not_configured",
+      "provider_unavailable",
+      "invalid_phone",
+      "whatsapp_invalid_phone",
+      "whatsapp_address_missing",
+      "whatsapp_recipient_unavailable",
+      "recipient_client_not_found",
+      "whatsapp_recipient_changed",
+      "whatsapp_content_missing",
+      "invalid_or_duplicate_phone",
+      "passenger_data_unavailable",
+    ]);
+    const skipReasonCounts = new Map<string, number>();
+    const addSkipReason = (rawCode: string, count = 1) => {
+      const code = safeSkipReasonCodes.has(rawCode) ? rawCode : "other";
+      skipReasonCounts.set(code, (skipReasonCounts.get(code) ?? 0) + count);
+    };
+    if (selection.skipped > 0) addSkipReason("invalid_or_duplicate_phone", selection.skipped);
+    const missingPassengerData = passengers.length - passengerContacts.length;
+    if (missingPassengerData > 0) addSkipReason("passenger_data_unavailable", missingPassengerData);
 
     for (const recipient of selection.recipients) {
       const message = interpolateWhatsAppMessage(parsed.data.messageTemplate, {
@@ -3467,13 +3793,14 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
           eventType: "trip_whatsapp_broadcast",
           idempotencyKey: buildTripWhatsAppBroadcastIdempotencyKey(
             trip.id,
-            parsed.data.requestId,
+            campaignId,
             recipient.phone,
           ),
           whatsappOnly: true,
           recipientClientId: recipient.recipientClientId,
           inlineOnQueueFailure: true,
         });
+        if (dispatch.deduplicated) deduplicated++;
         switch (dispatch.status) {
           case "queued":
             queued++;
@@ -3489,6 +3816,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
             break;
           case "skipped":
             skipped++;
+            addSkipReason(dispatch.error ?? "other");
             break;
         }
       } catch {
@@ -3506,6 +3834,8 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
       failed,
       unknown,
       skipped,
+      deduplicated,
+      skippedReasons: [...skipReasonCounts].map(([code, count]) => ({ code, count })),
     });
   } catch (err) {
     next(err);
@@ -3518,6 +3848,10 @@ router.get("/trips/:id/location", async (req, res, next: NextFunction): Promise<
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const [location] = await db.select()
       .from(tripGuideLocationsTable)
       .where(and(

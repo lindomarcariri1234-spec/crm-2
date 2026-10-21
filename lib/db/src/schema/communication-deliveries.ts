@@ -1,8 +1,8 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { boolean, index, integer, json, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { tenantsTable } from "./tenants";
 
-export const OUTBOUND_DELIVERY_CHANNELS = ["email", "whatsapp"] as const;
+export const OUTBOUND_DELIVERY_CHANNELS = ["email", "whatsapp", "instagram"] as const;
 export type OutboundDeliveryChannel = (typeof OUTBOUND_DELIVERY_CHANNELS)[number];
 
 export const OUTBOUND_DELIVERY_STATUSES = ["pending", "processing", "accepted", "failed", "skipped", "unknown"] as const;
@@ -76,6 +76,9 @@ export const outboundDeliveriesTable = pgTable(
     uniqueIndex("outbound_deliveries_message_channel_unique").on(table.outboundMessageId, table.channel),
     index("outbound_deliveries_tenant_status_next_idx").on(table.tenantId, table.status, table.nextAttemptAt),
     index("outbound_deliveries_tenant_message_idx").on(table.tenantId, table.outboundMessageId),
+    index("outbound_deliveries_bounce_backfill_idx")
+      .on(table.tenantId, table.outboundMessageId, table.bounceType)
+      .where(sql`${table.provider} = 'resend' AND ${table.channel} = 'email' AND ${table.bounceType} IN ('permanent', 'temporary')`),
   ],
 );
 

@@ -2,7 +2,9 @@ import { StrictMode, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "../src/index.css";
+import App from "../src/App";
 import PerfilPage from "../src/pages/perfil";
+import { ClubConfigTab } from "../src/pages/configuracoes";
 import VitrineCatalog from "../src/pages/vitrine/catalog";
 import VitrineCalendar from "../src/pages/vitrine/calendar";
 import VitrineProduct from "../src/pages/vitrine/product";
@@ -13,6 +15,7 @@ import ReferralLanding from "../src/pages/vitrine/referral-landing";
 import VitrineComparar from "../src/pages/vitrine/comparar";
 import VitrineSignIn from "../src/pages/vitrine/store-signin";
 import VitrineSignUp from "../src/pages/vitrine/store-signup";
+import { InstagramMediaPlaybackFixture } from "./InstagramMediaPlaybackFixture";
 import { CartProvider } from "../src/contexts/CartContext";
 import { ComparisonProvider } from "../src/contexts/ComparisonContext";
 import { FavoritesProvider } from "../src/contexts/FavoritesContext";
@@ -28,6 +31,8 @@ import {
 } from "./fixtures";
 
 const profileReferrals = { data: [visualReferral] };
+const isClubBenefitConflictKeyboardScenario = () =>
+  new URLSearchParams(window.location.search).get("scenario") === "club-benefit-conflict-keyboard";
 const favorites = {
   trips: [],
   products: [
@@ -229,6 +234,20 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
     };
   }
   if (pathname === "/api/club/config") return { clubName: "Clube de Viagens", description: "Benefícios para viajantes." };
+  if (pathname === "/api/club/benefits" && isClubBenefitConflictKeyboardScenario()) {
+    const changedByOtherUser =
+      window.sessionStorage.getItem("visual-test:club-benefit-conflict-sent") === "true";
+    return { data: [{
+      id: "visual-benefit-keyboard",
+      tier: "gold",
+      benefitKey: "keyboard_conflict",
+      label: changedByOtherUser ? "Nome salvo por outra pessoa" : "Nome inicial",
+      description: changedByOtherUser ? "Descrição salva por outra pessoa" : "Descrição inicial",
+      value: changedByOtherUser ? "8%" : "5%",
+      sortOrder: 0,
+      updatedAt: changedByOtherUser ? "2026-02-02T00:00:00.000Z" : "2026-02-01T00:00:00.000Z",
+    }] };
+  }
   if (pathname === "/api/club/benefits") {
     return { data: [{ id: "visual-benefit", title: "Condições especiais", description: "Ofertas para associados.", active: true }] };
   }
@@ -242,6 +261,31 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
     };
   }
   if (pathname === "/api/users/me" || pathname === "/api/auth/me") {
+    if (window.sessionStorage.getItem("visual-test:portal-authenticated") === "true") {
+      return {
+        id: "visual-client-user",
+        tenantId: visualStore.id,
+        role: "cliente",
+        name: "Viajante de Teste",
+        email: "viajante@example.invalid",
+        tenant: {
+          id: visualStore.id,
+          slug: visualStore.slug,
+          name: visualStore.name,
+          primaryColor: visualStore.primaryColor,
+          logoUrl: visualStore.logoUrl,
+        },
+      };
+    }
+    if (isClubBenefitConflictKeyboardScenario()) {
+      return {
+        id: "visual-agency-user",
+        tenantId: "visual-agency-tenant",
+        role: "admin",
+        name: "Pessoa da Agência",
+        email: "agencia@example.invalid",
+      };
+    }
     return {
       id: "visual-user-fixture",
       role: "client",
@@ -252,6 +296,7 @@ function payloadFor(pathname: string, method: string, requestBody?: unknown): un
   }
 
   const storePrefix = `/api/public/store/${visualStore.slug}`;
+  if (pathname === storePrefix) return visualStore;
   if (pathname === `${storePrefix}/categories`) return [visualCategory];
   if (pathname === `${storePrefix}/products`) {
     return { data: [visualProduct], total: 1, page: 1, limit: 12 };
@@ -350,6 +395,41 @@ function installFixtureFetch() {
     if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
       const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
       let requestBody: unknown;
+      if (
+        isClubBenefitConflictKeyboardScenario() &&
+        method === "GET" &&
+        url.pathname === "/api/club/benefits"
+      ) {
+        const refreshCountKey = "visual-test:club-benefits-get-count";
+        const count = Number(window.sessionStorage.getItem(refreshCountKey) ?? "0");
+        window.sessionStorage.setItem(refreshCountKey, String(count + 1));
+      }
+      if (
+        isClubBenefitConflictKeyboardScenario() &&
+        url.pathname === "/api/club/benefits/visual-benefit-keyboard" &&
+        method === "PUT"
+      ) {
+        const conflictKey = "visual-test:club-benefit-conflict-sent";
+        const current = {
+          id: "visual-benefit-keyboard",
+          tier: "gold",
+          benefitKey: "keyboard_conflict",
+          label: "Nome salvo por outra pessoa",
+          description: "Descrição salva por outra pessoa",
+          value: "8%",
+          sortOrder: 0,
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        };
+        if (window.sessionStorage.getItem(conflictKey) !== "true") {
+          window.sessionStorage.setItem(conflictKey, "true");
+          return new Response(JSON.stringify({ error: "benefit_changed", current }), {
+            status: 409,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        requestBody = await readJsonRequestBody(input, init);
+        return jsonResponse({ ...current, ...requestBody, updatedAt: "2026-02-03T00:00:00.000Z" });
+      }
       const orderLookupsKey = "visual-test:3ds-order-lookup-count";
       if (
         method === "GET" &&
@@ -397,6 +477,13 @@ function installFixtureFetch() {
 
 function scenarioElement(scenario: string) {
   if (scenario === "perfil") return createElement(PerfilPage);
+  if (scenario === "club-benefit-conflict-keyboard") return createElement(ClubConfigTab);
+  if (scenario === "instagram-media-playback") {
+    const mediaBase = new URLSearchParams(window.location.search).get("mediaBase");
+    return mediaBase
+      ? createElement(InstagramMediaPlaybackFixture, { mediaBase })
+      : createElement("p", null, "Servidor de mídia de teste não informado.");
+  }
   if (scenario === "catalogo") return createElement(VitrineCatalog, { slug: visualStore.slug, store: visualStore });
   if (scenario === "calendario") return createElement(VitrineCalendar, { slug: visualStore.slug, store: visualStore });
   if (scenario === "produto") return createElement(VitrineProduct, { slug: visualStore.slug, productSlug: visualProduct.slug, store: visualStore });
@@ -420,7 +507,18 @@ function scenarioElement(scenario: string) {
   return createElement("p", null, "Cenário de teste desconhecido.");
 }
 
-const scenario = new URLSearchParams(window.location.search).get("scenario") ?? "perfil";
+const requestedScenario = new URLSearchParams(window.location.search).get("scenario");
+const scenario = requestedScenario
+  ?? (sessionStorage.getItem("visual-test:portal-authenticated") === "true" ? "portal-authenticated" : "perfil");
+if (scenario === "portal-authenticated" && window.location.pathname === "/visual-tests/index.html") {
+  window.history.replaceState(null, "", "/perfil?scenario=portal-authenticated");
+}
+const palette = new URLSearchParams(window.location.search).get("palette");
+const themeStore = palette === "fallback"
+  ? { ...visualStore, primaryColor: "#3b82f6", secondaryColor: "#10b981", accentColor: "#f59e0b" }
+  : palette === "custom"
+    ? { ...visualStore, primaryColor: "#312e81", secondaryColor: "#166534", accentColor: "#eab308" }
+    : visualStore;
 const rootElement = document.getElementById("visual-test-root");
 if (!rootElement) throw new Error("Elemento raiz dos testes visuais não encontrado.");
 installFixtureFetch();
@@ -454,7 +552,7 @@ const queryClient = new QueryClient({
 });
 const storePage = createElement(
   VitrineThemeProvider,
-  { store: visualStore },
+  { store: themeStore },
   createElement(
     CartProvider,
     { slug: visualStore.slug },
@@ -470,10 +568,14 @@ createRoot(rootElement).render(
   createElement(
     StrictMode,
     null,
-    createElement(
-      QueryClientProvider,
-      { client: queryClient },
-      scenario === "perfil" ? scenarioElement(scenario) : storePage,
-    ),
+    scenario === "portal-authenticated"
+      ? createElement(App)
+      : createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          scenario === "perfil" || scenario === "club-benefit-conflict-keyboard"
+            ? scenarioElement(scenario)
+            : storePage,
+        ),
   ),
 );

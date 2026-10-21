@@ -58,6 +58,17 @@ Compare invite emails case/whitespace-insensitively (`lower(trim(email))`),
 never with a bare `eq()`. A typo'd capital letter in an invite should not
 permanently strand the invited user.
 
+Invite matching also requires a successful Clerk lookup and a verified primary
+email. Never accept an invite from the client-supplied email or an unverified
+Clerk address.
+
+**Why:** Email-only matching can grant a staff role and tenant membership to a
+session that has not proven control of the invited mailbox.
+
+**How to apply:** Enforce verification for both first-time provisioning and
+reconciliation of tenant-less or eligible placeholder accounts; leave the
+invite pending until Clerk reports the primary email as verified.
+
 ## Test-mock ripple effect
 Adding extra `db.select` calls to an existing-user branch of a heavily-mocked
 route (positional `mockLimit.mockResolvedValueOnce(...)` chains) breaks every

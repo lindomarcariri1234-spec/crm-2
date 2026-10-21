@@ -713,4 +713,50 @@ describe("GET /api/clients/:clientId/notes and activities — private visibility
     expect(res.body.map((activity: { id: string }) => activity.id)).toEqual(["note-private", "note-public"]);
     expect(res.body[0].isPrivate).toBe(true);
   });
+
+  it("denies client accounts from creating CRM activities, including qualification signals", async () => {
+    requireAuthMock.mockResolvedValue(clientUser as never);
+
+    const res = await request(buildApp())
+      .post("/api/clients/client-001/activities")
+      .send({ type: "qualification", content: "Self-reported qualification" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN_ROLE");
+    expect(mockSelect).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("denies client accounts from creating CRM client records", async () => {
+    requireAuthMock.mockResolvedValue(clientUser as never);
+
+    const res = await request(buildApp())
+      .post("/api/clients")
+      .send({ name: "Another customer", email: "other@example.com", whatsapp: "+5511999999999" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN_ROLE");
+    expect(mockSelect).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("denies client accounts from creating or deleting CRM notes", async () => {
+    requireAuthMock.mockResolvedValue(clientUser as never);
+    const app = buildApp();
+
+    const createResponse = await request(app)
+      .post("/api/clients/client-001/notes")
+      .send({ content: "Self-created CRM note", isPrivate: true });
+    const deleteResponse = await request(app)
+      .delete("/api/clients/client-001/notes/note-private");
+
+    expect(createResponse.status).toBe(403);
+    expect(createResponse.body.code).toBe("FORBIDDEN_ROLE");
+    expect(deleteResponse.status).toBe(403);
+    expect(deleteResponse.body.code).toBe("FORBIDDEN_ROLE");
+    expect(mockSelect).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,7 @@
 import { getCalendarSyncQueue } from "../../queues/index";
+import { db, reservationsTable } from "@workspace/db";
+import { and, eq } from "drizzle-orm";
+import { RESERVATION_STATUS } from "@workspace/permissions";
 import { CalendarSyncService } from "./sync-service";
 import { logger } from "../logger";
 
@@ -16,6 +19,38 @@ export async function scheduleCalendarSyncTrip(tripId: string): Promise<void> {
     CalendarSyncService.syncTrip(tripId).catch((err) =>
       logger.error({ err, tripId }, "[calendar-sync] Direct syncTrip failed"),
     );
+  }
+}
+
+export async function scheduleCalendarSyncReservation(reservationId: string, tenantId: string): Promise<void> {
+  try {
+    const [reservation] = await db.select({ tripId: reservationsTable.tripId })
+      .from(reservationsTable)
+      .where(and(
+        eq(reservationsTable.id, reservationId),
+        eq(reservationsTable.tenantId, tenantId),
+      ))
+      .limit(1);
+    if (reservation?.tripId) await scheduleCalendarSyncTrip(reservation.tripId);
+  } catch (err) {
+    logger.warn({ err, reservationId, tenantId }, "[calendar-queue] Failed to schedule reservation sync");
+  }
+}
+
+export async function scheduleCalendarSyncForClient(clientId: string, tenantId: string): Promise<void> {
+  try {
+    const reservations = await db.select({ tripId: reservationsTable.tripId })
+      .from(reservationsTable)
+      .where(and(
+        eq(reservationsTable.clientId, clientId),
+        eq(reservationsTable.tenantId, tenantId),
+        eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
+      ));
+    for (const tripId of new Set(reservations.map((reservation) => reservation.tripId))) {
+      await scheduleCalendarSyncTrip(tripId);
+    }
+  } catch (err) {
+    logger.warn({ err, clientId, tenantId }, "[calendar-queue] Failed to schedule client reservation sync");
   }
 }
 

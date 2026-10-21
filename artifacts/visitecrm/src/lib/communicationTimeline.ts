@@ -26,6 +26,7 @@ export interface AiConversationMessage {
   mediaMimeType?: string | null;
   mediaFileName?: string | null;
   mediaExpiredAt?: string | null;
+  mediaExpiresAt?: string | null;
 }
 
 interface SentMessage {
@@ -68,10 +69,24 @@ export interface CommunicationTimelineEntry {
   sentAt: string;
   status: string | null;
   source: "message" | "outbound" | "chatbot";
+  provider?: string | null;
+  externalId?: string | null;
+  deliveryAttempts?: number | null;
+  deliveryHistory?: Array<{
+    attemptNumber: number;
+    status: string;
+    provider: string | null;
+    externalId: string | null;
+    error: string | null;
+    startedAt: string | Date;
+    completedAt: string | Date | null;
+  }>;
+  deliveryIssue?: string | null;
   mediaUrl?: string | null;
   mediaMimeType?: string | null;
   mediaFileName?: string | null;
   mediaExpiredAt?: string | null;
+  mediaExpiresAt?: string | null;
 }
 
 export interface ClientConversationSummary {
@@ -86,7 +101,7 @@ function timeValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function timelineContent(channel: string, content: string): string {
+export function normalizeTimelineContent(channel: string, content: string): string {
   if (channel !== "email") return content;
   return content
     .replace(/<br\s*\/?>/gi, "\n")
@@ -105,7 +120,8 @@ function compareChronologically(
   left: CommunicationTimelineEntry,
   right: CommunicationTimelineEntry,
 ): number {
-  return timeValue(left.sentAt) - timeValue(right.sentAt) || left.id.localeCompare(right.id);
+  return timeValue(left.sentAt) - timeValue(right.sentAt)
+    || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
 }
 
 function basicTimelineEntries(
@@ -122,7 +138,7 @@ function basicTimelineEntries(
       clientId: message.toClientId,
       clientName: message.clientName || message.toClientId,
       channel: message.channel,
-      content: timelineContent(message.channel, message.content),
+      content: normalizeTimelineContent(message.channel, message.content),
       direction: "outbound",
       actor: "team",
       sentAt: message.sentAt,
@@ -139,7 +155,7 @@ function basicTimelineEntries(
       clientId: message.recipientId!,
       clientName: message.recipientName || message.recipientId!,
       channel: delivery.channel,
-      content: timelineContent(delivery.channel, delivery.content),
+      content: normalizeTimelineContent(delivery.channel, delivery.content),
       direction: "outbound",
       actor: "team",
       sentAt: delivery.acceptedAt ?? delivery.failedAt ?? delivery.createdAt ?? message.createdAt,
@@ -174,6 +190,7 @@ function chatbotEntry(
     mediaMimeType: message.mediaMimeType ?? null,
     mediaFileName: message.mediaFileName ?? null,
     mediaExpiredAt: message.mediaExpiredAt ?? null,
+    mediaExpiresAt: message.mediaExpiresAt ?? null,
   };
 }
 

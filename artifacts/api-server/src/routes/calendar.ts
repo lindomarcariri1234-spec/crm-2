@@ -118,6 +118,16 @@ router.post("/calendar/disconnect", async (req, res, next: NextFunction): Promis
     const [user] = await db.select({ googleAccessToken: usersTable.googleAccessToken })
       .from(usersTable).where(eq(usersTable.id, me.id)).limit(1);
 
+    const invitesCancelled = await CalendarSyncService.cancelReservationInvitesForUser(me.id);
+    if (!invitesCancelled) {
+      next(new AppError(
+        "Não foi possível cancelar todos os convites de viagem. Mantenha a conexão ativa e tente novamente.",
+        502,
+        "CALENDAR_INVITE_CANCEL_FAILED",
+      ));
+      return;
+    }
+
     if (user?.googleAccessToken) {
       await revokeToken(user.googleAccessToken);
     }

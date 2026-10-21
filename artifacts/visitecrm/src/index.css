@@ -198,6 +198,13 @@
   .visite-enter {
     animation: visite-enter .45s ease-out both;
   }
+  .settings-tabs-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .settings-tabs-scroll::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @keyframes visite-enter {
@@ -225,4 +232,24 @@ button, a, input, select, textarea { transition: border-color .2s ease, backgrou
 }
 .rotate-y-180 {
   transform: rotateY(180deg);
+}
+
+@media (forced-colors: active) {
+  .club-benefit-conflict-choice[aria-pressed="true"] {
+    background-color: Highlight !important;
+    border-color: Highlight !important;
+    color: HighlightText !important;
+  }
+
+  .club-benefit-conflict-choice[aria-pressed="false"] {
+    background-color: ButtonFace !important;
+    border-color: ButtonText !important;
+    color: ButtonText !important;
+  }
+
+  .club-benefit-conflict-choice:focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 2px;
+    box-shadow: none !important;
+  }
 }

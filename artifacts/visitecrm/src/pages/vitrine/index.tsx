@@ -1,4 +1,4 @@
-import { useState, useEffect, Component, ReactNode } from "react";
+import { useState, useEffect, Component, ReactNode, lazy, Suspense } from "react";
 import { useParams, Switch, Route, Redirect, useLocation } from "wouter";
 import { publicStoreApi, PublicStore } from "@/lib/storeApi";
 import { CartProvider } from "@/contexts/CartContext";
@@ -19,6 +19,16 @@ import VitrineComparar from "./comparar";
 import VitrineSignIn from "./store-signin";
 import VitrineSignUp from "./store-signup";
 import { Loader2, AlertCircle } from "lucide-react";
+
+const VisiteCaririHome = lazy(() => import("./visite-cariri/portal").then((module) => ({ default: module.VisiteCaririHome })));
+const VisiteCaririDestinations = lazy(() => import("./visite-cariri/portal").then((module) => ({ default: module.VisiteCaririDestinations })));
+const VisiteCaririDestinationDetail = lazy(() => import("./visite-cariri/portal").then((module) => ({ default: module.VisiteCaririDestinationDetail })));
+const VisiteCaririAbout = lazy(() => import("./visite-cariri/portal").then((module) => ({ default: module.VisiteCaririAbout })));
+const VisiteCaririInstitutionalPage = lazy(() => import("./visite-cariri/portal").then((module) => ({ default: module.VisiteCaririInstitutionalPage })));
+
+function RegionalPageSuspense({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<div className="min-h-[55vh] animate-pulse bg-[#f7f4ec]" aria-label="Carregando página regional" />} >{children}</Suspense>;
+}
 
 interface WizardErrorBoundaryState { hasError: boolean }
 
@@ -137,8 +147,21 @@ function StoreRouter({ slug }: { slug: string }) {
       <VitrineLayout slug={slug} store={store}>
         <Switch>
         <Route path={`/loja/${slug}`}>
-          <VitrineHome slug={slug} store={store} />
+          {slug === "visite-cariri" ? <RegionalPageSuspense><VisiteCaririHome slug={slug} store={store} /></RegionalPageSuspense> : <VitrineHome slug={slug} store={store} />}
         </Route>
+        {slug === "visite-cariri" && <>
+          <Route path={`/loja/${slug}/destinos`}><RegionalPageSuspense><VisiteCaririDestinations store={store} /></RegionalPageSuspense></Route>
+          <Route path={`/loja/${slug}/destinos/:destinationSlug`}>
+            {(params: Record<string, string>) => <RegionalPageSuspense><VisiteCaririDestinationDetail destinationSlug={params.destinationSlug ?? ""} /></RegionalPageSuspense>}
+          </Route>
+          <Route path={`/loja/${slug}/sobre`}><RegionalPageSuspense><VisiteCaririAbout store={store} /></RegionalPageSuspense></Route>
+          <Route path={`/loja/${slug}/como-reservar`}><RegionalPageSuspense><VisiteCaririInstitutionalPage page="booking" store={store} /></RegionalPageSuspense></Route>
+          <Route path={`/loja/${slug}/duvidas`}><RegionalPageSuspense><VisiteCaririInstitutionalPage page="faq" store={store} /></RegionalPageSuspense></Route>
+          <Route path={`/loja/${slug}/contato`}><RegionalPageSuspense><VisiteCaririInstitutionalPage page="contact" store={store} /></RegionalPageSuspense></Route>
+          <Route path={`/loja/${slug}/privacidade`}><RegionalPageSuspense><VisiteCaririInstitutionalPage page="privacy" store={store} /></RegionalPageSuspense></Route>
+          <Route path={`/loja/${slug}/termos`}><RegionalPageSuspense><VisiteCaririInstitutionalPage page="terms" store={store} /></RegionalPageSuspense></Route>
+          <Route path={`/loja/${slug}/cancelamento`}><RegionalPageSuspense><VisiteCaririInstitutionalPage page="cancellation" store={store} /></RegionalPageSuspense></Route>
+        </>}
         <Route path={`/loja/${slug}/produtos`}>
           <VitrineCatalog slug={slug} store={store} />
         </Route>

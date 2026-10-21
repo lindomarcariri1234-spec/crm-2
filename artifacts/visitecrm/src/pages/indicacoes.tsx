@@ -111,9 +111,11 @@ import { ReferralSettingsDialog } from "@/components/referral-settings-dialog";
 import { ReferralCampaignsDialog, type CampaignDraft } from "@/components/referral-campaigns-dialog";
 import { ReferralOperationalDialogs } from "@/components/referral-operational-dialogs";
 import { ReferralShareDialog } from "@/components/referral-share-dialog";
+import { buildReferralShareText } from "@/lib/referral-message";
 import { ReferralDetailDialog } from "@/components/referral-detail-dialog";
 import { PlanFeatureWall, canUpgradeForFeature, getRequiredPlanLabel } from "@/components/plan-limit-wall";
 import type { LinkedData } from "@/lib/linked-data";
+import { storeApi } from "@/lib/storeApi";
 
 const DEFAULT_TIERS: ReferralTierConfig[] = [
   { level: "bronze",  label: "Bronze",   minReferrals: 0,  bonusMultiplier: 1.0 },
@@ -433,22 +435,39 @@ export default function Indicacoes() {
     name: "", startsAt: "", endsAt: "",
     bonusType: "multiplier" as "multiplier" | "fixed_extra" | "fixed_bonus" | "percentage_bonus" | "reduced_bonus" | "no_reward",
     bonusValue: "2", bannerText: "",
-    eligibleStoreProductIds: "",
+    eligibleStoreProductIds: [],
     eligibleTierLevels: [] as string[],
     conversionCap: "",
     budgetAmount: "",
     shareMessage: "",
     materialUrl: "",
-    publicRanking: true,
     eligibleActivitySegments: [] as Array<"active" | "occasional" | "inactive">,
     eligibleChannels: "",
     commissionType: "none" as "none" | "fixed" | "bonus_percentage",
     commissionValue: "0",
     commissionRecipientType: "ambassador" as "ambassador" | "partner",
-    eligiblePartnerIds: "",
+    eligiblePartnerIds: [],
   });
   const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
   const { data: campaigns = [], isLoading: campaignsLoading, isError: campaignsError, refetch: refetchCampaigns } = useListReferralCampaigns();
+  const { data: campaignStoreProducts = [], isLoading: campaignProductsLoading, isError: campaignProductsError } = useQuery({
+    queryKey: ["referral-campaign-store-products", me?.tenantId],
+    queryFn: storeApi.getProducts,
+    enabled: campaignsDialogOpen && !!me?.tenantId,
+    staleTime: 30_000,
+  });
+  const { data: campaignPartners = [], isLoading: campaignPartnersLoading, isError: campaignPartnersError } = useQuery({
+    queryKey: ["referral-campaign-partners", me?.tenantId],
+    queryFn: async () => {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const response = await fetch(`${base}/api/parceiros`, { credentials: "include", headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error("Não foi possível carregar parceiros.");
+      const result = await response.json() as { data?: Array<{ id: string; name: string }> };
+      return Array.isArray(result.data) ? result.data : [];
+    },
+    enabled: campaignsDialogOpen && !!me?.tenantId,
+    staleTime: 30_000,
+  });
   const createCampaign = useCreateReferralCampaign();
   const deleteCampaign = useDeleteReferralCampaign();
   const updateCampaign = useUpdateReferralCampaign();
@@ -575,12 +594,13 @@ export default function Indicacoes() {
       : type === "bonusPaid"
       ? (localSettings.whatsappBonusPaidMessage as string | undefined) ?? ""
       : (localSettings.shareMessage as string | undefined) ?? "";
+    const phone = whatsappTestPhone.trim();
     if (!message.trim()) {
       toast({ title: "Preencha o texto da mensagem antes de testar", variant: "destructive" });
       return;
     }
-    if (type !== "share" && !(localSettings.whatsappPhoneNumber as string | undefined)?.trim()) {
-      toast({ title: "Configure o número WhatsApp da agência antes de testar", variant: "destructive" });
+    if (!phone) {
+      toast({ title: "Informe um número de WhatsApp para teste", variant: "destructive" });
       return;
     }
     const scope = `settings:${type}`;
@@ -589,10 +609,13 @@ export default function Indicacoes() {
     setSettingsWhatsappTestLoading(true);
     try {
       await testWhatsAppMessage(
-        { type, message },
+        { type, message, phone },
         { headers: { "Idempotency-Key": attemptId } },
       );
-      toast({ title: "Mensagem de teste enviada!", description: "Verifique o WhatsApp configurado na agência." });
+      toast({
+        title: "Solicitação aceita para envio",
+        description: "A mensagem pode estar na fila; isso não confirma a entrega no WhatsApp.",
+      });
     } catch (err: unknown) {
       const apiError = (err as { data?: { error?: string } })?.data?.error;
       toast({ title: getWhatsAppTestErrorMessage(apiError), variant: "destructive" });
@@ -695,14 +718,12 @@ export default function Indicacoes() {
 
   function buildWhatsAppShareUrl(phone: string, link: string, message: string, referrerName?: string | null, referralCode?: string | null, bonusAmount?: string | number | null) {
     const num = phone.replace(/\D/g, "");
-    const bonusFormatted = bonusAmount != null ? fmtCurrency(bonusAmount) : "";
-    const personalizedMessage = message
-      .replace(/\{nome\}/g, referrerName ?? "")
-      .replace(/\{codigo\}/g, referralCode ?? "")
-      .replace(/\{bonus\}/g, bonusFormatted)
-      .replace(/\{link\}/g, link);
-    const linkAlreadyEmbedded = /\{link\}/.test(message);
-    const text = personalizedMessage ? (linkAlreadyEmbedded ? personalizedMessage : `${personalizedMessage}\n${link}`) : link;
+    const text = buildReferralShareText(message, {
+      name: referrerName,
+      code: referralCode,
+      link,
+      bonus: bonusAmount,
+    });
     return `https://wa.me/55${num}?text=${encodeURIComponent(text)}`;
   }
 
@@ -803,39 +824,58 @@ export default function Indicacoes() {
 
   async function handleSaveCampaign() {
     if (!canEditSettings) return;
-    const { name, startsAt, endsAt, bonusType, bonusValue, bannerText, eligibleStoreProductIds, eligibleTierLevels, conversionCap, budgetAmount, shareMessage, materialUrl, publicRanking, eligibleActivitySegments, eligibleChannels, commissionType, commissionValue, commissionRecipientType, eligiblePartnerIds } = campaignFormData;
+    const { name, startsAt, endsAt, bonusType, bonusValue, bannerText, eligibleStoreProductIds, eligibleTierLevels, conversionCap, budgetAmount, shareMessage, materialUrl, eligibleActivitySegments, eligibleChannels, commissionType, commissionValue, commissionRecipientType, eligiblePartnerIds } = campaignFormData;
     if (!name.trim() || !startsAt || !endsAt) {
       toast({ title: "Preencha todos os campos obrigatórios", variant: "destructive" }); return;
     }
-    const bonusNum = parseFloat(bonusValue);
-    if (bonusType !== "no_reward" && (isNaN(bonusNum) || bonusNum <= 0)) {
-      toast({ title: "Valor do bônus inválido", variant: "destructive" }); return;
+    const startsAtDate = new Date(startsAt);
+    const endsAtDate = new Date(endsAt);
+    if (!Number.isFinite(startsAtDate.getTime()) || !Number.isFinite(endsAtDate.getTime()) || endsAtDate <= startsAtDate) {
+      toast({ title: "O término deve ser posterior ao início", variant: "destructive" }); return;
     }
-    const cVal = parseFloat(commissionValue) || 0;
+    const parseNumber = (value: string) => Number(value.trim().replace(",", "."));
+    const bonusNum = parseNumber(bonusValue);
+    if (bonusType !== "no_reward" && (!Number.isFinite(bonusNum) || bonusNum <= 0)) {
+      toast({ title: "Informe um valor de bônus maior que zero", variant: "destructive" }); return;
+    }
+    if (bonusType === "multiplier" && bonusNum < 1) {
+      toast({ title: "O multiplicador precisa ser 1 ou maior", variant: "destructive" }); return;
+    }
+    if (bonusType === "reduced_bonus" && bonusNum > 1) {
+      toast({ title: "O fator do bônus reduzido deve ser no máximo 1", variant: "destructive" }); return;
+    }
+    const conversionCapNum = campaignFormData.conversionCap.trim() ? Number(campaignFormData.conversionCap) : null;
+    if (conversionCapNum !== null && (!Number.isInteger(conversionCapNum) || conversionCapNum <= 0)) {
+      toast({ title: "O máximo de conversões deve ser um número inteiro maior que zero", variant: "destructive" }); return;
+    }
+    const budgetNum = campaignFormData.budgetAmount.trim() ? parseNumber(campaignFormData.budgetAmount) : null;
+    if (budgetNum !== null && (!Number.isFinite(budgetNum) || budgetNum <= 0)) {
+      toast({ title: "O teto de bônus deve ser maior que zero", variant: "destructive" }); return;
+    }
+    const cVal = parseNumber(commissionValue) || 0;
     if (commissionType !== "none" && cVal <= 0) {
       toast({ title: "Valor da comissão inválido", variant: "destructive" }); return;
     }
 
     const payload = {
       name: name.trim(),
-      startsAt: new Date(startsAt).toISOString(),
-      endsAt: new Date(endsAt).toISOString(),
+      startsAt: startsAtDate.toISOString(),
+      endsAt: endsAtDate.toISOString(),
       bonusType,
       bonusValue: bonusType === "no_reward" ? 0 : bonusNum,
       bannerText: bannerText.trim() || undefined,
-      eligibleStoreProductIds: eligibleStoreProductIds.split(",").map(s => s.trim()).filter(Boolean),
+      eligibleStoreProductIds,
       eligibleTierLevels: eligibleTierLevels,
-      conversionCap: conversionCap ? parseInt(conversionCap, 10) : null,
-      budgetAmount: budgetAmount ? parseFloat(budgetAmount) : null,
+      conversionCap: conversionCapNum,
+      budgetAmount: budgetNum,
       shareMessage: shareMessage.trim() || null,
       materialUrl: materialUrl.trim() || null,
-      publicRanking,
       eligibleActivitySegments,
       eligibleChannels: eligibleChannels.split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
       commissionType,
       commissionValue: commissionType === "none" ? 0 : cVal,
       commissionRecipientType,
-      eligiblePartnerIds: eligiblePartnerIds.split(",").map(s => s.trim()).filter(Boolean),
+      eligiblePartnerIds,
     };
 
     try {
@@ -849,9 +889,9 @@ export default function Indicacoes() {
       }
       setCampaignFormData({
         name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "",
-        eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "", budgetAmount: "",
-        shareMessage: "", materialUrl: "", publicRanking: true, eligibleActivitySegments: [], eligibleChannels: "", commissionType: "none", commissionValue: "0",
-        commissionRecipientType: "ambassador", eligiblePartnerIds: ""
+        eligibleStoreProductIds: [], eligibleTierLevels: [], conversionCap: "", budgetAmount: "",
+        shareMessage: "", materialUrl: "", eligibleActivitySegments: [], eligibleChannels: "", commissionType: "none", commissionValue: "0",
+        commissionRecipientType: "ambassador", eligiblePartnerIds: []
       });
       setShowCampaignForm(false);
       refetchCampaigns();
@@ -874,19 +914,18 @@ export default function Indicacoes() {
       bonusType: c.bonusType as any,
       bonusValue: String(c.bonusValue),
       bannerText: c.bannerText ?? "",
-      eligibleStoreProductIds: (c.eligibleStoreProductIds || []).join(", "),
+      eligibleStoreProductIds: c.eligibleStoreProductIds || [],
       eligibleTierLevels: c.eligibleTierLevels || [],
       conversionCap: c.conversionCap ? String(c.conversionCap) : "",
       budgetAmount: c.budgetAmount ? String(c.budgetAmount) : "",
       shareMessage: c.shareMessage ?? "",
       materialUrl: c.materialUrl ?? "",
-      publicRanking: c.publicRanking ?? true,
       eligibleActivitySegments: c.eligibleActivitySegments ?? [],
       eligibleChannels: (c.eligibleChannels ?? []).join(", "),
       commissionType: c.commissionType as any || "none",
       commissionValue: String(c.commissionValue || 0),
       commissionRecipientType: c.commissionRecipientType ?? "ambassador",
-      eligiblePartnerIds: (c.eligiblePartnerIds ?? []).join(", "),
+      eligiblePartnerIds: c.eligiblePartnerIds ?? [],
     });
     setEditingCampaignId(c.id);
     setShowCampaignForm(true);
@@ -1609,6 +1648,12 @@ export default function Indicacoes() {
       onRetry={() => void refetchCampaigns()}
       canEdit={canEditSettings}
       activeCampaign={activeCampaignAdmin}
+      productOptions={campaignStoreProducts.map(({ id, name }) => ({ id, name }))}
+      partnerOptions={campaignPartners.map(({ id, name }) => ({ id, name }))}
+      productsLoading={campaignProductsLoading}
+      partnersLoading={campaignPartnersLoading}
+      productsError={campaignProductsError}
+      partnersError={campaignPartnersError}
       showForm={showCampaignForm}
       setShowForm={setShowCampaignForm}
       draft={campaignFormData}

@@ -49,19 +49,20 @@ export function prepareClients(
   all: Client[],
   quickStart: string,
   quickEnd: string,
+  refundTotalsByClientId: ReadonlyMap<string, number> = new Map(),
 ): { headers: string[]; rows: string[][]; count: number } {
   const clients = all.filter((c) => inDateRange(c.createdAt, quickStart, quickEnd));
   const headers = [
     "Nome", "E-mail", "WhatsApp", "Telefone", "CPF", "Nascimento", "Gênero",
     "Cidade", "Estado", "Instagram", "Classificação", "Status", "Pipeline",
-    "Total Gasto (R$)", "Saldo Devedor (R$)", "Tags", "Destinos Sonhados",
+    "Total Gasto (R$)", "Estornos Stripe (R$)", "Saldo Devedor (R$)", "Tags", "Destinos Sonhados",
     "Observações", "Cadastrado em",
   ];
   const rows = clients.map((c) => [
     c.name, c.email ?? "", c.whatsapp ?? "", c.phone ?? "", c.cpf ?? "",
     fmtDate(c.birthDate), c.gender ?? "", c.addressCity ?? "", c.addressState ?? "",
     c.instagram ?? "", c.classification ?? "", c.status ?? "", c.pipelineStage ?? "",
-    fmtCur(c.totalSpent), fmtCur(c.outstandingBalance),
+    fmtCur(c.totalSpent), fmtCur((refundTotalsByClientId.get(c.id) ?? 0) / 100), fmtCur(c.outstandingBalance),
     (c.tags ?? []).join("; "), (c.dreamDestinations ?? []).join("; "),
     c.observations ?? "", fmtDate(c.createdAt),
   ]);
@@ -90,6 +91,30 @@ export function prepareTrips(
   return { headers, rows, count: trips.length };
 }
 
+export interface ReservationPaymentItem {
+  reservationId?: string | null;
+  clientId?: string | null;
+  gateway?: string | null;
+  type: string;
+  category: string;
+  amount: number;
+  status: string;
+  dueDate?: string | null;
+  paidAt?: string | null;
+  refundedAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export function chunkIds(ids: string[], batchSize = 100): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < ids.length; index += batchSize) {
+    chunks.push(ids.slice(index, index + batchSize));
+  }
+  return chunks;
+}
+
+export const chunkReservationIds = chunkIds;
+
 // Reservation item shape used by prepareManifest / prepareReservations
 export interface ReservationItem {
   id: string;
@@ -99,6 +124,7 @@ export interface ReservationItem {
   totalValue: number;
   paidValue: number;
   balance: number;
+  payments?: ReservationPaymentItem[];
   paymentMethod?: string | null;
   installments?: number | null;
   client?: { name?: string; whatsapp?: string } | null;
@@ -137,27 +163,73 @@ export function prepareReservations(
   all: ReservationItem[],
   quickStart: string,
   quickEnd: string,
+  includeReservationIds: ReadonlySet<string> = new Set(),
 ): { headers: string[]; rows: string[][]; count: number } {
-  const reservations = all.filter((r) => inDateRange(r.createdAt, quickStart, quickEnd));
+  const reservations = all.filter((r) =>
+    inDateRange(r.createdAt, quickStart, quickEnd) || includeReservationIds.has(r.id),
+  );
   const headers = [
     "ID", "Cliente", "Viagem", "Saída", "Status", "Assentos",
-    "Valor Total (R$)", "Valor Pago (R$)", "Saldo (R$)", "Forma de Pagamento",
-    "Parcelas", "Criado em",
+    "Valor Total (R$)", "Recebimentos Brutos (R$)", "Estornos Stripe (R$)",
+    "Detalhes dos Estornos Stripe", "Estornos Manuais (R$)", "Detalhes dos Estornos Manuais",
+    "Valor Pago Líquido (R$)", "Saldo (R$)", "Forma de Pagamento", "Parcelas", "Criado em",
   ];
-  const rows = reservations.map((r) => [
-    r.id,
-    r.client?.name ?? "",
-    r.trip?.name ?? "",
-    fmtDate(r.trip?.departureDate),
-    r.status,
-    String(r.seats?.length ?? 0),
-    fmtCur(r.totalValue),
-    fmtCur(r.paidValue),
-    fmtCur(r.balance),
-    r.paymentMethod ?? "",
-    String(r.installments ?? 1),
-    fmtDate(r.createdAt),
-  ]);
+  const rows = reservations.map((r) => {
+    const payments = r.payments ?? [];
+    const isReceived = (p: ReservationPaymentItem) =>
+      p.type === "receivable" && ["paid", "approved"].includes(p.status);
+    const cents = (amount: number) => Math.round(Number(amount) * 100);
+    const refunds = payments.filter(
+      (p) => isReceived(p) && p.category === "stripe_refund" && p.amount < 0,
+    );
+    const refundCents = refunds.reduce((total, p) => total + Math.abs(cents(p.amount)), 0);
+    const manualRefunds = payments.filter(
+      (p) =>
+        p.type === "receivable"
+        && p.status === "refunded"
+        && p.category !== "stripe_refund"
+        && p.gateway !== "stripe"
+        && p.amount > 0,
+    );
+    const manualRefundAdjustments = payments.filter(
+      (p) =>
+        isReceived(p)
+        && p.category === "manual_refund"
+        && p.amount < 0,
+    );
+    const manualRefundCents = [...manualRefunds, ...manualRefundAdjustments]
+      .reduce((total, p) => total + Math.abs(cents(p.amount)), 0);
+    const netPaidCents = cents(r.paidValue);
+    // Derive gross from the same canonical net paid value shown in the reservation
+    // summary, so order-level receipts that lack a reservation link still reconcile.
+    const grossReceiptsCents = netPaidCents + refundCents + manualRefundCents;
+    const refundDetails = refunds
+      .map((p) => `${fmtDate(p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
+      .join("; ");
+    const manualRefundDetails = [...manualRefunds, ...manualRefundAdjustments]
+      .map((p) => `${fmtDate(p.refundedAt ?? p.updatedAt ?? p.paidAt ?? p.dueDate)} (−${fmtCur(Math.abs(p.amount))})`)
+      .join("; ");
+
+    return [
+      r.id,
+      r.client?.name ?? "",
+      r.trip?.name ?? "",
+      fmtDate(r.trip?.departureDate),
+      r.status,
+      String(r.seats?.length ?? 0),
+      fmtCur(r.totalValue),
+      fmtCur(grossReceiptsCents / 100),
+      fmtCur(refundCents / 100),
+      refundDetails,
+      fmtCur(-manualRefundCents / 100),
+      manualRefundDetails,
+      fmtCur(r.paidValue),
+      fmtCur(r.balance),
+      r.paymentMethod ?? "",
+      String(r.installments ?? 1),
+      fmtDate(r.createdAt),
+    ];
+  });
   return { headers, rows, count: reservations.length };
 }
 

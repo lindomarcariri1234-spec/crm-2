@@ -136,6 +136,7 @@ export const storeProductsTable = pgTable("store_products", {
   storeId: text("store_id").notNull().references(() => storesTable.id, { onDelete: "cascade" }),
 
   type: text("type").notNull(),
+  storefrontGroup: text("storefront_group").notNull().default("other"),
 
   name: text("name").notNull(),
   slug: text("slug").notNull(),
@@ -275,6 +276,7 @@ export const storeOrdersTable = pgTable("store_orders", {
   paymentStatus: text("payment_status").notNull().default("pending"),
 
   paymentIntentId: text("payment_intent_id"),
+  stripeRefundedAmount: integer("stripe_refunded_amount").notNull().default(0),
   paymentChargeId: text("payment_charge_id"),
   // One-shot token returned in the order POST response. Required by
   // /public/store/:slug/orders/:orderNumber/payment-intent so attackers who
@@ -306,10 +308,16 @@ export const storeOrdersTable = pgTable("store_orders", {
   boardingLocationId: text("boarding_location_id"),
   seats: json("seats").$type<string[]>(),
 
-  // Co-passenger names/data collected in the vitrine wizard when qty > 1.
-  // Index 0 = 2nd passenger, index 1 = 3rd passenger, etc. (buyer is always primary).
-  // Stored as JSON so no seat/passenger schema change is required at checkout time.
-  coPassengers: json("co_passengers").$type<Array<{ name: string; cpf?: string; phone?: string }>>(),
+  // Additional child passenger data collected in the vitrine reservation wizard.
+  // The buyer remains the primary passenger; lap children are stored here without
+  // increasing the paid item quantity or trip capacity.
+  coPassengers: json("co_passengers").$type<Array<{
+    name: string;
+    cpf?: string;
+    phone?: string;
+    isChildUnder7?: boolean;
+    occupiesSeat?: boolean;
+  }>>(),
 
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
@@ -568,3 +576,27 @@ export const priceAlertSubscriptionsRelations = relations(priceAlertSubscription
   store: one(storesTable, { fields: [priceAlertSubscriptionsTable.storeId], references: [storesTable.id] }),
   product: one(storeProductsTable, { fields: [priceAlertSubscriptionsTable.productId], references: [storeProductsTable.id] }),
 }));
+
+export const storefrontDailyMetricsTable = pgTable("storefront_daily_metrics", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
+  storeId: text("store_id").notNull().references(() => storesTable.id, { onDelete: "cascade" }),
+  metricDate: date("metric_date").notNull(),
+  eventType: text("event_type").notNull(),
+  pageType: text("page_type").notNull().default("none"),
+  groupDimension: text("group_dimension").notNull().default("none"),
+  sourceDimension: text("source_dimension").notNull().default("none"),
+  count: integer("count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+}, (table) => [
+  uniqueIndex("storefront_daily_metrics_dimensions_uq").on(
+    table.storeId,
+    table.metricDate,
+    table.eventType,
+    table.pageType,
+    table.groupDimension,
+    table.sourceDimension,
+  ),
+  index("storefront_daily_metrics_tenant_date_idx").on(table.tenantId, table.metricDate),
+]);

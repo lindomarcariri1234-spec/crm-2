@@ -35,6 +35,7 @@ const {
   mockTransaction,
   mockAssertSafeUrl,
   mockSsrfFetch,
+  mockImportZernioInstagramHistoryChunk,
 } = vi.hoisted(() => {
   const mockUpdateWhere = vi.fn();
   const mockUpdateSet = vi.fn();
@@ -49,6 +50,7 @@ const {
   const mockRequireAuth = vi.fn();
   const mockAssertSafeUrl = vi.fn();
   const mockSsrfFetch = vi.fn();
+  const mockImportZernioInstagramHistoryChunk = vi.fn();
 
   return {
     mockLimit,
@@ -64,6 +66,7 @@ const {
     mockTransaction,
     mockAssertSafeUrl,
     mockSsrfFetch,
+    mockImportZernioInstagramHistoryChunk,
   };
 });
 
@@ -115,6 +118,11 @@ vi.mock("../lib/crypto.js", () => ({
 vi.mock("../lib/ssrf.js", () => ({
   assertSafeUrl: mockAssertSafeUrl,
   ssrfSafeFetchBounded: mockSsrfFetch,
+}));
+
+vi.mock("../services/instagram-zernio.js", () => ({
+  INSTAGRAM_ZERNIO_TYPE: "instagram_zernio",
+  importZernioInstagramHistoryChunk: mockImportZernioInstagramHistoryChunk,
 }));
 
 // ---------------------------------------------------------------------------
@@ -270,7 +278,9 @@ beforeEach(() => {
   mockLimit.mockReset();
 
   // Rebuild update chain (clearAllMocks wipes implementations)
-  mockUpdateWhere.mockResolvedValue([]);
+  mockUpdateWhere.mockImplementation(() => Object.assign(Promise.resolve([]), {
+    returning: vi.fn().mockResolvedValue([{ id: "row-wa" }]),
+  }));
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
   mockUpdate.mockReturnValue({ set: mockUpdateSet });
 
@@ -292,7 +302,11 @@ beforeEach(() => {
 
   // SSRF mocks: safe by default
   mockAssertSafeUrl.mockResolvedValue(undefined);
-  mockSsrfFetch.mockResolvedValue({ ok: true, status: 200 });
+  mockSsrfFetch.mockResolvedValue({
+    ok: true,
+    status: 200,
+    text: JSON.stringify({ instance: { state: "open" } }),
+  });
 });
 
 // ─── GET /api/integrations ────────────────────────────────────────────────────
@@ -306,7 +320,7 @@ describe("GET /api/integrations — list all integration types", () => {
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(5);
+    expect(res.body).toHaveLength(6);
 
     const types = res.body.map((r: { type: string }) => r.type);
     expect(types).toContain("whatsapp_evolution");
@@ -314,6 +328,7 @@ describe("GET /api/integrations — list all integration types", () => {
     expect(types).toContain("mercadopago");
     expect(types).toContain("google_analytics");
     expect(types).toContain("distribution_reference");
+    expect(types).toContain("instagram_zernio");
   });
 
   it("response items include type, label, status, and enabled — no secret fields", async () => {
@@ -331,6 +346,27 @@ describe("GET /api/integrations — list all integration types", () => {
       expect(item).not.toHaveProperty("secretsEncrypted");
       expect(item).not.toHaveProperty("maskedSecrets");
     }
+  });
+
+  it("exposes both identifiers needed to map an Instagram Zernio account", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([]);
+
+    const res = await request(buildApp()).get("/api/integrations/instagram_zernio");
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.fieldDefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: "accountId",
+        label: "Account ID da Zernio",
+        secret: false,
+      }),
+      expect.objectContaining({
+        key: "profileId",
+        label: "Profile ID da Zernio",
+        secret: false,
+      }),
+    ]));
   });
 
   it("reflects stored status for a connected integration", async () => {
@@ -446,11 +482,393 @@ describe("GET /api/integrations/:type — single integration detail", () => {
 
     expect(res.status).toBe(403);
   });
+
+  it("imports Zernio history only from the authenticated agency's connected integration", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([{
+      id: "zernio-integration-1",
+      tenantId: TENANT_ID,
+      type: "instagram_zernio",
+      config: { accountId: "account-1", profileId: "profile-1" },
+      secretsEncrypted: JSON.stringify({ apiKey: "private-api-key" }),
+      enabled: true,
+      status: "connected",
+    }]);
+    mockImportZernioInstagramHistoryChunk.mockResolvedValueOnce({
+      done: true,
+      cursor: null,
+      progress: {
+      conversationsFound: 2,
+      conversationsProcessed: 2,
+      messagesImported: 8,
+      messagesAlreadyPresent: 3,
+        messagesSkipped: 2,
+      },
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/instagram_zernio/import-history")
+      .send({ integrationId: "zernio-integration-1" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      done: true,
+      cursor: null,
+      progress: { messagesImported: 8, conversationsProcessed: 2, messagesSkipped: 2 },
+    });
+    expect(JSON.stringify(res.body)).not.toContain("private-api-key");
+    expect(mockImportZernioInstagramHistoryChunk).toHaveBeenCalledWith(
+      "private-api-key",
+      "account-1",
+      "profile-1",
+      "zernio-integration-1",
+      undefined,
+    );
+    expect(mockWhere).toHaveBeenCalled();
+  });
+
+  it("validates and returns an encrypted, integration-bound continuation cursor", async () => {
+    asAdmin();
+    const integration = {
+      id: "zernio-integration-1",
+      tenantId: TENANT_ID,
+      type: "instagram_zernio",
+      config: { accountId: "account-1", profileId: "profile-1" },
+      secretsEncrypted: JSON.stringify({ apiKey: "private-api-key" }),
+      enabled: true,
+      status: "connected",
+    };
+    mockLimit.mockResolvedValueOnce([integration]);
+    const checkpoint = {
+      integrationId: integration.id,
+      accountId: "account-1",
+      cursor: { status: "active", conversationCursor: "page-2" },
+    };
+    mockImportZernioInstagramHistoryChunk.mockResolvedValueOnce({
+      done: false,
+      cursor: { status: "active", conversationCursor: "page-3" },
+      progress: {
+        conversationsFound: 100,
+        conversationsProcessed: 4,
+        messagesImported: 12,
+        messagesAlreadyPresent: 1,
+        messagesSkipped: 0,
+      },
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/instagram_zernio/import-history")
+      .send({ integrationId: integration.id, cursor: JSON.stringify(checkpoint) });
+
+    expect(res.status).toBe(200);
+    expect(mockImportZernioInstagramHistoryChunk).toHaveBeenCalledWith(
+      "private-api-key",
+      "account-1",
+      "profile-1",
+      integration.id,
+      checkpoint.cursor,
+    );
+    expect(JSON.parse(res.body.cursor)).toMatchObject({
+      integrationId: integration.id,
+      accountId: "account-1",
+      cursor: { conversationCursor: "page-3" },
+    });
+    expect(JSON.stringify(res.body)).not.toContain("private-api-key");
+  });
+});
+
+describe("GET /api/integrations/whatsapp_evolution/connections", () => {
+  it("returns legacy default flags so duplicate defaults can be corrected in settings", async () => {
+    asAdmin();
+    const rows = [
+      { ...WHATSAPP_ROW, id: "wa-old", isDefault: true, status: "disconnected", enabled: false },
+      { ...WHATSAPP_ROW, id: "wa-live", isDefault: true, status: "connected", enabled: true },
+    ];
+    mockWhere.mockReturnValueOnce(Object.assign(Promise.resolve(rows), {
+      orderBy: vi.fn().mockResolvedValue(rows),
+    }));
+
+    const res = await request(buildApp()).get("/api/integrations/whatsapp_evolution/connections");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "wa-old", isDefault: true, enabled: false, status: "disconnected" }),
+      expect.objectContaining({ id: "wa-live", isDefault: true, enabled: true, status: "connected" }),
+    ]));
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/integrations/whatsapp_evolution/connections/:id/qr", () => {
+  it("reports a DNS validation failure without attempting a provider request", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockAssertSafeUrl.mockRejectedValueOnce(new Error("Não foi possível resolver o host."));
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(502);
+    expect(res.body.message).toMatch(/Não foi possível resolver o host/);
+    expect(mockSsrfFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["UND_ERR_CONNECT_TIMEOUT", /Tempo de conexão esgotado/],
+    ["ENOTFOUND", /resolver o endereço/],
+    ["ECONNREFUSED", /recusou ou interrompeu/],
+    ["CERT_HAS_EXPIRED", /certificado HTTPS/],
+  ])("reports a safe provider error instead of HTTP 500 for %s", async (code, message) => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockSsrfFetch.mockRejectedValueOnce(Object.assign(
+      new TypeError(`fetch failed; apikey=${WA_SECRETS.apiKey}`),
+      { cause: { code } },
+    ));
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(502);
+    expect(res.body.message).toMatch(message);
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      event: "qr_connect",
+      level: "warn",
+      message: res.body.message,
+    }));
+    expect(JSON.stringify(res.body)).not.toContain(WA_SECRETS.apiKey);
+    expect(JSON.stringify(mockInsertValues.mock.calls)).not.toContain(WA_SECRETS.apiKey);
+  });
+
+  it("treats a non-JSON provider success as an invalid QR rather than an internal error", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: true, status: 200, text: "<html>unavailable</html>" });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(502);
+    expect(res.body.message).toMatch(/não retornou um QR Code/);
+    expect(JSON.stringify(res.body)).not.toContain("<html>");
+  });
+
+  it("returns only a validated QR image and sends the saved API key to the encoded instance endpoint", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ base64: "data:image/png;base64,aGVsbG8=" }),
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ qrCodeDataUrl: "data:image/png;base64,aGVsbG8=" });
+    expect(mockSsrfFetch).toHaveBeenCalledWith(
+      "https://evo.example.com/instance/connect/my-instance",
+      expect.objectContaining({ headers: { apikey: WA_SECRETS.apiKey } }),
+    );
+    expect(JSON.stringify(res.body)).not.toContain(WA_SECRETS.apiKey);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    expect(JSON.stringify(mockInsertValues.mock.calls)).not.toContain("aGVsbG8=");
+  });
+
+  it("renders a QR image from Evolution's code field when base64 is absent", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ pairingCode: null, code: "2@temporary-pairing-code", count: 1 }),
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/row-wa/qr");
+
+    expect(res.status).toBe(200);
+    expect(res.body.qrCodeDataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    expect(JSON.stringify(res.body)).not.toContain("temporary-pairing-code");
+    expect(JSON.stringify(mockInsertValues.mock.calls)).not.toContain("temporary-pairing-code");
+  });
+});
+
+describe("POST /api/integrations/whatsapp_evolution/connections/refresh", () => {
+  it("clears the default only when Evolution confirms the instance is closed", async () => {
+    asAdmin();
+    mockWhere.mockResolvedValueOnce([{ ...WHATSAPP_ROW, isDefault: true }]);
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ instance: { state: "close" } }),
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/refresh");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, unverified: 0, disconnectedDefaults: 1 });
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      status: "disconnected",
+      isDefault: false,
+    }));
+    expect(mockUpdateWhere).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the current status and default after a temporary provider failure", async () => {
+    asAdmin();
+    mockWhere.mockResolvedValueOnce([{ ...WHATSAPP_ROW, isDefault: true }]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 503, text: "temporarily unavailable" });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/refresh");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, unverified: 1, disconnectedDefaults: 0 });
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(JSON.stringify(res.body)).not.toContain("temporarily unavailable");
+  });
+
+  it("does not interpret a missing Evolution instance as a disconnected session", async () => {
+    asAdmin();
+    mockWhere.mockResolvedValueOnce([{ ...WHATSAPP_ROW, isDefault: true }]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 404, text: "" });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/connections/refresh");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, unverified: 1, disconnectedDefaults: 0 });
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
 });
 
 // ─── PUT /api/integrations/:type ─────────────────────────────────────────────
 
 describe("PUT /api/integrations/:type — save configuration", () => {
+  it("atomically replaces the default only after the selected Evolution connection verifies", async () => {
+    asAdmin();
+    const currentDefault = { ...WHATSAPP_ROW, id: "wa-current", isDefault: true };
+    const selected = { ...WHATSAPP_ROW, id: "wa-selected", isDefault: false };
+    mockLimit.mockResolvedValueOnce([currentDefault]).mockResolvedValueOnce([selected]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, isDefault: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.isDefault).toBe(true);
+    expect(mockTransaction).toHaveBeenCalledOnce();
+    expect(mockUpdateSet.mock.calls.map(([values]) => values)).toEqual(expect.arrayContaining([
+      { isDefault: false },
+      { isDefault: true },
+    ]));
+  });
+
+  it("leaves one default and gives the losing concurrent admin a safe refresh instruction", async () => {
+    const adminA = { id: "admin-a", tenantId: TENANT_ID, role: "admin", name: "Admin A" };
+    const adminB = { id: "admin-b", tenantId: TENANT_ID, role: "admin", name: "Admin B" };
+    mockRequireAuth.mockResolvedValueOnce(adminA).mockResolvedValueOnce(adminB);
+    const currentDefault = { ...WHATSAPP_ROW, id: "wa-current", isDefault: true };
+    const selectedA = { ...WHATSAPP_ROW, id: "wa-a", isDefault: false };
+    const selectedB = { ...WHATSAPP_ROW, id: "wa-b", isDefault: false };
+    mockLimit
+      .mockResolvedValueOnce([currentDefault])
+      .mockResolvedValueOnce([currentDefault])
+      .mockResolvedValueOnce([selectedA])
+      .mockResolvedValueOnce([selectedB]);
+
+    let transactionNumber = 0;
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => unknown) => {
+      transactionNumber += 1;
+      if (transactionNumber === 1) {
+        await callback({ update: mockUpdate, insert: mockInsert });
+        return;
+      }
+      throw { code: "23505", constraint: "tenant_integrations_whatsapp_default_uq" };
+    });
+
+    const [responseA, responseB] = await Promise.all([
+      request(buildApp())
+        .put("/api/integrations/whatsapp_evolution")
+        .send({ integrationId: selectedA.id, isDefault: true }),
+      request(buildApp())
+        .put("/api/integrations/whatsapp_evolution")
+        .send({ integrationId: selectedB.id, isDefault: true }),
+    ]);
+
+    expect(mockTransaction).toHaveBeenCalledTimes(2);
+    const bodies = [responseA.body, responseB.body];
+    expect(bodies.filter((body) => body.isDefault)).toHaveLength(1);
+    const losingResponse = bodies.find((body) => !body.isDefault);
+    expect(losingResponse?.message).toBe(
+      "Outro administrador definiu o número padrão ao mesmo tempo. Atualize a lista e tente novamente.",
+    );
+    expect(JSON.stringify(losingResponse)).not.toContain("23505");
+  });
+
+  it("rejects selecting a disabled Evolution connection as default", async () => {
+    asAdmin();
+    const selected = { ...WHATSAPP_ROW, enabled: false, isDefault: false };
+    mockLimit.mockResolvedValueOnce([selected]).mockResolvedValueOnce([selected]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, enabled: false, isDefault: true });
+
+    expect(res.status).toBe(400);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not promote a disconnected connection when its reconnect check fails", async () => {
+    asAdmin();
+    const selected = { ...WHATSAPP_ROW, status: "disconnected", isDefault: false };
+    mockLimit.mockResolvedValueOnce([selected]).mockResolvedValueOnce([selected]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, enabled: true, isDefault: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.isDefault).toBe(false);
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("clears a stale default flag when a previously connected number fails verification", async () => {
+    asAdmin();
+    const selected = { ...WHATSAPP_ROW, isDefault: true };
+    mockLimit.mockResolvedValueOnce([selected]).mockResolvedValueOnce([selected]);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, enabled: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.isDefault).toBe(false);
+    expect(mockUpdateSet.mock.calls.map(([values]) => values)).toContainEqual(
+      expect.objectContaining({ status: "error", isDefault: false }),
+    );
+  });
+
+  it("allows a disconnected connection to become default after a successful reconnect check", async () => {
+    asAdmin();
+    const selected = { ...WHATSAPP_ROW, status: "disconnected", isDefault: false };
+    mockLimit.mockResolvedValueOnce([selected]).mockResolvedValueOnce([selected]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/whatsapp_evolution")
+      .send({ integrationId: selected.id, enabled: true, isDefault: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.isDefault).toBe(true);
+    expect(mockTransaction).toHaveBeenCalledOnce();
+  });
+
   it("returns 404 for unknown integration type", async () => {
     asAdmin();
 
@@ -591,13 +1009,64 @@ describe("PUT /api/integrations/:type — save configuration", () => {
     expect(statusUpdate).toBeDefined();
   });
 
+  it("saves and activates an Instagram Zernio account mapping", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/instagram_zernio")
+      .send({
+        name: "Instagram Zernio",
+        enabled: true,
+        config: {
+          accountId: "zernio-account-123",
+          profileId: "zernio-profile-456",
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      type: "instagram_zernio",
+      tenantId: TENANT_ID,
+      enabled: true,
+      config: {
+        accountId: "zernio-account-123",
+        profileId: "zernio-profile-456",
+      },
+    }));
+    expect(mockUpdateSet.mock.calls.some(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).status === "connected",
+    )).toBe(true);
+  });
+
+  it("does not mark an incomplete Instagram Zernio mapping connected", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([]);
+
+    const res = await request(buildApp())
+      .put("/api/integrations/instagram_zernio")
+      .send({
+        enabled: true,
+        config: { accountId: "zernio-account-123" },
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockUpdateSet.mock.calls.some(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).status === "error",
+    )).toBe(true);
+  });
+
   it("configures authenticated Evolution receive events when the integration is saved", async () => {
     const restoreEnv = setWebhookTestEnvironment("https://app.example.com/api");
     try {
       asAdmin();
       mockLimit.mockResolvedValueOnce([]);
       mockSsrfFetch
-        .mockResolvedValueOnce({ ok: true, status: 200 })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: JSON.stringify({ instance: { state: "open" } }),
+        })
         .mockResolvedValueOnce({ ok: true, status: 201 });
 
       const res = await request(buildApp())
@@ -626,21 +1095,56 @@ describe("PUT /api/integrations/:type — save configuration", () => {
         webhook: {
           enabled: boolean;
           url: string;
-          webhookByEvents: boolean;
-          webhookBase64: boolean;
           events: string[];
-          headers: Record<string, string>;
+          base64: boolean;
+          byEvents: boolean;
         };
       };
-      expect(body.webhook).toEqual({
-        enabled: true,
-        url: "https://app.example.com/api/webhooks/whatsapp/evolution/my-instance",
-        webhookByEvents: false,
-        webhookBase64: false,
-        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE"],
-        headers: { apikey: WA_SECRETS.apiKey },
+      expect(body).toEqual({
+        webhook: {
+          enabled: true,
+          url: "https://app.example.com/api/webhooks/whatsapp/evolution/my-instance",
+          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE"],
+          base64: false,
+          byEvents: false,
+        },
       });
       expect(res.text).not.toContain(WA_SECRETS.apiKey);
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  it("configures the receive webhook even when the WhatsApp session is disconnected", async () => {
+    const restoreEnv = setWebhookTestEnvironment("https://app.example.com");
+    try {
+      asAdmin();
+      mockLimit.mockResolvedValueOnce([]);
+      mockSsrfFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: JSON.stringify({ instance: { state: "close" } }),
+        })
+        .mockResolvedValueOnce({ ok: true, status: 201 });
+
+      const res = await request(buildApp())
+        .put("/api/integrations/whatsapp_evolution")
+        .send({
+          enabled: true,
+          config: { baseUrl: "https://evo.example.com", instanceName: "my-instance" },
+          secrets: { apiKey: WA_SECRETS.apiKey },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.webhook).toEqual({
+        ok: true,
+        message: "Webhook de recebimento do WhatsApp configurado.",
+      });
+      expect(mockSsrfFetch).toHaveBeenCalledTimes(2);
+      expect(mockUpdateSet.mock.calls.map(([values]) => values)).toContainEqual(
+        expect.objectContaining({ status: "error", isDefault: false }),
+      );
     } finally {
       restoreEnv();
     }
@@ -652,7 +1156,11 @@ describe("PUT /api/integrations/:type — save configuration", () => {
       asAdmin();
       mockLimit.mockResolvedValueOnce([]);
       mockSsrfFetch
-        .mockResolvedValueOnce({ ok: true, status: 200 })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: JSON.stringify({ instance: { state: "open" } }),
+        })
         .mockResolvedValueOnce({ ok: false, status: 401 });
 
       const res = await request(buildApp())
@@ -880,7 +1388,11 @@ describe("POST /api/integrations/:type/test — transient probe, never persists 
     asAdmin();
     mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
     mockAssertSafeUrl.mockResolvedValueOnce(undefined);
-    mockSsrfFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ instance: { state: "open" } }),
+    });
 
     const res = await request(buildApp())
       .post("/api/integrations/whatsapp_evolution/test")
@@ -891,6 +1403,29 @@ describe("POST /api/integrations/:type/test — transient probe, never persists 
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("whatsapp_evolution: a 200 response with a closed session is not reported as connected", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockAssertSafeUrl.mockResolvedValueOnce(undefined);
+    mockSsrfFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: JSON.stringify({ instance: { state: "close" } }),
+    });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/test")
+      .send({
+        config: { baseUrl: "https://evo.example.com", instanceName: "my-instance" },
+        secrets: { apiKey: MASK },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.message).toMatch(/sessão do WhatsApp está desconectada/i);
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
@@ -910,6 +1445,32 @@ describe("POST /api/integrations/:type/test — transient probe, never persists 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(false);
     expect(res.body.message).toMatch(/401/);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("whatsapp_evolution: 404 identifies the base URL and instance-name mismatch", async () => {
+    asAdmin();
+    mockLimit.mockResolvedValueOnce([WHATSAPP_ROW]);
+    mockAssertSafeUrl.mockResolvedValueOnce(undefined);
+    mockSsrfFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+
+    const res = await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/test")
+      .send({
+        config: { baseUrl: "https://evo.example.com", instanceName: "my-instance" },
+        secrets: { apiKey: MASK },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      ok: false,
+      status: "error",
+      message: "Instância não encontrada neste servidor (HTTP 404). Confirme a URL Base e o Nome da Instância exatos na mesma instalação Evolution.",
+    });
+    expect(mockSsrfFetch).toHaveBeenCalledWith(
+      "https://evo.example.com/instance/connectionState/my-instance",
+      expect.any(Object),
+    );
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
@@ -981,6 +1542,20 @@ describe("POST /api/integrations/:type/revoke — clear credentials", () => {
     expect(setArgs.status).toBe("disconnected");
   });
 
+  it("clears the default flag when revoking an Evolution connection", async () => {
+    asAdmin();
+
+    await request(buildApp())
+      .post("/api/integrations/whatsapp_evolution/revoke")
+      .send({ integrationId: "wa-default" });
+
+    expect(mockUpdateSet.mock.calls[0]?.[0]).toMatchObject({
+      enabled: false,
+      status: "disconnected",
+      isDefault: false,
+    });
+  });
+
   it("writes an audit log with event=revoke", async () => {
     asAdmin();
 
@@ -993,8 +1568,15 @@ describe("POST /api/integrations/:type/revoke — clear credentials", () => {
     expect(logValues).toBeDefined();
   });
 
-  it("works for all 4 integration types", async () => {
-    const types = ["whatsapp_evolution", "stripe_account", "mercadopago", "google_analytics"];
+  it("works for all registered integration types", async () => {
+    const types = [
+      "whatsapp_evolution",
+      "stripe_account",
+      "mercadopago",
+      "google_analytics",
+      "distribution_reference",
+      "instagram_zernio",
+    ];
 
     for (const type of types) {
       vi.clearAllMocks();

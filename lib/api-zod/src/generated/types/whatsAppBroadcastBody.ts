@@ -15,4 +15,6 @@ export interface WhatsAppBroadcastBody {
   messageTemplate: string;
   filter: WhatsAppBroadcastBodyFilter;
   requestId: string;
+  /** Set only when the staff member explicitly intends a new campaign with the same content and audience. */
+  campaignId?: string;
 }

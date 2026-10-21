@@ -52,6 +52,7 @@ import type {
   CalendarSyncRequest,
   CalendarSyncResponse,
   Campaign,
+  CampaignPermanentBounceRecipientsPage,
   CancelPmsReservationBody,
   CartItem,
   ChartDataPoint,
@@ -96,6 +97,7 @@ import type {
   CreateNoteBody,
   CreateOperationalCostPayableBody,
   CreateOutboundMessageBody,
+  CreatePartialManualRefundBody,
   CreatePassengerBody,
   CreatePaymentBody,
   CreatePipelineBody,
@@ -131,6 +133,7 @@ import type {
   FinancialSummary,
   FreePassengerCheckIn,
   GenerateClientReferralCode200,
+  GenerateEvolutionConnectionQr200,
   GetBirthdayHistoryParams,
   GetBirthdayUpcomingParams,
   GetCalendarCallbackParams,
@@ -159,6 +162,7 @@ import type {
   ListAdminUsersParams,
   ListAuditLogsParams,
   ListCalendarReconciliationsParams,
+  ListCampaignPermanentBounceRecipientsParams,
   ListChatbotMessagesParams,
   ListClientsParams,
   ListDealsParams,
@@ -317,6 +321,8 @@ import type {
   VehicleLayout,
   VerifyInstagramWebhookParams,
   WhatsAppBroadcastBody,
+  WhatsAppBroadcastPreviewBody,
+  WhatsAppBroadcastPreviewResult,
   WhatsAppBroadcastResult,
 } from "./api.schemas";
 
@@ -1970,6 +1976,103 @@ export const useAssignPmsReservationUnits = <
 > => {
   return useMutation(
     getAssignPmsReservationUnitsMutationOptions(options),
+    queryClient,
+  );
+};
+
+export const getGenerateEvolutionConnectionQrUrl = (id: string) => {
+  return `/api/integrations/whatsapp_evolution/connections/${id}/qr`;
+};
+
+/**
+ * @summary Generate a WhatsApp connection QR code
+ */
+export const generateEvolutionConnectionQr = async (
+  id: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<GenerateEvolutionConnectionQr200> => {
+  return customFetch<GenerateEvolutionConnectionQr200>(
+    getGenerateEvolutionConnectionQrUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getGenerateEvolutionConnectionQrMutationKey = () =>
+  ["generateEvolutionConnectionQr"] as const;
+
+export const getGenerateEvolutionConnectionQrMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+    TError,
+    GenerateEvolutionConnectionQrMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+  TError,
+  GenerateEvolutionConnectionQrMutationVariables,
+  TContext
+> => {
+  const mutationKey = getGenerateEvolutionConnectionQrMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+    GenerateEvolutionConnectionQrMutationVariables
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return generateEvolutionConnectionQr(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type GenerateEvolutionConnectionQrMutationResult = NonNullable<
+  Awaited<ReturnType<typeof generateEvolutionConnectionQr>>
+>;
+
+export type GenerateEvolutionConnectionQrMutationError = ErrorType<void>;
+export type GenerateEvolutionConnectionQrMutationVariables = { id: string };
+
+/**
+ * @summary Generate a WhatsApp connection QR code
+ */
+export const useGenerateEvolutionConnectionQr = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+      TError,
+      GenerateEvolutionConnectionQrMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof generateEvolutionConnectionQr>>,
+  TError,
+  GenerateEvolutionConnectionQrMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getGenerateEvolutionConnectionQrMutationOptions(options),
     queryClient,
   );
 };
@@ -14336,6 +14439,131 @@ export const useDeletePayment = <
   return useMutation(getDeletePaymentMutationOptions(options), queryClient);
 };
 
+export const getCreatePartialManualRefundUrl = (id: string) => {
+  return `/api/payments/${id}/partial-refunds`;
+};
+
+/**
+ * @summary Record a partial manual refund for a reservation payment
+ */
+export const createPartialManualRefund = async (
+  id: string,
+  createPartialManualRefundBody: CreatePartialManualRefundBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<Payment> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return customFetch<Payment>(getCreatePartialManualRefundUrl(id), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(createPartialManualRefundBody),
+  });
+};
+
+export const getCreatePartialManualRefundMutationKey = () =>
+  ["createPartialManualRefund"] as const;
+
+export const getCreatePartialManualRefundMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPartialManualRefund>>,
+    TError,
+    CreatePartialManualRefundMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createPartialManualRefund>>,
+  TError,
+  CreatePartialManualRefundMutationVariables,
+  TContext
+> => {
+  const mutationKey = getCreatePartialManualRefundMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createPartialManualRefund>>,
+    CreatePartialManualRefundMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return createPartialManualRefund(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreatePartialManualRefundMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createPartialManualRefund>>
+>;
+export type CreatePartialManualRefundMutationBody =
+  BodyType<CreatePartialManualRefundBody>;
+export type CreatePartialManualRefundMutationError = ErrorType<unknown>;
+export type CreatePartialManualRefundMutationVariables = {
+  id: string;
+  data: BodyType<CreatePartialManualRefundBody>;
+};
+
+/**
+ * @summary Record a partial manual refund for a reservation payment
+ */
+export const useCreatePartialManualRefund = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof createPartialManualRefund>>,
+      TError,
+      CreatePartialManualRefundMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof createPartialManualRefund>>,
+  TError,
+  CreatePartialManualRefundMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getCreatePartialManualRefundMutationOptions(options),
+    queryClient,
+  );
+};
+
 export const getGetPaymentsSummaryUrl = () => {
   return `/api/payments/summary`;
 };
@@ -22726,6 +22954,214 @@ export const useCreateCampaign = <
 > => {
   return useMutation(getCreateCampaignMutationOptions(options), queryClient);
 };
+
+export const getListCampaignPermanentBounceRecipientsUrl = (
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/campaigns/${id}/permanent-bounces?${stringifiedParams}`
+    : `/api/campaigns/${id}/permanent-bounces`;
+};
+
+/**
+ * @summary List permanent campaign bounces and bounce-prevented email sends
+ */
+export const listCampaignPermanentBounceRecipients = async (
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<CampaignPermanentBounceRecipientsPage> => {
+  return customFetch<CampaignPermanentBounceRecipientsPage>(
+    getListCampaignPermanentBounceRecipientsUrl(id, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListCampaignPermanentBounceRecipientsQueryKey = (
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+) => {
+  return [
+    `/api/campaigns/${id}/permanent-bounces`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListCampaignPermanentBounceRecipientsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListCampaignPermanentBounceRecipientsQueryKey(id, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>
+  > = ({ signal }) =>
+    listCampaignPermanentBounceRecipients(id, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListCampaignPermanentBounceRecipientsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>
+>;
+export type ListCampaignPermanentBounceRecipientsQueryError = ErrorType<void>;
+
+export function useListCampaignPermanentBounceRecipients<
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params: undefined | ListCampaignPermanentBounceRecipientsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+          TError,
+          Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListCampaignPermanentBounceRecipients<
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+          TError,
+          Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListCampaignPermanentBounceRecipients<
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List clients with permanent campaign email bounces
+ */
+
+export function useListCampaignPermanentBounceRecipients<
+  TData = Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  params?: ListCampaignPermanentBounceRecipientsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCampaignPermanentBounceRecipients>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListCampaignPermanentBounceRecipientsQueryOptions(
+    id,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export const getUpdateCampaignUrl = (id: string) => {
   return `/api/campaigns/${id}`;
@@ -39656,6 +40092,134 @@ export const useBroadcastTripWhatsApp = <
   );
 };
 
+export const getPreviewTripWhatsAppBroadcastUrl = (id: string) => {
+  return `/api/trips/${id}/whatsapp-broadcast/preview`;
+};
+
+/**
+ * @summary Preview eligible and skipped WhatsApp broadcast recipients
+ */
+export const previewTripWhatsAppBroadcast = async (
+  id: string,
+  whatsAppBroadcastPreviewBody: WhatsAppBroadcastPreviewBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<WhatsAppBroadcastPreviewResult> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return customFetch<WhatsAppBroadcastPreviewResult>(
+    getPreviewTripWhatsAppBroadcastUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(whatsAppBroadcastPreviewBody),
+    },
+  );
+};
+
+export const getPreviewTripWhatsAppBroadcastMutationKey = () =>
+  ["previewTripWhatsAppBroadcast"] as const;
+
+export const getPreviewTripWhatsAppBroadcastMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof previewTripWhatsAppBroadcast>>,
+    TError,
+    PreviewTripWhatsAppBroadcastMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof previewTripWhatsAppBroadcast>>,
+  TError,
+  PreviewTripWhatsAppBroadcastMutationVariables,
+  TContext
+> => {
+  const mutationKey = getPreviewTripWhatsAppBroadcastMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof previewTripWhatsAppBroadcast>>,
+    PreviewTripWhatsAppBroadcastMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return previewTripWhatsAppBroadcast(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PreviewTripWhatsAppBroadcastMutationResult = NonNullable<
+  Awaited<ReturnType<typeof previewTripWhatsAppBroadcast>>
+>;
+export type PreviewTripWhatsAppBroadcastMutationBody =
+  BodyType<WhatsAppBroadcastPreviewBody>;
+export type PreviewTripWhatsAppBroadcastMutationError = ErrorType<unknown>;
+export type PreviewTripWhatsAppBroadcastMutationVariables = {
+  id: string;
+  data: BodyType<WhatsAppBroadcastPreviewBody>;
+};
+
+/**
+ * @summary Preview eligible and skipped WhatsApp broadcast recipients
+ */
+export const usePreviewTripWhatsAppBroadcast = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof previewTripWhatsAppBroadcast>>,
+      TError,
+      PreviewTripWhatsAppBroadcastMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof previewTripWhatsAppBroadcast>>,
+  TError,
+  PreviewTripWhatsAppBroadcastMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getPreviewTripWhatsAppBroadcastMutationOptions(options),
+    queryClient,
+  );
+};
+
 export const getPayReferralBonusUrl = (id: string) => {
   return `/api/referrals/${id}/pay-bonus`;
 };
@@ -40212,7 +40776,7 @@ export const getTestWhatsAppMessageUrl = () => {
 };
 
 /**
- * @summary Send a referral WhatsApp test message to the configured agency number
+ * @summary Send a referral WhatsApp test message to an explicit test destination
  */
 export const testWhatsAppMessage = async (
   testWhatsAppMessageBody: TestWhatsAppMessageBody,
@@ -40301,7 +40865,7 @@ export type TestWhatsAppMessageMutationVariables = {
 };
 
 /**
- * @summary Send a referral WhatsApp test message to the configured agency number
+ * @summary Send a referral WhatsApp test message to an explicit test destination
  */
 export const useTestWhatsAppMessage = <
   TError = ErrorType<unknown>,

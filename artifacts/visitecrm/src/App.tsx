@@ -12,6 +12,7 @@ import { useApiTimeout } from "@/hooks/useApiTimeout";
 import { ApiTimeoutFallback } from "@/components/api-timeout-fallback";
 import { AccessBlockedWall, extractBlockedCode, extractBlockedScope, type BlockedAccessScope } from "@/components/access-blocked-wall";
 import { getRoleRedirectPath } from "@/lib/role-redirect";
+import { resolveClerkProxyUrl } from "@/lib/clerk-proxy-url";
 import { RoleGate } from "@/components/role-gate";
 
 import Layout from "@/components/layout";
@@ -36,6 +37,7 @@ const Loyalty = lazy(() => import("@/pages/loyalty"));
 const Nps = lazy(() => import("@/pages/nps"));
 const Registrations = lazy(() => import("@/pages/registrations"));
 const Analytics = lazy(() => import("@/pages/analytics"));
+const StorefrontAnalytics = lazy(() => import("@/pages/storefront-analytics"));
 const Insights = lazy(() => import("@/pages/insights"));
 const GemeoDigital = lazy(() => import("@/pages/gemeo"));
 const Commissions = lazy(() => import("@/pages/commissions"));
@@ -142,14 +144,10 @@ const clerkPubKeyIsValid = /^pk_(?:test|live)_[A-Za-z0-9_-]+$/.test(clerkPubKey)
 // If VITE_CLERK_PROXY_URL contains comma-separated entries (one per custom domain),
 // pick the one whose origin matches the current window location. Returns undefined (no proxy)
 // if none match — this ensures Clerk works on Replit preview/deploy URLs without erroring.
-const clerkProxyUrl = (() => {
-  const raw: string = import.meta.env.VITE_CLERK_PROXY_URL ?? "";
-  if (!raw) return undefined;
-  const entries = raw.split(",").map((s) => s.trim()).filter(Boolean);
-  const currentOrigin = typeof window !== "undefined" ? window.location.origin : "";
-  const match = entries.find((u) => u.startsWith(currentOrigin));
-  return match ?? undefined;
-})();
+const clerkProxyUrl = resolveClerkProxyUrl(
+  import.meta.env.VITE_CLERK_PROXY_URL,
+  typeof window !== "undefined" ? window.location.origin : "",
+);
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 function stripBase(path: string): string {
@@ -475,6 +473,7 @@ function Router() {
 
       {/* Analytics */}
       <Route path="/analytics" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Analytics} />} />
+      <Route path="/analytics/vitrine" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={StorefrontAnalytics} />} />
       <Route path="/analytics/revenue" component={() => <RoleGate allowedRoles={FINANCE_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Revenue} />} />
       <Route path="/analytics/historico-comparativo" component={() => <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">Carregando...</div>}><RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={HistoricoComparativo} /></Suspense>} />
       <Route path="/analytics/vendedores" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Vendedores} />} />

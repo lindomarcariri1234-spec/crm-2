@@ -48,6 +48,7 @@ import {
   deleteReservationAndReleaseCapacity,
   lockReservationForCancellation,
   moveLockedReservationCapacity,
+  findTripSeatConflicts,
   type LockedReservationCapacityRow,
 } from "../services/reservation-capacity";
 
@@ -291,6 +292,7 @@ function buildReservationView(r: typeof reservationsTable.$inferSelect, rel: Res
     clientId: r.clientId,
     seats: r.seats ?? [],
     tripType: r.tripType,
+    travelType: r.travelType,
     packageType: r.packageType,
     hasInsurance: r.hasInsurance,
     isGratuidade: r.isGratuidade,
@@ -751,6 +753,10 @@ router.get("/reservations/stats", async (req, res, next: NextFunction): Promise<
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.VIEW)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const { tripId, status, sellerId, dateFrom, dateTo, search, hasAutoRetry } = req.query as Record<string, string>;
     const conditions: ReturnType<typeof eq>[] = [eq(reservationsTable.tenantId, me.tenantId)];
@@ -787,7 +793,19 @@ router.get("/reservations/stats", async (req, res, next: NextFunction): Promise<
         ? or(voucherCondition, inArray(reservationsTable.clientId, matchingClients.map(client => client.id))) as ReturnType<typeof eq>
         : voucherCondition);
     }
-    if (me.role === ROLES.SALES) conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
+    if (me.role === ROLES.CLIENT) {
+      const [client] = await db.select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.userId, me.id)))
+        .limit(1);
+      if (!client) {
+        res.json({ total: 0, confirmed: 0, pending: 0, cancelled: 0, totalOutstanding: 0 });
+        return;
+      }
+      conditions.push(eq(reservationsTable.clientId, client.id));
+    } else if (me.role === ROLES.SALES) {
+      conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
+    }
 
     const [statsRow] = await db
       .select({
@@ -1052,6 +1070,7 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
 
     const {
       tripId, clientId, status, search, createdById, sellerId, dateFrom, dateTo,
+      reservationIds: reservationIdsParam,
       departureDateFrom, departureDateTo, commissionSyncStatus, hasAutoRetry,
       page = "1", limit = "20",
     } = req.query as Record<string, string>;
@@ -1065,7 +1084,22 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
     if (departureDateFrom && !ISO_DATE.test(departureDateFrom)) { next(new ValidationError("departureDateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
     if (departureDateTo && !ISO_DATE.test(departureDateTo)) { next(new ValidationError("departureDateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
 
+    let reservationIds: string[] | undefined;
+    if (reservationIdsParam !== undefined) {
+      if (typeof reservationIdsParam !== "string") {
+        next(new ValidationError("reservationIds must be a comma-separated string", "VALIDATION_ERROR"));
+        return;
+      }
+      reservationIds = reservationIdsParam.split(",").map(id => id.trim());
+      if (reservationIds.length === 0 || reservationIds.length > 100 || reservationIds.some(id => !id || id.length > 200)) {
+        next(new ValidationError("reservationIds must contain 1 to 100 valid reservation IDs", "VALIDATION_ERROR"));
+        return;
+      }
+      reservationIds = [...new Set(reservationIds)];
+    }
+
     const conditions: ReturnType<typeof eq>[] = [eq(reservationsTable.tenantId, me.tenantId)];
+    if (reservationIds) conditions.push(inArray(reservationsTable.id, reservationIds));
     if (tripId) conditions.push(eq(reservationsTable.tripId, tripId));
     if (status) conditions.push(eq(reservationsTable.status, parseReservationStatus(status)));
     if (commissionSyncStatus) conditions.push(eq(reservationsTable.commissionSyncStatus, commissionSyncStatus));
@@ -1380,6 +1414,20 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         return { error: "Não há vagas suficientes nesta viagem", status: 409, code: "RESERVATION_CONFLICT" };
       }
 
+      const conflictingSeats = await findTripSeatConflicts(
+        tx,
+        me.tenantId,
+        parsed.data.tripId,
+        parsed.data.seats,
+      );
+      if (conflictingSeats.length > 0) {
+        return {
+          error: "Uma ou mais poltronas selecionadas já estão ocupadas",
+          status: 409,
+          code: "SEAT_CONFLICT",
+        };
+      }
+
       let selectedRoomName: string | null = null;
       if (parsed.data.roomId) {
         if (!tripRow.accommodation_id) {
@@ -1454,6 +1502,7 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         clientId: parsed.data.clientId,
         seats: parsed.data.seats,
         tripType: parsed.data.tripType ?? null,
+        travelType: parsed.data.travelType ?? null,
         packageType: parsed.data.packageType ?? selectedRoomName,
         hasInsurance: parsed.data.hasInsurance ?? false,
         isGratuidade: parsed.data.isGratuidade ?? false,
@@ -1900,6 +1949,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     if (parsed.data.status != null) updates.status = parseReservationStatus(parsed.data.status);
     if (parsed.data.paymentMethod != null) updates.paymentMethod = parsed.data.paymentMethod;
     if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
+    if (parsed.data.travelType !== undefined) updates.travelType = parsed.data.travelType ?? null;
     if (parsed.data.seats != null) updates.seats = parsed.data.seats;
     if (parsed.data.installments != null) updates.installments = parsed.data.installments;
     if (parsed.data.boardingLocationId !== undefined) updates.boardingLocationId = parsed.data.boardingLocationId ?? null;

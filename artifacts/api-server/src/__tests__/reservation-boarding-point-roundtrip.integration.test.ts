@@ -1,7 +1,8 @@
 /**
  * Real PostgreSQL integration test for reservation boarding-point persistence.
- * It creates reservations through the API and reloads each one through the
- * detail and batched list endpoints, covering both supported ID namespaces.
+ * It creates reservations through the API, edits an unrelated field through
+ * PATCH, and reloads each one through detail/list endpoints. Both supported ID
+ * namespaces must retain the selected point and its display details.
  */
 import { randomUUID } from "node:crypto";
 import express from "express";
@@ -223,20 +224,45 @@ describe("reservation boarding point persistence — real PostgreSQL", () => {
         address: testCase.expectedPoint.address,
       });
 
+      const updated = await request(app)
+        .patch(`/api/reservations/${created.body.id}`)
+        .send({ notes: "Boarding point must survive an unrelated edit" });
+      expect(updated.status, JSON.stringify(updated.body)).toBe(200);
+      expect(updated.body).toMatchObject({
+        id: created.body.id,
+        notes: "Boarding point must survive an unrelated edit",
+        boardingLocationId: testCase.selectedId,
+        boardingLocation: {
+          name: testCase.expectedPoint.name,
+          time: testCase.expectedPoint.time,
+          address: testCase.expectedPoint.address,
+        },
+      });
+
       const [persisted] = await db
-        .select({ boardingLocationId: reservationsTable.boardingLocationId })
+        .select({
+          boardingLocationId: reservationsTable.boardingLocationId,
+          notes: reservationsTable.notes,
+        })
         .from(reservationsTable)
         .where(eq(reservationsTable.id, created.body.id))
         .limit(1);
-      expect(persisted?.boardingLocationId).toBe(testCase.selectedId);
+      expect(persisted).toMatchObject({
+        boardingLocationId: testCase.selectedId,
+        notes: "Boarding point must survive an unrelated edit",
+      });
 
       const reopened = await request(app).get(`/api/reservations/${created.body.id}`);
       expect(reopened.status).toBe(200);
-      expect(reopened.body.boardingLocationId).toBe(testCase.selectedId);
-      expect(reopened.body.boardingLocation).toEqual({
-        name: testCase.expectedPoint.name,
-        time: testCase.expectedPoint.time,
-        address: testCase.expectedPoint.address,
+      expect(reopened.body).toMatchObject({
+        id: created.body.id,
+        notes: "Boarding point must survive an unrelated edit",
+        boardingLocationId: testCase.selectedId,
+        boardingLocation: {
+          name: testCase.expectedPoint.name,
+          time: testCase.expectedPoint.time,
+          address: testCase.expectedPoint.address,
+        },
       });
     }
 

@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
+import { useLocation, useSearch } from "wouter";
 import { CoverImageUpload } from "@/components/cover-image-upload";
 import { storeApi } from "@/lib/storeApi";
-import { useUser } from "@clerk/react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import {
   useGetTenant,
@@ -23,7 +23,6 @@ import {
   type PlanPublic,
   type SubscriptionInvoice,
 } from "@workspace/api-client-react";
-import { parseBackupText, validateBackupDownload, type ParsedBackup } from "@/lib/backup-file";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import type {
@@ -63,6 +62,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
+import {
+  buildAgencySettingsTabUrl,
+  getLegacyBackupRedirect,
+  getAgencySettingsAccess,
+  normalizeAgencySettingsTabUrl,
+} from "@/components/settings/agency-settings-access";
+import {
+  AgencySettingsDirtyContext,
+  hasUnsavedAgencySettings,
+  updateAgencySettingsDirtySources,
+  useAgencySettingsDirty,
+} from "@/components/settings/agency-settings-dirty";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -104,16 +116,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Save,
-  DatabaseBackup,
-  Download,
-  Upload,
-  FileJson,
-  XCircle,
-  AlertTriangle,
   Wrench,
 } from "lucide-react";
 import { formatCurrencyBRL } from "@/lib/utils";
 import { interpolateWhatsAppPreview, renderWhatsAppPreview } from "@/lib/whatsappPreview";
+import { countWhatsAppDefaults, getWhatsAppDefaultActionLabel } from "@/lib/whatsapp-defaults";
 import { ROLES, INVOICE_STATUS } from "@workspace/permissions";
 import { FeaturesTab } from "./FeaturesTab";
 import { LinkedDataIntegrityPanel } from "@/components/linked-data-integrity-panel";
@@ -131,13 +138,14 @@ function SalesGoalSection() {
     return typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : 50000;
   })();
   const [goalInput, setGoalInput] = useState("");
+  useAgencySettingsDirty("agency", "sales-monthly-goal", goalInput !== String(currentGoal));
 
   useEffect(() => {
     setGoalInput(String(currentGoal));
   }, [currentGoal]);
 
   async function handleSaveGoal() {
-    const parsed = parseFloat(goalInput.replace(/\./g, "").replace(",", "."));
+    const parsed = parseFloat(goalInput);
     if (isNaN(parsed) || parsed <= 0) {
       toast({ title: "Valor inválido para a meta", variant: "destructive" });
       return;
@@ -176,176 +184,6 @@ function SalesGoalSection() {
   );
 }
 
-/* ──────────────────── Change Password Section ──────────────────── */
-function ChangePasswordSection() {
-  const { user } = useUser();
-  const { toast } = useToast();
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-
-  async function handleChangePassword(e: React.FormEvent) {
-    e.preventDefault();
-    if (!user) {
-      toast({ title: "Usuário não autenticado", variant: "destructive" });
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast({ title: "As senhas não coincidem", variant: "destructive" });
-      return;
-    }
-    if (newPassword.length < 8) {
-      toast({ title: "A nova senha deve ter pelo menos 8 caracteres", variant: "destructive" });
-      return;
-    }
-    setIsLoading(true);
-    try {
-      await user.updatePassword({ currentPassword, newPassword, signOutOfOtherSessions: false });
-      toast({ title: "Senha alterada com sucesso" });
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-    } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : "Erro ao alterar senha";
-      toast({ title: msg, variant: "destructive" });
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  return (
-    <div className="border rounded-lg p-4 space-y-3 mt-4">
-      <div className="flex items-center gap-2">
-        <Lock className="w-4 h-4 text-muted-foreground" />
-        <h3 className="text-sm font-semibold">Alterar Senha</h3>
-      </div>
-      {user?.passwordEnabled === false ? (
-        <p className="text-xs text-muted-foreground">
-          Sua conta usa login pelo Google — não é necessário definir uma senha.
-        </p>
-      ) : (
-        <form onSubmit={handleChangePassword} className="space-y-3 max-w-sm">
-          <div className="space-y-1">
-            <Label htmlFor="currentPassword" className="text-xs">Senha Atual</Label>
-            <Input
-              id="currentPassword"
-              type="password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="newPassword" className="text-xs">Nova Senha</Label>
-            <Input
-              id="newPassword"
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              autoComplete="new-password"
-              required
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="confirmPassword" className="text-xs">Confirmar Nova Senha</Label>
-            <Input
-              id="confirmPassword"
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              autoComplete="new-password"
-              required
-            />
-          </div>
-          <Button type="submit" size="sm" disabled={isLoading}>
-            {isLoading && <Loader2 className="w-3 h-3 mr-2 animate-spin" />}
-            Alterar Senha
-          </Button>
-        </form>
-      )}
-    </div>
-  );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/** "Backup de dados" — full-agency JSON export. Visible only to agency admins/superadmin. */
-function BackupDataSection() {
-  const { toast } = useToast();
-  const { data: me } = useGetMe();
-  const canManage = me?.role === ROLES.AGENCY_ADMIN || me?.role === ROLES.SUPER_ADMIN;
-  const [isExporting, setIsExporting] = useState(false);
-  const [lastExportSize, setLastExportSize] = useState<number | null>(null);
-
-  if (!canManage) return null;
-
-  async function handleExport() {
-    setIsExporting(true);
-    setLastExportSize(null);
-    try {
-      const res = await fetch("/api/backup/export", { credentials: "include" });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string; message?: string }).message ?? (err as { error?: string }).error ?? "Erro ao gerar backup");
-      }
-      const blob = await validateBackupDownload(await res.blob(), res.headers.get("Content-Type"));
-      const disposition = res.headers.get("Content-Disposition") ?? "";
-      const match = disposition.match(/filename="([^"]+)"/);
-      const filename = match?.[1] ?? "backup.json";
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = filename; a.click();
-      URL.revokeObjectURL(url);
-      setLastExportSize(blob.size);
-      toast({ title: "Backup gerado com sucesso!" });
-    } catch (err) {
-      toast({ title: "Erro ao gerar backup", description: String(err instanceof Error ? err.message : err), variant: "destructive" });
-    } finally {
-      setIsExporting(false);
-    }
-  }
-
-  return (
-    <div className="border rounded-lg p-4 space-y-3 mt-4">
-      <div className="flex items-center gap-2">
-        <DatabaseBackup className="w-4 h-4 text-muted-foreground" />
-        <h3 className="text-sm font-semibold">Backup de Dados</h3>
-      </div>
-      <p className="text-xs text-muted-foreground max-w-md">
-        Baixe um arquivo JSON com todos os dados da sua agência: configurações, usuários, clientes
-        (com notas, conquistas, destinos dos sonhos, favoritos e pontuação), fornecedores,
-        hospedagens, destinos, veículos, viagens (com layouts de veículo, locais de embarque,
-        custos, mídias e check-ins), reservas com passageiros e parcelas, documentos, modelos de
-        mensagem, automações e campanhas, calendário, comissões, funil de vendas, fidelidade, clube
-        de vantagens, indicações, pesquisas de satisfação (NPS), convites de equipe pendentes, loja
-        (categorias, produtos, cupons, páginas, avaliações, pedidos e alertas de preço), catálogo de
-        marketing (categorias, produtos e pedidos), parceiros de marketplace (com produtos e
-        comissões), acertos financeiros, cupons da agência, metas de vendas e financeiro (pagamentos
-        e despesas). Credenciais de autenticação e segredos de pagamento nunca são incluídos.
-      </p>
-      <div className="flex items-center gap-3">
-        <Button onClick={handleExport} disabled={isExporting} size="sm" variant="outline">
-          {isExporting ? (
-            <><Loader2 className="w-3 h-3 mr-2 animate-spin" />Gerando backup...</>
-          ) : (
-            <><DatabaseBackup className="w-3 h-3 mr-2" />Baixar backup (.json)</>
-          )}
-        </Button>
-        {lastExportSize != null && (
-          <span className="text-xs text-muted-foreground">Arquivo gerado: {formatBytes(lastExportSize)}</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /* ──────────────────── Agency Profile Tab ──────────────────── */
 function AgencyProfileTab() {
   const { toast } = useToast();
@@ -361,32 +199,32 @@ function AgencyProfileTab() {
   const updateTenant = useUpdateTenant();
 
   const [form, setForm] = useState<UpdateTenantBody>({});
+  const [savedForm, setSavedForm] = useState<UpdateTenantBody>({});
+  useAgencySettingsDirty("agency", "agency-profile", JSON.stringify(form) !== JSON.stringify(savedForm));
   const [prefixError, setPrefixError] = useState<string | null>(null);
-  const [uploadingCount, setUploadingCount] = useState(0);
-  const handleUploadingChange = useCallback((uploading: boolean) => {
-    setUploadingCount((n) => Math.max(0, n + (uploading ? 1 : -1)));
-  }, []);
-
   useEffect(() => {
     if (fullTenant) {
-      setForm({
+      const loadedForm = {
         name: fullTenant.name,
+        cnpj: fullTenant.cnpj ?? "",
         logoUrl: fullTenant.logoUrl ?? "",
-        primaryColor: fullTenant.primaryColor ?? "#3B82F6",
-        secondaryColor: fullTenant.secondaryColor ?? "#8B5CF6",
+        address: fullTenant.address ?? "",
+        city: fullTenant.city ?? "",
+        state: fullTenant.state ?? "",
+        zipCode: fullTenant.zipCode ?? "",
         whatsapp: fullTenant.whatsapp ?? "",
         phone: fullTenant.phone ?? "",
         website: fullTenant.website ?? "",
         reservationPrefix: fullTenant.reservationPrefix ?? "",
-      });
+      };
+      setForm(loadedForm);
+      setSavedForm(loadedForm);
     } else if (me?.tenant) {
-      setForm((f) => ({
-        ...f,
-        name: me.tenant!.name,
-        logoUrl: me.tenant!.logoUrl ?? "",
-        primaryColor: me.tenant!.primaryColor ?? "#3B82F6",
-        secondaryColor: me.tenant!.secondaryColor ?? "#8B5CF6",
-      }));
+      const loadedFields = {
+        name: me.tenant.name,
+      };
+      setForm((current) => ({ ...current, ...loadedFields }));
+      setSavedForm((current) => ({ ...current, ...loadedFields }));
     }
   }, [fullTenant?.id, me?.tenant?.id]);
 
@@ -406,6 +244,7 @@ function AgencyProfileTab() {
         delete submitData.reservationPrefix;
       }
       await updateTenant.mutateAsync({ id: tenantId, data: submitData });
+      setSavedForm(form);
       toast({ title: "Perfil da agência atualizado" });
       await queryClient.invalidateQueries({ queryKey: getGetTenantQueryKey(tenantId) });
       refetchMe();
@@ -420,154 +259,175 @@ function AgencyProfileTab() {
   }
 
   return (
-    <div className="space-y-4 max-w-xl">
-      <div className="space-y-1">
-        <Label>Nome da Agência</Label>
-        <Input
-          value={form.name ?? ""}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-        />
-      </div>
-      <div className="space-y-1">
-        <Label>Logo</Label>
-        <CoverImageUpload
-          fileSizeMB="2"
-          value={form.logoUrl ?? ""}
-          onChange={(url) => setForm((f) => ({ ...f, logoUrl: url }))}
-          onUploadingChange={handleUploadingChange}
-          emptyLabel="Clique ou arraste o logo aqui"
-          previewClassName="h-32"
-          objectFit="contain"
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1">
-          <Label>WhatsApp</Label>
-          <Input
-            value={form.whatsapp ?? ""}
-            onChange={(e) => setForm((f) => ({ ...f, whatsapp: e.target.value }))}
-            placeholder="+55 (11) 99999-9999"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label>Telefone</Label>
-          <Input
-            value={form.phone ?? ""}
-            onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-          />
-        </div>
-      </div>
-      <div className="space-y-1">
-        <Label>Website</Label>
-        <Input
-          value={form.website ?? ""}
-          onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))}
-          placeholder="https://suaagencia.com.br"
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1">
-          <Label>Cor Primária</Label>
-          <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={form.primaryColor ?? "#3B82F6"}
-              onChange={(e) => setForm((f) => ({ ...f, primaryColor: e.target.value }))}
-              className="h-9 w-14 cursor-pointer rounded border"
-            />
-            <Input
-              value={form.primaryColor ?? "#3B82F6"}
-              onChange={(e) => setForm((f) => ({ ...f, primaryColor: e.target.value }))}
-              className="font-mono"
-            />
-          </div>
-        </div>
-        <div className="space-y-1">
-          <Label>Cor Secundária</Label>
-          <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={form.secondaryColor ?? "#8B5CF6"}
-              onChange={(e) => setForm((f) => ({ ...f, secondaryColor: e.target.value }))}
-              className="h-9 w-14 cursor-pointer rounded border"
-            />
-            <Input
-              value={form.secondaryColor ?? "#8B5CF6"}
-              onChange={(e) => setForm((f) => ({ ...f, secondaryColor: e.target.value }))}
-              className="font-mono"
-            />
-          </div>
-        </div>
-      </div>
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <Label>Prefixo de Identificação</Label>
-          {fullTenant?.prefixLocked && (
-            <Badge variant="secondary" className="text-xs gap-1">
-              <Lock className="w-3 h-3" />
-              Fixado
-            </Badge>
-          )}
-        </div>
-        <div className="flex flex-col gap-1.5">
-          {fullTenant?.prefixLocked ? (
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-muted font-mono text-sm w-36">
-                  <Lock className="w-3 h-3 text-muted-foreground shrink-0" />
-                  <span>{fullTenant.reservationPrefix || "—"}</span>
+    <div className="space-y-5">
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Card className="rounded-2xl border-[#DCE3E8] shadow-sm dark:border-border">
+          <CardHeader>
+            <CardTitle className="text-base">Identificação do empreendimento</CardTitle>
+            <CardDescription>Dados usados para identificar sua agência no CRM e nos registros da operação.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-[150px_minmax(0,1fr)]">
+              <div className="space-y-2">
+                <Label>Logo</Label>
+                <CoverImageUpload
+                  value={form.logoUrl ?? ""}
+                  onChange={(logoUrl) => setForm((current) => ({ ...current, logoUrl }))}
+                  previewClassName="h-28 w-28 rounded-xl"
+                  emptyLabel="Adicionar logo"
+                  placeholder="https://..."
+                />
+              </div>
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label>Nome comercial</Label>
+                  <Input
+                    value={form.name ?? ""}
+                    onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))}
+                    placeholder="Nome da agência ou estabelecimento"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>CNPJ</Label>
+                  <Input
+                    value={form.cnpj ?? ""}
+                    onChange={(e) => setForm((current) => ({ ...current, cnpj: e.target.value }))}
+                    placeholder="00.000.000/0000-00"
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>E-mail cadastrado</Label>
+                  <Input value={fullTenant?.email ?? ""} readOnly disabled />
+                  <p className="text-xs text-muted-foreground">O e-mail de acesso não é alterado por esta configuração.</p>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground">Configurado permanentemente — não pode ser alterado.</p>
             </div>
-          ) : (
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border-[#DCE3E8] shadow-sm dark:border-border">
+          <CardHeader>
+            <CardTitle className="text-base">Contato e localização</CardTitle>
+            <CardDescription>Informações para atendimento aos viajantes e identificação do estabelecimento.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>WhatsApp de atendimento</Label>
+                <Input
+                  value={form.whatsapp ?? ""}
+                  onChange={(e) => setForm((current) => ({ ...current, whatsapp: e.target.value }))}
+                  placeholder="+55 (11) 99999-9999"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Telefone</Label>
+                <Input
+                  value={form.phone ?? ""}
+                  onChange={(e) => setForm((current) => ({ ...current, phone: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Site</Label>
+              <Input
+                value={form.website ?? ""}
+                onChange={(e) => setForm((current) => ({ ...current, website: e.target.value }))}
+                placeholder="https://suaagencia.com.br"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Endereço</Label>
+              <Input
+                value={form.address ?? ""}
+                onChange={(e) => setForm((current) => ({ ...current, address: e.target.value }))}
+                placeholder="Rua, número e complemento"
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-[1.4fr_1fr_0.7fr]">
+              <div className="space-y-1.5">
+                <Label>Cidade</Label>
+                <Input value={form.city ?? ""} onChange={(e) => setForm((current) => ({ ...current, city: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Estado</Label>
+                <Input value={form.state ?? ""} onChange={(e) => setForm((current) => ({ ...current, state: e.target.value.toUpperCase().slice(0, 2) }))} maxLength={2} placeholder="CE" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>CEP</Label>
+                <Input value={form.zipCode ?? ""} onChange={(e) => setForm((current) => ({ ...current, zipCode: e.target.value }))} placeholder="00000-000" inputMode="numeric" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="rounded-2xl border-[#DCE3E8] shadow-sm dark:border-border">
+        <CardHeader>
+          <CardTitle className="text-base">Identificação de reservas e clientes</CardTitle>
+          <CardDescription>O prefixo aparece nos códigos operacionais gerados pelo CRM.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Label>Prefixo de identificação</Label>
+              {fullTenant?.prefixLocked && (
+                <Badge variant="secondary" className="gap-1 text-xs">
+                  <Lock className="h-3 w-3" /> Fixado
+                </Badge>
+              )}
+            </div>
+            {fullTenant?.prefixLocked ? (
+              <>
+                <div className="flex w-36 items-center gap-2 rounded-md border bg-muted px-3 py-2 font-mono text-sm">
+                  <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span>{fullTenant.reservationPrefix || "—"}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">Configurado permanentemente — não pode ser alterado.</p>
+              </>
+            ) : (
+              <>
                 <Input
                   value={form.reservationPrefix ?? ""}
                   onChange={(e) => {
-                    const v = e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 5);
-                    setForm((f) => ({ ...f, reservationPrefix: v }));
+                    const value = e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 5);
+                    setForm((current) => ({ ...current, reservationPrefix: value }));
                     setPrefixError(null);
                   }}
-                  placeholder="Ex: CHQ, AGT..."
-                  className={`font-mono w-36 ${prefixError ? "border-destructive" : ""}`}
+                  placeholder="Ex.: CHQ, AGT"
+                  className={`w-36 font-mono ${prefixError ? "border-destructive" : ""}`}
                   maxLength={5}
                 />
-                <span className="text-xs text-muted-foreground">1–5 letras. Será fixado permanentemente ao salvar.</span>
-              </div>
-              {prefixError && (
-                <p className="text-xs text-destructive">{prefixError}</p>
-              )}
+                <p className="text-xs text-muted-foreground">De 1 a 5 letras. O prefixo fica fixo após o primeiro salvamento.</p>
+                {prefixError && <p className="text-xs text-destructive">{prefixError}</p>}
+              </>
+            )}
+            <div className="space-y-0.5 text-xs text-muted-foreground">
+              {(() => {
+                const now = new Date();
+                const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+                const prefix = (fullTenant?.prefixLocked ? fullTenant.reservationPrefix : form.reservationPrefix) || "CLI";
+                return (
+                  <>
+                    <p>Exemplo de reserva: <span className="font-mono font-semibold text-foreground">{prefix}-EXC-{yyyymm}-00001</span></p>
+                    <p>Exemplo de cliente: <span className="font-mono font-semibold text-foreground">{prefix}-{yyyymm}-00043</span></p>
+                  </>
+                );
+              })()}
             </div>
-          )}
-          <p className="text-xs text-muted-foreground">Usado nos códigos de reservas e nos códigos de registro de clientes.</p>
-          <div className="text-xs text-muted-foreground space-y-0.5">
-            {(() => {
-              const now = new Date();
-              const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-              const prefix = (fullTenant?.prefixLocked ? fullTenant.reservationPrefix : form.reservationPrefix) || "CLI";
-              return (
-                <>
-                  <p>Reservas: <span className="font-mono font-semibold text-foreground">{prefix}-EXC-{yyyymm}-00001</span></p>
-                  <p>Código de cliente: <span className="font-mono font-semibold text-foreground">{prefix}-{yyyymm}-00043</span></p>
-                </>
-              );
-            })()}
           </div>
-        </div>
-      </div>
-      <Button onClick={handleSave} disabled={updateTenant.isPending || uploadingCount > 0}>
-        {uploadingCount > 0 ? (
-          <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Aguardando upload...</>
-        ) : updateTenant.isPending ? (
-          <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Salvando...</>
-        ) : "Salvar Perfil"}
-      </Button>
+          <div className="flex justify-end border-t pt-4">
+            <Button onClick={handleSave} disabled={updateTenant.isPending}>
+              {updateTenant.isPending ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Salvando...</>
+              ) : "Salvar configuração geral"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <SalesGoalSection />
-      <ChangePasswordSection />
-      <BackupDataSection />
     </div>
   );
 }
@@ -858,7 +718,7 @@ function PlanTab() {
         </CardHeader>
         {usageItems.length > 0 && (
           <CardContent>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               {usageItems.map((item) => {
                 const pct = Math.min((item.used / item.max) * 100, 100);
                 const isNearLimit = pct >= 80;
@@ -958,7 +818,7 @@ function PlanTab() {
 
         return (
           <TooltipProvider>
-          <div className={`grid gap-4 ${visiblePlans.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+          <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${visiblePlans.length === 3 ? "lg:grid-cols-3" : ""}`}>
             {visiblePlans.map((plan) => {
               const isCurrentPlan = plan.slug === subData?.tenant?.planId || plan.id === subData?.tenant?.planId;
               const price = selectedCycle === "annual" ? Number(plan.annualPrice) : Number(plan.monthlyPrice);
@@ -1152,6 +1012,7 @@ function StatusBadge({ status }: { status: string }) {
 interface IntegrationFieldDef {
   key: string;
   label: string;
+  description?: string;
   secret: boolean;
   optional?: boolean;
 }
@@ -1198,9 +1059,41 @@ function WhatsAppIntegrationCards() {
   const [adding, setAdding] = useState(false);
   const [forbidden, setForbidden] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [refreshWarning, setRefreshWarning] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [disconnectedDefaultCount, setDisconnectedDefaultCount] = useState(0);
 
-  const loadConnections = useCallback(async () => {
+  const loadConnections = useCallback(async (refreshProvider = true) => {
     setLoadError(false);
+    setRefreshing(refreshProvider);
+    if (refreshProvider) {
+      try {
+        const refreshRes = await fetch(`${BASE}/api/integrations/whatsapp_evolution/connections/refresh`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (refreshRes.status === 403) {
+          setForbidden(true);
+          setLoading(false);
+          setRefreshing(false);
+          return;
+        }
+        if (refreshRes.ok) {
+          const refreshResult = await refreshRes.json().catch(() => ({})) as {
+            unverified?: number;
+            disconnectedDefaults?: number;
+          };
+          setRefreshWarning((refreshResult.unverified ?? 0) > 0);
+          setDisconnectedDefaultCount(refreshResult.disconnectedDefaults ?? 0);
+        } else {
+          setRefreshWarning(true);
+          setDisconnectedDefaultCount(0);
+        }
+      } catch {
+        setRefreshWarning(true);
+        setDisconnectedDefaultCount(0);
+      }
+    }
     try {
       const res = await fetch(`${BASE}/api/integrations/whatsapp_evolution/connections`, {
         credentials: "include",
@@ -1216,12 +1109,21 @@ function WhatsAppIntegrationCards() {
       setConnections([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
     if (canManage) void loadConnections();
     else setLoading(false);
+  }, [canManage, loadConnections]);
+
+  useEffect(() => {
+    if (!canManage) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadConnections(false);
+    }, 15_000);
+    return () => window.clearInterval(timer);
   }, [canManage, loadConnections]);
 
   if (!canManage || forbidden) return null;
@@ -1235,9 +1137,16 @@ function WhatsAppIntegrationCards() {
             As respostas dos tickets usam o mesmo número que recebeu a conversa.
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={adding}>
-          Adicionar número
-        </Button>
+        <div className="flex gap-2">
+          {!loading && !loadError && (
+            <Button size="sm" variant="outline" onClick={() => void loadConnections()} disabled={refreshing}>
+              {refreshing ? "Verificando..." : "Atualizar status"}
+            </Button>
+          )}
+          <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={adding}>
+            Adicionar número
+          </Button>
+        </div>
       </div>
       {loading ? (
         <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
@@ -1249,27 +1158,46 @@ function WhatsAppIntegrationCards() {
           <Button size="sm" variant="outline" onClick={() => void loadConnections()}>Tentar novamente</Button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {connections.map((connection) => (
-            <IntegrationCard
-              key={connection.id}
-              type="whatsapp_evolution"
-              integrationId={connection.id}
-              onSaved={() => void loadConnections()}
-            />
-          ))}
-          {(adding || connections.length === 0) && (
-            <IntegrationCard
-              type="whatsapp_evolution"
-              createNew
-              onSaved={() => {
-                setAdding(false);
-                void loadConnections();
-              }}
-              onCancel={connections.length > 0 ? () => setAdding(false) : undefined}
-            />
+        <>
+          {disconnectedDefaultCount > 0 && (
+            <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              A Evolution confirmou a desconexão do número padrão. Ele foi removido como padrão; escolha um número conectado para continuar usando envios gerais.
+            </div>
           )}
-        </div>
+          {refreshWarning && (
+            <div role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              Não foi possível confirmar o status de todos os números. Os padrões existentes foram mantidos.
+            </div>
+          )}
+          {countWhatsAppDefaults(connections) > 1 && (
+            <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              Há {countWhatsAppDefaults(connections)} números marcados como padrão. Escolha um número ativo e conectado para corrigir; o histórico de mensagens não será alterado.
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {connections.map((connection) => (
+              <IntegrationCard
+                key={connection.id}
+                type="whatsapp_evolution"
+                integrationId={connection.id}
+                connection={connection}
+                duplicateDefaultCount={countWhatsAppDefaults(connections)}
+                onSaved={() => void loadConnections()}
+              />
+            ))}
+            {(adding || connections.length === 0) && (
+              <IntegrationCard
+                type="whatsapp_evolution"
+                createNew
+                onSaved={() => {
+                  setAdding(false);
+                  void loadConnections();
+                }}
+                onCancel={connections.length > 0 ? () => setAdding(false) : undefined}
+              />
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -1278,15 +1206,19 @@ function WhatsAppIntegrationCards() {
 function IntegrationCard({
   type,
   integrationId,
+  connection,
   createNew = false,
   onSaved,
   onCancel,
+  duplicateDefaultCount = 0,
 }: {
   type: string;
   integrationId?: string;
+  connection?: WhatsAppConnectionSummary;
   createNew?: boolean;
   onSaved?: () => void;
   onCancel?: () => void;
+  duplicateDefaultCount?: number;
 }) {
   const { toast } = useToast();
   const { data: me } = useGetMe();
@@ -1296,7 +1228,12 @@ function IntegrationCard({
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
+  const [qrError, setQrError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const [data, setData] = useState<IntegrationData | null>(null);
   const [formConfig, setFormConfig] = useState<Record<string, string>>({});
@@ -1305,10 +1242,47 @@ function IntegrationCard({
   const [environment, setEnvironment] = useState<"production" | "test">("production");
   const [enabled, setEnabled] = useState(false);
   const [dirty, setDirty] = useState(false);
+  useAgencySettingsDirty("integrations", `integration-${type}-${integrationId ?? "new"}`, dirty);
   const [logs, setLogs] = useState<IntegrationLog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
+  const [importingHistory, setImportingHistory] = useState(false);
+  const [historyImportResult, setHistoryImportResult] = useState<{
+    conversationsFound: number;
+    conversationsProcessed: number;
+    messagesImported: number;
+    messagesAlreadyPresent: number;
+    messagesSkipped: number;
+  } | null>(null);
+  const [historyImportPartial, setHistoryImportPartial] = useState(false);
+  const [historyImportCursor, setHistoryImportCursor] = useState<unknown | null>(null);
+  const historyImportStorageKey = type === "instagram_zernio" && data?.integrationId
+    ? `zernio-history-import:${data.integrationId}`
+    : null;
+
+  useEffect(() => {
+    setHistoryImportCursor(null);
+    setHistoryImportResult(null);
+    setHistoryImportPartial(false);
+    if (!historyImportStorageKey) return;
+    try {
+      const saved = window.localStorage.getItem(historyImportStorageKey);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as { cursor?: unknown; progress?: typeof historyImportResult };
+      if (parsed.cursor) {
+        setHistoryImportCursor(parsed.cursor);
+        setHistoryImportResult(parsed.progress
+          ? { ...parsed.progress, messagesSkipped: parsed.progress.messagesSkipped ?? 0 }
+          : null);
+        setHistoryImportPartial(true);
+      }
+    } catch {
+      window.localStorage.removeItem(historyImportStorageKey);
+    }
+  }, [historyImportStorageKey]);
 
   const loadConfig = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
       const query = integrationId ? `?integrationId=${encodeURIComponent(integrationId)}` : "";
       const res = await fetch(`${BASE}/api/integrations/${type}${query}`, { credentials: "include" });
@@ -1335,7 +1309,7 @@ function IntegrationCard({
       setEnabled(d.enabled);
       setDirty(false);
     } catch {
-      // silent — card stays in default state
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -1362,7 +1336,8 @@ function IntegrationCard({
 
   if (!canManage || forbidden) return null;
 
-  const status = data?.status ?? "disconnected";
+  const status = connection?.status ?? data?.status ?? "disconnected";
+  const isDefault = connection?.isDefault ?? data?.isDefault ?? false;
   const fieldDefs = data?.fieldDefs ?? [];
   const configFields = fieldDefs.filter((f) => !f.secret);
   const secretFields = fieldDefs.filter((f) => f.secret);
@@ -1392,6 +1367,32 @@ function IntegrationCard({
       toast({ title: "Falha ao testar conexão", variant: "destructive" });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function requestConnectionQr() {
+    if (!integrationId) return;
+    setQrLoading(true);
+    setQrCodeDataUrl(null);
+    setQrError(null);
+    setQrOpen(true);
+    try {
+      const res = await fetch(
+        `${BASE}/api/integrations/whatsapp_evolution/connections/${encodeURIComponent(integrationId)}/qr`,
+        { method: "POST", credentials: "include" },
+      );
+      const result = await res.json().catch(() => ({})) as {
+        qrCodeDataUrl?: string;
+        message?: string;
+      };
+      if (!res.ok || !result.qrCodeDataUrl) {
+        throw new Error(result.message || "Não foi possível gerar o QR Code.");
+      }
+      setQrCodeDataUrl(result.qrCodeDataUrl);
+    } catch (error) {
+      setQrError(error instanceof Error ? error.message : "Não foi possível gerar o QR Code.");
+    } finally {
+      setQrLoading(false);
     }
   }
 
@@ -1454,6 +1455,8 @@ function IntegrationCard({
         body: JSON.stringify({ integrationId, isDefault: true }),
       });
       if (!res.ok) throw new Error("Erro ao definir o número padrão");
+      const result = await res.json().catch(() => ({})) as { isDefault?: boolean; message?: string };
+      if (!result.isDefault) throw new Error(result.message || "Conecte o número antes de defini-lo como padrão.");
       toast({ title: "Número padrão atualizado" });
       await loadConfig();
       onSaved?.();
@@ -1462,6 +1465,7 @@ function IntegrationCard({
         title: error instanceof Error ? error.message : "Erro ao definir o número padrão",
         variant: "destructive",
       });
+      onSaved?.();
     } finally {
       setSaving(false);
     }
@@ -1488,6 +1492,55 @@ function IntegrationCard({
     }
   }
 
+  async function importInstagramHistory() {
+    if (!data?.integrationId) return;
+    setImportingHistory(true);
+    let cursor = historyImportCursor;
+    try {
+      while (true) {
+        const res = await fetch(`${BASE}/api/integrations/instagram_zernio/import-history`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ integrationId: data.integrationId, cursor }),
+        });
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(result.message || "Não foi possível importar o histórico.");
+        setHistoryImportResult(result.progress);
+        cursor = result.cursor ?? null;
+        if (cursor) {
+          setHistoryImportCursor(cursor);
+          setHistoryImportPartial(true);
+          if (historyImportStorageKey) {
+            window.localStorage.setItem(historyImportStorageKey, JSON.stringify({
+              cursor,
+              progress: result.progress,
+            }));
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 100));
+          continue;
+        }
+        if (historyImportStorageKey) window.localStorage.removeItem(historyImportStorageKey);
+        setHistoryImportCursor(null);
+        setHistoryImportPartial(false);
+        toast({
+          title: "Importação concluída",
+          description: `${result.progress.messagesImported} mensagens novas; ${result.progress.messagesAlreadyPresent} já existentes; ${result.progress.messagesSkipped} não importadas.`,
+        });
+        break;
+      }
+    } catch (error) {
+      setHistoryImportCursor(cursor);
+      setHistoryImportPartial(cursor !== null);
+      toast({
+        title: error instanceof Error ? error.message : "Falha ao importar o histórico da Zernio.",
+        variant: "destructive",
+      });
+    } finally {
+      setImportingHistory(false);
+    }
+  }
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -1495,7 +1548,7 @@ function IntegrationCard({
           <CardTitle className="text-base flex items-center gap-2">
             <Wifi className="w-4 h-4 text-muted-foreground" />
             {data?.label ?? type}
-            {type === "whatsapp_evolution" && data?.isDefault && (
+            {type === "whatsapp_evolution" && isDefault && (
               <Badge variant="secondary" className="text-[10px]">Padrão</Badge>
             )}
           </CardTitle>
@@ -1507,6 +1560,13 @@ function IntegrationCard({
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
             <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
+          </div>
+        ) : loadError ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm" role="alert">
+            <span>Não foi possível carregar a configuração atual. Nenhuma alteração foi salva.</span>
+            <Button type="button" size="sm" variant="outline" onClick={() => void loadConfig()} disabled={loading}>
+              Tentar novamente
+            </Button>
           </div>
         ) : (
           <>
@@ -1535,6 +1595,9 @@ function IntegrationCard({
                     setDirty(true);
                   }}
                 />
+                {f.description && (
+                  <p className="text-[11px] text-muted-foreground">{f.description}</p>
+                )}
               </div>
             ))}
 
@@ -1546,6 +1609,9 @@ function IntegrationCard({
                     {f.label}
                     {f.optional ? " (opcional)" : ""}
                   </Label>
+                  {f.description && (
+                    <p className="text-[11px] text-muted-foreground">{f.description}</p>
+                  )}
                   <Input
                     type="password"
                     value={formSecrets[f.key] ?? ""}
@@ -1623,15 +1689,75 @@ function IntegrationCard({
               </p>
             )}
 
+            {type === "instagram_zernio" && data?.integrationId && enabled && status === "connected" && (
+              <div className="space-y-2 rounded-md border border-pink-200 bg-pink-50/40 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs">
+                    <p className="font-medium">Histórico do inbox Zernio</p>
+                    <p className="text-muted-foreground">Importa conversas ativas e arquivadas da conta vinculada. Repetir é seguro.</p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void importInstagramHistory()}
+                    disabled={importingHistory || dirty || saving}
+                  >
+                    {importingHistory && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                    {importingHistory ? "Importando histórico..." : historyImportCursor ? "Continuar importação" : "Importar histórico"}
+                  </Button>
+                </div>
+                {importingHistory && (
+                  <p role="status" className="text-xs text-muted-foreground">
+                    {historyImportResult
+                      ? `${historyImportResult.conversationsProcessed} conversas concluídas; ${historyImportResult.messagesImported} mensagens novas; ${historyImportResult.messagesSkipped} não importadas.`
+                      : "Iniciando a importação em etapas curtas."}
+                  </p>
+                )}
+                {historyImportPartial && !importingHistory && historyImportCursor !== null && (
+                  <p role="status" className="text-xs text-amber-700">
+                    Importação pausada. O progresso foi salvo neste navegador; continue para retomar de onde parou.
+                  </p>
+                )}
+                {historyImportResult && (
+                  <p role="status" className="text-xs text-muted-foreground">
+                    {historyImportPartial ? "Resultado parcial: " : ""}
+                    {historyImportResult.conversationsFound} encontradas · {historyImportResult.messagesImported} mensagens novas · {historyImportResult.messagesAlreadyPresent} já existentes · {historyImportResult.messagesSkipped} não importadas.
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-2 pt-1">
-              {type === "whatsapp_evolution" && integrationId && !data?.isDefault && (
+              {type === "whatsapp_evolution" && integrationId && enabled && status !== "connected" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void requestConnectionQr()}
+                  disabled={qrLoading || saving || testing || dirty}
+                  className="gap-1.5"
+                  title={dirty ? "Salve as alterações antes de conectar." : undefined}
+                >
+                  {qrLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
+                  Conectar com QR Code
+                </Button>
+              )}
+              {type === "whatsapp_evolution" && integrationId && getWhatsAppDefaultActionLabel({
+                isDefault,
+                enabled,
+                status,
+              }, duplicateDefaultCount) && (
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => void makeDefault()}
                   disabled={saving || testing}
                 >
-                  Tornar padrão
+                  {getWhatsAppDefaultActionLabel({
+                    isDefault,
+                    enabled,
+                    status,
+                  }, duplicateDefaultCount)}
                 </Button>
               )}
               {createNew && onCancel && (
@@ -1743,6 +1869,47 @@ function IntegrationCard({
                 )}
               </div>
             )}
+            <Dialog
+              open={qrOpen}
+              onOpenChange={(open) => {
+                setQrOpen(open);
+                if (!open) {
+                  setQrCodeDataUrl(null);
+                  setQrError(null);
+                  onSaved?.();
+                }
+              }}
+            >
+              <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Conectar WhatsApp</DialogTitle>
+                  <DialogDescription>
+                    No celular, abra o WhatsApp, acesse Aparelhos conectados e escaneie este QR Code.
+                    Depois, feche esta janela para atualizar o status. O painel Chaves API não é necessário.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="flex min-h-56 flex-col items-center justify-center gap-3">
+                  {qrLoading && <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />}
+                  {qrCodeDataUrl && (
+                    <img
+                      src={qrCodeDataUrl}
+                      alt="QR Code temporário para conectar o WhatsApp"
+                      className="h-56 w-56 rounded-md border bg-white p-2"
+                    />
+                  )}
+                  {qrError && <p role="alert" className="text-sm text-destructive">{qrError}</p>}
+                  {!qrLoading && !qrError && !qrCodeDataUrl && (
+                    <p className="text-sm text-muted-foreground">Solicitando QR Code à Evolution...</p>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => void requestConnectionQr()} disabled={qrLoading}>
+                    Gerar novo QR Code
+                  </Button>
+                  <Button onClick={() => setQrOpen(false)}>Fechar</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </>
         )}
       </CardContent>
@@ -1834,6 +2001,17 @@ function IntegrationsTab() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <WhatsAppIntegrationCards />
         <InstagramDirectIntegrationCard />
+        <Card className="md:col-span-2 border-pink-200 bg-pink-50/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Instagram Direct pela Zernio</CardTitle>
+            <CardDescription>
+              Este vínculo associa os eventos da Zernio à agência. Configure a URL, a assinatura e os eventos no painel da Zernio.
+              Para responder pelo CRM, informe também uma chave de API com permissão de mensagens; o status valida o mapeamento,
+              não a entrega do webhook.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+        <IntegrationCard type="instagram_zernio" />
         <IntegrationCard type="mercadopago" />
         <IntegrationCard type="google_analytics" />
         <IntegrationCard type="distribution_reference" />
@@ -2085,8 +2263,12 @@ function AICard() {
   const [logs, setLogs] = useState<AILog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   const [dirty, setDirty] = useState(false);
+  useAgencySettingsDirty("integrations", "ai-integration", dirty);
+  const [loadError, setLoadError] = useState(false);
 
   const loadConfig = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
       const res = await fetch(`${BASE}/api/ai-integration`, { credentials: "include" });
       if (res.status === 403) {
@@ -2110,7 +2292,7 @@ function AICard() {
       setMaskedAccessToken(data.maskedAccessToken ?? null);
       setDirty(false);
     } catch {
-      // silent — card stays in default state
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -2239,6 +2421,13 @@ function AICard() {
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
             <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
+          </div>
+        ) : loadError ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm" role="alert">
+            <span>Não foi possível carregar a configuração atual. Nenhuma alteração foi salva.</span>
+            <Button type="button" size="sm" variant="outline" onClick={() => void loadConfig()} disabled={loading}>
+              Tentar novamente
+            </Button>
           </div>
         ) : (
           <>
@@ -2846,6 +3035,7 @@ function NotificationsTab() {
   const npsAutoSend = (configs.find((c) => c.key === "npsAutoSend")?.value ?? false) as boolean;
   const npsHoursAfterReturn = (configs.find((c) => c.key === "npsHoursAfterReturn")?.value ?? 24) as number;
   const [npsHoursInput, setNpsHoursInput] = useState<number>(npsHoursAfterReturn);
+  useAgencySettingsDirty("notifications", "nps-hours", npsHoursInput !== npsHoursAfterReturn);
 
   useEffect(() => {
     setNpsHoursInput(npsHoursAfterReturn);
@@ -2883,6 +3073,7 @@ function NotificationsTab() {
               <Switch
                 checked={notifConfig[n.key] ?? true}
                 onCheckedChange={(v) => handleToggle(n.key, v)}
+                disabled={upsert.isPending}
               />
             </div>
           ))}
@@ -2901,6 +3092,7 @@ function NotificationsTab() {
           <Switch
             checked={npsAutoSend}
             onCheckedChange={handleNpsAutoSendToggle}
+            disabled={upsert.isPending}
           />
         </div>
         {npsAutoSend && (
@@ -2910,11 +3102,17 @@ function NotificationsTab() {
               type="number"
               min={1}
               max={720}
+              step={1}
               value={npsHoursInput}
-              onChange={(e) => setNpsHoursInput(Number(e.target.value))}
+              onChange={(e) => setNpsHoursInput(e.target.value === "" ? 0 : Number(e.target.value))}
               className="w-24"
             />
-            <Button size="sm" variant="outline" onClick={handleNpsHoursSave}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleNpsHoursSave}
+              disabled={upsert.isPending || !Number.isInteger(npsHoursInput) || npsHoursInput < 1 || npsHoursInput > 720}
+            >
               Salvar
             </Button>
           </div>
@@ -2972,15 +3170,29 @@ function WhatsAppNotificationsSection() {
   });
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  useAgencySettingsDirty("notifications", "whatsapp-notifications", dirty);
+  const [loadingSettings, setLoadingSettings] = useState(true);
+  const [settingsLoadError, setSettingsLoadError] = useState(false);
 
   const BASE = (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_BASE_URL ?? "";
 
-  useEffect(() => {
-    fetch(`${BASE}/api/whatsapp-notifications/settings`, { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => { if (data) setSettings(data); })
-      .catch(() => {});
+  const loadSettings = useCallback(async () => {
+    setLoadingSettings(true);
+    setSettingsLoadError(false);
+    try {
+      const response = await fetch(`${BASE}/api/whatsapp-notifications/settings`, { credentials: "include" });
+      if (!response.ok) throw new Error("load_failed");
+      setSettings(await response.json());
+    } catch {
+      setSettingsLoadError(true);
+    } finally {
+      setLoadingSettings(false);
+    }
   }, [BASE]);
+
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
 
   function update(patch: Partial<WaSettings>) {
     setSettings((s) => ({ ...s, ...patch }));
@@ -3056,6 +3268,23 @@ function WhatsAppNotificationsSection() {
         </p>
       </div>
 
+      {settingsLoadError && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm" role="alert">
+          <span>Não foi possível carregar as preferências atuais. Tente novamente antes de editar.</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => void loadSettings()} disabled={loadingSettings}>
+            {loadingSettings && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+            Tentar novamente
+          </Button>
+        </div>
+      )}
+
+      {loadingSettings && (
+        <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground" role="status">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Carregando preferências de WhatsApp...
+        </div>
+      )}
+
       {TYPES.map((t) => (
         <div key={t.key} className="space-y-2 border-t pt-4 first:border-t-0 first:pt-0">
           <div className="flex items-center justify-between">
@@ -3063,6 +3292,7 @@ function WhatsAppNotificationsSection() {
             <Switch
               checked={settings[t.key] ?? false}
               onCheckedChange={(v) => update({ [t.key]: v })}
+              disabled={loadingSettings || settingsLoadError || saving}
             />
           </div>
           {settings[t.key] && (
@@ -3109,6 +3339,7 @@ function WhatsAppNotificationsSection() {
                 value={settings[t.msgKey] ?? ""}
                 onChange={(e) => update({ [t.msgKey]: e.target.value || null })}
                 className="text-sm resize-none font-mono"
+                disabled={loadingSettings || settingsLoadError || saving}
               />
               <div className="space-y-1.5" aria-label={`Pré-visualização de ${t.label}`}>
                 <p className="text-xs font-medium text-muted-foreground">Pré-visualização</p>
@@ -3126,6 +3357,7 @@ function WhatsAppNotificationsSection() {
                   type="button"
                   className="text-xs text-muted-foreground underline"
                   onClick={() => update({ [t.msgKey]: null })}
+                  disabled={loadingSettings || settingsLoadError || saving}
                 >
                   Usar mensagem padrão
                 </button>
@@ -3135,7 +3367,7 @@ function WhatsAppNotificationsSection() {
         </div>
       ))}
 
-      <Button size="sm" onClick={handleSave} disabled={saving || !dirty} className="w-full">
+      <Button size="sm" onClick={handleSave} disabled={saving || !dirty || loadingSettings || settingsLoadError} className="w-full">
         {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
         Salvar configurações de WhatsApp
       </Button>
@@ -3160,37 +3392,33 @@ function CustomizationTab() {
   const [primaryColor, setPrimaryColor] = useState(me?.tenant?.primaryColor ?? "#3B82F6");
   const [secondaryColor, setSecondaryColor] = useState(me?.tenant?.secondaryColor ?? "#8B5CF6");
   const [logoUrl, setLogoUrl] = useState(me?.tenant?.logoUrl ?? "");
+  const [savedBranding, setSavedBranding] = useState({
+    primaryColor: me?.tenant?.primaryColor ?? "#3B82F6",
+    secondaryColor: me?.tenant?.secondaryColor ?? "#8B5CF6",
+    logoUrl: me?.tenant?.logoUrl ?? "",
+  });
   const [uploadingCount, setUploadingCount] = useState(0);
   const handleUploadingChange = useCallback((uploading: boolean) => {
     setUploadingCount((n) => Math.max(0, n + (uploading ? 1 : -1)));
   }, []);
 
-  const [storeLogo, setStoreLogo] = useState("");
-  const [storeLogoUploading, setStoreLogoUploading] = useState(false);
-  const [storeLogoSaving, setStoreLogoSaving] = useState(false);
-  const [pixQrDeliveryMode, setPixQrDeliveryMode] = useState<"screen" | "email" | "whatsapp" | "all">("screen");
-  const [pixQrDeliverySaving, setPixQrDeliverySaving] = useState(false);
-  const [hasStore, setHasStore] = useState(false);
+  const customizationDirty = primaryColor !== savedBranding.primaryColor
+    || secondaryColor !== savedBranding.secondaryColor
+    || logoUrl !== savedBranding.logoUrl;
+  useAgencySettingsDirty("customization", "customization", customizationDirty);
 
   useEffect(() => {
     if (fullTenant) {
       setPrimaryColor(fullTenant.primaryColor ?? "#3B82F6");
       setSecondaryColor(fullTenant.secondaryColor ?? "#8B5CF6");
       setLogoUrl(fullTenant.logoUrl ?? "");
+      setSavedBranding({
+        primaryColor: fullTenant.primaryColor ?? "#3B82F6",
+        secondaryColor: fullTenant.secondaryColor ?? "#8B5CF6",
+        logoUrl: fullTenant.logoUrl ?? "",
+      });
     }
   }, [fullTenant?.id]);
-
-  useEffect(() => {
-    storeApi.getSettings()
-      .then((s) => {
-        setStoreLogo(s.logo ?? "");
-        setPixQrDeliveryMode(s.pixQrDeliveryMode ?? "screen");
-        setHasStore(true);
-      })
-      .catch(() => {
-        setHasStore(false);
-      });
-  }, []);
 
   async function handleSave() {
     if (!tenantId) {
@@ -3199,6 +3427,7 @@ function CustomizationTab() {
     }
     try {
       await updateTenant.mutateAsync({ id: tenantId, data: { primaryColor, secondaryColor, logoUrl } });
+      setSavedBranding({ primaryColor, secondaryColor, logoUrl });
       toast({ title: "Personalização salva com sucesso" });
       await queryClient.invalidateQueries({ queryKey: getGetTenantQueryKey(tenantId) });
       refetchMe();
@@ -3207,34 +3436,10 @@ function CustomizationTab() {
     }
   }
 
-  async function handleSaveStoreLogo() {
-    setStoreLogoSaving(true);
-    try {
-      await storeApi.updateSettings({ logo: storeLogo });
-      toast({ title: "Logo da loja salvo com sucesso" });
-    } catch {
-      toast({ title: "Erro ao salvar logo da loja", variant: "destructive" });
-    } finally {
-      setStoreLogoSaving(false);
-    }
-  }
-
-  async function handleSavePixQrDelivery() {
-    setPixQrDeliverySaving(true);
-    try {
-      await storeApi.updateSettings({ pixQrDeliveryMode });
-      toast({ title: "Preferência de entrega do PIX salva" });
-    } catch {
-      toast({ title: "Erro ao salvar a preferência do PIX", variant: "destructive" });
-    } finally {
-      setPixQrDeliverySaving(false);
-    }
-  }
-
   return (
-    <div className="space-y-6 max-w-xl">
+    <div className="space-y-6 max-w-3xl">
       <div className="space-y-4">
-        <h3 className="font-semibold text-sm">Cores do sistema</h3>
+        <h3 className="font-semibold text-sm">Cores do painel</h3>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Cor primária</Label>
@@ -3317,70 +3522,20 @@ function CustomizationTab() {
         ) : "Salvar personalização"}
       </Button>
 
-      {hasStore && (
-        <div className="border-t pt-6 space-y-2">
-          <h3 className="font-semibold text-sm">Logo da Loja (Vitrine)</h3>
-          <p className="text-xs text-muted-foreground">
-            Exibido na vitrine pública, nos vouchers emitidos e no QR code de confirmação de pedidos.
-          </p>
-          <CoverImageUpload
-            fileSizeMB="2"
-            value={storeLogo}
-            onChange={setStoreLogo}
-            onUploadingChange={(uploading) => setStoreLogoUploading(uploading)}
-            emptyLabel="Clique ou arraste o logo da loja aqui"
-            previewClassName="h-32"
-            objectFit="contain"
-          />
-          <p className="text-xs text-muted-foreground">
-            Recomendado: PNG com fundo transparente, tamanho mínimo 200x60px
-          </p>
-          <Button
-            onClick={handleSaveStoreLogo}
-            disabled={storeLogoSaving || storeLogoUploading}
-            variant="outline"
-          >
-            {storeLogoUploading ? (
-              <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Aguardando upload...</>
-            ) : storeLogoSaving ? (
-              <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Salvando...</>
-            ) : "Salvar logo da loja"}
-          </Button>
-
-          <div className="border-t pt-5 mt-5 space-y-3">
-            <div>
-              <h3 className="font-semibold text-sm">Entrega do QR Code PIX</h3>
-              <p className="text-xs text-muted-foreground mt-1">
-                Escolha onde o cliente receberá o QR Code gerado no checkout. O código também fica
-                disponível na confirmação e na consulta do pedido quando a opção de tela estiver ativa.
-              </p>
-            </div>
-            <select
-              value={pixQrDeliveryMode}
-              onChange={(event) => setPixQrDeliveryMode(event.target.value as typeof pixQrDeliveryMode)}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-            >
-              <option value="screen">Somente na tela</option>
-              <option value="email">E-mail</option>
-              <option value="whatsapp">WhatsApp</option>
-              <option value="all">Tela, e-mail e WhatsApp</option>
-            </select>
-            <p className="text-xs text-muted-foreground">
-              Para e-mail e WhatsApp, os respectivos dados de contato precisam estar preenchidos e
-              configurados para envio.
-            </p>
-            <Button
-              onClick={handleSavePixQrDelivery}
-              disabled={pixQrDeliverySaving}
-              variant="outline"
-            >
-              {pixQrDeliverySaving ? (
-                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Salvando...</>
-              ) : "Salvar entrega do QR Code"}
-            </Button>
-          </div>
+      <div className="rounded-xl border border-dashed p-4">
+        <h3 className="font-semibold text-sm">Configurações da Vitrine</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Cores, logo e banners públicos ficam juntos em Aparência; a entrega do QR Code PIX fica em Pagamentos.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-3 text-sm">
+          <a className="font-medium text-primary underline-offset-4 hover:underline" href="/loja/configuracoes?tab=aparencia">
+            Abrir aparência da Vitrine
+          </a>
+          <a className="font-medium text-primary underline-offset-4 hover:underline" href="/loja/configuracoes?tab=pagamento">
+            Abrir pagamentos da Loja
+          </a>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -3431,26 +3586,29 @@ function TeamTab() {
   const [loading, setLoading] = useState(true);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
+  useAgencySettingsDirty("team", "team-invite", inviteOpen && Boolean(inviteEmail.trim()));
   const inviteRole = "vendedor" as const;
   const [inviting, setInviting] = useState(false);
   const [limitError, setLimitError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
 
   async function loadTeam() {
     setLoading(true);
+    setLoadError(false);
     try {
       const [membersRes, invitesRes] = await Promise.all([
         fetch(`${BASE}/api/team/members`, { credentials: "include" }),
         fetch(`${BASE}/api/team/invites`, { credentials: "include" }),
       ]);
-      if (membersRes.ok) {
-        const all: TeamMember[] = await membersRes.json();
-        setMembers(all.filter((m) => m.role === "vendedor"));
-      }
-      if (invitesRes.ok) {
-        const all: PendingInvite[] = await invitesRes.json();
-        setInvites(all.filter((i) => !i.accepted && i.role === "vendedor"));
-      }
+      if (!membersRes.ok || !invitesRes.ok) throw new Error("team_load_failed");
+      const [allMembers, allInvites] = await Promise.all([
+        membersRes.json() as Promise<TeamMember[]>,
+        invitesRes.json() as Promise<PendingInvite[]>,
+      ]);
+      setMembers(allMembers.filter((m) => m.role === "vendedor"));
+      setInvites(allInvites.filter((i) => !i.accepted && i.role === "vendedor"));
     } catch {
+      setLoadError(true);
       toast({ title: "Erro ao carregar equipe", variant: "destructive" });
     } finally {
       setLoading(false);
@@ -3500,12 +3658,13 @@ function TeamTab() {
 
   async function handleRemove(id: string) {
     try {
-      await fetch(`${BASE}/api/team/members/${id}`, {
+      const response = await fetch(`${BASE}/api/team/members/${id}`, {
         method: "DELETE",
         credentials: "include",
       });
+      if (!response.ok) throw new Error("remove_failed");
       toast({ title: "Membro desativado" });
-      loadTeam();
+      await loadTeam();
     } catch {
       toast({ title: "Erro ao remover membro", variant: "destructive" });
     }
@@ -3513,12 +3672,13 @@ function TeamTab() {
 
   async function handleCancelInvite(id: string) {
     try {
-      await fetch(`${BASE}/api/team/invites/${id}`, {
+      const response = await fetch(`${BASE}/api/team/invites/${id}`, {
         method: "DELETE",
         credentials: "include",
       });
+      if (!response.ok) throw new Error("cancel_failed");
       toast({ title: "Convite cancelado" });
-      loadTeam();
+      await loadTeam();
     } catch {
       toast({ title: "Erro ao cancelar convite", variant: "destructive" });
     }
@@ -3558,6 +3718,11 @@ function TeamTab() {
         <div className="flex items-center gap-2 py-8 text-muted-foreground text-sm justify-center">
           <Loader2 className="w-4 h-4 animate-spin" />
           Carregando equipe...
+        </div>
+      ) : loadError ? (
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-8 text-center" role="alert">
+          <p className="text-sm text-muted-foreground">Não foi possível carregar os membros e convites. A lista pode estar desatualizada.</p>
+          <Button variant="outline" size="sm" onClick={() => void loadTeam()}>Tentar novamente</Button>
         </div>
       ) : (
         <>
@@ -3689,53 +3854,14 @@ function TeamTab() {
 
 /* ──────────────────── API Keys Tab ──────────────────── */
 function ApiKeysTab() {
-  const [keys] = useState([
-    { id: "1", name: "Produção", key: "••••••••••••••••••••", createdAt: "2024-01-15", lastUsed: "Hoje" },
-    { id: "2", name: "Desenvolvimento", key: "••••••••••••••••••••", createdAt: "2024-02-20", lastUsed: "Ontem" },
-  ]);
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
-
-  function toggleVisible(id: string) {
-    setVisible((v) => ({ ...v, [id]: !v[id] }));
-  }
-
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          Use chaves de API para integrar o VisiteCRM com sistemas externos.
-        </p>
-        <Button variant="outline">
-          <Key className="w-4 h-4 mr-2" />
-          Gerar nova chave
-        </Button>
-      </div>
-
-      <div className="rounded-md border bg-background divide-y">
-        {keys.map((k) => (
-          <div key={k.id} className="p-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium text-sm">{k.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  Criado em {k.createdAt} · Último uso: {k.lastUsed}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => toggleVisible(k.id)}>
-                  {visible[k.id] ? "Ocultar" : "Mostrar"}
-                </Button>
-                <Button variant="outline" size="sm" className="text-destructive">
-                  Revogar
-                </Button>
-              </div>
-            </div>
-            {visible[k.id] && (
-              <div className="font-mono text-xs bg-muted rounded p-2 break-all">{k.key}</div>
-            )}
-          </div>
-        ))}
-      </div>
+    <div className="rounded-lg border border-dashed p-6 text-center">
+      <Key className="mx-auto mb-3 h-8 w-8 text-muted-foreground" aria-hidden="true" />
+      <h3 className="text-sm font-medium">Gerenciamento de chaves ainda não disponível</h3>
+      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+        Esta tela ainda não está conectada a um serviço de criação e revogação de chaves.
+        Nenhuma chave foi criada; não use os controles desta aba para configurar integrações.
+      </p>
     </div>
   );
 }
@@ -3758,12 +3884,39 @@ interface ClubBenefitAdmin {
   description: string | null;
   value: string | null;
   sortOrder: number;
+  updatedAt: string;
 }
 
-function ClubConfigTab() {
+type ClubBenefitDraft = { label: string; value: string; description: string };
+type ClubBenefitCreatePayload = {
+  tier: string;
+  benefitKey: string;
+  label: string;
+  description: string | null;
+  value: string | null;
+  sortOrder: number;
+};
+type ClubBenefitCreateAttempt = {
+  fingerprint: string;
+  idempotencyKey: string;
+  payload: ClubBenefitCreatePayload;
+};
+type StoredClubBenefitDraft = {
+  version: 1;
+  tier: string;
+  draft: ClubBenefitDraft;
+  attempt: ClubBenefitCreateAttempt | null;
+};
+
+export function ClubConfigTab() {
   const { toast } = useToast();
+  const { data: me } = useGetMe();
+  const benefitDraftStorageKey = me?.tenantId
+    ? `visitecrm:club-benefit-draft:v1:${me.tenantId}`
+    : null;
   const [clubName, setClubName] = useState("Clube Visite");
   const [clubDescription, setClubDescription] = useState("");
+  const [savedClubConfig, setSavedClubConfig] = useState({ clubName: "Clube Visite", clubDescription: "" });
   const [benefits, setBenefits] = useState<ClubBenefitAdmin[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingConfig, setSavingConfig] = useState(false);
@@ -3771,39 +3924,244 @@ function ClubConfigTab() {
   const [newLabel, setNewLabel] = useState("");
   const [newValue, setNewValue] = useState("");
   const [newDescription, setNewDescription] = useState("");
+  const benefitDraftRef = useRef<ClubBenefitDraft>({ label: "", value: "", description: "" });
+  const [benefitDraftStorageReady, setBenefitDraftStorageReady] = useState(false);
+  const [benefitDraftStorageUnavailable, setBenefitDraftStorageUnavailable] = useState(false);
+  const [hasRecoveredBenefitDraft, setHasRecoveredBenefitDraft] = useState(false);
   const [addingBenefit, setAddingBenefit] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const addingBenefitRef = useRef(false);
+  const addAttemptRef = useRef<ClubBenefitCreateAttempt | null>(null);
+  const benefitDraftStorageReadyRef = useRef(false);
+  const benefitDraftStorageReadableRef = useRef(false);
+  const [deletingBenefitIds, setDeletingBenefitIds] = useState<Set<string>>(() => new Set());
+  const deletingBenefitIdsRef = useRef(new Set<string>());
+  const [editingBenefitId, setEditingBenefitId] = useState<string | null>(null);
+  const [editingBenefitError, setEditingBenefitError] = useState<string | null>(null);
+  const [editingBenefitConflict, setEditingBenefitConflict] = useState(false);
+  const [editingBenefitRefreshAnnouncement, setEditingBenefitRefreshAnnouncement] = useState("");
+  const [editingBenefitConflictChoices, setEditingBenefitConflictChoices] = useState<
+    Partial<Record<keyof ClubBenefitDraft, "draft" | "latest">>
+  >({});
+  const [editingBenefitConflictDraft, setEditingBenefitConflictDraft] = useState<ClubBenefitDraft>({
+    label: "",
+    value: "",
+    description: "",
+  });
+  const editingBenefitLabelInputRef = useRef<HTMLInputElement | null>(null);
+  const focusBenefitLabelAfterConflictRef = useRef(false);
+  const [editingBenefitExpectedUpdatedAt, setEditingBenefitExpectedUpdatedAt] = useState("");
+  const [editingBenefitOriginal, setEditingBenefitOriginal] = useState<ClubBenefitDraft>({
+    label: "",
+    value: "",
+    description: "",
+  });
+  const [editingBenefitDraft, setEditingBenefitDraft] = useState<ClubBenefitDraft>({
+    label: "",
+    value: "",
+    description: "",
+  });
+  const [savingEditedBenefit, setSavingEditedBenefit] = useState(false);
+  const savingEditedBenefitRef = useRef(false);
+  const benefitsLoadedRef = useRef(false);
+  const benefitsRefreshInFlightRef = useRef(false);
+  const benefitMutationCountRef = useRef(0);
+  const benefitRevisionRef = useRef(0);
+  const clubSettingsDirty = clubName !== savedClubConfig.clubName
+    || clubDescription !== savedClubConfig.clubDescription
+    || Boolean(newLabel.trim() || newValue.trim() || newDescription.trim());
+  useAgencySettingsDirty("clube", "club-settings", clubSettingsDirty);
+
+  useEffect(() => {
+    if (!editingBenefitConflict && focusBenefitLabelAfterConflictRef.current) {
+      focusBenefitLabelAfterConflictRef.current = false;
+      editingBenefitLabelInputRef.current?.focus();
+    }
+  }, [editingBenefitConflict]);
+
+  function persistBenefitDraft(
+    draft: ClubBenefitDraft,
+    attempt: ClubBenefitCreateAttempt | null = addAttemptRef.current,
+    tier: string = activeTier,
+  ) {
+    if (!benefitDraftStorageKey || !benefitDraftStorageReadyRef.current) return;
+    try {
+      if (!draft.label && !draft.value && !draft.description && !attempt) {
+        sessionStorage.removeItem(benefitDraftStorageKey);
+      } else {
+        const stored: StoredClubBenefitDraft = { version: 1, tier, draft, attempt };
+        sessionStorage.setItem(benefitDraftStorageKey, JSON.stringify(stored));
+      }
+      if (!benefitDraftStorageReadableRef.current) {
+        sessionStorage.getItem(benefitDraftStorageKey);
+        benefitDraftStorageReadableRef.current = true;
+      }
+      setBenefitDraftStorageUnavailable(false);
+    } catch {
+      // Storage can be disabled by browser policy; keep the in-memory form usable.
+      setBenefitDraftStorageUnavailable(true);
+    }
+  }
+
+  useEffect(() => {
+    const emptyDraft: ClubBenefitDraft = { label: "", value: "", description: "" };
+    benefitDraftRef.current = emptyDraft;
+    addAttemptRef.current = null;
+    setNewLabel("");
+    setNewValue("");
+    setNewDescription("");
+    setHasRecoveredBenefitDraft(false);
+    setBenefitDraftStorageUnavailable(false);
+    benefitDraftStorageReadyRef.current = false;
+    benefitDraftStorageReadableRef.current = false;
+    setBenefitDraftStorageReady(false);
+    if (!benefitDraftStorageKey) return;
+
+    try {
+      const storedText = sessionStorage.getItem(benefitDraftStorageKey);
+      benefitDraftStorageReadableRef.current = true;
+      if (storedText) {
+        let stored: Partial<StoredClubBenefitDraft> | null;
+        try {
+          stored = JSON.parse(storedText) as Partial<StoredClubBenefitDraft>;
+        } catch {
+          stored = null;
+        }
+        const draft = stored?.draft;
+        const attempt = stored?.attempt;
+        const draftIsValid = stored?.version === 1
+          && CLUB_TIERS.some((tier) => tier.value === stored?.tier)
+          && !!draft
+          && typeof draft.label === "string"
+          && typeof draft.value === "string"
+          && typeof draft.description === "string";
+        const attemptIsValid = attempt == null || (
+          typeof attempt.fingerprint === "string"
+          && typeof attempt.idempotencyKey === "string"
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(attempt.idempotencyKey)
+          && !!attempt.payload
+          && CLUB_TIERS.some((tier) => tier.value === attempt.payload.tier)
+          && typeof attempt.payload.benefitKey === "string"
+          && typeof attempt.payload.label === "string"
+          && (attempt.payload.description === null || typeof attempt.payload.description === "string")
+          && (attempt.payload.value === null || typeof attempt.payload.value === "string")
+          && Number.isInteger(attempt.payload.sortOrder)
+        );
+        if (draftIsValid && attemptIsValid) {
+          benefitDraftRef.current = draft;
+          setActiveTier(stored!.tier!);
+          setNewLabel(draft.label);
+          setNewValue(draft.value);
+          setNewDescription(draft.description);
+          addAttemptRef.current = attempt ?? null;
+          setHasRecoveredBenefitDraft(Boolean(
+            draft.label || draft.value || draft.description || attempt,
+          ));
+        } else {
+          sessionStorage.removeItem(benefitDraftStorageKey);
+        }
+      }
+      setBenefitDraftStorageUnavailable(false);
+    } catch {
+      setBenefitDraftStorageUnavailable(true);
+      try {
+        sessionStorage.removeItem(benefitDraftStorageKey);
+      } catch {
+        // Ignore storage cleanup failures.
+      }
+    }
+    benefitDraftStorageReadyRef.current = true;
+    setBenefitDraftStorageReady(true);
+  }, [benefitDraftStorageKey]);
+
+  function discardBenefitDraft() {
+    const emptyDraft: ClubBenefitDraft = { label: "", value: "", description: "" };
+    benefitDraftRef.current = emptyDraft;
+    addAttemptRef.current = null;
+    setNewLabel("");
+    setNewValue("");
+    setNewDescription("");
+    setHasRecoveredBenefitDraft(false);
+    persistBenefitDraft(emptyDraft, null);
+  }
+
+  const fetchClubBenefits = useCallback(async (): Promise<ClubBenefitAdmin[]> => {
+    const response = await fetch(`${BASE}/api/club/benefits`, { credentials: "include" });
+    if (!response.ok) throw new Error("load_benefits_failed");
+    const result = await response.json() as { data?: ClubBenefitAdmin[] };
+    if (!Array.isArray(result.data)) throw new Error("invalid_benefits_response");
+    return result.data;
+  }, []);
+
+  const refreshClubBenefits = useCallback(async () => {
+    if (!benefitsLoadedRef.current
+      || benefitsRefreshInFlightRef.current
+      || benefitMutationCountRef.current > 0) return;
+
+    const revision = benefitRevisionRef.current;
+    benefitsRefreshInFlightRef.current = true;
+    try {
+      const refreshedBenefits = await fetchClubBenefits();
+      if (benefitRevisionRef.current === revision && benefitMutationCountRef.current === 0) {
+        setBenefits(refreshedBenefits);
+      }
+    } catch {
+      // Transient background refresh failures leave the current list intact and retry later.
+    } finally {
+      benefitsRefreshInFlightRef.current = false;
+    }
+  }, [fetchClubBenefits]);
 
   useEffect(() => {
     async function load() {
       try {
-        const [cfgRes, bnfRes] = await Promise.all([
+        const [cfgRes, initialBenefits] = await Promise.all([
           fetch(`${BASE}/api/club/config`, { credentials: "include" }),
-          fetch(`${BASE}/api/club/benefits`, { credentials: "include" }),
+          fetchClubBenefits(),
         ]);
+        if (!cfgRes.ok) throw new Error("load_failed");
         const cfg = await cfgRes.json() as { clubName: string; description: string | null };
-        const bnf = await bnfRes.json() as { data: ClubBenefitAdmin[] };
         setClubName(cfg.clubName ?? "Clube Visite");
         setClubDescription(cfg.description ?? "");
-        setBenefits(bnf.data ?? []);
+        setSavedClubConfig({
+          clubName: cfg.clubName ?? "Clube Visite",
+          clubDescription: cfg.description ?? "",
+        });
+        setBenefits(initialBenefits);
       } catch {
         toast({ title: "Erro ao carregar configurações do clube", variant: "destructive" });
       } finally {
+        benefitsLoadedRef.current = true;
         setLoading(false);
       }
     }
     void load();
-  }, []);
+  }, [fetchClubBenefits, toast]);
+
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshClubBenefits();
+    };
+    const intervalId = window.setInterval(refreshWhenVisible, 30_000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [refreshClubBenefits]);
 
   async function handleSaveConfig() {
     setSavingConfig(true);
     try {
-      await fetch(`${BASE}/api/club/config`, {
+      const response = await fetch(`${BASE}/api/club/config`, {
         method: "PUT",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ clubName, description: clubDescription || null }),
       });
+      if (!response.ok) throw new Error("save_failed");
+      setSavedClubConfig({ clubName, clubDescription });
       toast({ title: "Configurações do clube salvas!" });
     } catch {
       toast({ title: "Erro ao salvar configurações", variant: "destructive" });
@@ -3813,201 +4171,707 @@ function ClubConfigTab() {
   }
 
   async function handleAddBenefit() {
-    if (!newLabel.trim()) return;
+    if (addingBenefitRef.current) return;
+    const submittedDraft = { ...benefitDraftRef.current };
+    if (!submittedDraft.label.trim()) return;
+    const submittedBenefit = {
+      tier: activeTier,
+      benefitKey: submittedDraft.label.toLowerCase().replace(/\s+/g, "_").slice(0, 100),
+      label: submittedDraft.label.trim(),
+      description: submittedDraft.description.trim() || null,
+      value: submittedDraft.value.trim() || null,
+      sortOrder: benefits.filter((benefit) => benefit.tier === activeTier).length,
+    };
+    const fingerprint = JSON.stringify({
+      tier: submittedBenefit.tier,
+      benefitKey: submittedBenefit.benefitKey,
+      label: submittedBenefit.label,
+      description: submittedBenefit.description,
+      value: submittedBenefit.value,
+    });
+    let attempt = addAttemptRef.current;
+    if (!attempt || attempt.fingerprint !== fingerprint) {
+      attempt = {
+        fingerprint,
+        idempotencyKey: crypto.randomUUID(),
+        payload: submittedBenefit,
+      };
+      addAttemptRef.current = attempt;
+    }
+    persistBenefitDraft(benefitDraftRef.current, attempt);
+    const requestBenefit = attempt.payload;
+    addingBenefitRef.current = true;
+    benefitRevisionRef.current += 1;
+    benefitMutationCountRef.current += 1;
     setAddingBenefit(true);
     try {
       const res = await fetch(`${BASE}/api/club/benefits`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tier: activeTier,
-          benefitKey: newLabel.toLowerCase().replace(/\s+/g, "_").slice(0, 100),
-          label: newLabel.trim(),
-          description: newDescription.trim() || null,
-          value: newValue.trim() || null,
-          sortOrder: benefits.filter((b) => b.tier === activeTier).length,
-        }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": attempt.idempotencyKey },
+        body: JSON.stringify(requestBenefit),
       });
-      const data = await res.json() as { id: string };
-      setBenefits((prev) => [
-        ...prev,
-        {
-          id: data.id,
-          tier: activeTier,
-          benefitKey: newLabel.toLowerCase().replace(/\s+/g, "_").slice(0, 100),
-          label: newLabel.trim(),
-          description: newDescription.trim() || null,
-          value: newValue.trim() || null,
-          sortOrder: prev.filter((b) => b.tier === activeTier).length,
-        },
-      ]);
-      setNewLabel("");
-      setNewValue("");
-      setNewDescription("");
+      if (!res.ok) throw new Error("add_benefit_failed");
+      const data = await res.json() as { id: string; updatedAt: string };
+      setBenefits((prev) => {
+        if (prev.some((benefit) => benefit.id === data.id)) return prev;
+        return [
+          ...prev,
+          {
+            id: data.id,
+            ...requestBenefit,
+            sortOrder: prev.filter((benefit) => benefit.tier === requestBenefit.tier).length,
+            updatedAt: data.updatedAt,
+          },
+        ];
+      });
+      if (addAttemptRef.current === attempt) addAttemptRef.current = null;
+      if (benefitDraftRef.current.label === submittedDraft.label) {
+        benefitDraftRef.current.label = "";
+        setNewLabel("");
+      }
+      if (benefitDraftRef.current.value === submittedDraft.value) {
+        benefitDraftRef.current.value = "";
+        setNewValue("");
+      }
+      if (benefitDraftRef.current.description === submittedDraft.description) {
+        benefitDraftRef.current.description = "";
+        setNewDescription("");
+      }
+      setHasRecoveredBenefitDraft(false);
+      persistBenefitDraft(benefitDraftRef.current, addAttemptRef.current);
       toast({ title: "Benefício adicionado!" });
     } catch {
       toast({ title: "Erro ao adicionar benefício", variant: "destructive" });
     } finally {
+      addingBenefitRef.current = false;
+      benefitMutationCountRef.current = Math.max(0, benefitMutationCountRef.current - 1);
       setAddingBenefit(false);
     }
   }
 
   async function handleDeleteBenefit(id: string) {
-    setDeletingId(id);
+    if (deletingBenefitIdsRef.current.has(id)) return;
+    deletingBenefitIdsRef.current.add(id);
+    setDeletingBenefitIds(new Set(deletingBenefitIdsRef.current));
+    benefitRevisionRef.current += 1;
+    benefitMutationCountRef.current += 1;
     try {
-      await fetch(`${BASE}/api/club/benefits/${id}`, {
+      const response = await fetch(`${BASE}/api/club/benefits/${id}`, {
         method: "DELETE",
         credentials: "include",
       });
+      if (!response.ok) throw new Error("delete_benefit_failed");
       setBenefits((prev) => prev.filter((b) => b.id !== id));
       toast({ title: "Benefício removido" });
     } catch {
       toast({ title: "Erro ao remover benefício", variant: "destructive" });
     } finally {
-      setDeletingId(null);
+      deletingBenefitIdsRef.current.delete(id);
+      setDeletingBenefitIds(new Set(deletingBenefitIdsRef.current));
+      benefitMutationCountRef.current = Math.max(0, benefitMutationCountRef.current - 1);
     }
   }
 
-  const tierBenefits = benefits.filter((b) => b.tier === activeTier);
+  function startEditingBenefit(benefit: ClubBenefitAdmin) {
+    setEditingBenefitId(benefit.id);
+    setEditingBenefitError(null);
+    setEditingBenefitConflict(false);
+    setEditingBenefitRefreshAnnouncement("");
+    setEditingBenefitConflictChoices({});
+    setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
+    const original = {
+      label: benefit.label,
+      value: benefit.value ?? "",
+      description: benefit.description ?? "",
+    };
+    setEditingBenefitOriginal(original);
+    setEditingBenefitDraft(original);
+  }
+
+  async function handleUpdateBenefit(benefit: ClubBenefitAdmin) {
+    if (savingEditedBenefitRef.current) return;
+    const updatedFields = {
+      label: editingBenefitDraft.label.trim(),
+      value: editingBenefitDraft.value.trim() || null,
+      description: editingBenefitDraft.description.trim() || null,
+    };
+    if (!updatedFields.label) return;
+
+    savingEditedBenefitRef.current = true;
+    setSavingEditedBenefit(true);
+    benefitRevisionRef.current += 1;
+    benefitMutationCountRef.current += 1;
+    try {
+      const response = await fetch(`${BASE}/api/club/benefits/${benefit.id}`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...updatedFields, expectedUpdatedAt: editingBenefitExpectedUpdatedAt }),
+      });
+      if (response.status === 409) {
+        const body = await response.json().catch(() => null) as {
+          error?: string;
+          current?: ClubBenefitAdmin;
+        } | null;
+        if (body?.error === "benefit_changed" && body.current?.id === benefit.id) {
+          setBenefits((previous) => previous.map((item) => item.id === benefit.id ? body.current! : item));
+          setEditingBenefitRefreshAnnouncement("");
+          setEditingBenefitConflict(true);
+          setEditingBenefitConflictChoices({});
+          setEditingBenefitConflictDraft({ ...editingBenefitDraft });
+          setEditingBenefitError(null);
+          toast({
+            title: "Este benefício foi alterado por outra pessoa",
+            description: "Confira a versão salva antes de continuar com seu rascunho.",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+      if (!response.ok) throw new Error("update_benefit_failed");
+
+      const savedBenefit = await response.json() as ClubBenefitAdmin;
+      setBenefits((previous) => previous.map((item) => item.id === benefit.id ? savedBenefit : item));
+      setEditingBenefitId(null);
+      setEditingBenefitError(null);
+      setEditingBenefitConflict(false);
+      toast({ title: "Benefício atualizado!" });
+    } catch {
+      setEditingBenefitError("Não foi possível salvar. Seu rascunho foi mantido para você tentar novamente ou cancelar.");
+      toast({ title: "Erro ao atualizar benefício", variant: "destructive" });
+    } finally {
+      savingEditedBenefitRef.current = false;
+      setSavingEditedBenefit(false);
+      benefitMutationCountRef.current = Math.max(0, benefitMutationCountRef.current - 1);
+    }
+  }
 
   if (loading) {
-    return <div className="py-8 text-center text-sm text-muted-foreground">Carregando configurações do clube...</div>;
+    return (
+      <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+        Carregando configurações do clube...
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div className="space-y-4">
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          <Crown className="w-4 h-4 text-amber-500" />
-          Identidade do Clube
-        </h3>
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <Label>Nome do Clube</Label>
+    <div className="max-w-5xl space-y-5">
+      <Card className="overflow-hidden rounded-xl border-[#E7DED0] shadow-sm dark:border-border">
+        <CardHeader className="border-b border-[#EEE7DC] bg-gradient-to-r from-amber-50/80 to-white px-5 py-4 dark:border-border dark:from-amber-950/20 dark:to-card">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+              <Crown className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <CardTitle className="text-base">Identidade do Clube</CardTitle>
+              <CardDescription className="mt-1">
+                Defina como o programa de benefícios aparece para os clientes.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-4 p-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] md:items-end">
+          <div className="space-y-1.5">
+            <Label htmlFor="club-name">Nome do Clube</Label>
             <Input
+              id="club-name"
+              data-testid="club-name-input"
               value={clubName}
               onChange={(e) => setClubName(e.target.value)}
               placeholder="Ex: Clube Visite Cariri"
               maxLength={100}
             />
           </div>
-          <div className="space-y-1">
-            <Label>Descrição <span className="text-xs text-muted-foreground">(opcional)</span></Label>
+          <div className="space-y-1.5">
+            <Label htmlFor="club-description">
+              Descrição <span className="font-normal text-muted-foreground">(opcional)</span>
+            </Label>
             <Input
+              id="club-description"
+              data-testid="club-description-input"
               value={clubDescription}
               onChange={(e) => setClubDescription(e.target.value)}
               placeholder="Uma frase sobre o clube para os clientes"
               maxLength={500}
             />
           </div>
-          <Button size="sm" onClick={handleSaveConfig} disabled={savingConfig}>
-            {savingConfig ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Salvando...</> : "Salvar"}
-          </Button>
-        </div>
-      </div>
+          <div className="md:col-span-2 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-muted-foreground">
+              Essas informações identificam o programa em toda a experiência do cliente.
+            </p>
+            <Button
+              data-testid="club-save-identity"
+              onClick={handleSaveConfig}
+              disabled={savingConfig}
+              className="sm:min-w-32"
+            >
+              {savingConfig ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Salvando...</>
+              ) : "Salvar identidade"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
-      <div className="border-t pt-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold flex items-center gap-2">
-            <Star className="w-4 h-4 text-amber-500" />
-            Benefícios por Nível
-          </h3>
-          <Button size="sm" variant="outline" asChild>
-            <a href="/embaixadores" className="flex items-center gap-1.5">
-              <Users className="w-3.5 h-3.5" />
-              Ver Ranking de Embaixadores
+      <Card className="overflow-hidden rounded-xl border-[#DCE3E8] shadow-sm dark:border-border">
+        <CardHeader className="gap-3 border-b bg-muted/20 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Star className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <CardTitle className="text-base">Benefícios por nível</CardTitle>
+              <CardDescription className="mt-1">
+                Organize as vantagens e acompanhe quantas estão ativas em cada categoria.
+              </CardDescription>
+            </div>
+          </div>
+          <Button size="sm" variant="outline" asChild className="shrink-0">
+            <a href="/embaixadores" data-testid="club-ambassadors-link" className="flex items-center gap-1.5">
+              <Users className="h-3.5 w-3.5" aria-hidden="true" />
+              Ranking de Embaixadores
             </a>
           </Button>
-        </div>
+        </CardHeader>
+        <CardContent className="space-y-5 p-4 sm:p-5">
+          <Tabs
+            value={activeTier}
+            onValueChange={(tier) => {
+              setActiveTier(tier);
+              persistBenefitDraft(benefitDraftRef.current, addAttemptRef.current, tier);
+            }}
+          >
+            <TabsList aria-label="Nível do Clube" className="grid h-auto w-full grid-cols-2 gap-1.5 bg-muted/70 p-1.5 sm:grid-cols-4">
+              {CLUB_TIERS.map((tier) => {
+                const count = benefits.filter((benefit) => benefit.tier === tier.value).length;
+                return (
+                  <TabsTrigger
+                    key={tier.value}
+                    value={tier.value}
+                    data-testid={`club-tier-tab-${tier.value}`}
+                    className="min-h-11 justify-between gap-2 rounded-lg px-3 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span aria-hidden="true">{tier.icon}</span>
+                      <span>{tier.label}</span>
+                    </span>
+                    <Badge
+                      variant="secondary"
+                      data-testid={`club-tier-count-${tier.value}`}
+                      className="h-5 min-w-5 justify-center px-1.5 text-[10px]"
+                    >
+                      {count}
+                    </Badge>
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
 
-        <Tabs value={activeTier} onValueChange={setActiveTier}>
-          <TabsList>
-            {CLUB_TIERS.map((t) => (
-              <TabsTrigger key={t.value} value={t.value} className="gap-1">
-                <span>{t.icon}</span>
-                {t.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-
-          {CLUB_TIERS.map((t) => (
-            <TabsContent key={t.value} value={t.value} className="space-y-3 mt-4">
-              {tierBenefits.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Nenhum benefício cadastrado para {t.label} ainda.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {tierBenefits.map((b) => (
-                    <div key={b.id} className="flex items-start gap-3 p-3 border rounded-lg bg-card">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium">{b.label}</span>
-                          {b.value && <Badge variant="outline" className="text-xs">{b.value}</Badge>}
-                        </div>
-                        {b.description && (
-                          <p className="text-xs text-muted-foreground mt-0.5">{b.description}</p>
-                        )}
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive hover:text-destructive h-7 w-7 p-0 shrink-0"
-                        onClick={() => handleDeleteBenefit(b.id)}
-                        disabled={deletingId === b.id}
-                      >
-                        {deletingId === b.id ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-3.5 h-3.5" />
-                        )}
-                      </Button>
+            {CLUB_TIERS.map((tier) => {
+              const tierBenefits = benefits.filter((benefit) => benefit.tier === tier.value);
+              return (
+                <TabsContent key={tier.value} value={tier.value} className="mt-5 space-y-4">
+                  {tierBenefits.length === 0 ? (
+                    <div className="rounded-xl border border-dashed bg-muted/20 px-4 py-6 text-center">
+                      <span className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-background text-lg shadow-sm" aria-hidden="true">
+                        {tier.icon}
+                      </span>
+                      <p data-testid={`club-empty-tier-${tier.value}`} className="text-sm font-medium">
+                        Nenhum benefício para {tier.label} ainda
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Adicione uma vantagem para destacar este nível do clube.
+                      </p>
                     </div>
-                  ))}
-                </div>
-              )}
+                  ) : (
+                    <div className="space-y-2">
+                      {tierBenefits.map((benefit) => (
+                        <div
+                          key={benefit.id}
+                          data-testid={`club-benefit-${benefit.id}`}
+                          className="flex items-start gap-3 rounded-xl border bg-card p-3.5 transition-colors hover:bg-muted/20"
+                        >
+                          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950/30 dark:text-amber-300">
+                            <Star className="h-4 w-4" aria-hidden="true" />
+                          </span>
+                          {editingBenefitId === benefit.id ? (
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <div
+                                className="rounded-md border bg-muted/30 px-3 py-2 text-xs"
+                                data-testid={`club-benefit-last-saved-${benefit.id}`}
+                              >
+                                <p className="font-medium">Última versão salva</p>
+                                <p className="mt-1">{benefit.label}{benefit.value ? ` · ${benefit.value}` : ""}</p>
+                                {benefit.description && (
+                                  <p className="mt-0.5 text-muted-foreground">{benefit.description}</p>
+                                )}
+                              </div>
+                              {editingBenefitError && (
+                                <p
+                                  role="alert"
+                                  className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+                                  data-testid={`club-edit-benefit-error-${benefit.id}`}
+                                >
+                                  {editingBenefitError} A versão acima continua salva.
+                                </p>
+                              )}
+                              <p
+                                role="status"
+                                aria-live="polite"
+                                className="sr-only"
+                                data-testid={`club-edit-benefit-refresh-status-${benefit.id}`}
+                              >
+                                {editingBenefitRefreshAnnouncement}
+                              </p>
+                              {editingBenefitConflict && (
+                                <div
+                                  role="alert"
+                                  className="space-y-2 rounded-md border border-amber-500/40 bg-amber-50 p-3 text-xs text-amber-950 dark:bg-amber-950/20 dark:text-amber-100"
+                                  data-testid={`club-edit-benefit-conflict-${benefit.id}`}
+                                >
+                                  <p>
+                                    Outra pessoa salvou uma versão mais recente. Seu rascunho foi mantido; os valores salvos acima foram atualizados.
+                                  </p>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    data-testid={`club-refresh-edit-benefit-${benefit.id}`}
+                                    onClick={() => {
+                                      focusBenefitLabelAfterConflictRef.current = true;
+                                      setEditingBenefitRefreshAnnouncement(
+                                        "Versão atualizada. Seu rascunho e as escolhas foram mantidos.",
+                                      );
+                                      setEditingBenefitOriginal({
+                                        label: benefit.label,
+                                        value: benefit.value ?? "",
+                                        description: benefit.description ?? "",
+                                      });
+                                      setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
+                                      setEditingBenefitConflict(false);
+                                      setEditingBenefitConflictChoices({});
+                                      setEditingBenefitError(null);
+                                    }}
+                                  >
+                                    Atualizar versão e continuar com meu rascunho
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    data-testid={`club-discard-edit-benefit-${benefit.id}`}
+                                    onClick={() => {
+                                      const latest = {
+                                        label: benefit.label,
+                                        value: benefit.value ?? "",
+                                        description: benefit.description ?? "",
+                                      };
+                                      setEditingBenefitExpectedUpdatedAt(benefit.updatedAt);
+                                      setEditingBenefitOriginal(latest);
+                                      setEditingBenefitDraft(latest);
+                                      setEditingBenefitConflict(false);
+                                      setEditingBenefitConflictChoices({});
+                                      setEditingBenefitError(null);
+                                    }}
+                                  >
+                                    Descartar rascunho e editar versão atual
+                                  </Button>
+                                  <div className="space-y-1.5 border-t border-amber-500/20 pt-2">
+                                    {([
+                                      ["label", "Nome", editingBenefitOriginal.label, benefit.label],
+                                      ["value", "Valor", editingBenefitOriginal.value, benefit.value ?? ""],
+                                      ["description", "Descrição", editingBenefitOriginal.description, benefit.description ?? ""],
+                                    ] as const)
+                                      .filter(([, , previous, latest]) => previous !== latest)
+                                      .map(([field, title, previous, latest]) => (
+                                        <div
+                                          key={field}
+                                          data-testid={`club-benefit-conflict-field-${field}-${benefit.id}`}
+                                          className="grid gap-1 rounded bg-background/70 p-2 sm:grid-cols-[5rem_minmax(0,1fr)_minmax(0,1fr)] sm:gap-2"
+                                        >
+                                          <span className="font-semibold">{title}</span>
+                                          <span className="break-words text-muted-foreground">
+                                            Antes: {previous || "—"}
+                                          </span>
+                                          <span className="break-words font-medium">
+                                            Salvo agora: {latest || "—"}
+                                          </span>
+                                          <div className="flex flex-wrap gap-1 sm:col-start-2 sm:col-span-2">
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant={editingBenefitConflictChoices[field] === "latest" ? "outline" : "secondary"}
+                                              className="club-benefit-conflict-choice"
+                                              aria-label={`${title}: manter meu rascunho`}
+                                              aria-pressed={editingBenefitConflictChoices[field] !== "latest"}
+                                              data-testid={`club-benefit-conflict-choice-draft-${field}-${benefit.id}`}
+                                              onClick={() => {
+                                                setEditingBenefitConflictChoices((choices) => ({ ...choices, [field]: "draft" }));
+                                                setEditingBenefitDraft((draft) => ({
+                                                  ...draft,
+                                                  [field]: editingBenefitConflictDraft[field],
+                                                }));
+                                              }}
+                                            >
+                                              Manter meu rascunho
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant={editingBenefitConflictChoices[field] === "latest" ? "secondary" : "outline"}
+                                              className="club-benefit-conflict-choice"
+                                              aria-label={`${title}: usar valor salvo`}
+                                              aria-pressed={editingBenefitConflictChoices[field] === "latest"}
+                                              data-testid={`club-benefit-conflict-choice-latest-${field}-${benefit.id}`}
+                                              onClick={() => {
+                                                setEditingBenefitConflictChoices((choices) => ({ ...choices, [field]: "latest" }));
+                                                setEditingBenefitDraft((draft) => ({ ...draft, [field]: latest }));
+                                              }}
+                                            >
+                                              Usar valor salvo
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                  </div>
+                                </div>
+                              )}
+                              <Label htmlFor={`club-benefit-edit-label-${benefit.id}`} className="sr-only">
+                                Nome do benefício
+                              </Label>
+                              <Input
+                                ref={editingBenefitLabelInputRef}
+                                id={`club-benefit-edit-label-${benefit.id}`}
+                                data-testid={`club-edit-benefit-label-${benefit.id}`}
+                                value={editingBenefitDraft.label}
+                                disabled={savingEditedBenefit || editingBenefitConflict}
+                                onChange={(event) => {
+                                  setEditingBenefitError(null);
+                                  setEditingBenefitDraft((draft) => ({ ...draft, label: event.target.value }));
+                                }}
+                                maxLength={200}
+                                aria-label={`Nome do benefício ${benefit.label}`}
+                              />
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <div>
+                                  <Label htmlFor={`club-benefit-edit-value-${benefit.id}`} className="sr-only">
+                                    Valor ou condição
+                                  </Label>
+                                  <Input
+                                    id={`club-benefit-edit-value-${benefit.id}`}
+                                    data-testid={`club-edit-benefit-value-${benefit.id}`}
+                                    placeholder="Valor ou condição (opcional)"
+                                    value={editingBenefitDraft.value}
+                                    disabled={savingEditedBenefit || editingBenefitConflict}
+                                    onChange={(event) => {
+                                      setEditingBenefitError(null);
+                                      setEditingBenefitDraft((draft) => ({ ...draft, value: event.target.value }));
+                                    }}
+                                    maxLength={200}
+                                  />
+                                </div>
+                                <div>
+                                  <Label htmlFor={`club-benefit-edit-description-${benefit.id}`} className="sr-only">
+                                    Descrição do benefício
+                                  </Label>
+                                  <Input
+                                    id={`club-benefit-edit-description-${benefit.id}`}
+                                    data-testid={`club-edit-benefit-description-${benefit.id}`}
+                                    placeholder="Detalhes adicionais (opcional)"
+                                    value={editingBenefitDraft.description}
+                                    disabled={savingEditedBenefit || editingBenefitConflict}
+                                    onChange={(event) => {
+                                      setEditingBenefitError(null);
+                                      setEditingBenefitDraft((draft) => ({ ...draft, description: event.target.value }));
+                                    }}
+                                    maxLength={500}
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  data-testid={`club-cancel-edit-benefit-${benefit.id}`}
+                                  onClick={() => {
+                                    setEditingBenefitId(null);
+                                    setEditingBenefitError(null);
+                                    setEditingBenefitConflict(false);
+                                  }}
+                                  disabled={savingEditedBenefit}
+                                >
+                                  Cancelar
+                                </Button>
+                                <Button
+                                  type="button"
+                                  data-testid={`club-save-edit-benefit-${benefit.id}`}
+                                  onClick={() => void handleUpdateBenefit(benefit)}
+                                  disabled={savingEditedBenefit || editingBenefitConflict || !editingBenefitDraft.label.trim()}
+                                >
+                                  {savingEditedBenefit ? (
+                                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Salvando...</>
+                                  ) : "Salvar"}
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-sm font-medium">{benefit.label}</span>
+                                  {benefit.value && <Badge variant="outline" className="text-xs">{benefit.value}</Badge>}
+                                </div>
+                                {benefit.description && (
+                                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{benefit.description}</p>
+                                )}
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  data-testid={`club-edit-benefit-${benefit.id}`}
+                                  aria-label={`Editar benefício ${benefit.label}`}
+                                  className="h-8 w-8 text-muted-foreground"
+                                  onClick={() => startEditingBenefit(benefit)}
+                                  disabled={!!editingBenefitId || deletingBenefitIds.has(benefit.id)}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  data-testid={`club-delete-benefit-${benefit.id}`}
+                                  aria-label={`Remover benefício ${benefit.label}`}
+                                  className="h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                  onClick={() => handleDeleteBenefit(benefit.id)}
+                                  disabled={!!editingBenefitId || deletingBenefitIds.has(benefit.id)}
+                                >
+                                  {deletingBenefitIds.has(benefit.id) ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
-              <div className="border rounded-lg p-3 space-y-2 bg-muted/30">
-                <p className="text-xs font-medium text-muted-foreground">Adicionar benefício para {t.label}</p>
-                <Input
-                  placeholder="Ex: 5% de desconto em todas as viagens"
-                  value={newLabel}
-                  onChange={(e) => setNewLabel(e.target.value)}
-                  className="text-sm"
-                  maxLength={200}
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    placeholder="Valor (ex: 5%)"
-                    value={newValue}
-                    onChange={(e) => setNewValue(e.target.value)}
-                    className="text-sm"
-                    maxLength={200}
-                  />
-                  <Input
-                    placeholder="Descrição (opcional)"
-                    value={newDescription}
-                    onChange={(e) => setNewDescription(e.target.value)}
-                    className="text-sm"
-                    maxLength={500}
-                  />
-                </div>
-                <Button
-                  size="sm"
-                  onClick={handleAddBenefit}
-                  disabled={addingBenefit || !newLabel.trim()}
-                >
-                  {addingBenefit ? (
-                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                  ) : null}
-                  + Adicionar
-                </Button>
-              </div>
-            </TabsContent>
-          ))}
-        </Tabs>
-      </div>
+                  <div className="rounded-xl border border-primary/15 bg-primary/[0.03] p-4">
+                    <div className="mb-3">
+                      <h4 className="text-sm font-semibold">Adicionar benefício</h4>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        A nova vantagem será incluída no nível {tier.label}.
+                      </p>
+                      {hasRecoveredBenefitDraft && (
+                        <p className="mt-1 text-xs text-primary" role="status">
+                          Rascunho recuperado desta sessão.
+                        </p>
+                      )}
+                      {benefitDraftStorageReady && benefitDraftStorageUnavailable && (
+                        <p
+                          className="mt-1 text-xs text-amber-700 dark:text-amber-400"
+                          data-testid="club-benefit-storage-warning"
+                          role="status"
+                        >
+                          Não foi possível salvar este rascunho neste navegador. Ele pode ser perdido
+                          se você recarregar a página, mas ainda é possível adicionar o benefício.
+                        </p>
+                      )}
+                    </div>
+                    <div className="grid gap-2.5 sm:grid-cols-2">
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <Label htmlFor="club-benefit-label" className="sr-only">Nome do benefício</Label>
+                        <Input
+                          id="club-benefit-label"
+                          data-testid="club-benefit-label-input"
+                          placeholder="Ex.: 5% de desconto em todas as viagens"
+                          value={newLabel}
+                          onChange={(e) => {
+                            const draft = { ...benefitDraftRef.current, label: e.target.value };
+                            benefitDraftRef.current = draft;
+                            setNewLabel(e.target.value);
+                            persistBenefitDraft(draft);
+                          }}
+                          disabled={!benefitDraftStorageReady}
+                          maxLength={200}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="club-benefit-value" className="sr-only">Valor ou condição</Label>
+                        <Input
+                          id="club-benefit-value"
+                          data-testid="club-benefit-value-input"
+                          placeholder="Valor ou condição (ex.: 5%)"
+                          value={newValue}
+                          onChange={(e) => {
+                            const draft = { ...benefitDraftRef.current, value: e.target.value };
+                            benefitDraftRef.current = draft;
+                            setNewValue(e.target.value);
+                            persistBenefitDraft(draft);
+                          }}
+                          disabled={!benefitDraftStorageReady}
+                          maxLength={200}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="club-benefit-description" className="sr-only">Descrição do benefício</Label>
+                        <Input
+                          id="club-benefit-description"
+                          data-testid="club-benefit-description-input"
+                          placeholder="Detalhes adicionais (opcional)"
+                          value={newDescription}
+                          onChange={(e) => {
+                            const draft = { ...benefitDraftRef.current, description: e.target.value };
+                            benefitDraftRef.current = draft;
+                            setNewDescription(e.target.value);
+                            persistBenefitDraft(draft);
+                          }}
+                          disabled={!benefitDraftStorageReady}
+                          maxLength={500}
+                        />
+                      </div>
+                      <div className="sm:col-span-2 flex flex-col gap-2 pt-1 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="text-xs text-muted-foreground">
+                          {tier.icon} Nível selecionado: <strong className="font-medium text-foreground">{tier.label}</strong>
+                        </span>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          {(newLabel || newValue || newDescription || hasRecoveredBenefitDraft) && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              data-testid="club-discard-benefit-draft"
+                              onClick={discardBenefitDraft}
+                              disabled={addingBenefit || !benefitDraftStorageReady}
+                            >
+                              Descartar rascunho
+                            </Button>
+                          )}
+                          <Button
+                            data-testid="club-add-benefit"
+                            onClick={handleAddBenefit}
+                            disabled={!benefitDraftStorageReady || addingBenefit || !newLabel.trim()}
+                            className="sm:min-w-32"
+                          >
+                            {addingBenefit ? (
+                              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Adicionando...</>
+                            ) : "Adicionar benefício"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </TabsContent>
+              );
+            })}
+          </Tabs>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -4058,6 +4922,23 @@ function PipelineSettingsTab() {
   const [newStageColor, setNewStageColor] = useState(PIPELINE_PRESET_COLORS[0]);
   const [editingStageId, setEditingStageId] = useState<string | null>(null);
   const [editingStageValue, setEditingStageValue] = useState("");
+  useAgencySettingsDirty(
+    "pipelines",
+    "pipeline-drafts",
+    Boolean(
+      (creatingPipeline && newPipelineName.trim())
+      || (renamingPipelineId && renameValue.trim())
+      || newStageName.trim()
+      || (editingStageId && editingStageValue.trim()),
+    ),
+  );
+
+  function reportRequestError(error: unknown) {
+    toast({
+      title: error instanceof Error ? error.message : "Não foi possível atualizar o pipeline.",
+      variant: "destructive",
+    });
+  }
 
   async function createPipeline() {
     if (!newPipelineName.trim()) return;
@@ -4074,6 +4955,8 @@ function PipelineSettingsTab() {
       setCreatingPipeline(false);
       setActivePipelineId(p.id);
       await refetchPipelines();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4081,13 +4964,19 @@ function PipelineSettingsTab() {
     if (!renameValue.trim()) return;
     setLoadingAction(`rename-${id}`);
     try {
-      await fetch(`${BASE}/api/pipelines/${id}`, {
+      const r = await fetch(`${BASE}/api/pipelines/${id}`, {
         method: "PATCH", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: renameValue.trim() }),
       });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.message ?? d.error ?? "Não foi possível renomear o pipeline.");
+      }
       setRenamingPipelineId(null);
       await refetchPipelines();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4101,6 +4990,8 @@ function PipelineSettingsTab() {
       });
       if (!r.ok) { const d = await r.json().catch(() => ({})); toast({ title: "Erro", description: d.message, variant: "destructive" }); return; }
       await refetchPipelines();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4111,6 +5002,8 @@ function PipelineSettingsTab() {
       if (!r.ok) { const d = await r.json().catch(() => ({})); toast({ title: "Erro", description: d.message, variant: "destructive" }); return; }
       if (activePipeline?.id === id) setActivePipelineId(null);
       await refetchPipelines();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4118,13 +5011,19 @@ function PipelineSettingsTab() {
     if (!newStageName.trim() || !activePipeline) return;
     setLoadingAction("add-stage");
     try {
-      await fetch(`${BASE}/api/pipeline/stages?pipelineId=${activePipeline.id}`, {
+      const r = await fetch(`${BASE}/api/pipeline/stages?pipelineId=${activePipeline.id}`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: newStageName.trim(), color: newStageColor }),
       });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.message ?? d.error ?? "Não foi possível adicionar a etapa.");
+      }
       setNewStageName("");
       await refetchStages();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4132,13 +5031,19 @@ function PipelineSettingsTab() {
     if (!editingStageValue.trim()) return;
     setLoadingAction(`rename-stage-${stageId}`);
     try {
-      await fetch(`${BASE}/api/pipeline/stages/${stageId}`, {
+      const r = await fetch(`${BASE}/api/pipeline/stages/${stageId}`, {
         method: "PATCH", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: editingStageValue.trim() }),
       });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.message ?? d.error ?? "Não foi possível renomear a etapa.");
+      }
       setEditingStageId(null);
       await refetchStages();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4148,6 +5053,8 @@ function PipelineSettingsTab() {
       const r = await fetch(`${BASE}/api/pipeline/stages/${stageId}`, { method: "DELETE", credentials: "include" });
       if (!r.ok) { const d = await r.json().catch(() => ({})); toast({ title: "Erro", description: d.message, variant: "destructive" }); return; }
       await refetchStages();
+    } catch (error) {
+      reportRequestError(error);
     } finally { setLoadingAction(null); }
   }
 
@@ -4366,490 +5273,176 @@ function PipelineSettingsTab() {
   );
 }
 
-/* ──────────────────── Backup de Dados Tab ──────────────────── */
-function formatBackupBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function parseBackupFilename(contentDisposition: string | null): string | null {
-  if (!contentDisposition) return null;
-  const match = /filename="?([^";]+)"?/i.exec(contentDisposition);
-  return match?.[1] ?? null;
-}
-
-interface BackupImportGroupResult {
-  created: number;
-  duplicate: number;
-  skipped: number;
-  errors: Array<{ sourceId?: string; label?: string; error: string }>;
-}
-
-interface BackupImportUserMatch {
-  sourceId: string;
-  email: string | null;
-  name: string | null;
-}
-
-interface BackupImportReport {
-  agencia: { updated: boolean };
-  usuarios: { matched: number; fallbackToImporter: number; fallbackDetails: BackupImportUserMatch[] };
-  clientes: BackupImportGroupResult;
-  viagens: BackupImportGroupResult;
-  reservas: BackupImportGroupResult;
-  passageiros: BackupImportGroupResult;
-  embarqueLocais: BackupImportGroupResult;
-  checkins: BackupImportGroupResult;
-  automacoes: BackupImportGroupResult;
-  automacaoAcoes: BackupImportGroupResult;
-  automacaoLogs: BackupImportGroupResult;
-  indicacoes: BackupImportGroupResult;
-  lojaProdutos: BackupImportGroupResult;
-  lojaCupons: BackupImportGroupResult;
-  lojaPedidos: BackupImportGroupResult;
-  lojaItensPedido: BackupImportGroupResult;
-  pagamentos: BackupImportGroupResult;
-  despesas: BackupImportGroupResult;
-}
-
-const BACKUP_IMPORT_GROUP_LABELS: Record<keyof Omit<BackupImportReport, "agencia" | "usuarios">, string> = {
-  clientes: "Clientes",
-  viagens: "Viagens",
-  reservas: "Reservas",
-  passageiros: "Passageiros",
-  embarqueLocais: "Locais de embarque",
-  checkins: "Check-ins",
-  automacoes: "Automações",
-  automacaoAcoes: "Ações de automação",
-  automacaoLogs: "Logs de automação",
-  indicacoes: "Indicações",
-  lojaProdutos: "Produtos da loja",
-  lojaCupons: "Cupons da loja",
-  lojaPedidos: "Pedidos da loja",
-  lojaItensPedido: "Itens de pedido da loja",
-  pagamentos: "Pagamentos",
-  despesas: "Despesas",
-};
-
-function BackupImportReportView({ report }: { report: BackupImportReport }) {
-  const groupKeys = Object.keys(BACKUP_IMPORT_GROUP_LABELS) as Array<keyof typeof BACKUP_IMPORT_GROUP_LABELS>;
-  const totalErrors = groupKeys.reduce((acc, key) => acc + report[key].errors.length, 0);
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-lg border p-3 text-sm">
-        <div className="flex items-center gap-2 font-medium">
-          <Building2 className="w-4 h-4 text-muted-foreground" />
-          Agência
-        </div>
-        <p className="text-muted-foreground mt-1">
-          {report.agencia.updated
-            ? "Configurações e marca da agência atualizadas com os dados do backup."
-            : "Nenhum dado de agência encontrado para atualizar."}
-        </p>
-      </div>
-
-      <div className="rounded-lg border p-3 text-sm">
-        <div className="flex items-center gap-2 font-medium">
-          <Users className="w-4 h-4 text-muted-foreground" />
-          Usuários (referência)
-        </div>
-        <p className="text-muted-foreground mt-1">
-          {report.usuarios.matched} associados por e-mail a contas existentes
-          {report.usuarios.fallbackToImporter > 0 && (
-            <> · {report.usuarios.fallbackToImporter} sem conta correspondente (associados a você)</>
-          )}
-          .
-        </p>
-        {report.usuarios.fallbackDetails.length > 0 && (
-          <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground list-disc list-inside">
-            {report.usuarios.fallbackDetails.slice(0, 10).map((u, i) => (
-              <li key={u.sourceId ?? i}>{u.name ?? "Sem nome"} {u.email ? `(${u.email})` : ""}</li>
-            ))}
-            {report.usuarios.fallbackDetails.length > 10 && (
-              <li>e mais {report.usuarios.fallbackDetails.length - 10}...</li>
-            )}
-          </ul>
-        )}
-      </div>
-
-      <div className="rounded-lg border overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50">
-            <tr>
-              <th className="text-left font-medium px-3 py-2">Tipo de registro</th>
-              <th className="text-right font-medium px-3 py-2">Criados</th>
-              <th className="text-right font-medium px-3 py-2">Já existiam</th>
-              <th className="text-right font-medium px-3 py-2">Ignorados</th>
-              <th className="text-right font-medium px-3 py-2">Erros</th>
-            </tr>
-          </thead>
-          <tbody>
-            {groupKeys.map((key) => {
-              const g = report[key];
-              const hasErrors = g.errors.length > 0;
-              return (
-                <tr key={key} className="border-t">
-                  <td className="px-3 py-2">{BACKUP_IMPORT_GROUP_LABELS[key]}</td>
-                  <td className="text-right px-3 py-2">{g.created}</td>
-                  <td className="text-right px-3 py-2">{g.duplicate}</td>
-                  <td className="text-right px-3 py-2">{g.skipped}</td>
-                  <td className={`text-right px-3 py-2 ${hasErrors ? "text-destructive font-medium" : ""}`}>{g.errors.length}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {totalErrors > 0 && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm space-y-1">
-          <div className="flex items-center gap-2 font-medium text-destructive">
-            <AlertTriangle className="w-4 h-4" />
-            Detalhes dos erros
-          </div>
-          <ul className="text-xs text-muted-foreground space-y-0.5 max-h-48 overflow-y-auto">
-            {groupKeys.flatMap((key) =>
-              report[key].errors.slice(0, 20).map((e, i) => (
-                <li key={`${key}-${i}`}>
-                  <span className="font-medium">{BACKUP_IMPORT_GROUP_LABELS[key]}:</span> {e.error}
-                </li>
-              )),
-            )}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function BackupDataTab() {
-  const { toast } = useToast();
-  const { data: me } = useGetMe();
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [receivedBytes, setReceivedBytes] = useState(0);
-
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [parsedBackup, setParsedBackup] = useState<ParsedBackup | null>(null);
-  const [parseError, setParseError] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
-  const [importReport, setImportReport] = useState<BackupImportReport | null>(null);
-  const [importIdempotencyKey, setImportIdempotencyKey] = useState<string | null>(null);
-
-  async function handleGenerateBackup() {
-    setIsGenerating(true);
-    setReceivedBytes(0);
-    try {
-      const response = await fetch(`${BASE}/api/backup/export`, {
-        method: "GET",
-        credentials: "include",
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as
-          | { error?: string; message?: string }
-          | null;
-        throw new Error(payload?.message ?? payload?.error ?? "Não foi possível gerar o backup.");
-      }
-      if (!response.body) {
-        // Fallback for environments without streaming response support.
-        const blob = await validateBackupDownload(await response.blob(), response.headers.get("Content-Type"));
-        downloadBackupBlob(blob, response.headers.get("Content-Disposition"));
-        setReceivedBytes(blob.size);
-        toast({ title: "Backup gerado com sucesso", description: "O download do arquivo foi iniciado." });
-        return;
-      }
-
-      const reader = response.body.getReader();
-      const chunks: BlobPart[] = [];
-      let total = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          chunks.push(value as BlobPart);
-          total += value.byteLength;
-          setReceivedBytes(total);
-        }
-      }
-      const blob = await validateBackupDownload(
-        new Blob(chunks, { type: "application/json" }),
-        response.headers.get("Content-Type"),
-      );
-      downloadBackupBlob(blob, response.headers.get("Content-Disposition"));
-      toast({ title: "Backup gerado com sucesso", description: "O download do arquivo foi iniciado." });
-    } catch (err) {
-      toast({
-        title: "Erro ao gerar backup",
-        description: err instanceof Error ? err.message : "Tente novamente.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsGenerating(false);
-    }
-  }
-
-  function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
-    e.target.value = "";
-    setImportReport(null);
-    setParseError(null);
-    setSelectedFile(null);
-    setParsedBackup(null);
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".json")) {
-      setParseError("Selecione um arquivo .json gerado pela exportação de backup.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const text = String(reader.result ?? "");
-        const parsed = parseBackupText(text);
-        setSelectedFile(file);
-        setParsedBackup(parsed);
-        setConfirmOpen(true);
-      } catch (error) {
-        setParseError(error instanceof Error ? error.message : "Não foi possível validar o arquivo selecionado.");
-      }
-    };
-    reader.onerror = () => setParseError("Não foi possível ler o arquivo selecionado.");
-    reader.readAsText(file);
-  }
-
-  async function handleConfirmImport() {
-    if (!parsedBackup) return;
-    setConfirmOpen(false);
-    setIsImporting(true);
-    setImportReport(null);
-    try {
-      const idempotencyKey = importIdempotencyKey ?? crypto.randomUUID();
-      setImportIdempotencyKey(idempotencyKey);
-      const response = await fetch(`${BASE}/api/backup/import`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idempotencyKey, backup: parsedBackup }),
-      });
-      const payload = await response.json().catch(() => null) as
-        | { report?: BackupImportReport; replayed?: boolean; message?: string; error?: string }
-        | null;
-      if (!response.ok) {
-        throw new Error(payload?.message ?? payload?.error ?? "Não foi possível restaurar o backup.");
-      }
-      if (!payload?.report) {
-        throw new Error("Resposta inesperada do servidor.");
-      }
-      setImportReport(payload.report);
-      setImportIdempotencyKey(null);
-      setSelectedFile(null);
-      setParsedBackup(null);
-      toast({
-        title: payload.replayed ? "Backup já havia sido restaurado" : "Backup restaurado com sucesso",
-        description: "Veja o relatório abaixo para os detalhes por tipo de registro.",
-      });
-    } catch (err) {
-      toast({
-        title: "Erro ao restaurar backup",
-        description: err instanceof Error ? err.message : "Tente novamente.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsImporting(false);
-    }
-  }
-
-  function downloadBackupBlob(blob: Blob, contentDisposition: string | null) {
-    const filename = parseBackupFilename(contentDisposition) ?? `backup-agencia-${new Date().toISOString().slice(0, 10)}.json`;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
-        <DatabaseBackup className="w-5 h-5 mt-0.5 text-muted-foreground shrink-0" />
-        <div className="text-sm text-muted-foreground">
-          Gere um arquivo .json com todos os dados da sua agência: clientes, viagens, reservas e
-          passageiros, embarque e check-in, automações, indicações, loja, cupons, pagamentos,
-          despesas e cadastros auxiliares. Nenhuma credencial de acesso é incluída no arquivo.
-          Guarde-o em um local seguro — ele contém dados pessoais dos seus clientes.
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <Button onClick={handleGenerateBackup} disabled={isGenerating} className="gap-2">
-          {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          {isGenerating ? "Gerando backup..." : "Gerar e baixar backup"}
-        </Button>
-        {isGenerating && (
-          <span className="text-sm text-muted-foreground">
-            {receivedBytes > 0
-              ? `Montando arquivo... ${formatBackupBytes(receivedBytes)} recebidos`
-              : "Preparando exportação..."}
-          </span>
-        )}
-      </div>
-
-      {isGenerating && (
-        <p className="text-xs text-muted-foreground">
-          Para agências com muitos dados, isso pode levar alguns minutos. Não feche esta página
-          enquanto o backup estiver sendo gerado.
-        </p>
-      )}
-
-      <div className="border-t pt-4 space-y-3">
-        <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
-          <Upload className="w-5 h-5 mt-0.5 text-muted-foreground shrink-0" />
-          <div className="text-sm text-muted-foreground">
-            Envie um arquivo .json gerado por esta exportação para restaurar os dados na sua
-            agência. Usuários não são recriados — registros são associados a contas existentes
-            pelo e-mail, ou a você quando não houver correspondência. Registros já existentes não
-            são duplicados em uma nova tentativa.
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button variant="outline" asChild disabled={isImporting} className="gap-2 cursor-pointer">
-            <label>
-              {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileJson className="w-4 h-4" />}
-              {isImporting ? "Restaurando backup..." : "Selecionar arquivo de backup (.json)"}
-              <input type="file" accept=".json,application/json" className="hidden" disabled={isImporting} onChange={handleFileSelected} />
-            </label>
-          </Button>
-        </div>
-
-        {parseError && (
-          <div className="flex items-center gap-2 text-sm text-destructive">
-            <XCircle className="w-4 h-4 shrink-0" />
-            {parseError}
-          </div>
-        )}
-
-        {importReport && (
-          <div className="pt-2">
-            <h3 className="text-sm font-medium mb-2">Relatório da restauração</h3>
-            <BackupImportReportView report={importReport} />
-          </div>
-        )}
-      </div>
-
-      <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!open) setConfirmOpen(false); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Restaurar dados deste backup?</AlertDialogTitle>
-            <AlertDialogDescription>
-              <span className="block mb-2">
-                <strong>Origem:</strong>{" "}
-                {String((parsedBackup?.tenant as { name?: string; slug?: string } | undefined)?.name
-                  ?? (parsedBackup?.tenant as { slug?: string } | undefined)?.slug
-                  ?? ((parsedBackup as Record<string, unknown> | null)?.meta as { tenantName?: string } | undefined)?.tenantName
-                  ?? "Agência identificada no backup")}
-                <br />
-                <strong>Destino:</strong> {me?.tenant?.name ?? "sua agência atual"}
-              </span>
-              O arquivo <strong>{selectedFile?.name}</strong> será usado para recriar clientes,
-              viagens, reservas, embarque/check-in, automações, indicações, loja e financeiro na
-              sua agência. Registros já existentes serão identificados e ignorados — nenhum dado
-              atual será removido. Esta ação não pode ser desfeita automaticamente.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => { setSelectedFile(null); setParsedBackup(null); }}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmImport}>Restaurar backup</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  );
-}
-
 /* ──────────────────── Main Settings Page ──────────────────── */
 export default function Configuracoes() {
+  const [currentRoute, setLocation] = useLocation();
+  const currentSearch = useSearch();
+  const currentUrlRef = useRef(window.location.href);
+  const currentHistoryStateRef = useRef(window.history.state);
   const { data: me } = useGetMe();
-  const isAgencyAdmin = me?.role === ROLES.AGENCY_ADMIN;
+  const requestedTab = new URLSearchParams(currentSearch).get("tab");
+  const { isAgencyAdmin, initialTab, navigationGroups, availableTabs } = getAgencySettingsAccess(
+    me?.role,
+    requestedTab,
+  );
+  const allowedTabs = availableTabs;
+  useEffect(() => {
+    if (requestedTab === "backup") {
+      const destination = getLegacyBackupRedirect(me?.role);
+      if (destination) {
+        setLocation(destination);
+      } else if (me) {
+        setLocation(normalizeAgencySettingsTabUrl(window.location.href), { replace: true });
+      }
+      return;
+    }
+    if (!requestedTab || allowedTabs.has(requestedTab)) return;
+    setLocation(normalizeAgencySettingsTabUrl(window.location.href), { replace: true });
+  }, [allowedTabs, me, me?.role, requestedTab, setLocation]);
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [dirtySources, setDirtySources] = useState<Record<string, string>>({});
+  const [pendingExit, setPendingExit] = useState<
+    { kind: "tab"; destination: string } | { kind: "route"; destination: string } | null
+  >(null);
+  const hasUnsavedChanges = hasUnsavedAgencySettings(dirtySources);
+  const activeTabHasUnsavedChanges = hasUnsavedAgencySettings(dirtySources, activeTab);
+
+  useEffect(() => {
+    currentUrlRef.current = window.location.href;
+    currentHistoryStateRef.current = window.history.state;
+  }, [currentRoute, currentSearch]);
+
+  const reportDirty = useCallback((section: string, source: string, isDirty: boolean) => {
+    setDirtySources((current) =>
+      updateAgencySettingsDirtySources(current, section, source, isDirty),
+    );
+  }, []);
+
+  const commitTabChange = useCallback((nextTab: string) => {
+    if (!allowedTabs.has(nextTab)) return;
+    const nextUrl = buildAgencySettingsTabUrl(window.location.href, nextTab);
+    window.history.pushState(window.history.state, "", nextUrl);
+    currentUrlRef.current = new URL(nextUrl, window.location.origin).href;
+    currentHistoryStateRef.current = window.history.state;
+    setActiveTab(nextTab);
+  }, [allowedTabs]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const guardHistoryNavigation = (event: PopStateEvent) => {
+      const destination = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const currentUrl = new URL(currentUrlRef.current);
+      const currentRouteUrl = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
+      if (destination === currentRouteUrl) return;
+
+      event.stopImmediatePropagation();
+      window.history.pushState(currentHistoryStateRef.current, "", currentRouteUrl);
+      setPendingExit({ kind: "route", destination });
+    };
+    window.addEventListener("popstate", guardHistoryNavigation, true);
+    return () => window.removeEventListener("popstate", guardHistoryNavigation, true);
+  }, [hasUnsavedChanges]);
+
+  const handleTabChange = useCallback((nextTab: string) => {
+    if (nextTab === activeTab) return;
+    if (activeTabHasUnsavedChanges) {
+      setPendingExit({ kind: "tab", destination: nextTab });
+      return;
+    }
+    commitTabChange(nextTab);
+  }, [activeTab, activeTabHasUnsavedChanges, commitTabChange]);
+
+  const handleRouteClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!hasUnsavedChanges || event.defaultPrevented || event.button !== 0
+      || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const anchor = target.closest<HTMLAnchorElement>("a[href]");
+    if (!anchor || anchor.hasAttribute("download") || (anchor.target && anchor.target !== "_self")) return;
+    const nextUrl = new URL(anchor.href, window.location.href);
+    if (nextUrl.origin !== window.location.origin || nextUrl.pathname === window.location.pathname) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    setPendingExit({
+      kind: "route",
+      destination: `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
+    });
+  }, [hasUnsavedChanges]);
+
+  const discardAndContinue = useCallback(() => {
+    if (!pendingExit) return;
+    if (pendingExit.kind === "tab") {
+      setDirtySources((current) => Object.fromEntries(
+        Object.entries(current).filter(([, section]) => section !== activeTab),
+      ));
+      commitTabChange(pendingExit.destination);
+    } else {
+      setDirtySources({});
+      setLocation(pendingExit.destination);
+    }
+    setPendingExit(null);
+  }, [activeTab, commitTabChange, pendingExit, setLocation]);
+
+  useEffect(() => {
+    const historyTab = requestedTab && allowedTabs.has(requestedTab) ? requestedTab : "agency";
+    if (historyTab === activeTab) return;
+    if (activeTabHasUnsavedChanges) {
+      const currentTabUrl = buildAgencySettingsTabUrl(window.location.href, activeTab);
+      setLocation(currentTabUrl, { replace: true });
+      setPendingExit({ kind: "tab", destination: historyTab });
+      return;
+    }
+    setActiveTab(historyTab);
+  }, [activeTab, activeTabHasUnsavedChanges, allowedTabs, currentRoute, requestedTab, setLocation]);
 
   return (
-    <div className="visite-enter mx-auto max-w-[1440px] space-y-6">
+    <AgencySettingsDirtyContext.Provider value={reportDirty}>
+    <div className="visite-enter mx-auto max-w-[1440px] space-y-6" onClickCapture={handleRouteClickCapture}>
       <div className="relative overflow-hidden rounded-3xl border border-[#D9CBBE] bg-[#FFF9F0] px-5 py-6 shadow-[0_10px_28px_rgba(93,62,42,.07)] sm:px-7 dark:border-border dark:bg-card">
         <div className="pointer-events-none absolute -right-10 -top-16 h-44 w-44 rounded-full border-[16px] border-[#D8A646]/20" />
         <div className="relative">
-          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F]">Bastidores da agência · Cariri</p>
-          <h1 className="text-2xl font-bold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">Configurações</h1>
-          <p className="mt-1 max-w-2xl text-sm text-[#71808C] dark:text-muted-foreground">Deixe a operação com a sua cara e mantenha os serviços essenciais prontos para a próxima saída.</p>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F]">
+            BASTIDORES DA AGÊNCIA · CARIRI
+          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">
+            {activeTab === "clube" ? "Clube de benefícios" : "Configurações"}
+          </h1>
+          <p className="mt-1 max-w-2xl text-sm text-[#71808C] dark:text-muted-foreground">
+            {activeTab === "clube"
+              ? "Configure a identidade e os benefícios do programa de relacionamento com seus clientes."
+              : "Deixe a operação com a sua cara e mantenha os serviços essenciais prontos para a próxima saída."}
+          </p>
         </div>
       </div>
 
-      <Tabs defaultValue={new URLSearchParams(window.location.search).get("tab") ?? "agency"}>
-        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/85 p-1.5 shadow-sm dark:border-border dark:bg-card">
-          <TabsTrigger value="agency" className="flex items-center gap-1.5">
-            <Building2 className="w-3.5 h-3.5" />
-            Agência
-          </TabsTrigger>
-          <TabsTrigger value="plan" className="flex items-center gap-1.5">
-            <CreditCard className="w-3.5 h-3.5" />
-            Plano
-          </TabsTrigger>
-          <TabsTrigger value="integrations" className="flex items-center gap-1.5">
-            <Puzzle className="w-3.5 h-3.5" />
-            Integrações
-          </TabsTrigger>
-          <TabsTrigger value="notifications" className="flex items-center gap-1.5">
-            <Bell className="w-3.5 h-3.5" />
-            Notificações
-          </TabsTrigger>
-          <TabsTrigger value="customization" className="flex items-center gap-1.5">
-            <Palette className="w-3.5 h-3.5" />
-            Personalização
-          </TabsTrigger>
-          <TabsTrigger value="team" className="flex items-center gap-1.5">
-            <Users className="w-3.5 h-3.5" />
-            Equipe
-          </TabsTrigger>
-          <TabsTrigger value="apikeys" className="flex items-center gap-1.5">
-            <Key className="w-3.5 h-3.5" />
-            Chaves API
-          </TabsTrigger>
-          <TabsTrigger value="features" className="flex items-center gap-1.5">
-            <ToggleLeft className="w-3.5 h-3.5" />
-            Funcionalidades
-          </TabsTrigger>
-          <TabsTrigger value="clube" className="flex items-center gap-1.5">
-            <Crown className="w-3.5 h-3.5" />
-            Clube
-          </TabsTrigger>
-          <TabsTrigger value="pipelines" className="flex items-center gap-1.5">
-            <GitBranch className="w-3.5 h-3.5" />
-            Pipelines
-          </TabsTrigger>
-          {isAgencyAdmin && (
-            <TabsTrigger value="backup" className="flex items-center gap-1.5">
-              <DatabaseBackup className="w-3.5 h-3.5" />
-              Backup de Dados
-            </TabsTrigger>
-          )}
-          {isAgencyAdmin && (
-            <TabsTrigger value="integrity" className="flex items-center gap-1.5" data-testid="tab-linked-data-integrity">
-              <Wrench className="w-3.5 h-3.5" />
-              Integridade
-            </TabsTrigger>
-          )}
-        </TabsList>
-
-        <div className="mt-4">
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
+        <div className="space-y-4">
+          <SettingsNavigation
+            groups={navigationGroups}
+            pageLabel="Seções do CRM"
+            testIdPrefix="agency-settings"
+            value={activeTab}
+            onValueChange={handleTabChange}
+            orientation="horizontal"
+          />
+          <div className="min-w-0">
           <TabsContent value="agency">
             <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
-                <CardTitle>Perfil da Agência</CardTitle>
+                <CardTitle>Dados gerais do estabelecimento</CardTitle>
                 <CardDescription>
-                  Informações da agência, logotipo e cores do sistema
+                  Identificação, contato e dados básicos da operação turística
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -4901,7 +5494,7 @@ export default function Configuracoes() {
               <CardHeader>
                 <CardTitle>Personalização</CardTitle>
                 <CardDescription>
-                  Personalize cores, logotipo e aparência do sistema
+                  Personalize a identidade visual do painel administrativo
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -4995,26 +5588,26 @@ export default function Configuracoes() {
             </Card>
           </TabsContent>
 
-          {isAgencyAdmin && (
-            <TabsContent value="backup">
-              <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <DatabaseBackup className="w-4 h-4" />
-                    Backup de Dados
-                  </CardTitle>
-                  <CardDescription>
-                    Gere e baixe um backup completo dos dados da sua agência em um arquivo .json
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <BackupDataTab />
-                </CardContent>
-              </Card>
-            </TabsContent>
-          )}
+        </div>
         </div>
       </Tabs>
+      <AlertDialog open={pendingExit !== null} onOpenChange={(open) => { if (!open) setPendingExit(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Descartar alterações não salvas?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Há mudanças nesta seção que ainda não foram salvas. Se continuar, elas serão perdidas.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Continuar editando</AlertDialogCancel>
+            <AlertDialogAction onClick={discardAndContinue}>
+              {pendingExit?.kind === "tab" ? "Descartar e trocar de seção" : "Descartar e sair"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+    </AgencySettingsDirtyContext.Provider>
   );
 }

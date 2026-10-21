@@ -125,7 +125,7 @@ vi.mock("../lib/email-retry-constants.js", () => ({
 }));
 
 vi.mock("bullmq", () => ({ Worker: vi.fn() }));
-vi.mock("../lib/redis.js", () => ({ getRedisConnection: vi.fn(() => null) }));
+vi.mock("../lib/redis.js", () => ({ getBullMQWorkerConnection: vi.fn(() => null) }));
 vi.mock("../lib/expired-reservations.js", () => ({ runExpiredReservationsCron: vi.fn() }));
 vi.mock("../queues/index.js", () => ({}));
 vi.mock("@workspace/permissions", () => ({

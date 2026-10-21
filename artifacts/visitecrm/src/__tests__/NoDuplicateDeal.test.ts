@@ -177,11 +177,11 @@ vi.mock("@workspace/api-client-react", () => ({
   useGetClientLoyalty: () => ({ data: null }),
   useListLoyaltyMembers: () => ({ data: [] }),
   useListLoyaltyTransactions: () => ({ data: [] }),
-  useListClientActivities: () => ({ data: { data: [] }, isLoading: false }),
+  useListClientActivities: () => ({ data: [], isLoading: false }),
   useCreateClientActivity: () => ({ mutateAsync: createClientActivityMock, isPending: false }),
   useGetClientReferral: () => ({ data: null, isLoading: false }),
   useGenerateClientReferralCode: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useListOutboundMessages: () => ({ data: { data: [] }, isLoading: false }),
+  useListOutboundMessages: () => ({ data: [], isLoading: false }),
 }));
 
 vi.mock("@/hooks/use-toast", () => ({

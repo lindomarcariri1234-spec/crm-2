@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, numeric, integer, boolean, index, uniqueIndex, check } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, integer, boolean, index, uniqueIndex, check, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -24,6 +24,8 @@ export const paymentsTable = pgTable("payments", {
   totalInstallments: integer("total_installments").notNull().default(1),
   dueDate: timestamp("due_date", { withTimezone: true }).notNull(),
   paidAt: timestamp("paid_at", { withTimezone: true }),
+  refundedAt: timestamp("refunded_at", { withTimezone: true }),
+  refundOfPaymentId: text("refund_of_payment_id").references((): AnyPgColumn => paymentsTable.id, { onDelete: "restrict" }),
   status: text("status").$type<PaymentStatus>().notNull().default("pending"),
   receiptUrl: text("receipt_url"),
   gateway: text("gateway"),
@@ -38,6 +40,7 @@ export const paymentsTable = pgTable("payments", {
 }, (t) => [
   index("payments_tenant_id_created_at_idx").on(t.tenantId, t.createdAt),
   index("payments_reservation_id_idx").on(t.reservationId),
+  index("payments_refund_of_payment_id_idx").on(t.refundOfPaymentId),
   index("payments_client_id_idx").on(t.clientId),
   index("payments_tenant_id_status_idx").on(t.tenantId, t.status),
   index("payments_financial_paid_idx").on(t.tenantId, t.type, t.status, t.paidAt),
@@ -51,7 +54,7 @@ export const paymentsTable = pgTable("payments", {
   ),
 ]);
 
-export const insertPaymentSchema = createInsertSchema(paymentsTable).omit({ createdAt: true, updatedAt: true });
+export const insertPaymentSchema = createInsertSchema(paymentsTable).omit({ createdAt: true, updatedAt: true, refundedAt: true });
 export type InsertPayment = typeof paymentsTable.$inferInsert;
 export type Payment = typeof paymentsTable.$inferSelect;
 

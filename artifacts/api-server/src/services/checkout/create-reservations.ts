@@ -41,6 +41,10 @@ import { moveDealToStage } from "../pipeline-automation";
 import { getStorefrontInitialPipelineStage } from "./storefront-pipeline";
 import { recalculateClientFinancials } from "../client-financials";
 import { findTripSeatConflicts } from "../reservation-capacity";
+import {
+  countSeatBearingCoPassengers,
+  getStorefrontPassengerPolicyError,
+} from "./storefront-passenger-rules";
 
 export const CHECKOUT_RESERVATION_HOLD_MINUTES = 30;
 const ACTIVE_ACCOMMODATION_STAY_STATUSES = ["held", "confirmed", "checked_in", "in_house"];
@@ -555,13 +559,24 @@ export async function createReservationsForOrder(
   const totalTripQuantity = tripQuantities.reduce((sum, item) => sum + item.totalQty, 0);
   const coPassengers = Array.isArray(order.coPassengers) ? order.coPassengers : [];
 
-  // coPassengers is positional data for one reservation: the buyer is the
-  // primary passenger and every remaining capacity unit needs one named row.
-  // Never create synthetic passenger names because they make the manifest and
-  // the checkout disagree while looking like valid data.
-  if (tripLinkedProducts.size === 1 && coPassengers.length !== totalTripQuantity - 1) {
+  const passengerPolicyError = getStorefrontPassengerPolicyError(coPassengers);
+  if (passengerPolicyError) {
     throw new AppError(
-      `Dados de passageiros incompletos: esperados ${Math.max(0, totalTripQuantity - 1)} acompanhante(s), recebidos ${coPassengers.length}`,
+      passengerPolicyError.message,
+      400,
+      passengerPolicyError.code,
+    );
+  }
+
+  // The buyer is the primary passenger. Each paid seat after the buyer must
+  // match one seat-bearing child; lap children are still named passenger rows
+  // but do not consume capacity or a seat.
+  if (
+    tripLinkedProducts.size === 1
+    && countSeatBearingCoPassengers(coPassengers) !== totalTripQuantity - 1
+  ) {
+    throw new AppError(
+      `Dados de passageiros incompletos: esperados ${Math.max(0, totalTripQuantity - 1)} criança(s) com poltrona, recebidas ${countSeatBearingCoPassengers(coPassengers)}`,
       400,
       "PASSENGER_QUANTITY_MISMATCH",
     );
@@ -666,7 +681,7 @@ export async function createReservationsForOrder(
 
     // Row-level lock prevents concurrent paid orders from overselling the same trip.
     const lockResult = await exec.execute(
-      sql`SELECT id, available_seats, total_capacity, show_seat_map, seat_map, type FROM trips WHERE id = ${tripId} AND tenant_id = ${order.tenantId} FOR UPDATE`,
+      sql`SELECT id, available_seats, total_capacity, show_seat_map, seat_map, type, status FROM trips WHERE id = ${tripId} AND tenant_id = ${order.tenantId} FOR UPDATE`,
     );
     const tripRow = (lockResult as unknown as { rows: Array<{
       id: string;
@@ -675,6 +690,7 @@ export async function createReservationsForOrder(
       show_seat_map: boolean;
       seat_map: Record<string, { status?: string }> | null;
       type: string;
+      status: string;
     }> }).rows[0];
 
     if (!tripRow) {
@@ -682,6 +698,14 @@ export async function createReservationsForOrder(
         `Viagem vinculada ao produto "${product.name}" não encontrada`,
         404,
         "TRIP_NOT_FOUND",
+      );
+    }
+
+    if (tripRow.status === "completed") {
+      throw new AppError(
+        `A viagem "${product.name}" já foi realizada e não está mais disponível para compra`,
+        409,
+        "TRIP_COMPLETED",
       );
     }
 
@@ -824,15 +848,10 @@ export async function createReservationsForOrder(
       ...(order.customerNotes ? { notes: order.customerNotes } : {}),
     });
 
-    // Create one passenger record per seat.
-    //
-    // Seat 0 (reservationSeats[0]) → primary passenger (the buyer).
-    // Seat N (reservationSeats[N]) → the named co-passenger[N-1] from the
-    // order. The quantity/name invariant is validated before any insert.
-    //
-    // This ensures the ANTT manifest and Painel de Embarque are fully
-    // populated immediately after payment without the agency filling in
-    // passengers manually.
+    // Create the primary passenger, every seated child and every lap child.
+    // Only passengers with a seat consume a reservation seat/capacity unit;
+    // lap children remain in the manifest with seatNumber=null and category
+    // "baby", so the operational trip can display them as travelling on a lap.
     const clientBirthDateForPassenger = order.customerBirthdate
       ? new Date(order.customerBirthdate + "T12:00:00")
       : undefined;
@@ -850,9 +869,15 @@ export async function createReservationsForOrder(
       ...(order.boardingLocationId ? { boardingLocationId: order.boardingLocationId } : {}),
     });
 
-    // Additional passengers (seats 2, 3, … totalQty)
-    for (let i = 1; i < totalQty; i++) {
-      const co = coPassengers[i - 1];
+    let nextPassengerSeatIndex = 1;
+    for (const co of coPassengers) {
+      const occupiesSeat = co.occupiesSeat !== false;
+      const isChildUnder7 = co.isChildUnder7 === true;
+      const isNewChildRecord =
+        co.isChildUnder7 !== undefined && co.occupiesSeat !== undefined;
+      const seatNumber = occupiesSeat
+        ? reservationSeats[nextPassengerSeatIndex++] ?? null
+        : null;
       const passengerName = co.name.trim();
       await exec.insert(passengersTable).values({
         id: generateId(),
@@ -860,9 +885,14 @@ export async function createReservationsForOrder(
         name: passengerName,
         ...(co?.cpf ? { cpf: co.cpf } : {}),
         ...(co?.phone ? { phone: co.phone } : {}),
-        ageCategory: "adult",
+        ageCategory: isNewChildRecord
+          ? isChildUnder7 && !occupiesSeat
+            ? "baby"
+            : "child"
+          : "adult",
+        isChildUnder7,
         isPrimary: false,
-        seatNumber: reservationSeats[i] ?? null,
+        seatNumber,
         ...(order.boardingLocationId ? { boardingLocationId: order.boardingLocationId } : {}),
       });
     }

@@ -30,6 +30,7 @@ const {
   mockCreateReservationsForOrder,
   mockConfirmReservationsForOrder,
   mockSyncStoreOrderFromOrderPayment,
+  mockSyncReservationPaymentStatus,
   mockRecalculateClientFinancials,
   mockInsertValues,
   selectQueue,
@@ -47,6 +48,7 @@ const {
   const mockCreateReservationsForOrder = vi.fn().mockResolvedValue({ tripIds: [], reservationIds: [] });
   const mockConfirmReservationsForOrder = vi.fn().mockResolvedValue({ reservationIds: [], allocatedAmount: 0 });
   const mockSyncStoreOrderFromOrderPayment = vi.fn().mockResolvedValue({ orderId: "order-004", transitionedToPaid: false });
+  const mockSyncReservationPaymentStatus = vi.fn().mockResolvedValue(undefined);
   const mockRecalculateClientFinancials = vi.fn().mockResolvedValue(undefined);
   const mockInsertValues = vi.fn().mockResolvedValue(undefined);
   const mockUpdateReturning = vi.fn();
@@ -59,6 +61,7 @@ const {
     mockCreateReservationsForOrder,
     mockConfirmReservationsForOrder,
     mockSyncStoreOrderFromOrderPayment,
+    mockSyncReservationPaymentStatus,
     mockRecalculateClientFinancials,
     mockInsertValues,
     selectQueue,
@@ -169,9 +172,16 @@ vi.mock("@clerk/express", () => ({
 }));
 
 vi.mock("@workspace/permissions", () => ({
-  PAYMENT_STATUS: { PAID: "paid", PENDING: "pending" },
+  PAYMENT_STATUS: { PAID: "paid", PENDING: "pending", APPROVED: "approved", REFUNDED: "refunded" },
   PAYMENT_TYPE: { RECEIVABLE: "receivable", PAYABLE: "payable" },
-  RESERVATION_STATUS: { PENDING: "pending", CANCELLED: "cancelled", REFUNDED: "refunded", FAILED: "failed" },
+  RESERVATION_STATUS: {
+    PENDING: "pending",
+    CONFIRMED: "confirmed",
+    COMPLETED: "completed",
+    CANCELLED: "cancelled",
+    REFUNDED: "refunded",
+    FAILED: "failed",
+  },
   STORE_ORDER_STATUS: {
     CANCELLED: "cancelled",
     COMPLETED: "completed",
@@ -218,6 +228,10 @@ vi.mock("../services/checkout/create-reservations.js", () => ({
 
 vi.mock("../services/reservation-order-payment-sync", () => ({
   syncStoreOrderFromOrderPayment: mockSyncStoreOrderFromOrderPayment,
+}));
+
+vi.mock("../lib/reservation-payments.js", () => ({
+  syncReservationPaymentStatus: mockSyncReservationPaymentStatus,
 }));
 
 vi.mock("../services/client-financials", () => ({
@@ -351,6 +365,7 @@ beforeEach(() => {
   mockCreateReservationsForOrder.mockResolvedValue({ tripIds: [], reservationIds: [] });
   mockConfirmReservationsForOrder.mockResolvedValue({ reservationIds: [], allocatedAmount: 0 });
   mockSyncStoreOrderFromOrderPayment.mockResolvedValue({ orderId: "order-004", transitionedToPaid: false });
+  mockSyncReservationPaymentStatus.mockResolvedValue(undefined);
   mockRecalculateClientFinancials.mockResolvedValue(undefined);
   mockInsertValues.mockResolvedValue(undefined);
   // Default update returns [{id}] (1 row updated)
@@ -370,7 +385,7 @@ describe("PUT /api/store/orders/:id/status — admin manual-cancel referral reve
 
       const res = await request(buildApp())
         .put("/api/store/orders/order-001/status")
-        .send({ status: "cancelled" });
+        .send({ status: "cancelled", paymentStatus: "refunded" });
 
       expect(res.status).toBe(200);
       expect(mockCancelPartnerItems).toHaveBeenCalledWith(
@@ -391,7 +406,7 @@ describe("PUT /api/store/orders/:id/status — admin manual-cancel referral reve
 
       const res = await request(buildApp())
         .put("/api/store/orders/order-001/status")
-        .send({ status: "cancelled" });
+        .send({ status: "cancelled", paymentStatus: "refunded" });
 
       expect(res.status).toBe(200);
       expect(mockReverseProductOnly).toHaveBeenCalledTimes(1);
@@ -497,6 +512,67 @@ describe("PUT /api/store/orders/:id/status — admin manual-cancel referral reve
       expect(mockReverseProductOnly).not.toHaveBeenCalled();
       expect(mockReverseTripOrder).not.toHaveBeenCalled();
     });
+  });
+
+  it("requires an explicit refund before cancelling a paid order", async () => {
+    selectQueue.push([FAKE_STORE]);
+    selectQueue.push([FAKE_PAID_ORDER_WITH_REFERRAL]);
+
+    const res = await request(buildApp())
+      .put("/api/store/orders/order-001/status")
+      .send({ status: "cancelled" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("ORDER_REFUND_REQUIRED");
+    expect(mockReverseOrderSettlement).not.toHaveBeenCalled();
+    expect(mockReverseProductOnly).not.toHaveBeenCalled();
+  });
+
+  it("also blocks cancellation when a pending order has recorded partial receipts", async () => {
+    selectQueue.push([FAKE_STORE]);
+    selectQueue.push([{ ...FAKE_PAID_ORDER_WITH_REFERRAL, paymentStatus: "pending" }]);
+    selectQueue.push([]);
+    selectQueue.push([{ id: "payment-partial" }]);
+
+    const res = await request(buildApp())
+      .put("/api/store/orders/order-001/status")
+      .send({ status: "cancelled" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("ORDER_REFUND_REQUIRED");
+    expect(mockReverseOrderSettlement).not.toHaveBeenCalled();
+  });
+
+  it("cancels linked reservations and resyncs their balances after a recorded refund", async () => {
+    const order = {
+      ...FAKE_PAID_ORDER_WITH_REFERRAL,
+      referralEffectsAppliedAt: null,
+      pendingReferral: null,
+    };
+    selectQueue.push([FAKE_STORE]);
+    selectQueue.push([order]);
+    selectQueue.push([{
+      id: "reservation-001",
+      clientId: null,
+      status: "confirmed",
+      tripId: "trip-001",
+      seats: ["seat-1"],
+      capacityUnits: 1,
+    }]);
+    selectQueue.push([{ id: "payment-001" }]);
+
+    const res = await request(buildApp())
+      .put("/api/store/orders/order-001/status")
+      .send({ status: "cancelled", paymentStatus: "refunded" });
+
+    expect(res.status).toBe(200);
+    expect(mockReverseOrderSettlement).toHaveBeenCalledTimes(1);
+    expect(mockSyncReservationPaymentStatus).toHaveBeenCalledWith(
+      "reservation-001",
+      "tenant-001",
+      expect.anything(),
+    );
+    expect(mockReverseTripOrder).not.toHaveBeenCalled();
   });
 
   it("expires a pending referral instead of reversing a bonus when cancelling an unpaid order", async () => {

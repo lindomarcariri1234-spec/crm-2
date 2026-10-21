@@ -12,4 +12,5 @@ export type ExportOutboundMessagesChannel =
 export const ExportOutboundMessagesChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;

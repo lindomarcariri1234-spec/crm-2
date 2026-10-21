@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { CoverImageUpload } from "@/components/cover-image-upload";
 import { useToast } from "@/hooks/use-toast";
 import { storeApi, StoreSettings, InitStoreInput } from "@/lib/storeApi";
@@ -10,7 +10,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
+import { STORE_SETTINGS_NAVIGATION_GROUPS } from "@/components/settings/store-settings-navigation";
 import {
   Card,
   CardContent,
@@ -325,6 +327,8 @@ function StoreWizard({ onCreated }: { onCreated: (s: StoreSettings) => void }) {
 
 export default function LojaConfiguracoes() {
   const { toast } = useToast();
+  const search = useSearch();
+  const [, setLocation] = useLocation();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingCount, setUploadingCount] = useState(0);
@@ -333,6 +337,7 @@ export default function LojaConfiguracoes() {
     setUploadingCount((prev) => (uploading ? prev + 1 : Math.max(0, prev - 1)));
   const [store, setStore] = useState<StoreSettings | null>(null);
   const [form, setForm] = useState<Partial<StoreSettings>>({});
+  const [activeSettingsTab, setActiveSettingsTab] = useState("geral");
   const [testingStripeConnection, setTestingStripeConnection] = useState(false);
   const [stripeConnectionResult, setStripeConnectionResult] = useState<{
     kind: "success" | "error";
@@ -341,6 +346,16 @@ export default function LojaConfiguracoes() {
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
   const [showPixKey, setShowPixKey] = useState(false);
+  useEffect(() => {
+    const requestedTab = new URLSearchParams(search).get("tab");
+    const knownTabs = STORE_SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.items.map((item) => item.value));
+    setActiveSettingsTab(requestedTab && knownTabs.includes(requestedTab) ? requestedTab : "geral");
+  }, [search]);
+
+  function changeSettingsTab(tab: string) {
+    setActiveSettingsTab(tab);
+    setLocation(`${window.location.pathname}?tab=${encodeURIComponent(tab)}`);
+  }
 
   const generateQr = useCallback(async (slug: string, updatedAt: string) => {
     const cacheVersion = Date.parse(updatedAt);
@@ -628,45 +643,16 @@ export default function LojaConfiguracoes() {
         </Button>
       </div>
 
-      <Tabs defaultValue="geral">
-        <TabsList className="flex-wrap h-auto gap-1">
-          <TabsTrigger value="geral">
-            <Store className="w-4 h-4 mr-1.5" />
-            Geral
-          </TabsTrigger>
-          <TabsTrigger value="aparencia">
-            <Palette className="w-4 h-4 mr-1.5" />
-            Aparência
-          </TabsTrigger>
-          <TabsTrigger value="contato">
-            <Phone className="w-4 h-4 mr-1.5" />
-            Contato
-          </TabsTrigger>
-          <TabsTrigger value="seo">
-            <Search className="w-4 h-4 mr-1.5" />
-            SEO
-          </TabsTrigger>
-          <TabsTrigger value="dominio">
-            <Link2 className="w-4 h-4 mr-1.5" />
-            Domínio
-          </TabsTrigger>
-          <TabsTrigger value="pagamento">
-            <CreditCard className="w-4 h-4 mr-1.5" />
-            Pagamentos
-          </TabsTrigger>
-          <TabsTrigger value="politicas">
-            <FileText className="w-4 h-4 mr-1.5" />
-            Políticas
-          </TabsTrigger>
-          <TabsTrigger value="notificacoes">
-            <Bell className="w-4 h-4 mr-1.5" />
-            Notificações
-          </TabsTrigger>
-          <TabsTrigger value="compartilhar">
-            <Share2 className="w-4 h-4 mr-1.5" />
-            Compartilhar
-          </TabsTrigger>
-        </TabsList>
+      <Tabs value={activeSettingsTab} onValueChange={changeSettingsTab}>
+        <div className="grid items-start gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <SettingsNavigation
+            groups={STORE_SETTINGS_NAVIGATION_GROUPS}
+            pageLabel="Seções da loja"
+            testIdPrefix="store-settings"
+            value={activeSettingsTab}
+            onValueChange={changeSettingsTab}
+          />
+          <div className="min-w-0">
 
         {/* ── GERAL ── */}
         <TabsContent value="geral" className="space-y-4 mt-4">
@@ -1138,6 +1124,32 @@ export default function LojaConfiguracoes() {
         <TabsContent value="pagamento" className="space-y-4 mt-4">
           <Card>
             <CardHeader>
+              <CardTitle>Entrega do QR Code PIX</CardTitle>
+              <CardDescription>
+                Escolha onde o cliente receberá o QR Code gerado no checkout. A opção de tela mantém o código disponível na confirmação e na consulta do pedido.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Label htmlFor="pix-qr-delivery-mode">Enviar QR Code por</Label>
+              <select
+                id="pix-qr-delivery-mode"
+                data-testid="pix-qr-delivery-mode"
+                value={form.pixQrDeliveryMode ?? "screen"}
+                onChange={(event) => set("pixQrDeliveryMode", event.target.value as StoreSettings["pixQrDeliveryMode"])}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              >
+                <option value="screen">Somente na tela</option>
+                <option value="email">E-mail</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="all">Tela, e-mail e WhatsApp</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Para e-mail e WhatsApp, os respectivos dados de contato precisam estar preenchidos e configurados para envio.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
               <CardTitle>Configurações de Pagamento</CardTitle>
               <CardDescription>Opções de parcelamento e valor mínimo de reserva.</CardDescription>
             </CardHeader>
@@ -1229,6 +1241,30 @@ export default function LojaConfiguracoes() {
                 />
                 <p className="text-xs text-muted-foreground">
                   A loja só oferecerá este provedor quando estiver ativado e a InfiniteTag estiver preenchida.
+                </p>
+              </div>
+              <div
+                className="space-y-2 rounded-lg border border-muted bg-muted/30 p-3 text-sm"
+                data-testid="infinitepay-setup-guidance"
+              >
+                <p className="font-medium">Antes de testar um pagamento</p>
+                <p className="text-muted-foreground">
+                  No app InfinitePay, acesse Vendas → Checkout → Configurações → Habilitar Checkout Integrado.
+                  Também é possível habilitar pelo{" "}
+                  <a
+                    className="underline underline-offset-2"
+                    data-testid="link-infinitepay-settings"
+                    href="https://app.infinitepay.io/external-checkout#configuracoes"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    painel web da InfinitePay
+                  </a>
+                  . Confira também se a InfiniteTag acima está correta e sem o símbolo $.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Se a criação do link for recusada, confira esses requisitos. Uma resposta de validação, sozinha,
+                  não confirma qual configuração causou a recusa.
                 </p>
               </div>
             </CardContent>
@@ -1853,6 +1889,8 @@ export default function LojaConfiguracoes() {
             </CardContent>
           </Card>
         </TabsContent>
+          </div>
+        </div>
       </Tabs>
     </div>
   );

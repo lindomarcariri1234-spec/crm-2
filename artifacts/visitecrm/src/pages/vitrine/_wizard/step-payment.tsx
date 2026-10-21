@@ -1,6 +1,6 @@
 import { CreditCard, CheckCircle2, Info, AlertTriangle } from "lucide-react";
 import { PublicStore } from "@/lib/storeApi";
-import { PAYMENT_METHODS_CONFIG } from "./constants";
+import { getPaymentMethodDescription, isPaymentMethodAvailable, PAYMENT_METHODS_CONFIG } from "./constants";
 import { StepPaymentSummary } from "./payment-summary";
 import type { WizardState } from "./use-wizard-state";
 
@@ -54,13 +54,16 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
               if (!config) return null;
               const { Icon } = config;
               const isCardMethod = methodId === "credit_card" || methodId === "debit_card";
-              const cardUnavailable = isCardMethod && (
-                methodId === "debit_card"
-                  ? form.paymentProvider !== "stripe" || !store.stripeEnabled
-                  : !(
-                      (form.paymentProvider === "stripe" && store.stripeEnabled)
-                      || (form.paymentProvider === "infinitepay" && store.infinitePayEnabled)
-                    )
+              const cardUnavailable = isCardMethod && !isPaymentMethodAvailable(
+                methodId,
+                form.paymentProvider,
+                store.stripeEnabled,
+                store.infinitePayEnabled,
+              );
+              const description = getPaymentMethodDescription(
+                methodId,
+                form.paymentProvider,
+                config.description,
               );
               const isSelected = form.paymentMethod === methodId;
               return (
@@ -88,7 +91,7 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
                   </div>
                   <div className="flex-1">
                     <p className="font-semibold text-sm">{config.label}</p>
-                    <p className="text-xs text-muted-foreground">{config.description}</p>
+                    <p className="text-xs text-muted-foreground">{description}</p>
                   </div>
                   {isSelected && <CheckCircle2 className="w-5 h-5 text-orange-500 shrink-0" />}
                 </label>
@@ -284,6 +287,11 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
             <div className="flex-1">
               <p className="font-semibold mb-0.5">Reserva não concluída</p>
               <p>{submitError}</p>
+              {form.paymentProvider === "infinitepay" && submitError.includes("este aviso não confirma a causa") && (
+                <p className="mt-1 text-xs text-amber-800" data-testid="status-infinitepay-checkout-help">
+                  Se o problema persistir, fale com a agência. Esta mensagem não confirma a causa da falha.
+                </p>
+              )}
             </div>
             <button
               aria-label="Fechar"

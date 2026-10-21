@@ -180,7 +180,10 @@ router.post("/guide/trip/:tripId/checkins", async (req, res, next: NextFunction)
       status: z.enum(["present", "absent"]).default("present"),
     }).parse(req.body);
 
-    const [passenger] = await db.select({ id: passengersTable.id })
+    const [passenger] = await db.select({
+      id: passengersTable.id,
+      reservationId: passengersTable.reservationId,
+    })
       .from(passengersTable)
       .innerJoin(reservationsTable, eq(passengersTable.reservationId, reservationsTable.id))
       .where(and(
@@ -190,6 +193,10 @@ router.post("/guide/trip/:tripId/checkins", async (req, res, next: NextFunction)
       ))
       .limit(1);
     if (!passenger) { next(new NotFoundError("Passageiro não encontrado", "PASSENGER_NOT_FOUND")); return; }
+    if (reservationId && reservationId !== passenger.reservationId) {
+      next(new ValidationError("A reserva não corresponde ao passageiro.", "VALIDATION_ERROR"));
+      return;
+    }
 
     const checkedInAt = new Date();
     await db.insert(tripCheckinsTable)
@@ -198,7 +205,7 @@ router.post("/guide/trip/:tripId/checkins", async (req, res, next: NextFunction)
         tripId: guide.tripId,
         tenantId: guide.tenantId,
         passengerId,
-        reservationId: reservationId ?? null,
+        reservationId: passenger.reservationId,
         checkedInByUserRef: `guide:${guide.tokenId}:${guide.guideName}`,
         checkedInAt,
         notes: notes ?? null,

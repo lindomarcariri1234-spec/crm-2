@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useSearch } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { publicStoreApi, PublicStore, StoreProduct, StoreCategory } from "@/lib/storeApi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,13 +22,17 @@ import { Search, MapPin, SlidersHorizontal, X, ArrowUpDown } from "lucide-react"
 import { ProductQuickView } from "@/components/vitrine/ProductQuickView";
 import { PremiumProductCard } from "@/components/vitrine/PremiumProductCard";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
+import { trackStoreGroupSelection, trackStorefrontSearch } from "@/lib/analytics";
 import { getStoredValue, removeStoredValue } from "./utils/storage";
+
+type ProductGroup = "all" | "travel" | "other";
 
 interface Filters {
   search: string;
   category: string;
   destination: string;
   type: string;
+  group: ProductGroup;
   minPrice: string;
   maxPrice: string;
   departureFrom: string;
@@ -41,6 +45,7 @@ const EMPTY_FILTERS: Filters = {
   category: "all",
   destination: "all",
   type: "all",
+  group: "all",
   minPrice: "",
   maxPrice: "",
   departureFrom: "",
@@ -48,7 +53,29 @@ const EMPTY_FILTERS: Filters = {
   sort: "default",
 };
 
-const STOREFRONT_PRODUCT_TYPES = new Set(["package", "tour", "hotel", "service", "cruise"]);
+const STOREFRONT_PRODUCT_TYPES = new Set([
+  "trip",
+  "package",
+  "tour",
+  "transfer",
+  "cruise",
+  "hotel",
+  "service",
+  "insurance",
+  "product",
+]);
+
+const PRODUCT_TYPE_OPTIONS = [
+  { value: "trip", label: "Viagens" },
+  { value: "package", label: "Pacotes" },
+  { value: "tour", label: "Passeios" },
+  { value: "transfer", label: "Serviços de transfer" },
+  { value: "cruise", label: "Cruzeiros" },
+  { value: "hotel", label: "Hospedagens" },
+  { value: "service", label: "Serviços" },
+  { value: "insurance", label: "Seguros" },
+  { value: "product", label: "Produtos" },
+];
 
 function FilterPanel({
   filters,
@@ -87,6 +114,7 @@ function FilterPanel({
     local.category !== "all" ||
     local.destination !== "all" ||
     local.type !== "all" ||
+    local.group !== "all" ||
     !!local.minPrice ||
     !!local.maxPrice ||
     !!local.departureFrom ||
@@ -144,11 +172,7 @@ function FilterPanel({
         <div className="space-y-1">
           {[
             { value: "all", label: "Todos" },
-            { value: "package", label: "Pacotes" },
-            { value: "tour", label: "Passeios" },
-            { value: "cruise", label: "Cruzeiros" },
-            { value: "hotel", label: "Hotéis" },
-            { value: "service", label: "Serviços" },
+            ...PRODUCT_TYPE_OPTIONS,
           ].map(({ value, label }) => (
             <label key={value} className="flex items-center gap-2 text-sm cursor-pointer">
               <input
@@ -272,6 +296,7 @@ export default function VitrineCatalog({
 }) {
   const { colors } = useVitrineTheme();
   const searchStr = useSearch();
+  const [, navigate] = useLocation();
   const params = new URLSearchParams(searchStr);
   const initialCategory = params.get("categoryId") ?? "all";
   const initialSearch = params.get("search") ?? "";
@@ -280,6 +305,11 @@ export default function VitrineCatalog({
   const initialMinSeats = params.get("minSeats") ?? "";
   const requestedType = params.get("type") ?? "";
   const initialType = STOREFRONT_PRODUCT_TYPES.has(requestedType) ? requestedType : "all";
+  const requestedGroup = params.get("group");
+  const initialGroup: ProductGroup =
+    requestedGroup === "travel" || requestedGroup === "other"
+      ? requestedGroup
+      : "all";
   const requestedMaxPrice = params.get("maxPrice") ?? "";
   const initialMaxPrice = /^\d+(\.\d{1,2})?$/.test(requestedMaxPrice)
     && Number(requestedMaxPrice) > 0
@@ -301,6 +331,7 @@ export default function VitrineCatalog({
     category: initialCategory,
     destination: initialDestination,
     type: initialType,
+    group: initialGroup,
     maxPrice: initialMaxPrice,
     departureFrom: initialDepartureFrom,
     minSeats: initialMinSeats,
@@ -367,6 +398,7 @@ export default function VitrineCatalog({
       if (filters.category !== "all") queryParams.categoryId = filters.category;
       if (filters.destination !== "all") queryParams.destination = filters.destination;
       if (filters.type !== "all") queryParams.type = filters.type;
+      if (filters.group !== "all") queryParams.group = filters.group;
       if (filters.minPrice) queryParams.minPrice = filters.minPrice;
       if (filters.maxPrice) queryParams.maxPrice = filters.maxPrice;
       if (filters.departureFrom) queryParams.departureFrom = filters.departureFrom;
@@ -392,7 +424,7 @@ export default function VitrineCatalog({
 
   useEffect(() => {
     setPage(1);
-  }, [filters.search, filters.category, filters.destination, filters.type, filters.minPrice, filters.maxPrice, filters.departureFrom, filters.minSeats, filters.sort]);
+  }, [filters.search, filters.category, filters.destination, filters.type, filters.group, filters.minPrice, filters.maxPrice, filters.departureFrom, filters.minSeats, filters.sort]);
 
   useEffect(() => {
     load();
@@ -404,10 +436,42 @@ export default function VitrineCatalog({
     filters.category !== "all" ||
     filters.destination !== "all" ||
     filters.type !== "all" ||
+    filters.group !== "all" ||
     !!filters.minPrice ||
     !!filters.maxPrice ||
     !!filters.departureFrom ||
     !!filters.minSeats;
+
+  function applyFilters(nextFilters: Filters) {
+    const groupChanged = nextFilters.group !== filters.group;
+    setFilters(nextFilters);
+    if (!groupChanged) return;
+
+    const nextParams = new URLSearchParams(window.location.search);
+    if (nextFilters.group === "all") nextParams.delete("group");
+    else nextParams.set("group", nextFilters.group);
+    nextParams.delete("type");
+    const query = nextParams.toString();
+    navigate(`${window.location.pathname}${query ? `?${query}` : ""}`);
+  }
+
+  function changeGroup(group: ProductGroup) {
+    trackStoreGroupSelection(group, "catalog_tab", slug);
+    applyFilters({ ...filters, group, type: "all" });
+  }
+
+  const catalogTitle =
+    filters.group === "travel"
+      ? "Viagens e experiências"
+      : filters.group === "other"
+        ? "Outros itens da loja"
+        : "Viagens e produtos";
+  const catalogItemLabel =
+    filters.group === "travel"
+      ? total === 1 ? "viagem disponível" : "viagens disponíveis"
+      : filters.group === "other"
+        ? total === 1 ? "item da loja disponível" : "itens da loja disponíveis"
+        : total === 1 ? "item disponível" : "itens disponíveis";
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-10 lg:px-8 lg:py-14">
@@ -444,13 +508,49 @@ export default function VitrineCatalog({
           Catálogo
         </span>
         <h1 className="mt-2 text-4xl font-semibold tracking-[-0.045em] sm:text-5xl">
-          Nossos Pacotes
+          {catalogTitle}
         </h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground">
           {loading
-            ? "Carregando pacotes..."
-            : `${total} pacote${total !== 1 ? "s" : ""} ${total !== 1 ? "disponíveis" : "disponível"}`}
+            ? "Carregando catálogo..."
+            : `${total} ${catalogItemLabel}`}
         </p>
+      </div>
+
+      <div
+        role="group"
+        aria-label="Separar viagens e produtos da loja"
+        className="mb-6 flex gap-2 overflow-x-auto pb-1"
+      >
+        {[
+          { value: "all" as const, label: "Tudo" },
+          { value: "travel" as const, label: "Viagens" },
+          { value: "other" as const, label: "Outros itens" },
+        ].map(({ value, label }) => {
+          const active = filters.group === value;
+          return (
+            <button
+              key={value}
+              type="button"
+              data-testid={`button-catalog-group-${value}`}
+              aria-pressed={active}
+              onClick={() => changeGroup(value)}
+              className={`shrink-0 rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
+                active ? "border-transparent" : "border-border hover:bg-muted"
+              }`}
+              style={
+                active
+                  ? {
+                      backgroundColor: colors.primary,
+                      color: colors.primaryForeground,
+                    }
+                  : undefined
+              }
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       <div className="mb-6 flex flex-col gap-3 rounded-[1.5rem] border border-slate-200/80 bg-white p-3 shadow-[0_12px_35px_rgba(15,23,42,0.06)] sm:flex-row">
@@ -458,9 +558,20 @@ export default function VitrineCatalog({
           <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="h-12 rounded-xl border-slate-200 bg-slate-50/70 pl-11 shadow-none focus-visible:ring-2"
-            placeholder="Buscar destinos, pacotes..."
+            placeholder={
+              filters.group === "travel"
+                ? "Buscar destinos e viagens..."
+                : filters.group === "other"
+                  ? "Buscar produtos e serviços..."
+                  : "Buscar viagens e produtos..."
+            }
             value={filters.search}
             onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                trackStorefrontSearch(slug, "catalog_search");
+              }
+            }}
           />
         </div>
 
@@ -503,7 +614,7 @@ export default function VitrineCatalog({
               <FilterPanel
                 filters={filters}
                 setFilters={(f) => {
-                  setFilters(f);
+                  applyFilters(f);
                   setFiltersOpen(false);
                 }}
                 categories={categories}
@@ -570,12 +681,20 @@ export default function VitrineCatalog({
       ) : products.length === 0 ? (
          <div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-white/70 py-20 text-center text-muted-foreground">
            <MapPin className="mx-auto mb-4 h-16 w-16 opacity-20" style={{ color: colors.primary }} />
-           <p className="text-lg font-semibold text-foreground">Nenhum pacote encontrado.</p>
+          <p className="text-lg font-semibold text-foreground">
+            {filters.group === "travel"
+              ? "Nenhuma viagem encontrada."
+              : filters.group === "other"
+                ? "Nenhum item da loja encontrado."
+                : "Nenhum item encontrado."}
+          </p>
           {(filters.search || hasActiveFilters) && (
             <button
                className="mt-3 text-sm font-semibold underline underline-offset-4"
                style={{ color: colors.primary }}
-              onClick={() => setFilters({ ...EMPTY_FILTERS })}
+              onClick={() => {
+                applyFilters({ ...EMPTY_FILTERS });
+              }}
             >
               Limpar filtros
             </button>

@@ -3,8 +3,8 @@ import { safeErrorLogFields } from "./safe-error-log";
 import { db, tenantIntegrationsTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { decryptCredential } from "./crypto";
-import { ssrfSafeFetchBounded } from "./ssrf";
 import { normalizeBrazilPhone } from "@workspace/shared";
+import { evolutionApiRequest, sendEvolutionText } from "../services/evolution-api";
 
 export interface WhatsAppSendResult {
   success: boolean;
@@ -96,25 +96,41 @@ export async function sendTenantWhatsAppMessage(
   // Each ticket reply supplies the stored conversation connection. General
   // messages use the tenant's explicit default; ambiguous connections never
   // fall through to an unrelated sender.
-  const integrations = await db
-    .select()
-    .from(tenantIntegrationsTable)
-    .where(
-      and(
-        eq(tenantIntegrationsTable.tenantId, tenantId),
-        eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
-      ),
-    )
-    .limit(100);
+  let integrations: (typeof tenantIntegrationsTable.$inferSelect)[];
+  try {
+    integrations = await db
+      .select()
+      .from(tenantIntegrationsTable)
+      .where(
+        and(
+          eq(tenantIntegrationsTable.tenantId, tenantId),
+          eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+        ),
+      )
+      .limit(100);
+  } catch (err) {
+    logger.warn(
+      { tenantId, providerError: safeErrorLogFields(err) },
+      "[whatsapp] Could not resolve the Evolution connection before sending",
+    );
+    return { success: false, error: "whatsapp_connection_lookup_failed", provider: "evolution" };
+  }
+  const usableIntegrations = integrations.filter(
+    (row) => row.enabled && row.status === "connected" && Boolean(row.secretsEncrypted),
+  );
+  const defaultIntegrations = usableIntegrations.filter((row) => row.isDefault);
+  if (!route.integrationId && defaultIntegrations.length > 1) {
+    return { success: false, error: "whatsapp_connection_ambiguous", provider: "evolution" };
+  }
   let integration = route.integrationId
-    ? integrations.find((row) => row.id === route.integrationId)
-    : integrations.find((row) => row.isDefault)
-      ?? (integrations.length === 1 ? integrations[0] : undefined);
+    ? usableIntegrations.find((row) => row.id === route.integrationId)
+    : defaultIntegrations[0]
+      ?? (usableIntegrations.length === 1 ? usableIntegrations[0] : undefined);
 
   if (!integration && route.requireEvolution) {
     return { success: false, error: "whatsapp_connection_unavailable", provider: "evolution" };
   }
-  if (integrations.length > 1 && !integration) {
+  if (usableIntegrations.length > 1 && !integration) {
     return { success: false, error: "whatsapp_connection_ambiguous", provider: "evolution" };
   }
 
@@ -134,22 +150,9 @@ export async function sendTenantWhatsAppMessage(
           logger.warn({ phone, tenantId }, "[whatsapp] Invalid Brazilian phone number — skipping Evolution send");
           return { success: false, error: "invalid_phone", provider: "evolution" };
         }
-        const encodedInstance = encodeURIComponent(instanceName);
-        const url = `${baseUrl.replace(/\/$/, "")}/message/sendText/${encodedInstance}`;
-
-        // Use ssrfSafeFetchBounded to enforce HTTPS, block private/reserved IP
-        // ranges at connect time (defeating DNS rebinding), and refuse redirects.
-        // This mirrors the protections applied by the save/test endpoints and
-        // prevents a malicious tenant from using DNS rebinding to turn normal
-        // WhatsApp sends into blind SSRF probes against internal services.
         let result;
         try {
-          result = await ssrfSafeFetchBounded(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", apikey: apiKey },
-            body: JSON.stringify({ number: e164, text: message }),
-            timeoutMs: 15_000,
-          });
+          result = await sendEvolutionText(baseUrl, apiKey, instanceName, e164, message);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logger.warn(
@@ -308,22 +311,25 @@ export async function reconcileTenantWhatsAppMessage(
     const normalizedPhone = phone ? normalizeBrazilPhone(phone) : null;
     const remoteJid = normalizedPhone ? `${normalizedPhone}@s.whatsapp.net` : undefined;
     const encodedInstance = encodeURIComponent(instanceName);
-    const url = `${baseUrl.replace(/\/$/, "")}/chat/findMessages/${encodedInstance}`;
-    const result = await ssrfSafeFetchBounded(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", apikey: apiKey },
-      body: JSON.stringify({
-        where: {
-          key: {
-            id: normalizedExternalId,
-            ...(remoteJid ? { remoteJid } : {}),
-            fromMe: true,
+    const result = await evolutionApiRequest(
+      baseUrl,
+      apiKey,
+      `/chat/findMessages/${encodedInstance}`,
+      {
+        method: "POST",
+        body: {
+          where: {
+            key: {
+              id: normalizedExternalId,
+              ...(remoteJid ? { remoteJid } : {}),
+              fromMe: true,
+            },
           },
+          limit: 10,
         },
-        limit: 10,
-      }),
-      timeoutMs: 15_000,
-    });
+        timeoutMs: 15_000,
+      },
+    );
 
     if (!result.ok) {
       logger.warn({ tenantId, provider, status: result.status }, "[whatsapp] Evolution reconciliation failed");

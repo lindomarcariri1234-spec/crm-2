@@ -12,4 +12,5 @@ export type SendMessageBodyChannel =
 export const SendMessageBodyChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;

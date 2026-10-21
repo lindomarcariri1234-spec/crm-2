@@ -55,6 +55,22 @@ const chatbotMessages: AiConversationMessage[] = [
 ];
 
 describe("communication timeline", () => {
+  it("uses the same deterministic ID order for messages with equal timestamps", () => {
+    const sameTimestamp = "2026-10-01T10:00:00.000Z";
+    const timeline = buildClientTimeline({
+      clientId: "client-1",
+      messages: [],
+      outboundMessages: [],
+      chatbotConversations: [conversation],
+      chatbotMessages: [
+        { ...chatbotMessages[0]!, id: "a", sentAt: sameTimestamp },
+        { ...chatbotMessages[0]!, id: "B", sentAt: sameTimestamp },
+      ],
+    });
+
+    expect(timeline.map((entry) => entry.id)).toEqual(["chatbot:B", "chatbot:a"]);
+  });
+
   it("preserves expired WhatsApp media state on the client timeline entry", () => {
     const mediaMessage: AiConversationMessage = {
       ...chatbotMessages[0]!,

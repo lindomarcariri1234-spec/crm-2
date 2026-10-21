@@ -1,13 +1,14 @@
 import { Router, type NextFunction } from "express";
 import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable, paymentsTable, auditLogsTable, outboundMessagesTable } from "@workspace/db";
-import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull, gte, lte, lt } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { ADMIN_ROLES, ALL_STAFF_ROLES } from '../lib/tenant';
+import { ADMIN_ROLES } from '../lib/tenant';
 import { ACTIONS, hasPermission, REFERRAL_STATUS, RESOURCES } from "@workspace/permissions";
 import { enqueueReferralBonusPaidEmail, dispatchReferralExpiringSoonEmail, dispatchReferralBonusReleasedEmail } from "../queues/email-helpers";
+import { dispatchWhatsAppReferralBonusPaid } from "../queues/whatsapp-helpers";
 import { interpolateWhatsAppMessage } from "../lib/whatsapp";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
 import { DEFAULT_TIERS as DEFAULT_TIERS_CONFIG, computeReferralTier } from "../lib/referral-tiers";
@@ -169,7 +170,7 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const status = req.query.status as string | undefined;
     const search = req.query.search as string | undefined;
@@ -345,7 +346,7 @@ router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const page = Math.max(1, parseInt((req.query.page as string) ?? "1", 10));
     const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "20", 10)));
@@ -571,7 +572,7 @@ router.post("/referrals", async (req, res, next: NextFunction): Promise<void> =>
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.CREATE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateReferralBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
     const ids = [parsed.data.referrerId, ...(parsed.data.referredId ? [parsed.data.referredId] : [])];
@@ -833,6 +834,19 @@ router.post("/referrals/:id/pay-bonus", async (req, res, next: NextFunction): Pr
       } catch (emailErr) {
       }
     }
+
+    void dispatchWhatsAppReferralBonusPaid({
+      referrerId: row.referrerId,
+      referrerPhone: null,
+      referrerName,
+      referralCode: row.code,
+      bonusAmount: bonusValue,
+      referralId: row.id,
+      tenantId: me.tenantId,
+      tenantName: agencyName,
+    }).catch((err: unknown) => {
+      req.log?.warn?.({ err, referralId: row.id }, "Falha ao notificar pagamento do bônus por WhatsApp");
+    });
 
     const [updated] = await db.select({
       ...getTableColumns(referralsTable),
@@ -1097,7 +1111,7 @@ router.get("/referrals/:id/expiry-email-status", async (req, res, next: NextFunc
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db.select({
       id: referralsTable.id,
@@ -1145,7 +1159,7 @@ router.get("/referrals/:id/bonus-release-email-status", async (req, res, next: N
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db.select({
       code: referralsTable.code,
@@ -1201,7 +1215,7 @@ router.get("/referrals/:id/share", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db
       .select({
@@ -1236,7 +1250,7 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const period = parseInt((req.query.period as string) || "90", 10);
     if (![30, 90, 180].includes(period)) {
@@ -1894,7 +1908,7 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const parsed = z.object({
       type: z.enum(["converted", "bonusPaid", "reversed", "share"]),
       message: z.string().optional(),
-      phone: z.string().trim().min(8).optional(),
+      phone: z.string().trim().min(8),
     }).safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -1907,11 +1921,7 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const [settings] = await db.select().from(referralSettingsTable)
       .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
 
-    const phone = parsed.data.phone || settings?.whatsappPhoneNumber;
-    if (!phone) {
-      res.status(400).json({ error: "whatsapp_not_configured" });
-      return;
-    }
+    const phone = parsed.data.phone;
 
     const [tenant] = await db.select().from(tenantsTable)
       .where(eq(tenantsTable.id, me.tenantId)).limit(1);
@@ -2307,36 +2317,25 @@ router.get("/referrals/campaigns", async (req, res, next: NextFunction): Promise
 
     if (campaigns.length === 0) { res.json([]); return; }
 
-    // Single grouped query for all campaign stats to avoid N+1
+    // Single grouped query for all campaign stats to avoid N+1. Joining by
+    // campaign window avoids grouping on a correlated scalar subquery, which
+    // fails on PostgreSQL once the first campaign exists.
     const statsRows = await db.select({
-      campaignId: sql<string>`
-        (SELECT c2.id FROM referral_campaigns c2
-         WHERE c2.tenant_id = ${me.tenantId}
-           AND ${referralsTable.convertedAt} >= c2.starts_at
-           AND ${referralsTable.convertedAt} < c2.ends_at
-         LIMIT 1)
-      `,
-      referralsCount: count(),
+      campaignId: referralCampaignsTable.id,
+      referralsCount: count(referralsTable.id),
       bonusPaidAmount: sql<number>`COALESCE(SUM(${referralsTable.bonusAmount}) FILTER (WHERE ${referralsTable.bonusPaid} = true), 0)`,
     })
-    .from(referralsTable)
-    .where(and(
-      eq(referralsTable.tenantId, me.tenantId),
+    .from(referralCampaignsTable)
+    .leftJoin(referralsTable, and(
+      eq(referralsTable.tenantId, referralCampaignsTable.tenantId),
       eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
-      sql`EXISTS (
-        SELECT 1 FROM referral_campaigns c2
-        WHERE c2.tenant_id = ${me.tenantId}
-          AND ${referralsTable.convertedAt} >= c2.starts_at
-          AND ${referralsTable.convertedAt} < c2.ends_at
-      )`,
+      gte(referralsTable.convertedAt, referralCampaignsTable.startsAt),
+      lt(referralsTable.convertedAt, referralCampaignsTable.endsAt),
     ))
-    .groupBy(sql`
-      (SELECT c2.id FROM referral_campaigns c2
-       WHERE c2.tenant_id = ${me.tenantId}
-         AND ${referralsTable.convertedAt} >= c2.starts_at
-         AND ${referralsTable.convertedAt} < c2.ends_at
-       LIMIT 1)
-    `);
+    .where(and(
+      eq(referralCampaignsTable.tenantId, me.tenantId),
+    ))
+    .groupBy(referralCampaignsTable.id);
 
     const statsMap = new Map(statsRows.map((r) => [r.campaignId, r]));
 
@@ -2380,6 +2379,10 @@ router.post("/referrals/campaigns", async (req, res, next: NextFunction): Promis
       { message: "Comissão deve ser maior que zero", path: ["commissionValue"] },
     ).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    if (parsed.data.bonusType === "reduced_bonus" && parsed.data.bonusValue > 1) {
+      next(new ValidationError("Fator do bônus reduzido deve ser ≤ 1", "VALIDATION_ERROR"));
+      return;
+    }
 
     const starts = new Date(parsed.data.startsAt);
     const ends = new Date(parsed.data.endsAt);
@@ -2501,6 +2504,12 @@ router.patch("/referrals/campaigns/:id", async (req, res, next: NextFunction): P
       { message: "Configuração de comissão inválida", path: ["commissionValue"] },
     ).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    const effectiveType = parsed.data.bonusType ?? existing.bonusType;
+    const effectiveBonusValue = parsed.data.bonusValue ?? Number(existing.bonusValue);
+    if (effectiveType === "reduced_bonus" && effectiveBonusValue > 1) {
+      next(new ValidationError("Fator do bônus reduzido deve ser ≤ 1", "VALIDATION_ERROR"));
+      return;
+    }
 
     const starts = parsed.data.startsAt ? new Date(parsed.data.startsAt) : new Date(existing.startsAt);
     const ends = parsed.data.endsAt ? new Date(parsed.data.endsAt) : new Date(existing.endsAt);
@@ -2565,7 +2574,7 @@ router.get("/referrals/active-campaign", async (req, res, next: NextFunction): P
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const now = new Date();
     const [campaign] = await db.select().from(referralCampaignsTable)

@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { getRedisConnection } from "../lib/redis";
+import { getBullMQWorkerConnection } from "../lib/redis";
 import {
   attachCircuitBreaker,
   WORKER_IDLE_DRAIN_DELAY_SECONDS,
@@ -12,7 +12,7 @@ import { processOutboundDelivery } from "../services/outbound-delivery";
 let worker: Worker<OutboundDeliveryJobData> | null = null;
 
 export function startOutboundDeliveryWorker(): Worker<OutboundDeliveryJobData> | null {
-  const connection = getRedisConnection();
+  const connection = getBullMQWorkerConnection();
   if (!connection) {
     logger.warn("[outbound-delivery-worker] No Redis connection — worker not started");
     return null;

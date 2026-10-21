@@ -32,27 +32,51 @@ const {
   mockLimit,
   mockDelete,
   mockDeleteWhere,
+  mockInsert,
+  mockTransaction,
   tripMediaRows,
+  selectRows,
+  mockInArray,
 } = vi.hoisted(() => {
   const mockDeleteOrphanedFile = vi.fn().mockResolvedValue(undefined);
 
   const mockLimit = vi.fn();
-  const tripMediaRows: Array<{ url: string }> = [];
+  const tripMediaRows: Array<Record<string, unknown>> = [];
   const mockWhere = vi.fn(() => {
-    const query = Promise.resolve(tripMediaRows);
-    return Object.assign(query, { limit: mockLimit });
+    const query = Promise.resolve(selectRows.shift() ?? tripMediaRows);
+    return Object.assign(query, {
+      limit: (...args: unknown[]) => {
+        const limited = mockLimit(...args);
+        return Object.assign(limited, { offset: () => limited });
+      },
+      orderBy: () => query,
+      offset: () => query,
+    });
   });
-  const mockFrom = vi.fn(() => ({ where: mockWhere }));
+  const mockFrom = vi.fn(() => ({
+    where: mockWhere,
+    innerJoin: () => ({ where: mockWhere }),
+  }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
   const mockDeleteWhere = vi.fn().mockResolvedValue([]);
   const mockDelete = vi.fn(() => ({ where: mockDeleteWhere }));
+  const mockInsert = vi.fn(() => ({
+    values: vi.fn(() => ({
+      onConflictDoUpdate: vi.fn().mockResolvedValue([]),
+    })),
+  }));
+  const mockTransaction = vi.fn();
+  const selectRows: unknown[][] = [];
+  const mockInArray = vi.fn((_column: unknown, values: unknown[]) => ({ kind: "inArray", values }));
 
   return {
     mockDeleteOrphanedFile,
     mockSelect, mockFrom, mockWhere, mockLimit,
-    mockDelete, mockDeleteWhere,
+    mockDelete, mockDeleteWhere, mockInsert, mockTransaction,
     tripMediaRows,
+    selectRows,
+    mockInArray,
   };
 });
 
@@ -68,10 +92,13 @@ vi.mock("@workspace/db", () => ({
   db: {
     select:      mockSelect,
     delete:      mockDelete,
-    insert:      vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
+    insert:      mockInsert,
     update:      vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
-    transaction: vi.fn(),
+    transaction: mockTransaction,
   },
+  paymentsTable: { id: "payments.id", tenantId: "payments.tenantId", type: "payments.type" },
+  expensesTable: { id: "expenses.id", tenantId: "expenses.tenantId", tripId: "expenses.tripId" },
+  tripCostsTable: { id: "tripCosts.id", tenantId: "tripCosts.tenantId", tripId: "tripCosts.tripId" },
   tripMediaTable:           { id: "tripMedia.id", tenantId: "tripMedia.tenantId", tripId: "tripMedia.tripId", url: "tripMedia.url" },
   tripsTable:               { id: "trips.id", tenantId: "trips.tenantId" },
   reservationsTable:        {},
@@ -91,6 +118,7 @@ vi.mock("drizzle-orm", async () => {
   const { makeDrizzleOrmMock } = await import("./helpers/drizzle-mock.js");
   return {
     ...makeDrizzleOrmMock(),
+    inArray: mockInArray,
     sql: Object.assign(
       (strings: TemplateStringsArray, ...vals: unknown[]): string => {
         let r = "";
@@ -207,18 +235,20 @@ vi.mock("@workspace/api-zod", () => ({
 }));
 
 vi.mock("@workspace/permissions", () => ({
+  PAYMENT_TYPE:       { PAYABLE: "payable" },
   RESERVATION_STATUS: { PENDING: "pending", CONFIRMED: "confirmed", CANCELLED: "cancelled" },
   REFERRAL_STATUS:    { ACTIVE: "active" },
   TRIP_STATUS:        { DRAFT: "draft", PUBLISHED: "published", ACTIVE: "active", CANCELLED: "cancelled" },
   RESOURCES:          { TRIPS: "trips", RESERVATIONS: "reservations" },
-  ACTIONS:            { EDIT: "edit", MANAGE: "manage", DELETE: "delete" },
+  ACTIONS:            { VIEW: "view", CREATE: "create", EDIT: "edit", MANAGE: "manage", DELETE: "delete" },
+  ROLES:              { CLIENT: "cliente" },
   hasPermission:      (role: string) => ["admin", "agencia", "gerente"].includes(role),
 }));
 
 // ── App setup ────────────────────────────────────────────────────────────────
 
 import { requireAuth } from "../lib/tenant.js";
-import tripsRouter from "../routes/trips.js";
+import tripsRouter, { formatClientTrip } from "../routes/trips.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
 
 const TRIP_ID  = "trip-abc-123";
@@ -266,12 +296,14 @@ beforeEach(() => {
   // Default: media row found
   mockLimit.mockResolvedValue([MEDIA_ROW]);
   tripMediaRows.splice(0);
+  selectRows.length = 0;
 
   // Default: deleteOrphanedFile succeeds
   mockDeleteOrphanedFile.mockResolvedValue(undefined);
 
   // Default: db.delete succeeds
   mockDeleteWhere.mockResolvedValue([]);
+  mockTransaction.mockReset();
 });
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -344,6 +376,23 @@ describe("DELETE /trips/:id/media/:mediaId — UploadThing cleanup", () => {
 });
 
 describe("DELETE /trips/:id — UploadThing cleanup", () => {
+  it("blocks deleting a trip while one of its costs has a linked payable", async () => {
+    const deleteTrip = vi.fn();
+    mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({
+        execute: vi.fn().mockResolvedValue({ rows: [{ id: "linked-payable" }] }),
+        select: vi.fn(),
+        delete: vi.fn(() => ({ where: deleteTrip })),
+      }),
+    );
+
+    const res = await request(app).delete(`/trips/${TRIP_ID}`);
+
+    expect(res.status).toBe(409);
+    expect(deleteTrip).not.toHaveBeenCalled();
+    expect(mockDeleteOrphanedFile).not.toHaveBeenCalled();
+  });
+
   it("removes every associated media URL before returning success", async () => {
     tripMediaRows.push({ url: MEDIA_URL }, { url: SECOND_MEDIA_URL }, { url: THIRD_MEDIA_URL });
     mockLimit.mockResolvedValueOnce([{ coverImage: COVER_URL }]);
@@ -395,5 +444,141 @@ describe("DELETE /trips/:id — UploadThing cleanup", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
     expect(mockDeleteOrphanedFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /trips — client visibility", () => {
+  const clientUser = { id: "client-user-1", tenantId: ME.tenantId, role: "cliente" };
+
+  it("returns no trips when the client has no reservations", async () => {
+    vi.mocked(requireAuth).mockResolvedValue(clientUser as never);
+
+    const res = await request(app).get("/trips");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      data: [],
+      total: 0,
+      stats: { total: 0, totalRevenue: 0 },
+    });
+  });
+
+  it("filters the client trip list by their own reservations and hides agency revenue", async () => {
+    const clientId = "client-record-2";
+    const trip = {
+      id: TRIP_ID,
+      tenantId: ME.tenantId,
+      name: "Reserved trip",
+      departureDate: new Date("2027-01-01T12:00:00Z"),
+      createdAt: new Date("2026-01-01T12:00:00Z"),
+      updatedAt: new Date("2026-01-02T12:00:00Z"),
+      fixedCosts: [{ amount: 1000 }],
+      variableCosts: [{ amount: 200 }],
+    };
+    vi.mocked(requireAuth).mockResolvedValue(clientUser as never);
+    selectRows.push(
+      [],
+      [{ tripId: TRIP_ID }],
+      [trip],
+      [{ count: 1 }],
+      [{ total: 1, active: 1, totalCapacity: 10, occupiedSeats: 1, totalRevenue: 12000 }],
+    );
+    mockLimit
+      .mockResolvedValueOnce([{ id: clientId }])
+      .mockResolvedValueOnce([trip]);
+
+    const res = await request(app).get("/trips");
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((row: { id: string }) => row.id)).toEqual([TRIP_ID]);
+    expect(res.body.data[0].fixedCosts).toEqual([]);
+    expect(res.body.data[0].variableCosts).toEqual([]);
+    expect(res.body.stats.totalRevenue).toBe(0);
+    expect(mockInArray.mock.calls.some(([, values]) =>
+      Array.isArray(values) && values.includes(TRIP_ID),
+    )).toBe(true);
+  });
+
+  it("returns only a linked trip with driver documents, contacts and internal costs removed", async () => {
+    const clientId = "client-record-1";
+    const trip = {
+      id: TRIP_ID,
+      tenantId: ME.tenantId,
+      name: "Reserved trip",
+      departureDate: new Date("2027-01-01T12:00:00Z"),
+      createdAt: new Date("2026-01-01T12:00:00Z"),
+      updatedAt: new Date("2026-01-02T12:00:00Z"),
+      driverName: "Driver Name",
+      driverCnh: "driver-license",
+      driverPhone: "5511999999999",
+      driver1Cpf: "11111111100",
+      driver1Cnh: "driver-one-license",
+      driver2Cpf: "22222222200",
+      tourGuideCpf: "33333333300",
+      tourGuideRegistration: "guide-registration",
+      manifestNumber: "MAN-001",
+      fixedCosts: [{ amount: 1000 }],
+      variableCosts: [{ amount: 200 }],
+    };
+
+    vi.mocked(requireAuth).mockResolvedValue(clientUser as never);
+    tripMediaRows.push({ tripId: TRIP_ID });
+    mockLimit
+      .mockResolvedValueOnce([{ id: clientId }])
+      .mockResolvedValueOnce([trip]);
+
+    const res = await request(app).get(`/trips/${TRIP_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(TRIP_ID);
+    expect(res.body.driverName).toBe("Driver Name");
+    expect(res.body.driverCnh).toBeNull();
+    expect(res.body.driverPhone).toBeNull();
+    expect(res.body.driver1Cpf).toBeNull();
+    expect(res.body.driver1Cnh).toBeNull();
+    expect(res.body.driver2Cpf).toBeNull();
+    expect(res.body.tourGuideCpf).toBeNull();
+    expect(res.body.tourGuideRegistration).toBeNull();
+    expect(res.body.manifestNumber).toBeNull();
+    expect(res.body.fixedCosts).toEqual([]);
+    expect(res.body.variableCosts).toEqual([]);
+  });
+
+  it("keeps the client-safe projection free of internal cost and identity fields", () => {
+    const trip = {
+      id: TRIP_ID,
+      name: "Trip",
+      departureDate: new Date("2027-01-01T12:00:00Z"),
+      createdAt: new Date("2026-01-01T12:00:00Z"),
+      updatedAt: new Date("2026-01-02T12:00:00Z"),
+      driverCnh: "license",
+      fixedCosts: [{ amount: 1 }],
+      variableCosts: [{ amount: 2 }],
+    } as never;
+
+    const formatted = formatClientTrip(trip);
+
+    expect(formatted.driverCnh).toBeNull();
+    expect(formatted.fixedCosts).toEqual([]);
+    expect(formatted.variableCosts).toEqual([]);
+  });
+
+  it("rejects a check-in that tries to link a passenger to another tenant's reservation", async () => {
+    mockLimit
+      .mockResolvedValueOnce([{ id: TRIP_ID }])
+      .mockResolvedValueOnce([{
+        id: "passenger-tenant-a",
+        reservationId: "reservation-tenant-a",
+      }]);
+
+    const res = await request(app)
+      .post(`/trips/${TRIP_ID}/checkins`)
+      .send({
+        passengerId: "passenger-tenant-a",
+        reservationId: "reservation-tenant-b",
+      });
+
+    expect(res.status).toBe(400);
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 });

@@ -47,6 +47,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatCurrency } from "@/lib/utils";
 import { useUploadDocument } from "@/hooks/use-upload";
 import { getReservationFinancialSummary, type ReservationWithFinancialLinks } from "@/pages/reservations/financial";
+import { METHOD_LABELS } from "@/pages/reservations/constants";
 
 const API_BASE_ADMIN = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -160,16 +161,70 @@ function isAutoActivity(type: string) {
   return type in AUTO_TYPE_LABELS;
 }
 
+function historyStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    accepted: "Aceita",
+    delivered: "Entregue",
+    failed: "Falhou",
+    partial: "Falha parcial",
+    pending: "Pendente",
+    processing: "Em processamento",
+    sent: "Enviada",
+    skipped: "Ignorada",
+    unknown: "Sem confirmação",
+  };
+  return labels[status] ?? status.replaceAll("_", " ");
+}
+
+function historyOriginLabel(origin: string) {
+  const labels: Record<string, string> = {
+    "referral-welcome": "Boas-vindas da indicação",
+    "referral-converted": "Indicação convertida",
+    "referral-bonus_paid": "Bônus de indicação pago",
+    "referral-bonus-paid": "Bônus de indicação pago",
+  };
+  return labels[origin] ?? origin
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function deliveryChannelLabel(channel: string) {
+  return channel === "email" ? "E-mail" : channel === "whatsapp" ? "WhatsApp" : channel;
+}
+
 function ClientHistoryTab({ clientId, isOpen }: { clientId: string; isOpen: boolean }) {
   const { toast } = useToast();
   const [formType, setFormType] = useState<ClientActivityType>("note");
   const [formContent, setFormContent] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<"all" | "activities" | "messages">("all");
 
   const { data: activities, isLoading, refetch } = useListClientActivities(clientId, {
     query: { enabled: isOpen && !!clientId, queryKey: getListClientActivitiesQueryKey(clientId) },
   });
   const { data: outboundMessages, isLoading: loadingOutbound } = useListOutboundMessages({ clientId, limit: 100 });
+  const timeline = useMemo(() => {
+    const activityEntries = (activities ?? []).map((activity) => ({
+      kind: "activity" as const,
+      id: activity.id,
+      createdAt: activity.createdAt,
+      activity,
+    }));
+    const messageEntries = (outboundMessages ?? []).map((message) => ({
+      kind: "message" as const,
+      id: message.id,
+      createdAt: message.createdAt,
+      message,
+    }));
+    return [...activityEntries, ...messageEntries].sort(
+      (left, right) => parseISO(right.createdAt).getTime() - parseISO(left.createdAt).getTime(),
+    );
+  }, [activities, outboundMessages]);
+  const filteredTimeline = timeline.filter((entry) =>
+    historyFilter === "all" || entry.kind === (historyFilter === "activities" ? "activity" : "message"),
+  );
+  const activityCount = activities?.length ?? 0;
+  const messageCount = outboundMessages?.length ?? 0;
 
   const { mutate: createActivity, isPending } = useCreateClientActivity({
     mutation: {
@@ -191,37 +246,40 @@ function ClientHistoryTab({ clientId, isOpen }: { clientId: string; isOpen: bool
   }
 
   return (
-    <div className="space-y-3">
-      {(loadingOutbound || (outboundMessages ?? []).length > 0) && (
-        <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-          <p className="text-sm font-semibold">Mensagens multicanal</p>
-          {loadingOutbound ? <Skeleton className="h-12 w-full" /> : (outboundMessages ?? []).map((message) => (
-            <div key={message.id} className="rounded-md border bg-card p-2.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Badge variant="outline">{message.origin}</Badge>
-                <span className="text-xs text-muted-foreground">{format(parseISO(message.createdAt), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span>
-                <Badge className={message.status === "partial" ? "bg-orange-100 text-orange-800" : "bg-muted"}>{message.status === "partial" ? "Falha parcial" : message.status}</Badge>
-              </div>
-              <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                {message.deliveries.map((delivery) => (
-                  <div key={delivery.id} className="text-xs flex items-center justify-between gap-2">
-                    <span>{delivery.channel === "email" ? "E-mail" : "WhatsApp"} · {delivery.recipient ?? "sem contato"}</span>
-                    <span className={delivery.status === "failed" ? "text-red-600" : delivery.status === "skipped" ? "text-amber-700" : "text-muted-foreground"}>{delivery.status}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold" data-testid="text-history-count">
+            {isLoading || loadingOutbound ? "Histórico do cliente" : `${timeline.length} registro${timeline.length === 1 ? "" : "s"}`}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {activityCount} atividade{activityCount === 1 ? "" : "s"} · {messageCount} mensagem{messageCount === 1 ? "" : "s"} multicanal
+          </p>
         </div>
-      )}
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-muted-foreground">
-          {isLoading ? "Carregando…" : `${(activities ?? []).length} atividade(s)`}
-        </p>
-        <Button variant="outline" size="sm" onClick={() => setShowForm(s => !s)}>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border bg-muted/40 p-1" role="group" aria-label="Filtrar histórico">
+            {([
+              ["all", "Tudo"],
+              ["activities", "Atividades"],
+              ["messages", "Mensagens"],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                data-testid={`button-history-filter-${value}`}
+                aria-pressed={historyFilter === value}
+                onClick={() => setHistoryFilter(value)}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${historyFilter === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <Button variant="outline" size="sm" data-testid="button-history-register" onClick={() => setShowForm(s => !s)}>
           <Plus className="w-4 h-4 mr-1" />
-          Registrar
-        </Button>
+            Registrar
+          </Button>
+        </div>
       </div>
 
       {showForm && (
@@ -258,43 +316,109 @@ function ClientHistoryTab({ clientId, isOpen }: { clientId: string; isOpen: bool
         </div>
       )}
 
-      {isLoading ? (
+      {isLoading || (loadingOutbound && timeline.length === 0) ? (
         <div className="space-y-3">
           {[1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full" />)}
         </div>
-      ) : !(activities ?? []).length ? (
-        <div className="text-center py-10 text-muted-foreground">
-          <Calendar className="w-10 h-10 mx-auto mb-2 opacity-30" />
-          <p className="text-sm font-medium">Nenhuma atividade registrada</p>
-          <p className="text-xs mt-1">O histórico é criado automaticamente conforme reservas e pagamentos acontecem.</p>
+      ) : filteredTimeline.length === 0 ? (
+        <div className="rounded-xl border border-dashed bg-muted/10 px-5 py-9 text-center">
+          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
+            {historyFilter === "messages" ? <Mail className="h-5 w-5" /> : <Calendar className="h-5 w-5" />}
+          </div>
+          <p className="text-sm font-semibold">
+            {timeline.length === 0 ? "O histórico começa aqui" : "Nenhum registro neste filtro"}
+          </p>
+          <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
+            {timeline.length === 0
+              ? "Reservas, pagamentos e mensagens aparecem automaticamente. Você também pode registrar uma atividade manual."
+              : "Escolha outro filtro para ver os demais registros do cliente."}
+          </p>
+          {timeline.length === 0 && (
+            <Button className="mt-4" size="sm" onClick={() => setShowForm(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              Registrar atividade
+            </Button>
+          )}
         </div>
       ) : (
-        <div className="relative space-y-0">
-          {(activities ?? []).map((act, idx) => {
-            const { Icon, bg, color } = activityIcon(act.type);
-            return (
-              <div key={act.id} className="flex gap-3">
-                <div className="flex flex-col items-center">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${bg}`}>
-                    <Icon className={`w-3.5 h-3.5 ${color}`} />
+        <div className="rounded-xl border bg-card">
+          <ol className="divide-y">
+            {filteredTimeline.map((entry) => {
+              if (entry.kind === "activity") {
+                const act = entry.activity;
+                const { Icon, bg, color } = activityIcon(act.type);
+                return (
+                  <li key={`activity-${entry.id}`} data-testid={`history-activity-${entry.id}`} className="flex gap-3 px-3 py-3.5 sm:px-4">
+                    <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${bg}`}>
+                      <Icon className={`h-4 w-4 ${color}`} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="text-sm font-semibold">{activityTypeLabel(act.type)}</span>
+                        {!isAutoActivity(act.type) && <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">Manual</Badge>}
+                        <time className="ml-auto text-xs text-muted-foreground" dateTime={act.createdAt}>
+                          {format(parseISO(act.createdAt), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+                        </time>
+                      </div>
+                      <p className="mt-1 whitespace-pre-wrap break-words text-sm text-muted-foreground">{act.content}</p>
+                    </div>
+                  </li>
+                );
+              }
+
+              const message = entry.message;
+              const statusColor = message.status === "partial"
+                ? "border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-200"
+                : "border-border bg-muted/50 text-muted-foreground";
+              return (
+                <li key={`message-${entry.id}`} data-testid={`history-message-${entry.id}`} className="flex gap-3 px-3 py-3.5 sm:px-4">
+                  <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+                    <MessageSquare className="h-4 w-4" />
                   </div>
-                  {idx < (activities ?? []).length - 1 && <div className="w-px flex-1 bg-border mt-1 mb-1" />}
-                </div>
-                <div className="pb-4 min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium">{activityTypeLabel(act.type)}</span>
-                    {!isAutoActivity(act.type) && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Manual</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="text-sm font-semibold">{historyOriginLabel(message.origin)}</span>
+                      <Badge variant="outline" className={`h-5 px-1.5 text-[10px] ${statusColor}`}>
+                        {historyStatusLabel(message.status)}
+                      </Badge>
+                      <time className="ml-auto text-xs text-muted-foreground" dateTime={message.createdAt}>
+                        {format(parseISO(message.createdAt), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+                      </time>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {message.deliveries.map((delivery) => (
+                        <Badge key={delivery.id} variant="secondary" className="gap-1 font-normal">
+                          {delivery.channel === "email" ? <Mail className="h-3 w-3" /> : <MessageSquare className="h-3 w-3" />}
+                          {deliveryChannelLabel(delivery.channel)} · {historyStatusLabel(delivery.status)}
+                        </Badge>
+                      ))}
+                    </div>
+                    {message.deliveries.length > 0 && (
+                      <details className="group mt-2">
+                        <summary
+                          data-testid={`button-history-message-details-${entry.id}`}
+                          className="w-fit cursor-pointer list-none text-xs font-medium text-primary marker:hidden hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&::-webkit-details-marker]:hidden"
+                        >
+                          Ver destinatários e detalhes
+                        </summary>
+                        <div className="mt-2 grid gap-2 rounded-lg bg-muted/40 p-2.5 sm:grid-cols-2">
+                          {message.deliveries.map((delivery) => (
+                            <div key={delivery.id} className="min-w-0 text-xs">
+                              <p className="font-medium">{deliveryChannelLabel(delivery.channel)}</p>
+                              <p className="mt-0.5 break-all text-muted-foreground">{delivery.recipient ?? "Sem contato cadastrado"}</p>
+                              <p className={`mt-0.5 ${delivery.status === "failed" ? "text-destructive" : delivery.status === "skipped" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}`}>
+                                {historyStatusLabel(delivery.status)}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">{act.content}</p>
-                  <p className="text-xs text-muted-foreground/70 mt-0.5">
-                    {format(parseISO(act.createdAt), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
+                </li>
+              );
+            })}
+          </ol>
         </div>
       )}
     </div>
@@ -771,8 +895,8 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
   );
 
   const { data: payments } = useListPayments(
-    { clientId: id, limit: 20 },
-    { query: { enabled: open && !!id, queryKey: getListPaymentsQueryKey({ clientId: id, limit: 20 }) } }
+    { clientId: id, limit: 500 },
+    { query: { enabled: open && !!id, queryKey: getListPaymentsQueryKey({ clientId: id, limit: 500 }) } }
   );
 
   const { data: loyaltyInfo } = useGetClientLoyalty(id, {
@@ -1212,23 +1336,39 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
                   <p className="text-sm text-muted-foreground text-center py-8">Nenhum pagamento encontrado.</p>
                 ) : (
                   <div className="space-y-2">
-                    {payments.data.map(p => (
-                      <div key={p.id} className="flex items-center justify-between p-3 rounded-lg border">
-                        <div>
-                          <p className="font-medium text-sm">{p.description ?? p.category}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Vence {format(parseISO(p.dueDate), "dd/MM/yyyy", { locale: ptBR })}
-                            {p.paidAt && ` · Pago ${format(parseISO(p.paidAt), "dd/MM/yyyy", { locale: ptBR })}`}
-                          </p>
+                    {payments.data.map(p => {
+                      const isStripeRefund = p.category === "stripe_refund";
+                      const paymentDate = p.paidAt ?? p.dueDate;
+                      return (
+                        <div key={p.id} className="flex items-center justify-between p-3 rounded-lg border">
+                          <div>
+                            <p className={`font-medium text-sm ${isStripeRefund ? "text-destructive" : ""}`}>
+                              {isStripeRefund ? "Estorno Stripe" : p.description ?? p.category}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {isStripeRefund
+                                ? `Estornado em ${format(parseISO(paymentDate), "dd/MM/yyyy", { locale: ptBR })}`
+                                : `Vence ${format(parseISO(p.dueDate), "dd/MM/yyyy", { locale: ptBR })}`}
+                              {isStripeRefund
+                                ? ` · Método original: ${METHOD_LABELS[p.paymentMethod ?? ""] ?? p.paymentMethod ?? "—"}`
+                                : p.paidAt && ` · Pago ${format(parseISO(p.paidAt), "dd/MM/yyyy", { locale: ptBR })}`}
+                              {p.description && ` · ${p.description}`}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className={`font-semibold text-sm ${isStripeRefund ? "text-destructive" : ""}`}>
+                              {isStripeRefund ? `− ${formatCurrency(Math.abs(p.amount))}` : formatCurrency(p.amount)}
+                            </p>
+                            <Badge
+                              variant={isStripeRefund ? "destructive" : p.status === PAYMENT_STATUS.PAID ? "default" : p.status === PAYMENT_STATUS.OVERDUE ? "destructive" : "secondary"}
+                              className="text-xs"
+                            >
+                              {isStripeRefund ? "Estornado" : p.status === PAYMENT_STATUS.PAID ? "Pago" : p.status === PAYMENT_STATUS.OVERDUE ? "Vencido" : "Pendente"}
+                            </Badge>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <p className="font-semibold text-sm">{formatCurrency(p.amount)}</p>
-                          <Badge variant={p.status === PAYMENT_STATUS.PAID ? "default" : p.status === PAYMENT_STATUS.OVERDUE ? "destructive" : "secondary"} className="text-xs">
-                            {p.status === PAYMENT_STATUS.PAID ? "Pago" : p.status === PAYMENT_STATUS.OVERDUE ? "Vencido" : "Pendente"}
-                          </Badge>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </TabsContent>

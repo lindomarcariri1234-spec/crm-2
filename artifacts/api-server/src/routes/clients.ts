@@ -17,7 +17,7 @@ import {
   CreateClientNoteBody,
 } from "@workspace/api-zod";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
-import { scheduleCalendarSyncBirthday } from "../lib/google-calendar/schedule-sync";
+import { scheduleCalendarSyncBirthday, scheduleCalendarSyncForClient } from "../lib/google-calendar/schedule-sync";
 import { logger } from "../lib/logger";
 import { ADMIN_ROLES, MANAGEMENT_ROLES } from '../lib/tenant';
 import { ACTIONS, hasPermission, RESOURCES, ROLES } from "@workspace/permissions";
@@ -387,10 +387,16 @@ router.post("/clients", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (me.tenantId) {
-      const allowed = await checkPlanLimit(me.tenantId, "clients", req, res);
-      if (!allowed) return;
+    if (!hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.CREATE)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
     }
+    if (!me.tenantId) {
+      next(new ForbiddenError("A tenant scope is required to create a client", "TENANT_SCOPE_REQUIRED"));
+      return;
+    }
+    const allowed = await checkPlanLimit(me.tenantId, "clients", req, res);
+    if (!allowed) return;
     const parsed = CreateClientBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
     const name = parsed.data.name.trim();
@@ -671,7 +677,7 @@ router.patch("/clients/:id", async (req, res, next: NextFunction): Promise<void>
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (me.role === ROLES.CLIENT) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const existing = await requireClientAccess(me, req.params.id);
 
     delete (req.body as Record<string, unknown>).customerCode;
@@ -681,6 +687,8 @@ router.patch("/clients/:id", async (req, res, next: NextFunction): Promise<void>
     const updates: Partial<typeof clientsTable.$inferInsert> = {};
     if (parsed.data.name != null) updates.name = parsed.data.name;
     if (parsed.data.email != null) updates.email = parsed.data.email;
+    const emailChanged = parsed.data.email != null
+      && parsed.data.email.trim().toLowerCase() !== (existing.email ?? "").trim().toLowerCase();
     if (parsed.data.whatsapp != null) updates.whatsapp = parsed.data.whatsapp;
     if (parsed.data.phone !== undefined) updates.phone = parsed.data.phone ?? null;
     if (parsed.data.cpf != null) {
@@ -760,6 +768,11 @@ router.patch("/clients/:id", async (req, res, next: NextFunction): Promise<void>
     if (parsed.data.birthDate !== undefined) {
       scheduleCalendarSyncBirthday(client.id).catch((err) => logger.warn({ err }, "[clients] calendar birthday sync (update) failed"));
     }
+    if (emailChanged) {
+      scheduleCalendarSyncForClient(client.id, me.tenantId).catch((err) =>
+        logger.warn({ err, clientId: client.id }, "[clients] reservation invite sync after email update failed"),
+      );
+    }
   } catch (err) {
     next(err);
   }
@@ -833,7 +846,7 @@ router.patch("/clients/:id/pipeline-stage", async (req, res, next: NextFunction)
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (me.role === ROLES.CLIENT) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const existing = await requireClientAccess(me, req.params.id);
 
     const parsed = UpdateClientPipelineStageBody.safeParse(req.body);
@@ -883,6 +896,10 @@ router.post("/clients/:clientId/activities", async (req, res, next: NextFunction
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const client = await requireClientAccess(me, req.params.clientId);
     const parsedBody = CreateActivityBody.safeParse(req.body);
     if (!parsedBody.success) {
@@ -971,6 +988,10 @@ router.post("/clients/:clientId/notes", async (req, res, next: NextFunction): Pr
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const client = await requireClientAccess(me, req.params.clientId);
     const parsed = CreateClientNoteBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
@@ -1000,6 +1021,10 @@ router.delete("/clients/:clientId/notes/:noteId", async (req, res, next: NextFun
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const client = await requireClientAccess(me, req.params.clientId);
     await db.delete(notesTable)
       .where(and(eq(notesTable.id, req.params.noteId), eq(notesTable.clientId, req.params.clientId)));

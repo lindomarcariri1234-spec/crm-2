@@ -32,6 +32,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await db.delete(usersTable).where(inArray(usersTable.id, [userA, userB]));
   await db.delete(tenantsTable).where(inArray(tenantsTable.id, [tenantA, tenantB]));
   await pool.end();
 });

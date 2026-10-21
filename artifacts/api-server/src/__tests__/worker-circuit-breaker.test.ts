@@ -13,11 +13,11 @@ const { logger, redisCircuit } = vi.hoisted(() => ({
 }));
 vi.mock("../lib/logger", () => ({ logger }));
 vi.mock("../lib/redis", () => ({
-  isRedisDailyLimitCircuitOpen: redisCircuit.isOpen,
+  isQueueRedisDailyLimitCircuitOpen: redisCircuit.isOpen,
   isTransientRedisError: redisCircuit.isTransient,
   recordTransientRedisError: redisCircuit.recordTransient,
-  registerRedisDailyLimitWorker: redisCircuit.registerWorker,
-  reportRedisDailyLimitError: redisCircuit.reportDailyLimit,
+  registerQueueRedisDailyLimitWorker: redisCircuit.registerWorker,
+  reportQueueRedisDailyLimitError: redisCircuit.reportDailyLimit,
   resetTransientRedisErrors: vi.fn(),
 }));
 
@@ -67,5 +67,28 @@ describe("attachCircuitBreaker", () => {
     redisCircuit.isOpen.mockReturnValue(false);
     worker.emit("ready");
     expect(resetTransientRedisErrors).toHaveBeenCalledOnce();
+  });
+
+  it("routes a rejected background run through the worker error handler", async () => {
+    const failure = new Error("max daily request limit");
+    redisCircuit.reportDailyLimit.mockReturnValue(true);
+    const worker = new EventEmitter() as EventEmitter & {
+      run: () => Promise<void>;
+      resume: () => void;
+    };
+    worker.run = vi.fn().mockRejectedValue(failure);
+    worker.resume = () => {
+      void worker.run();
+    };
+
+    attachCircuitBreaker(worker as unknown as Worker<unknown>, "email-worker");
+    worker.resume();
+    await Promise.resolve();
+
+    expect(redisCircuit.reportDailyLimit).toHaveBeenCalledWith(failure);
+    expect(logger.warn).toHaveBeenCalledWith(
+      { workerName: "email-worker" },
+      expect.stringContaining("daily-limit circuit"),
+    );
   });
 });

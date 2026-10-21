@@ -379,7 +379,63 @@ export interface WhatsAppBroadcastBody {
   messageTemplate: string;
   filter: WhatsAppBroadcastBodyFilter;
   requestId: string;
+  /** Set only when the staff member explicitly intends a new campaign with the same content and audience. */
+  campaignId?: string;
 }
+
+export type WhatsAppBroadcastPreviewBodyFilter =
+  (typeof WhatsAppBroadcastPreviewBodyFilter)[keyof typeof WhatsAppBroadcastPreviewBodyFilter];
+
+export const WhatsAppBroadcastPreviewBodyFilter = {
+  all: "all",
+  confirmed: "confirmed",
+  pending: "pending",
+} as const;
+
+export interface WhatsAppBroadcastPreviewBody {
+  /** @maxLength 2000 */
+  messageTemplate: string;
+  filter: WhatsAppBroadcastPreviewBodyFilter;
+}
+
+export type WhatsAppBroadcastPreviewResultSkippedReasonsItem = {
+  code: string;
+  count: number;
+};
+
+export interface WhatsAppBroadcastPreviewResult {
+  recipientCount: number;
+  eligibleCount: number;
+  skipped: number;
+  skippedReasons: WhatsAppBroadcastPreviewResultSkippedReasonsItem[];
+}
+
+export type WhatsAppBroadcastResultSkippedReasonsItemCode =
+  (typeof WhatsAppBroadcastResultSkippedReasonsItemCode)[keyof typeof WhatsAppBroadcastResultSkippedReasonsItemCode];
+
+export const WhatsAppBroadcastResultSkippedReasonsItemCode = {
+  whatsapp_opted_out: "whatsapp_opted_out",
+  contact_opted_out: "contact_opted_out",
+  whatsapp_connection_unavailable: "whatsapp_connection_unavailable",
+  whatsapp_connection_ambiguous: "whatsapp_connection_ambiguous",
+  credentials_not_configured: "credentials_not_configured",
+  provider_unavailable: "provider_unavailable",
+  invalid_phone: "invalid_phone",
+  whatsapp_invalid_phone: "whatsapp_invalid_phone",
+  whatsapp_address_missing: "whatsapp_address_missing",
+  whatsapp_recipient_unavailable: "whatsapp_recipient_unavailable",
+  recipient_client_not_found: "recipient_client_not_found",
+  whatsapp_recipient_changed: "whatsapp_recipient_changed",
+  whatsapp_content_missing: "whatsapp_content_missing",
+  invalid_or_duplicate_phone: "invalid_or_duplicate_phone",
+  passenger_data_unavailable: "passenger_data_unavailable",
+  other: "other",
+} as const;
+
+export type WhatsAppBroadcastResultSkippedReasonsItem = {
+  code: WhatsAppBroadcastResultSkippedReasonsItemCode;
+  count: number;
+};
 
 export interface WhatsAppBroadcastResult {
   recipientCount: number;
@@ -388,6 +444,9 @@ export interface WhatsAppBroadcastResult {
   failed: number;
   unknown: number;
   skipped: number;
+  /** Existing campaign deliveries reused; no new send was started for these recipients. */
+  deduplicated: number;
+  skippedReasons: WhatsAppBroadcastResultSkippedReasonsItem[];
 }
 
 export interface ReverseReferralBonusBody {
@@ -496,10 +555,10 @@ export interface TestWhatsAppMessageBody {
   type: TestWhatsAppMessageBodyType;
   message?: string;
   /**
-   * Optional test destination; defaults to the configured agency WhatsApp number.
+   * Explicit test destination; never defaults to the agency WhatsApp number.
    * @minLength 8
    */
-  phone?: string;
+  phone: string;
 }
 
 export interface TestWhatsAppMessageResult {
@@ -1817,6 +1876,8 @@ export interface Reservation {
   /** @nullable */
   tripType?: string | null;
   /** @nullable */
+  travelType?: string | null;
+  /** @nullable */
   packageType?: string | null;
   hasInsurance: boolean;
   isGratuidade: boolean;
@@ -1895,6 +1956,8 @@ export interface CreateReservationBody {
   seats: string[];
   /** @nullable */
   tripType?: string | null;
+  /** @nullable */
+  travelType?: string | null;
   /** @nullable */
   packageType?: string | null;
   /**
@@ -2125,6 +2188,8 @@ export interface UpdateReservationBody {
   paymentMethod?: string | null;
   /** @nullable */
   notes?: string | null;
+  /** @nullable */
+  travelType?: string | null;
   /** @nullable */
   seats?: string[] | null;
   /** @nullable */
@@ -2371,6 +2436,12 @@ export interface Payment {
   dueDate: string;
   /** @nullable */
   paidAt?: string | null;
+  /** @nullable */
+  refundedAt?: string | null;
+  /** @nullable */
+  refundOfPaymentId?: string | null;
+  /** @nullable */
+  gateway?: string | null;
   status: PaymentStatus;
   /** @nullable */
   description?: string | null;
@@ -2417,6 +2488,13 @@ export interface UpdatePaymentBody {
   paidAt?: string | null;
   /** @nullable */
   notes?: string | null;
+}
+
+export interface CreatePartialManualRefundBody {
+  /** @exclusiveMinimum 0 */
+  amount: number;
+  /** @maxLength 1000 */
+  notes?: string;
 }
 
 export type CreateOperationalCostPayableBodySourceType =
@@ -2682,6 +2760,7 @@ export type SendMessageBodyChannel =
 export const SendMessageBodyChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export interface SendMessageBody {
@@ -2714,6 +2793,7 @@ export type OutboundDeliveryChannel =
 export const OutboundDeliveryChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export type OutboundDeliveryStatus =
@@ -2924,6 +3004,7 @@ export type CreateMessageTemplateBodyChannel =
 export const CreateMessageTemplateBodyChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export interface CreateMessageTemplateBody {
@@ -3382,9 +3463,17 @@ export interface UpdateOrderBody {
   paymentStatus?: string | null;
 }
 
+export type PublicCheckoutBodyItemsItemMetadata = { [key: string]: unknown };
+
 export type PublicCheckoutBodyItemsItem = {
-  productId?: string;
-  quantity?: number;
+  productId: string;
+  productName?: string;
+  quantity: number;
+  /** Client-side display estimate only. The server recalculates the amount from the current product and selected variant. */
+  unitPrice?: number;
+  variantName?: string;
+  variantLabel?: string;
+  metadata?: PublicCheckoutBodyItemsItemMetadata;
 };
 
 /**
@@ -3486,15 +3575,66 @@ export interface Campaign {
   sentAt?: string | null;
   recipientsCount: number;
   sentCount: number;
+  emailDeliveredCount: number;
   openedCount: number;
   clickedCount: number;
+  /** Email recipients whose messages bounced according to Resend. */
+  bouncedCount: number;
+  /** Email recipients whose Resend bounce classification is permanent. */
+  permanentBouncedCount: number;
+  /** Campaign email recipients skipped because an earlier permanent bounce was confirmed. */
+  permanentBounceSuppressedCount: number;
+  /** Email recipients whose Resend bounce classification is temporary. */
+  temporaryBouncedCount: number;
+  /** Email recipients whose messages failed according to Resend. */
+  failedCount: number;
+  /** Email recipients who reported messages as spam according to Resend. */
+  complainedCount: number;
   deliveredCount?: number;
+  engagementMetricsAvailable: boolean;
+  /** Whether bounce totals and classifications, failures, and complaints are available for this campaign. */
+  failureMetricsAvailable: boolean;
   /** @nullable */
   triggerType?: string | null;
   /** @nullable */
   triggerConfig?: CampaignTriggerConfig;
   autoEnabled?: boolean;
   createdAt: string;
+}
+
+export interface CampaignPermanentBounceRecipient {
+  clientId: string;
+  name: string;
+  email: string;
+  bouncedAt: string;
+}
+
+export interface CampaignPermanentBounceRecipientsPage {
+  /** False when campaign email failure tracking was not available. */
+  available: boolean;
+  recipients: CampaignPermanentBounceRecipient[];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  permanentBounceSuppressions: CampaignPermanentBounceSuppressionsPage;
+}
+
+export interface CampaignPermanentBounceSuppressionRecipient {
+  clientId: string;
+  name: string;
+  /** @nullable */
+  email: string | null;
+}
+
+export interface CampaignPermanentBounceSuppressionsPage {
+  /** False when the campaign does not send email. */
+  available: boolean;
+  /** Distinct clients whose email was skipped due to a confirmed permanent bounce. */
+  count: number;
+  recipients: CampaignPermanentBounceSuppressionRecipient[];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
 }
 
 export type CreateCampaignBodyTargetSegment = { [key: string]: unknown };
@@ -3772,10 +3912,66 @@ export type SystemHealthRedisDailyUsage = {
   warningThresholdPct: number;
 } | null;
 
+/**
+ * @nullable
+ */
+export type SystemHealthRedisQueueDailyUsage = {
+  commandCount: number;
+  maxCommands: number;
+  usagePct: number;
+  warningThresholdPct: number;
+} | null;
+
+export type SystemHealthBullMQRedisCutoverSelectedRedis =
+  (typeof SystemHealthBullMQRedisCutoverSelectedRedis)[keyof typeof SystemHealthBullMQRedisCutoverSelectedRedis];
+
+export const SystemHealthBullMQRedisCutoverSelectedRedis = {
+  REDIS_URL: "REDIS_URL",
+  REDIS_QUEUE_URL: "REDIS_QUEUE_URL",
+  disabled: "disabled",
+} as const;
+
+export type SystemHealthBullMQRedisCutoverOutcome =
+  (typeof SystemHealthBullMQRedisCutoverOutcome)[keyof typeof SystemHealthBullMQRedisCutoverOutcome];
+
+export const SystemHealthBullMQRedisCutoverOutcome = {
+  not_checked: "not_checked",
+  checking: "checking",
+  not_configured: "not_configured",
+  workers_disabled: "workers_disabled",
+  blocked: "blocked",
+  approved: "approved",
+  verified: "verified",
+  reverted: "reverted",
+  same_resource: "same_resource",
+} as const;
+
+export type SystemHealthBullMQRedisCutoverBlockersItem = {
+  queue: string;
+  state: string;
+  count: number;
+  reason: string;
+};
+
+export interface SystemHealthBullMQRedisCutover {
+  selectedRedis: SystemHealthBullMQRedisCutoverSelectedRedis;
+  outcome: SystemHealthBullMQRedisCutoverOutcome;
+  /** @nullable */
+  reason: string | null;
+  blockerCount: number;
+  blockedWorkCount: number;
+  blockers: SystemHealthBullMQRedisCutoverBlockersItem[];
+  /** @nullable */
+  checkedAt: string | null;
+}
+
 export interface SystemHealthRedis {
   status: SystemHealthRedisStatus;
   /** @nullable */
   dailyUsage?: SystemHealthRedisDailyUsage;
+  /** @nullable */
+  queueDailyUsage?: SystemHealthRedisQueueDailyUsage;
+  queueCutover?: SystemHealthBullMQRedisCutover;
 }
 
 export interface SystemHealthStripeWebhookAuditEndpoint {
@@ -3815,10 +4011,81 @@ export type SystemHealthPipelineOrphans = { [key: string]: unknown };
 
 export type SystemHealthClientFinancialDrift = { [key: string]: unknown };
 
+export type ReminderSchedulerRegistrationHealthStatus =
+  (typeof ReminderSchedulerRegistrationHealthStatus)[keyof typeof ReminderSchedulerRegistrationHealthStatus];
+
+export const ReminderSchedulerRegistrationHealthStatus = {
+  ok: "ok",
+  degraded: "degraded",
+  unknown: "unknown",
+} as const;
+
+export type ReminderSchedulerRegistrationStatus =
+  (typeof ReminderSchedulerRegistrationStatus)[keyof typeof ReminderSchedulerRegistrationStatus];
+
+export const ReminderSchedulerRegistrationStatus = {
+  not_attempted: "not_attempted",
+  registered: "registered",
+  failed: "failed",
+} as const;
+
+export type ReminderSchedulerRegistrationScheduleStatus =
+  (typeof ReminderSchedulerRegistrationScheduleStatus)[keyof typeof ReminderSchedulerRegistrationScheduleStatus];
+
+export const ReminderSchedulerRegistrationScheduleStatus = {
+  healthy: "healthy",
+  registration_failed: "registration_failed",
+  missing: "missing",
+  delayed: "delayed",
+  unavailable: "unavailable",
+} as const;
+
+/**
+ * @nullable
+ */
+export type ReminderSchedulerRegistrationLastRunStatus =
+  | (typeof ReminderSchedulerRegistrationLastRunStatus)[keyof typeof ReminderSchedulerRegistrationLastRunStatus]
+  | null;
+
+export const ReminderSchedulerRegistrationLastRunStatus = {
+  completed: "completed",
+  failed: "failed",
+} as const;
+
+export interface ReminderSchedulerRegistration {
+  id: string;
+  name: string;
+  status: ReminderSchedulerRegistrationStatus;
+  scheduleStatus: ReminderSchedulerRegistrationScheduleStatus;
+  /** @nullable */
+  lastAttemptAt: string | null;
+  /** @nullable */
+  lastSuccessfulAt: string | null;
+  /** @nullable */
+  nextRunAt: string | null;
+  /** @nullable */
+  lastRunAt: string | null;
+  /** @nullable */
+  lastRunStatus: ReminderSchedulerRegistrationLastRunStatus;
+  failureCount: number;
+}
+
+export interface ReminderSchedulerRegistrationHealth {
+  status: ReminderSchedulerRegistrationHealthStatus;
+  failedCount: number;
+  unattemptedCount: number;
+  delayedCount: number;
+  missingCount: number;
+  unavailableCount: number;
+  timezone: string;
+  schedulers: ReminderSchedulerRegistration[];
+}
+
 export interface SystemHealth {
   redis: SystemHealthRedis;
   stripeWebhookAudit: SystemHealthStripeWebhookAudit;
   stripeSyncTables: SystemHealthStripeSyncTables;
+  reminderSchedulers: ReminderSchedulerRegistrationHealth;
   workers?: SystemHealthWorkers;
   seatDrift?: SystemHealthSeatDrift;
   pipelineOrphans?: SystemHealthPipelineOrphans;
@@ -3856,6 +4123,16 @@ export interface Tenant {
   name: string;
   slug: string;
   email: string;
+  /** @nullable */
+  cnpj?: string | null;
+  /** @nullable */
+  address?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  state?: string | null;
+  /** @nullable */
+  zipCode?: string | null;
   /** @nullable */
   whatsapp?: string | null;
   /** @nullable */
@@ -5728,6 +6005,10 @@ export type AssignPmsReservationUnitsBody = {
   assignments: PmsUnitAssignment[];
 };
 
+export type GenerateEvolutionConnectionQr200 = {
+  qrCodeDataUrl: string;
+};
+
 export type ListAdminInvoicesParams = {
   tenantId?: string;
   status?: string;
@@ -5886,9 +6167,18 @@ export type ListTripsParams = {
    */
   search?: string | null;
   /**
+   * Case-insensitive match across trip origin and destination city/state (maximum 100 characters).
+   * @maxLength 100
+   */
+  location?: string;
+  /**
    * @nullable
    */
   status?: string | null;
+  /**
+   * Filter trips by whether their linked store product is active in the public storefront.
+   */
+  storePublication?: ListTripsStorePublication;
   type?: string;
   /**
    * Inclusive departure-date lower bound in YYYY-MM-DD (America/Sao_Paulo).
@@ -5897,6 +6187,14 @@ export type ListTripsParams = {
   page?: number;
   limit?: number;
 };
+
+export type ListTripsStorePublication =
+  (typeof ListTripsStorePublication)[keyof typeof ListTripsStorePublication];
+
+export const ListTripsStorePublication = {
+  published: "published",
+  unpublished: "unpublished",
+} as const;
 
 export type SyncTripPassengers200 = {
   /** Number of passenger records created */
@@ -5935,6 +6233,11 @@ export type GetReservationStatsParams = {
 };
 
 export type ListReservationsParams = {
+  /**
+   * Comma-separated reservation IDs to retrieve (maximum 100 IDs).
+   * @nullable
+   */
+  reservationIds?: string | null;
   /**
    * @nullable
    */
@@ -5997,9 +6300,19 @@ export type ListPaymentsParams = {
    */
   reservationId?: string | null;
   /**
+   * Comma-separated reservation IDs to retrieve payments for (maximum 100 IDs).
+   * @nullable
+   */
+  reservationIds?: string | null;
+  /**
    * @nullable
    */
   clientId?: string | null;
+  /**
+   * Comma-separated client IDs to retrieve payments for (maximum 100 IDs).
+   * @nullable
+   */
+  clientIds?: string | null;
   /**
    * @nullable
    */
@@ -6026,6 +6339,16 @@ export type ListPaymentsParams = {
    * @nullable
    */
   dueDateTo?: string | null;
+  /**
+   * Inclusive start of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtFrom?: string | null;
+  /**
+   * Inclusive end of the updated-at range in America/Sao_Paulo.
+   * @nullable
+   */
+  updatedAtTo?: string | null;
   /**
    * Return only payments not linked to an operational cost.
    */
@@ -6056,6 +6379,15 @@ export type ListExpensesParams = {
    */
   supplierId?: string | null;
   /**
+   * Exact source record ID for opening one operational cost from its linked payable.
+   * @nullable
+   */
+  sourceId?: string | null;
+  /**
+   * Source record type; required together with sourceId.
+   */
+  sourceType?: ListExpensesSourceType;
+  /**
    * @nullable
    */
   dateFrom?: string | null;
@@ -6074,6 +6406,14 @@ export type ListExpensesParams = {
   page?: number;
   limit?: number;
 };
+
+export type ListExpensesSourceType =
+  (typeof ListExpensesSourceType)[keyof typeof ListExpensesSourceType];
+
+export const ListExpensesSourceType = {
+  agency: "agency",
+  trip: "trip",
+} as const;
 
 export type ListExpensesSummaryPeriod =
   (typeof ListExpensesSummaryPeriod)[keyof typeof ListExpensesSummaryPeriod];
@@ -6153,6 +6493,7 @@ export type ListOutboundMessagesChannel =
 export const ListOutboundMessagesChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export type ListOutboundMessagesDeliveryStatus =
@@ -6205,6 +6546,7 @@ export type ListOutboundProviderFailureSummaryChannel =
 export const ListOutboundProviderFailureSummaryChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export type ListOutboundProviderFailureSummaryDeliveryStatus =
@@ -6266,6 +6608,7 @@ export type ExportOutboundMessagesChannel =
 export const ExportOutboundMessagesChannel = {
   email: "email",
   whatsapp: "whatsapp",
+  instagram: "instagram",
 } as const;
 
 export type ExportOutboundMessagesDeliveryStatus =
@@ -6312,6 +6655,14 @@ export type ListOrdersParams = {
   status?: string | null;
   page?: number;
   limit?: number;
+};
+
+export type ListCampaignPermanentBounceRecipientsParams = {
+  /**
+   * @minimum 1
+   * @maximum 1000
+   */
+  page?: number;
 };
 
 export type ListNpsResponsesParams = {
